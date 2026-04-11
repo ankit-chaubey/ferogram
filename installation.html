@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Installation - ferogram: Async Telegram MTProto in Rust</title>
+        <title>Installation - ferogram</title>
 
 
         <!-- Custom HTML head -->
@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-437b4e62.js";
+            window.path_to_searchindex_js = "searchindex-c5d5afa1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-3a947583.js"></script>
@@ -138,7 +138,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title">ferogram: Async Telegram MTProto in Rust</h1>
+                    <h1 class="menu-title">ferogram</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -184,7 +184,7 @@
                         <h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
 <h2 id="add-to-cargotoml"><a class="header" href="#add-to-cargotoml">Add to Cargo.toml</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.4.8"
+ferogram = "0.1.1"
 tokio        = { version = "1", features = ["full"] }
 </code></pre>
 <p><code>ferogram</code> re-exports everything you need for both user clients and bots.</p>
@@ -225,11 +225,11 @@ let api_hash = "deadbeef..."; // ← never do this in a public repo
 <hr>
 <h2 id="optional-features"><a class="header" href="#optional-features">Optional features</a></h2>
 <h3 id="sqlite-session-storage"><a class="header" href="#sqlite-session-storage">SQLite session storage</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.4.8", features = ["sqlite-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.1.1", features = ["sqlite-session"] }
 </code></pre>
 <p>Stores session data in a SQLite database instead of a binary file. More robust for long-running servers.</p>
-<h3 id="libsql--turso-session-storage-new-in-v048"><a class="header" href="#libsql--turso-session-storage-new-in-v048">LibSQL / Turso session storage: New in v0.4.8</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.4.8", features = ["libsql-session"] }
+<h3 id="libsql--turso-session-storage-new-in-v011"><a class="header" href="#libsql--turso-session-storage-new-in-v011">LibSQL / Turso session storage: New in v0.1.1</a></h3>
+<pre><code class="language-toml">ferogram = { version = "0.1.1", features = ["libsql-session"] }
 </code></pre>
 <p>Backed by <a href="https://github.com/tursodatabase/libsql">libsql</a>: supports local embedded databases and remote Turso cloud databases. Ideal for serverless or distributed deployments.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -245,7 +245,7 @@ let backend = LibSqlBackend::open_remote(
     "your-turso-auth-token",
 ).await?;
 <span class="boring">}</span></code></pre>
-<h3 id="string-session-portable-no-extra-deps-new-in-v048"><a class="header" href="#string-session-portable-no-extra-deps-new-in-v048">String session (portable, no extra deps): New in v0.4.8</a></h3>
+<h3 id="string-session-portable-no-extra-deps-new-in-v011"><a class="header" href="#string-session-portable-no-extra-deps-new-in-v011">String session (portable, no extra deps): New in v0.1.1</a></h3>
 <p>No feature flag needed. Encode a session as a base64 string and restore it anywhere:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -260,10 +260,10 @@ let (client, _shutdown) = Client::with_string_session(
 <p>See <a href="./authentication/session-backends.html">Session Backends</a> for the full guide.</p>
 <h3 id="html-entity-parsing"><a class="header" href="#html-entity-parsing">HTML entity parsing</a></h3>
 <pre><code class="language-toml"># Built-in hand-rolled HTML parser (no extra deps)
-ferogram = { version = "0.4.8", features = ["html"] }
+ferogram = { version = "0.1.1", features = ["html"] }
 
 # OR: spec-compliant html5ever tokenizer (overrides built-in)
-ferogram = { version = "0.4.8", features = ["html5ever"] }
+ferogram = { version = "0.1.1", features = ["html5ever"] }
 </code></pre>
 <div class="table-wrapper">
 <table>
@@ -278,7 +278,7 @@ ferogram = { version = "0.4.8", features = ["html5ever"] }
 </div>
 <h3 id="raw-type-system-features-ferogram-tl-types"><a class="header" href="#raw-type-system-features-ferogram-tl-types">Raw type system features (<code>ferogram-tl-types</code>)</a></h3>
 <p>If you use <code>ferogram-tl-types</code> directly for raw API access:</p>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.4.8", features = [
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.1.1", features = [
     "tl-api",          # Telegram API types (required)
     "tl-mtproto",      # Low-level MTProto types
     "impl-debug",      # Debug trait on all types (default ON)
