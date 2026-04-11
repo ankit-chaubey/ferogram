@@ -1,0 +1,936 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Client Methods - ferogram: Async Telegram MTProto in Rust</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/custom-044eaa15.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-437b4e62.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-3a947583.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">ferogram: Async Telegram MTProto in Rust</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/ankit-chaubey/ferogram" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/ankit-chaubey/ferogram/edit/main/docs/src/api/client.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="client-methods-full-reference"><a class="header" href="#client-methods-full-reference">Client Methods: Full Reference</a></h1>
+<p>All methods on <code>Client</code>. Every method is <code>async</code> and returns <code>Result&lt;T, InvocationError&gt;</code> unless noted.</p>
+<hr>
+<h2 id="connection--session"><a class="header" href="#connection--session">Connection &amp; Session</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">Client::connect(config: Config) → Result&lt;(Client, ShutdownToken), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Opens a TCP connection to Telegram, performs the full 3-step DH key exchange, and loads any existing session. Returns both the client handle and a <code>ShutdownToken</code> for graceful shutdown.
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">sync</span>
+<span class="api-card-sig">Client::with_string_session(session: &amp;str, api_id: i32, api_hash: &amp;str) → Result&lt;(Client, ShutdownToken), InvocationError&gt; <span class="api-badge-new">New 0.4.8</span></span>
+</div>
+
+<div class="api-card-body">
+Convenience constructor that connects using a <code>StringSessionBackend</code>. Pass the string exported by <code>export_session_string()</code>.
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.is_authorized() → Result&lt;bool, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Returns <code>true</code> if the session has a logged-in user or bot. Use this to skip the login flow on subsequent runs.
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.save_session() → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Writes the current session (auth key + DC info + peer cache) to the backend. Call after a successful login.
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.export_session_string() → Result&lt;String, InvocationError&gt; <span class="api-badge-new">New 0.4.8</span></span>
+</div>
+
+<div class="api-card-body">
+Serialises the current session to a portable base64 string. Store it in an env var, DB column, or CI secret. Restore with <code>Client::with_string_session()</code> or <code>StringSessionBackend</code>.
+<pre><code>let s = client.export_session_string().await?;
+std::env::set_var("TG_SESSION", &amp;s);</code></pre>
+
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.sign_out() → Result&lt;bool, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Revokes the auth key on Telegram's servers and deletes the local session. The bool indicates whether teardown was confirmed server-side.
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">sync</span>
+<span class="api-card-sig">client.disconnect()</span>
+</div>
+
+<div class="api-card-body">
+Immediately closes the TCP connection and stops the reader task without waiting for pending RPCs to drain. For graceful shutdown that waits for pending calls, use <code>ShutdownToken::cancel()</code> instead.
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.sync_update_state() <span class="api-badge-new">New 0.4.8</span></span>
+</div>
+
+<div class="api-card-body">
+Forces an immediate <code>updates.getState</code> round-trip and reconciles local pts/seq/qts counters. Useful after a long disconnect or when you suspect a gap but don't want to wait for the gap-detection timer.
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">sync</span>
+<span class="api-card-sig">client.signal_network_restored()</span>
+</div>
+
+<div class="api-card-body">
+Signals to the reconnect logic that the network is available. Skips the exponential backoff and triggers an immediate reconnect attempt. Call from Android <code>ConnectivityManager</code> or iOS <code>NWPathMonitor</code> callbacks.
+</div>
+
+</div>
+
+<hr>
+<h2 id="authentication"><a class="header" href="#authentication">Authentication</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.request_login_code(phone: &amp;str) → Result&lt;LoginToken, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Sends a verification code to <code>phone</code> via SMS or Telegram app. Returns a <code>LoginToken</code> to pass to <code>sign_in</code>. Phone must be in E.164 format: <code>"+12345678900"</code>.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.sign_in(token: &amp;LoginToken, code: &amp;str) → Result&lt;String, SignInError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Submits the verification code. Returns the user's full name on success, or <code>SignInError::PasswordRequired(PasswordToken)</code> when 2FA is enabled. The <code>PasswordToken</code> carries the hint set by the user.
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.check_password(token: PasswordToken, password: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Completes the SRP 2FA verification. The password is never transmitted in plain text: only a zero-knowledge cryptographic proof is sent.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.bot_sign_in(token: &amp;str) → Result&lt;String, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Logs in using a bot token from @BotFather. Returns the bot's username on success.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_me() → Result&lt;tl::types::User, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetches the full <code>User</code> object for the logged-in account. Contains <code>id</code>, <code>username</code>, <code>first_name</code>, <code>last_name</code>, <code>phone</code>, <code>bot</code> flag, <code>verified</code> flag, and more.</div>
+
+</div>
+
+<hr>
+<h2 id="updates"><a class="header" href="#updates">Updates</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">sync</span>
+<span class="api-card-sig">client.stream_updates() → UpdateStream</span>
+</div>
+
+<div class="api-card-body">
+Returns an <code>UpdateStream</code>: an async iterator that yields typed <code>Update</code> values. Call <code>.next().await</code> in a loop to process events. The stream runs until the connection is closed.
+<pre><code>let mut updates = client.stream_updates();
+while let Some(update) = updates.next().await {
+    match update {
+        Update::NewMessage(msg) =&gt; { /* … */ }
+        _ =&gt; {}
+    }
+}</code></pre>
+
+</div>
+
+</div>
+
+<hr>
+<h2 id="messaging"><a class="header" href="#messaging">Messaging</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.send_message(peer: &amp;str, text: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Send a plain-text message. <code>peer</code> can be <code>"me"</code>, <code>"@username"</code>, or a numeric ID string. For rich formatting, use <code>send_message_to_peer_ex</code>.
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.send_to_self(text: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Sends a message to your own Saved Messages. Shorthand for <code>send_message("me", text)</code>.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.send_message_to_peer(peer: Peer, text: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Send a plain text message to a resolved <code>tl::enums::Peer</code>.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.send_message_to_peer_ex(peer: Peer, msg: &amp;InputMessage) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Full-featured send with the <a href="./input-message.html"><code>InputMessage</code></a> builder: supports markdown entities, reply-to, inline keyboard, scheduled date, silent flag, and more.
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.edit_message(peer: Peer, message_id: i32, new_text: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Edit the text of a previously sent message. Only works on messages sent by the logged-in account (or bot).</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.edit_inline_message(inline_msg_id: tl::enums::InputBotInlineMessageId, text: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Edit the text of a message that was sent via inline mode. The <code>inline_msg_id</code> is provided in <code>Update::InlineSend</code>.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.forward_messages(from_peer: Peer, to_peer: Peer, ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Forward one or more messages from <code>from_peer</code> into <code>to_peer</code>.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.delete_messages(ids: Vec&lt;i32&gt;, revoke: bool) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body"><code>revoke: true</code> deletes for everyone; <code>false</code> deletes only for the current account.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_messages_by_id(peer: Peer, ids: &amp;[i32]) → Result&lt;Vec&lt;tl::enums::Message&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetch specific messages by their IDs from a peer. Returns messages in the same order as the input IDs.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.pin_message(peer: Peer, message_id: i32, silent: bool) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Pin a message. <code>silent: true</code> pins without notifying members.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.unpin_message(peer: Peer, message_id: i32) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Unpin a specific message.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.unpin_all_messages(peer: Peer) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Unpin all pinned messages in a chat.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_pinned_message(peer: Peer) → Result&lt;Option&lt;tl::enums::Message&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetch the currently pinned message, or <code>None</code> if nothing is pinned.</div>
+
+</div>
+
+<hr>
+<h2 id="reactions"><a class="header" href="#reactions">Reactions</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.send_reaction(peer: Peer, msg_id: i32, reaction: Reaction) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Send a reaction to a message. Build reactions using the <code>Reaction</code> helper:
+<pre><code>use ferogram::reactions::InputReactions;
+<p>client.send_reaction(peer, msg_id, InputReactions::emoticon(“👍”)).await?;
+client.send_reaction(peer, msg_id, InputReactions::remove()).await?; // remove all
+client.send_reaction(peer, msg_id, InputReactions::emoticon(“🔥”).big()).await?;
+See <a href="../messaging/reactions.html">Reactions</a> for the full guide.</p>
+
+
+<hr>
+<h2 id="sending-chat-actions"><a class="header" href="#sending-chat-actions">Sending chat actions</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.send_chat_action(peer: Peer, action: SendMessageAction, top_msg_id: Option&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Send a one-shot typing / uploading / recording indicator. Expires after ~5 seconds. Use <a href="./typing-guard.html"><code>TypingGuard</code></a> to keep it alive for longer operations. <code>top_msg_id</code> restricts the indicator to a forum topic.
+</div>
+
+</div>
+
+<hr>
+<h2 id="search"><a class="header" href="#search">Search</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">sync</span>
+<span class="api-card-sig">client.search(peer: impl Into&lt;PeerRef&gt;, query: &amp;str) → SearchBuilder</span>
+</div>
+
+<div class="api-card-body">Returns a <a href="./search.html"><code>SearchBuilder</code></a> for per-peer message search with date filters, sender filter, media type filter, and pagination.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">sync</span>
+<span class="api-card-sig">client.search_global_builder(query: &amp;str) → GlobalSearchBuilder</span>
+</div>
+
+<div class="api-card-body">Returns a <a href="./search.html"><code>GlobalSearchBuilder</code></a> for searching across all dialogs simultaneously.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.search_messages(peer: Peer, query: &amp;str, limit: i32) → Result&lt;Vec&lt;tl::enums::Message&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Simple one-shot search within a peer. For advanced options use <code>client.search()</code>.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.search_global(query: &amp;str, limit: i32) → Result&lt;Vec&lt;tl::enums::Message&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Simple one-shot global search. For advanced options use <code>client.search_global_builder()</code>.</div>
+
+</div>
+
+<hr>
+<h2 id="dialogs--history"><a class="header" href="#dialogs--history">Dialogs &amp; History</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_dialogs(limit: i32) → Result&lt;Vec&lt;Dialog&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetch the most recent <code>limit</code> dialogs. Each <code>Dialog</code> has <code>title()</code>, <code>peer()</code>, <code>unread_count()</code>, and <code>top_message()</code>.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">sync</span>
+<span class="api-card-sig">client.iter_dialogs() → DialogIter</span>
+</div>
+
+<div class="api-card-body">Lazy iterator that pages through <em>all</em> dialogs automatically. Call <code>iter.next(&amp;client).await?</code>. <code>iter.total()</code> returns the server-reported count after the first page.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">sync</span>
+<span class="api-card-sig">client.iter_messages(peer: impl Into&lt;PeerRef&gt;) → MessageIter</span>
+</div>
+
+<div class="api-card-body">Lazy iterator over the full message history of a peer, newest first. Call <code>iter.next(&amp;client).await?</code>.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_messages(peer: Peer, limit: i32, offset_id: i32) → Result&lt;Vec&lt;tl::enums::Message&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetch a page of messages. Pass the lowest message ID from the previous page as <code>offset_id</code> to paginate.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.mark_as_read(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Mark all messages in a dialog as read.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.clear_mentions(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Clear unread @mention badges in a chat.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.delete_dialog(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Delete a dialog from the account's dialog list (does not delete messages for others).</div>
+
+</div>
+
+<hr>
+<h2 id="scheduled-messages"><a class="header" href="#scheduled-messages">Scheduled messages</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_scheduled_messages(peer: Peer) → Result&lt;Vec&lt;tl::enums::Message&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetch all messages scheduled to be sent in a chat.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.delete_scheduled_messages(peer: Peer, ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Cancel and delete scheduled messages by ID.</div>
+
+</div>
+
+<hr>
+<h2 id="participants--admin"><a class="header" href="#participants--admin">Participants &amp; Admin</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_participants(peer: Peer, limit: i32) → Result&lt;Vec&lt;Participant&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetch members of a chat or channel. Pass <code>limit = 0</code> for the default server maximum per page. Use <code>iter_participants</code> to lazily page all members.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.iter_participants(peer: Peer) → ParticipantIter</span>
+</div>
+
+<div class="api-card-body">Lazy async iterator that pages through all members, including beyond the 200-member limit. Fixed in v0.4.8 to paginate correctly for large channels.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.set_admin_rights(peer: Peer, user_id: i64, rights: AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Promote a user to admin with specified rights. See <a href="./admin-rights.html">Admin &amp; Ban Rights</a>.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.set_banned_rights(peer: Peer, user_id: i64, rights: BanRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Restrict or ban a user. Pass <code>BanRightsBuilder::full_ban()</code> to fully ban. See <a href="./admin-rights.html">Admin &amp; Ban Rights</a>.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_profile_photos(peer: Peer, limit: i32) → Result&lt;Vec&lt;tl::enums::Photo&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetch a user's profile photo list.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_permissions(peer: Peer, user_id: i64) → Result&lt;Participant, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetch the effective permissions of a user in a chat. Check <code>.is_admin()</code>, <code>.is_banned()</code>, etc. on the returned <code>Participant</code>.</div>
+
+</div>
+
+<hr>
+<h2 id="media"><a class="header" href="#media">Media</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.upload_file(path: &amp;str) → Result&lt;UploadedFile, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Upload a file from a local path. Returns an <code>UploadedFile</code> with <code>.as_photo_media()</code> and <code>.as_document_media()</code> methods.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.send_file(peer: Peer, media: InputMedia, caption: Option&lt;&amp;str&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Send an uploaded file as a photo or document with an optional caption.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.send_album(peer: Peer, media: Vec&lt;InputMedia&gt;, caption: Option&lt;&amp;str&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Send multiple media items as a grouped album (2–10 items).</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.download_media_to_file(location: impl Downloadable, path: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Download a media attachment and write it directly to a file path.</div>
+
+</div>
+
+<hr>
+<h2 id="callbacks--inline"><a class="header" href="#callbacks--inline">Callbacks &amp; Inline</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.answer_callback_query(query_id: i64, text: Option&lt;&amp;str&gt;, alert: bool) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Acknowledge an inline button press. <code>text</code> shows a toast (or alert if <code>alert=true</code>). Must be called within 60 seconds of the button press.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.answer_inline_query(query_id: i64, results: Vec&lt;InputBotInlineResult&gt;, cache_time: i32, is_personal: bool, next_offset: Option&lt;&amp;str&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Respond to an inline query with a list of results. <code>cache_time</code> in seconds. Empty result list now handled correctly (fixed in v0.4.8).</div>
+
+</div>
+
+<hr>
+<h2 id="peer-resolution"><a class="header" href="#peer-resolution">Peer resolution</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.resolve_peer(peer: &amp;str) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Resolve a string (<code>"@username"</code>, <code>"+phone"</code>, <code>"me"</code>, numeric ID) to a <code>Peer</code> with cached access hash.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.resolve_username(username: &amp;str) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Resolve a bare username (without @) to a <code>Peer</code>.</div>
+
+</div>
+
+<hr>
+<h2 id="raw-api"><a class="header" href="#raw-api">Raw API</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.invoke&lt;R: RemoteCall&gt;(req: &amp;R) → Result&lt;R::Return, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Call any Layer 224 API method directly. See <a href="../advanced/raw-api.html">Raw API Access</a> for the full guide.
+<pre><code>use ferogram_tl_types::functions;
+let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></pre>
+
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.invoke_on_dc&lt;R: RemoteCall&gt;(req: &amp;R, dc_id: i32) → Result&lt;R::Return, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Send a request to a specific Telegram data centre. Used for file downloads from CDN DCs.</div>
+
+</div>
+
+<hr>
+<h2 id="chat-management"><a class="header" href="#chat-management">Chat management</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.join_chat(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Join a group or channel by peer reference.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.accept_invite_link(link: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Accept a <code>t.me/+hash</code> or <code>t.me/joinchat/hash</code> invite link.</div>
+
+</div>
+
+</code></pre>
+</div>
+</div>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../updates/inline-mode.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../api/input-message.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../updates/inline-mode.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../api/input-message.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../theme/custom-ff45141f.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
