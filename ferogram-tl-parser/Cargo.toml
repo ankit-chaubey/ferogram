@@ -1,0 +1,16 @@
+[package]
+name        = "ferogram-tl-parser"
+description = "Parser for Telegram's Type Language (.tl) schema files"
+readme      = "README.md"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+documentation = "https://docs.rs/ferogram-tl-parser"
+keywords      = ["telegram", "mtproto", "tl", "parser", "codegen"]
+categories    = ["parser-implementations", "development-tools"]
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]

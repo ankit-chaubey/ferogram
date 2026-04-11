@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Telegram Chat (questions and discussion)
+    url: https://t.me/ferogram_chat
+    about: Ask questions and get help from the community
+  - name: Telegram Channel (announcements)
+    url: https://t.me/ferogram_rs
+    about: Follow for releases and updates

@@ -1,0 +1,34 @@
+[package]
+name        = "ferogram-tl-types"
+description = "Auto-generated Telegram TL types: constructors, functions, enums (Layer 224)"
+readme      = "README.md"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+documentation = "https://docs.rs/ferogram-tl-types"
+keywords      = ["telegram", "mtproto", "tl", "types", "api"]
+categories    = ["api-bindings", "encoding"]
+
+build = "build.rs"
+
+[build-dependencies]
+ferogram-tl-parser = { workspace = true }
+ferogram-tl-gen    = { workspace = true }
+
+[features]
+default = ["impl-debug", "impl-from-type", "impl-from-enum", "tl-api"]
+impl-debug               = []
+impl-from-type           = []
+impl-from-enum           = []
+deserializable-functions = []
+name-for-id              = []
+tl-api                   = []
+tl-mtproto               = []
+impl-serde               = []
+
+[package.metadata.docs.rs]
+features     = ["impl-debug", "impl-from-type", "impl-from-enum", "tl-api", "tl-mtproto", "deserializable-functions", "name-for-id"]
+rustdoc-args = ["--cfg", "docsrs"]

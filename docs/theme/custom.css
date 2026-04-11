@@ -1,0 +1,424 @@
+/* ═══════════════════════════════════════════════════════════════
+   layer docs — Comfortable Reading Theme
+   ═══════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* ── Root variables ─────────────────────────────────────────── */
+:root {
+  --layer-accent:       #7c6af7;
+  --layer-accent-light: #a89ef9;
+  --layer-accent-glow:  rgba(124,106,247,0.18);
+  --layer-green:        #22c55e;
+  --layer-red:          #ef4444;
+  --layer-yellow:       #f59e0b;
+  --layer-blue:         #3b82f6;
+  --layer-cyan:         #06b6d4;
+  --layer-orange:       #f97316;
+  --radius:             12px;
+  --radius-sm:          7px;
+  --shadow:             0 4px 28px rgba(0,0,0,0.32);
+  --shadow-sm:          0 2px 10px rgba(0,0,0,0.2);
+}
+
+/* ── FORCE BASE FONT SIZE — overrides mdBook navy theme ─────── */
+html {
+  font-size: 18px !important;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif !important;
+  font-size: 18px !important;
+  line-height: 1.9 !important;
+}
+
+/* ── Main content area ──────────────────────────────────────── */
+.content main,
+.content .content-wrapper {
+  max-width: 940px !important;
+  font-size: 18px !important;
+  line-height: 1.9 !important;
+  padding-bottom: 4rem !important;
+}
+
+/* Force all paragraph and list text */
+.content p,
+.content li,
+.content td,
+.content dd,
+.content dt,
+.content span {
+  font-size: 17px !important;
+  line-height: 1.9 !important;
+  font-family: 'Inter', system-ui, sans-serif !important;
+}
+
+/* ── Headings ────────────────────────────────────────────────── */
+.content h1,
+h1:first-of-type {
+  font-size: 2.6rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.03em !important;
+  line-height: 1.2 !important;
+  margin-bottom: 0.4em !important;
+  background: linear-gradient(135deg, #fff 30%, var(--layer-accent-light) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.content h2, h2 {
+  font-size: 1.7rem !important;
+  font-weight: 650 !important;
+  letter-spacing: -0.02em !important;
+  margin-top: 2.8em !important;
+  margin-bottom: 0.75em !important;
+  padding-bottom: 0.45em !important;
+  border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+  color: #e2e8f0 !important;
+}
+
+.content h3, h3 {
+  font-size: 1.28rem !important;
+  font-weight: 600 !important;
+  color: var(--layer-accent-light) !important;
+  margin-top: 2em !important;
+  margin-bottom: 0.5em !important;
+}
+
+.content h4, h4 {
+  font-size: 1.05rem !important;
+  font-weight: 600 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255,255,255,0.5) !important;
+  margin-top: 1.6em !important;
+}
+
+/* ── Code blocks ─────────────────────────────────────────────── */
+pre {
+  border-radius: var(--radius) !important;
+  border: 1px solid rgba(255,255,255,0.07) !important;
+  box-shadow: var(--shadow) !important;
+  position: relative;
+  overflow: hidden;
+  padding: 1.5em 1.7em !important;
+  margin: 1.5em 0 !important;
+}
+
+pre::before {
+  content: '';
+  display: block;
+  height: 3px;
+  background: linear-gradient(90deg, var(--layer-accent), var(--layer-cyan));
+  position: absolute;
+  top: 0; left: 0; right: 0;
+}
+
+pre code,
+pre code span,
+code.hljs {
+  font-size: 15px !important;
+  line-height: 1.85 !important;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+}
+
+/* Inline code */
+code:not(pre code) {
+  background: rgba(124,106,247,0.12) !important;
+  border: 1px solid rgba(124,106,247,0.22) !important;
+  color: var(--layer-accent-light) !important;
+  border-radius: var(--radius-sm) !important;
+  padding: 3px 9px !important;
+  font-size: 0.88em !important;
+  font-weight: 500 !important;
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* ── Tables ──────────────────────────────────────────────────── */
+table {
+  border-collapse: collapse !important;
+  width: 100% !important;
+  border-radius: var(--radius) !important;
+  overflow: hidden !important;
+  box-shadow: var(--shadow-sm) !important;
+  font-size: 16px !important;
+  margin: 1.8em 0 !important;
+  line-height: 1.75 !important;
+}
+
+table thead tr {
+  background: linear-gradient(135deg, rgba(124,106,247,0.25), rgba(6,182,212,0.12)) !important;
+}
+
+table thead th {
+  padding: 15px 22px !important;
+  font-weight: 600 !important;
+  font-size: 14px !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  color: rgba(255,255,255,0.75) !important;
+  border-bottom: 1px solid rgba(124,106,247,0.25) !important;
+  border-right: none !important;
+  font-family: 'Inter', sans-serif !important;
+}
+
+table tbody tr {
+  border-bottom: 1px solid rgba(255,255,255,0.055) !important;
+  transition: background 0.12s !important;
+}
+table tbody tr:hover {
+  background: rgba(124,106,247,0.07) !important;
+}
+table tbody td {
+  padding: 14px 22px !important;
+  border-right: none !important;
+  vertical-align: middle !important;
+  font-size: 16px !important;
+  font-family: 'Inter', sans-serif !important;
+}
+table tbody tr:last-child { border-bottom: none !important; }
+
+/* ── Sidebar ─────────────────────────────────────────────────── */
+.sidebar {
+  background: #0f1117 !important;
+  border-right: 1px solid rgba(124,106,247,0.15) !important;
+  width: 285px !important;
+}
+.sidebar .sidebar-scrollbox { padding-top: 0 !important; }
+
+.sidebar-scrollbox::before {
+  content: "⚡ layer";
+  display: block;
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  padding: 26px 22px 6px;
+  background: linear-gradient(135deg, var(--layer-accent), var(--layer-cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.sidebar-scrollbox::after {
+  content: "Telegram MTProto · Rust";
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: rgba(255,255,255,0.35);
+  padding: 0 22px 20px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  margin-bottom: 12px;
+}
+
+.chapter li a,
+.chapter li a:link,
+.chapter li a:visited {
+  border-radius: var(--radius-sm) !important;
+  transition: background 0.15s, color 0.15s !important;
+  padding: 8px 15px !important;
+  margin: 2px 8px !important;
+  font-size: 15px !important;
+  line-height: 1.5 !important;
+  display: block !important;
+}
+.chapter li a:hover {
+  background: rgba(124,106,247,0.12) !important;
+  color: var(--layer-accent-light) !important;
+}
+.chapter li a.active {
+  background: rgba(124,106,247,0.22) !important;
+  color: #fff !important;
+  font-weight: 600 !important;
+  border-left: 3px solid var(--layer-accent) !important;
+}
+
+.chapter li.part-title {
+  font-size: 11px !important;
+  letter-spacing: 0.1em !important;
+  text-transform: uppercase !important;
+  color: rgba(255,255,255,0.3) !important;
+  padding: 18px 22px 5px !important;
+  font-weight: 600 !important;
+}
+
+/* ── Blockquote ──────────────────────────────────────────────── */
+blockquote {
+  border-radius: var(--radius) !important;
+  border-left: 4px solid var(--layer-accent) !important;
+  background: rgba(124,106,247,0.09) !important;
+  padding: 18px 22px !important;
+  margin: 1.6em 0 !important;
+  color: rgba(255,255,255,0.82) !important;
+  font-size: 16px !important;
+  line-height: 1.8 !important;
+}
+blockquote p { margin: 0 !important; }
+
+/* ── Feature grid ────────────────────────────────────────────── */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin: 1.8em 0;
+}
+.feature-card {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: var(--radius);
+  padding: 22px 24px;
+  transition: border-color 0.2s, background 0.2s, transform 0.15s;
+}
+.feature-card:hover {
+  border-color: rgba(124,106,247,0.4);
+  background: rgba(124,106,247,0.06);
+  transform: translateY(-2px);
+}
+.feature-card .fc-icon  { font-size: 1.7rem !important; margin-bottom: 12px; }
+.feature-card .fc-title { font-weight: 600 !important; font-size: 16px !important; color: #e2e8f0 !important; margin-bottom: 7px; }
+.feature-card .fc-desc  { font-size: 15px !important; color: rgba(255,255,255,0.58) !important; line-height: 1.7 !important; }
+
+/* ── Hero banner ─────────────────────────────────────────────── */
+.hero-banner {
+  background: linear-gradient(135deg, rgba(124,106,247,0.15) 0%, rgba(6,182,212,0.08) 100%);
+  border: 1px solid rgba(124,106,247,0.22);
+  border-radius: 16px;
+  padding: 38px 42px;
+  margin: 1em 0 2.4em;
+  text-align: center;
+}
+.hero-banner h2 {
+  border: none !important;
+  font-size: 1.25rem !important;
+  color: rgba(255,255,255,0.65) !important;
+  font-weight: 400 !important;
+  margin: 0.35em 0 1.1em !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+}
+.hero-badges { display: flex; flex-wrap: wrap; gap: 9px; justify-content: center; margin-top: 14px; }
+.hero-badges img { height: 26px; border-radius: 4px; }
+
+/* ── API cards ───────────────────────────────────────────────── */
+.api-card {
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: var(--radius);
+  margin: 1.4em 0;
+  overflow: hidden;
+}
+.api-card-header {
+  background: rgba(124,106,247,0.12);
+  border-bottom: 1px solid rgba(124,106,247,0.18);
+  padding: 12px 18px;
+  display: flex; align-items: center; gap: 10px;
+}
+.api-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 4px;
+}
+.api-badge-async { background: rgba(34,197,94,0.2);  color: var(--layer-green); }
+.api-badge-fn    { background: rgba(59,130,246,0.2);  color: var(--layer-blue); }
+.api-badge-type  { background: rgba(249,115,22,0.2);  color: var(--layer-orange); }
+.api-card-sig    { font-family: 'JetBrains Mono', monospace; font-size: 15px !important; color: #e2e8f0; }
+.api-card-body   { padding: 16px 18px; font-size: 16px !important; color: rgba(255,255,255,0.74); line-height: 1.8; }
+
+/* ── Badges / pills ──────────────────────────────────────────── */
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 3px 10px;
+  border-radius: 999px;
+  vertical-align: middle;
+  margin: 0 2px;
+  text-transform: uppercase;
+}
+.badge-default  { background: rgba(124,106,247,0.2); color: var(--layer-accent-light); }
+.badge-optional { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.5); }
+.badge-required { background: rgba(239,68,68,0.18);  color: #fca5a5; }
+.badge-new      { background: rgba(34,197,94,0.18);  color: #86efac; }
+.badge-bot      { background: rgba(6,182,212,0.18);  color: #67e8f9; }
+.badge-user     { background: rgba(249,115,22,0.18); color: #fdba74; }
+
+/* ── Divider ─────────────────────────────────────────────────── */
+hr {
+  border: none !important;
+  height: 1px !important;
+  background: linear-gradient(90deg, transparent, rgba(124,106,247,0.3), transparent) !important;
+  margin: 3em 0 !important;
+}
+
+/* ── Lists ───────────────────────────────────────────────────── */
+ul, ol { padding-left: 1.6em; line-height: 1.9; }
+li { margin: 0.35em 0; font-size: 17px !important; }
+li > ul, li > ol { margin: 0.3em 0; }
+
+/* ── Scrollbar ───────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(124,106,247,0.35); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(124,106,247,0.6); }
+
+/* ── Nav arrows ──────────────────────────────────────────────── */
+.nav-chapters .fa {
+  background: rgba(124,106,247,0.15);
+  border-radius: 50%;
+  padding: 14px;
+  transition: background 0.2s;
+}
+.nav-chapters .fa:hover { background: rgba(124,106,247,0.3); }
+
+/* ── Top bar ─────────────────────────────────────────────────── */
+#menu-bar {
+  background: rgba(10,12,20,0.95) !important;
+  backdrop-filter: blur(12px) !important;
+  border-bottom: 1px solid rgba(124,106,247,0.12) !important;
+}
+#menu-bar i { color: rgba(255,255,255,0.6) !important; }
+#menu-bar i:hover { color: var(--layer-accent-light) !important; }
+
+/* ── Search ──────────────────────────────────────────────────── */
+#searchbar {
+  border-radius: var(--radius-sm) !important;
+  border: 1px solid rgba(124,106,247,0.25) !important;
+  background: rgba(255,255,255,0.05) !important;
+  color: #fff !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 16px !important;
+  padding: 9px 14px !important;
+}
+#searchbar:focus {
+  border-color: var(--layer-accent) !important;
+  box-shadow: 0 0 0 3px var(--layer-accent-glow) !important;
+  outline: none !important;
+}
+
+/* ── Selection ───────────────────────────────────────────────── */
+::selection { background: rgba(124,106,247,0.35); }
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  html { font-size: 16px !important; }
+  body, .content main { font-size: 16px !important; }
+  .content p, .content li, .content td { font-size: 15px !important; }
+  h1:first-of-type, .content h1 { font-size: 2rem !important; }
+  .content h2, h2 { font-size: 1.4rem !important; }
+  .content h3, h3 { font-size: 1.15rem !important; }
+  .feature-grid { grid-template-columns: 1fr; }
+  .hero-banner { padding: 24px 20px; }
+  pre code { font-size: 13px !important; }
+  table { font-size: 14px !important; }
+  table tbody td, table thead th { padding: 11px 14px !important; }
+  .feature-card .fc-desc { font-size: 14px !important; }
+}
+@media (max-width: 480px) {
+  html { font-size: 15px !important; }
+  pre { padding: 1.1em 1.2em !important; }
+}

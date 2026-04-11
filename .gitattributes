@@ -1,0 +1,2 @@
+# Mark TL schema files as data — not code
+*.tl linguist-language=TL linguist-detectable=false

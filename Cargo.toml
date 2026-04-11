@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "ferogram-tl-parser",
+    "ferogram-tl-gen",
+    "ferogram-tl-types",
+    "ferogram-crypto",
+    "ferogram-mtproto",
+    "ferogram",
+    "ferogram-connect",
+    "ferogram-app",       # userbot (user account)
+    "ferogram-bot",       # showcase bot
+]
+
+[workspace.package]
+version       = "0.1.0"
+edition       = "2024"
+license       = "MIT OR Apache-2.0"
+readme        = "README.md"
+authors       = ["Ankit Chaubey <ankitchaubey.dev@gmail.com>"]
+repository    = "https://github.com/ankit-chaubey/ferogram"
+homepage      = "https://github.com/ankit-chaubey/ferogram"
+documentation = "https://docs.rs/ferogram"
+
+[workspace.dependencies]
+ferogram-tl-parser = { path = "ferogram-tl-parser", version = "0.1.0" }
+ferogram-tl-gen    = { path = "ferogram-tl-gen",    version = "0.1.0" }
+ferogram-tl-types  = { path = "ferogram-tl-types",  version = "0.1.0" }
+ferogram-crypto    = { path = "ferogram-crypto",     version = "0.1.0" }
+ferogram-mtproto   = { path = "ferogram-mtproto",    version = "0.1.0" }
+ferogram           = { path = "ferogram",            version = "0.1.0" }

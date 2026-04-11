@@ -1,0 +1,56 @@
+[package]
+name        = "ferogram"
+description = "Production-grade async Telegram MTProto client: updates, bots, flood-wait, dialogs, messages"
+readme      = "README.md"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+documentation = "https://docs.rs/ferogram"
+keywords      = ["telegram", "mtproto", "client", "bot", "async"]
+categories    = ["api-bindings", "network-programming", "asynchronous"]
+
+[dependencies]
+ferogram-tl-types = { workspace = true, features = ["tl-api", "tl-mtproto"] }
+ferogram-mtproto  = { workspace = true }
+ferogram-crypto   = { workspace = true }
+ferogram-tl-parser = { workspace = true, optional = true }
+ferogram-tl-gen    = { workspace = true, optional = true }
+tokio          = { version = "1",   features = ["net", "io-util", "sync", "time", "rt", "rt-multi-thread", "macros"] }
+tokio-util     = { version = "0.7", features = ["rt"] }
+getrandom      = "0.2"
+flate2         = "1"
+num-bigint     = "0.4"
+num-traits     = "0.2"
+sha2           = "0.10"
+hmac           = "0.12"
+pbkdf2         = "0.12"
+tracing        = { version = "0.1", features = ["log"] }
+serde          = { version = "1", features = ["derive"], optional = true }
+mime_guess     = "2"
+base64         = "0.22"
+pulldown-cmark = "0.11"
+chrono         = { version = "0.4", features = ["clock"] }
+rusqlite       = { version = "0.31", optional = true }
+libsql         = { version = "0.6", features = ["core"], optional = true }
+html5ever       = { version = "0.38", optional = true }
+tokio-socks    = "0.5"
+socket2        = { version = "0.5", features = ["all"] }
+
+[features]
+default = []
+sqlite-session  = ["rusqlite"]
+libsql-session  = ["dep:libsql"]
+serde           = ["dep:serde"]
+html            = []
+html5ever        = ["dep:html5ever"]
+## Re-export the TL parser for custom tooling.
+parser          = ["dep:ferogram-tl-parser"]
+## Re-export the code generator for custom tooling.
+codegen         = ["dep:ferogram-tl-gen"]
+
+[package.metadata.docs.rs]
+features     = ["sqlite-session", "serde", "html", "html5ever", "parser", "codegen"]
+rustdoc-args = ["--cfg", "docsrs"]

@@ -1,0 +1,21 @@
+[package]
+name        = "ferogram-app"
+description = "Userbot (user account only) built with ferogram"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+publish = false
+
+[[bin]]
+name = "ferogram-app"
+path = "src/main.rs"
+
+[dependencies]
+ferogram        = { workspace = true }
+ferogram-tl-types = { path = "../ferogram-tl-types", version = "0.1.0", features = ["tl-api", "tl-mtproto"] }
+tokio       = { version = "1", features = ["full"] }
+env_logger  = "0.11"
+chrono      = { version = "0.4", features = ["clock"] }

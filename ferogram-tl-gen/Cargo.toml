@@ -1,0 +1,19 @@
+[package]
+name        = "ferogram-tl-gen"
+description = "Build-time code generator: Telegram TL schema → Rust source"
+readme      = "README.md"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+documentation = "https://docs.rs/ferogram-tl-gen"
+keywords      = ["telegram", "mtproto", "tl", "codegen", "build"]
+categories    = ["development-tools::build-utils", "development-tools"]
+
+[dependencies]
+ferogram-tl-parser = { workspace = true }
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
