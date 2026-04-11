@@ -2,36 +2,72 @@
 
 Telegram supports rich text formatting through **message entities**: positional markers that indicate bold, italic, code, links, and more.
 
-## Using parse_markdown
+## Quickest way: InputMessage constructors
 
-The easiest way is `parse_markdown`, which converts a Markdown-like syntax into a `(String, Vec<MessageEntity>)` tuple:
+The simplest approach is `InputMessage::markdown` or `InputMessage::html`, which parse the text and attach entities in one call:
+
+```rust
+use ferogram::InputMessage;
+
+// Markdown
+let msg = InputMessage::markdown("**Bold**, _italic_, `code`");
+
+// HTML
+let msg = InputMessage::html("<b>Bold</b>, <i>italic</i>, <code>code</code>");
+
+client.send_message_to_peer_ex(peer, &msg).await?;
+```
+
+## Using parse_markdown directly
+
+If you need the `(String, Vec<MessageEntity>)` tuple for further processing:
 
 ```rust
 use ferogram::parsers::parse_markdown;
 use ferogram::InputMessage;
 
-let (plain, entities) = parse_markdown(
-    "**Bold text**, _italic text_, `inline code`\n\
-     and a [clickable link](https://example.com)"
-);
+let (plain, entities) = parse_markdown("**Bold text**, _italic_, `inline code`");
 
 let msg = InputMessage::text(plain).entities(entities);
 client.send_message_to_peer_ex(peer, &msg).await?;
 ```
 
-## Supported syntax
+## Markdown syntax
 
-| Markdown | Entity type | Example |
-|---|---|---|
-| `**text**` | Bold | **Hello** |
-| `_text_` | Italic | _Hello_ |
-| `*text*` | Italic | *Hello* |
-| `__text__` | Underline | Hello |
-| `~~text~~` | Strikethrough | ~~Hello~~ |
-| `` `text` `` | Code (inline) | `Hello` |
-| ```` ```text``` ```` | Pre (code block) | block |
-| `\|\|text\|\|` | Spoiler | ▓▓▓▓▓ |
-| `[label](url)` | Text link | clickable |
+| Syntax | Entity |
+|---|---|
+| `**text**` | Bold |
+| `*text*` | Bold |
+| `_text_` | Italic |
+| `__text__` | Italic |
+| `~~text~~` | Strikethrough |
+| `` `text` `` | Code (inline) |
+| ```` ```lang\ncode\n``` ```` | Pre (code block) |
+| `\|\|text\|\|` | Spoiler |
+| `[label](url)` | TextUrl |
+| `[label](tg://user?id=123)` | MentionName |
+| `![text](tg://emoji?id=123)` | CustomEmoji |
+| `\*`, `\_`, `\~` … | Escaped literal character |
+
+> **Note:** Underline has no markdown syntax. Use HTML `<u>` if you need it.
+
+## HTML syntax
+
+Supported tags:
+
+| Tag | Entity |
+|---|---|
+| `<b>`, `<strong>` | Bold |
+| `<i>`, `<em>` | Italic |
+| `<u>` | Underline |
+| `<s>`, `<del>`, `<strike>` | Strikethrough |
+| `<code>` | Code (inline) |
+| `<pre>` | Pre (code block) |
+| `<tg-spoiler>` | Spoiler |
+| `<a href="url">` | TextUrl |
+| `<a href="tg://user?id=123">` | MentionName |
+| `<tg-emoji emoji-id="123">` | CustomEmoji |
+| `<br>` | Newline |
 
 ## Building entities manually
 
@@ -42,12 +78,10 @@ use ferogram_tl_types as tl;
 
 let text = "Hello world";
 let entities = vec![
-    // Bold "Hello"
     tl::enums::MessageEntity::Bold(tl::types::MessageEntityBold {
         offset: 0,
         length: 5,
     }),
-    // Code "world"
     tl::enums::MessageEntity::Code(tl::types::MessageEntityCode {
         offset: 6,
         length: 5,
@@ -57,16 +91,79 @@ let entities = vec![
 let msg = InputMessage::text(text).entities(entities);
 ```
 
-## All entity types (Layer 224)
+## Pre block with language
 
-| Enum variant | Description |
+```rust
+tl::enums::MessageEntity::Pre(tl::types::MessageEntityPre {
+    offset:   0,
+    length:   code_text.encode_utf16().count() as i32,
+    language: "rust".into(),
+})
+```
+
+## Mention by user ID
+
+```rust
+tl::enums::MessageEntity::MentionName(tl::types::MessageEntityMentionName {
+    offset:  0,
+    length:  label.encode_utf16().count() as i32,
+    user_id: 123456789,
+})
+```
+
+## Blockquote
+
+`messageEntityBlockquote` has an optional `collapsed` flag:
+
+```rust
+tl::enums::MessageEntity::Blockquote(tl::types::MessageEntityBlockquote {
+    collapsed: false, // true = collapsible quote
+    offset: 0,
+    length: text.encode_utf16().count() as i32,
+})
+```
+
+## FormattedDate
+
+Displays a Unix timestamp in the user's local timezone and locale. Set the boolean flags you want; the rest default to false:
+
+```rust
+tl::enums::MessageEntity::FormattedDate(tl::types::MessageEntityFormattedDate {
+    relative:    false,
+    short_time:  false,
+    long_time:   false,
+    short_date:  true,  // e.g. "Jan 5"
+    long_date:   false,
+    day_of_week: false,
+    offset: 0,
+    length: placeholder_text.encode_utf16().count() as i32,
+    date:   1736000000, // Unix timestamp
+})
+```
+
+## Generating markup from entities
+
+Both `generate_markdown` and `generate_html` are available if you need to serialise entities back to text:
+
+```rust
+use ferogram::parsers::{generate_markdown, generate_html};
+
+let md  = generate_markdown(plain_text, &entities);
+let htm = generate_html(plain_text, &entities);
+```
+
+> `generate_markdown` skips `Underline` (no unambiguous delimiter). Use `generate_html` if you need it.
+
+## All entity types
+
+| Variant | Description |
 |---|---|
-| `Bold` | **Bold text** |
-| `Italic` | _Italic text_ |
-| `Underline` | Underlined |
-| `Strike` | ~~Strikethrough~~ |
+| `Bold` | Bold text |
+| `Italic` | Italic text |
+| `Underline` | Underlined (HTML only) |
+| `Strike` | Strikethrough |
 | `Spoiler` | Hidden until tapped |
-| `Code` | `Monospace inline` |
+| `Code` | Monospace inline |
 | `Pre` | Code block (optional language) |
 | `TextUrl` | Hyperlink with custom label |
 | `Url` | Auto-detected URL |
@@ -78,45 +175,6 @@ let msg = InputMessage::text(text).entities(entities);
 | `Cashtag` | $TICKER |
 | `BotCommand` | /command |
 | `BankCard` | Bank card number |
-| `BlockquoteCollapsible` | Collapsible quote block |
+| `Blockquote` | Block quote, optionally collapsible |
 | `CustomEmoji` | Custom emoji by document ID |
-| `FormattedDate` | ✨ New in Layer 223: displays a date in local time |
-
-## Pre block with language
-
-```rust
-tl::enums::MessageEntity::Pre(tl::types::MessageEntityPre {
-    offset:   0,
-    length:   code_text.len() as i32,
-    language: "rust".into(),
-})
-```
-
-## Mention by user ID (no @username needed)
-
-```rust
-tl::enums::MessageEntity::MentionName(tl::types::MessageEntityMentionName {
-    offset:  0,
-    length:  5,   // length of the label text
-    user_id: 123456789,
-})
-```
-
-## FormattedDate: Layer 224
-
-A new entity that automatically formats a unix timestamp into the user's local timezone and locale:
-
-```rust
-tl::enums::MessageEntity::FormattedDate(tl::types::MessageEntityFormattedDate {
-    flags:    0,
-    relative:    false, // "yesterday", "2 days ago"
-    short_time:  false, // "14:30"
-    long_time:   false, // "2:30 PM"
-    short_date:  true,  // "Jan 5"
-    long_date:   false, // "January 5, 2026"
-    day_of_week: false, // "Monday"
-    offset:      0,
-    length:      text.len() as i32,
-    date:        1736000000, // unix timestamp
-})
-```
+| `FormattedDate` | Unix timestamp rendered in local time |

@@ -1110,27 +1110,9 @@ impl Client {
             });
         }
 
-        // Only clear the auth key on definitive bad-key signals from Telegram.
-        // Network errors (EOF mid-session, ConnectionReset, Rpc(-404)) mean the
-        // server rejected our key. Any other error (I/O, etc.) is left intact
-        // no RPC timeout exists anymore, so there is no "timed out = stale key" case.
+        // Only -404 means Telegram rejected the key. EOF/RST are plain TCP drops.
         if let Err(e) = client.init_connection().await {
-            let key_is_stale = match &e {
-                InvocationError::Rpc(r) if r.code == -404 => true,
-                // -429 = TRANSPORT_FLOOD (rate limit). The auth key is valid
-                // Telegram is just throttling us. Do NOT do fresh DH here; it
-                // would race with the reader task's error handler and produce two
-                // concurrent DH handshakes whose keys clobber each other, leading
-                // to AUTH_KEY_UNREGISTERED on every post-reconnect RPC call.
-                InvocationError::Rpc(r) if r.code == -429 => false,
-                InvocationError::Io(io)
-                    if io.kind() == std::io::ErrorKind::UnexpectedEof
-                        || io.kind() == std::io::ErrorKind::ConnectionReset =>
-                {
-                    true
-                }
-                _ => false,
-            };
+            let key_is_stale = matches!(&e, InvocationError::Rpc(r) if r.code == -404);
 
             // Concurrency guard: only one fresh-DH handshake at a time.
             // If the reader task already started DH (e.g. it also got a -404
@@ -2111,24 +2093,8 @@ impl Client {
                             tracing::warn!("[ferogram] Reader: connection error: {e}");
                             drop(init_rx.take()); // discard any in-flight init
 
-                            // Detect definitive auth-key rejection.  Telegram signals
-                            // this with a -404 transport error (now surfaced as Rpc(-404)
-                            // by recv_frame_read) or an immediate EOF/RST.  In that case
-                            // we clear the saved key so do_reconnect_loop falls through to
-                            // connect_raw (fresh DH) rather than reconnecting with the same
-                            // expired key and getting -404 forever.
-                            //
-                            // -429 = TRANSPORT_FLOOD (rate limit). The key is fine: do NOT
-                            // clear it. Clearing on -429 causes a double-DH race with the
-                            // startup path, producing AUTH_KEY_UNREGISTERED post-reconnect.
-                            let key_is_stale = match &e {
-                                InvocationError::Rpc(r) if r.code == -404 => true,
-                                InvocationError::Rpc(r) if r.code == -429 => false,
-                                InvocationError::Io(io)
-                                    if io.kind() == std::io::ErrorKind::UnexpectedEof
-                                    || io.kind() == std::io::ErrorKind::ConnectionReset => true,
-                                _ => false,
-                            };
+                            // Only -404 = Telegram rejected the key. EOF/RST = TCP drop.
+                            let key_is_stale = matches!(&e, InvocationError::Rpc(r) if r.code == -404);
                             // Only clear the key if no DH is already in progress.
                             // The startup init_connection path may have already claimed
                             // dh_in_progress; honour that to avoid a double-DH race.
@@ -2229,16 +2195,8 @@ impl Client {
                         }
 
                         Ok(Err(e)) => {
-                            // TCP connected but init RPC failed.
-                            // Only clear auth key on definitive bad-key signals from Telegram.
-                            // -429 = TRANSPORT_FLOOD: key is valid, just throttled: do NOT clear.
-                            let key_is_stale = match &e {
-                                InvocationError::Rpc(r) if r.code == -404 => true,
-                                InvocationError::Rpc(r) if r.code == -429 => false,
-                                InvocationError::Io(io) if io.kind() == std::io::ErrorKind::UnexpectedEof
-                                    || io.kind() == std::io::ErrorKind::ConnectionReset => true,
-                                _ => false,
-                            };
+                            // Only -404 = key rejected. EOF/RST = TCP drop, key still valid.
+                            let key_is_stale = matches!(&e, InvocationError::Rpc(r) if r.code == -404);
                             // Use compare_exchange so we don't stomp on another in-progress DH.
                             let dh_claimed = key_is_stale
                                 && self.inner.dh_in_progress
@@ -3419,58 +3377,83 @@ impl Client {
                     let c = self.clone();
                     let utx = self.inner.update_tx.clone();
                     tokio::spawn(async move {
-                        // Respect FLOOD_WAIT before sending the result back.
-                        // Without this, a FLOOD_WAIT from Telegram during init
-                        // would immediately re-trigger another reconnect attempt,
-                        // which would itself hit FLOOD_WAIT: a ban spiral.
-                        let result = loop {
-                            match c.init_connection().await {
-                                Ok(()) => break Ok(()),
-                                Err(InvocationError::Rpc(ref r))
-                                    if r.flood_wait_seconds().is_some() =>
-                                {
-                                    let secs = r.flood_wait_seconds().unwrap();
-                                    tracing::warn!(
-                                        "[ferogram] init_connection FLOOD_WAIT_{secs}:                                          waiting before retry"
-                                    );
-                                    sleep(Duration::from_secs(secs + 1)).await;
-                                    // loop and retry init_connection
+                        // Retry on FLOOD_WAIT; 401 can happen if key hasn't propagated yet.
+                        let result = {
+                            let mut attempt = 0u32;
+                            const MAX_ATTEMPTS: u32 = 5;
+                            loop {
+                                match c.init_connection().await {
+                                    Ok(()) => break Ok(()),
+                                    Err(InvocationError::Rpc(ref r))
+                                        if r.flood_wait_seconds().is_some() =>
+                                    {
+                                        let secs = r.flood_wait_seconds().unwrap();
+                                        tracing::warn!(
+                                            "[ferogram] init_connection FLOOD_WAIT_{secs}: \
+                                             waiting before retry"
+                                        );
+                                        sleep(Duration::from_secs(secs + 1)).await;
+                                    }
+                                    Err(InvocationError::Rpc(ref r))
+                                        if r.code == 401 && attempt < MAX_ATTEMPTS =>
+                                    {
+                                        let delay = Duration::from_millis(500 * (1u64 << attempt));
+                                        tracing::warn!(
+                                            "[ferogram] init_connection AUTH_KEY_UNREGISTERED \
+                                             (attempt {}/{MAX_ATTEMPTS}): retrying in {delay:?}",
+                                            attempt + 1,
+                                        );
+                                        sleep(delay).await;
+                                        attempt += 1;
+                                    }
+                                    Err(e) => break Err(e),
                                 }
-                                Err(e) => break Err(e),
                             }
                         };
                         if result.is_ok() {
-                            // Replay any updates missed during the outage.
-                            // After fresh DH the new key may not have propagated to
-                            // all of Telegram's app servers yet, so getDifference can
-                            // return AUTH_KEY_UNREGISTERED (401).  A 2 s pause lets the
-                            // key replicate before we send any RPCs (same reason
-                            // yields after fresh DH).  Without this, post-reconnect RPC
-                            // calls silently fail and the bot stops responding.
-                            if c.inner
-                                .dh_in_progress
-                                .load(std::sync::atomic::Ordering::SeqCst)
-                            {
-                                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                            }
-                            let missed = match c.get_difference().await {
-                                Ok(updates) => updates,
-                                Err(ref e)
-                                    if matches!(e,
-                                    InvocationError::Rpc(r) if r.code == 401) =>
-                                {
-                                    tracing::warn!(
-                                        "[ferogram] getDifference AUTH_KEY_UNREGISTERED after \
-                                         fresh DH: falling back to sync_pts_state"
-                                    );
-                                    let _ = c.sync_pts_state().await;
-                                    vec![]
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "[ferogram] getDifference failed after reconnect: {e}"
-                                    );
-                                    vec![]
+                            // Retry getDifference on 401: key may not have propagated yet.
+                            let missed = {
+                                let mut attempt = 0u32;
+                                const MAX_ATTEMPTS: u32 = 5;
+                                loop {
+                                    match c.get_difference().await {
+                                        Ok(updates) => break updates,
+                                        Err(ref e)
+                                            if matches!(e,
+                                                InvocationError::Rpc(r) if r.code == 401)
+                                                && attempt < MAX_ATTEMPTS =>
+                                        {
+                                            let delay =
+                                                Duration::from_millis(500 * (1u64 << attempt));
+                                            tracing::warn!(
+                                                "[ferogram] getDifference AUTH_KEY_UNREGISTERED \
+                                                 (attempt {}/{MAX_ATTEMPTS}): retrying in \
+                                                 {delay:?}",
+                                                attempt + 1,
+                                            );
+                                            sleep(delay).await;
+                                            attempt += 1;
+                                        }
+                                        Err(ref e)
+                                            if matches!(e,
+                                                InvocationError::Rpc(r) if r.code == 401) =>
+                                        {
+                                            tracing::warn!(
+                                                "[ferogram] getDifference AUTH_KEY_UNREGISTERED \
+                                                 after {MAX_ATTEMPTS} retries: falling back \
+                                                 to sync_pts_state"
+                                            );
+                                            let _ = c.sync_pts_state().await;
+                                            break vec![];
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "[ferogram] getDifference failed after reconnect: \
+                                                 {e}"
+                                            );
+                                            break vec![];
+                                        }
+                                    }
                                 }
                             };
                             for u in missed {
