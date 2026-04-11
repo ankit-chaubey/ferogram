@@ -14,8 +14,8 @@ name = "ferogram-bot"
 path = "src/main.rs"
 
 [dependencies]
-ferogram          = { path = "../ferogram",       version = "0.1.0" }
-ferogram-tl-types = { path = "../ferogram-tl-types", version = "0.1.0", features = ["tl-api", "tl-mtproto"] }
+ferogram          = { path = "../ferogram",       version = "0.1.1" }
+ferogram-tl-types = { path = "../ferogram-tl-types", version = "0.1.1", features = ["tl-api", "tl-mtproto"] }
 tokio      = { version = "1", features = ["full"] }
 env_logger = "0.11"
 chrono     = { version = "0.4", features = ["clock"] }

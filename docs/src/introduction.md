@@ -83,7 +83,7 @@ Most Telegram libraries are thin wrappers around generated code or ports from Py
 
 ```toml
 [dependencies]
-ferogram = "0.1.0"
+ferogram = "0.1.1"
 tokio        = { version = "1", features = ["full"] }
 ```
 
@@ -94,7 +94,7 @@ Then head to [Installation](./installation.md) for credentials setup, or jump st
 
 ---
 
-## Initial Release — v0.1.0
+## Initial Release v0.1.0
 
 #### Proxy & Transport
 - **MTProxy support**: connect via `t.me/proxy` / `tg://proxy` links or manual host/port/secret config

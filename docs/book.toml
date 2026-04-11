@@ -1,5 +1,5 @@
 [book]
-title = "ferogram: Async Telegram MTProto in Rust"
+title = "ferogram"
 authors = ["Ankit Chaubey"]
 language = "en"
 src = "src"

@@ -17,7 +17,7 @@ Build-dependency only. Runs during `cargo build` via `build.rs` and produces Rus
 
 ```toml
 [build-dependencies]
-ferogram-tl-gen = "0.4.8"
+ferogram-tl-gen = "0.1.1"
 ```
 
 ---

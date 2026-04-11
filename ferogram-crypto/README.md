@@ -17,7 +17,7 @@ Implements AES-IGE, RSA, SHA-1/256, Diffie-Hellman, PQ factorization, auth key d
 
 ```toml
 [dependencies]
-ferogram-crypto = "0.4.8"
+ferogram-crypto = "0.1.1"
 ```
 
 ---

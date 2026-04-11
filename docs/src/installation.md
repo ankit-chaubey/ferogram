@@ -6,7 +6,7 @@
 
 ```toml
 [dependencies]
-ferogram = "0.4.8"
+ferogram = "0.1.1"
 tokio        = { version = "1", features = ["full"] }
 ```
 
@@ -57,15 +57,15 @@ For bots, additionally get a **bot token** from [@BotFather](https://t.me/BotFat
 ### SQLite session storage
 
 ```toml
-ferogram = { version = "0.4.8", features = ["sqlite-session"] }
+ferogram = { version = "0.1.1", features = ["sqlite-session"] }
 ```
 
 Stores session data in a SQLite database instead of a binary file. More robust for long-running servers.
 
-### LibSQL / Turso session storage: New in v0.4.8
+### LibSQL / Turso session storage: New in v0.1.1
 
 ```toml
-ferogram = { version = "0.4.8", features = ["libsql-session"] }
+ferogram = { version = "0.1.1", features = ["libsql-session"] }
 ```
 
 Backed by [libsql](https://github.com/tursodatabase/libsql): supports local embedded databases and remote Turso cloud databases. Ideal for serverless or distributed deployments.
@@ -83,7 +83,7 @@ let backend = LibSqlBackend::open_remote(
 ).await?;
 ```
 
-### String session (portable, no extra deps): New in v0.4.8
+### String session (portable, no extra deps): New in v0.1.1
 
 No feature flag needed. Encode a session as a base64 string and restore it anywhere:
 
@@ -103,10 +103,10 @@ See [Session Backends](./authentication/session-backends.md) for the full guide.
 
 ```toml
 # Built-in hand-rolled HTML parser (no extra deps)
-ferogram = { version = "0.4.8", features = ["html"] }
+ferogram = { version = "0.1.1", features = ["html"] }
 
 # OR: spec-compliant html5ever tokenizer (overrides built-in)
-ferogram = { version = "0.4.8", features = ["html5ever"] }
+ferogram = { version = "0.1.1", features = ["html5ever"] }
 ```
 
 | Feature | Deps added | Notes |
@@ -119,7 +119,7 @@ ferogram = { version = "0.4.8", features = ["html5ever"] }
 If you use `ferogram-tl-types` directly for raw API access:
 
 ```toml
-ferogram-tl-types = { version = "0.4.8", features = [
+ferogram-tl-types = { version = "0.1.1", features = [
     "tl-api",          # Telegram API types (required)
     "tl-mtproto",      # Low-level MTProto types
     "impl-debug",      # Debug trait on all types (default ON)

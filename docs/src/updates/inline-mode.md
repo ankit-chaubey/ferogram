@@ -1,6 +1,6 @@
 # Inline Mode
 
-Inline mode lets users type `@yourbot query` in any chat and receive results. Layer supports both sides: **receiving queries** (bot) and **sending queries** (user account).
+Inline mode lets users type `@yourbot query` in any chat and receive results. ferogram supports both sides: **receiving queries** (bot) and **sending queries** (user account).
 
 ---
 

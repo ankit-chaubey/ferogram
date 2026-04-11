@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version       = "0.1.0"
+version       = "0.1.1"
 edition       = "2024"
 license       = "MIT OR Apache-2.0"
 readme        = "README.md"
@@ -24,9 +24,9 @@ homepage      = "https://github.com/ankit-chaubey/ferogram"
 documentation = "https://docs.rs/ferogram"
 
 [workspace.dependencies]
-ferogram-tl-parser = { path = "ferogram-tl-parser", version = "0.1.0" }
-ferogram-tl-gen    = { path = "ferogram-tl-gen",    version = "0.1.0" }
-ferogram-tl-types  = { path = "ferogram-tl-types",  version = "0.1.0" }
-ferogram-crypto    = { path = "ferogram-crypto",     version = "0.1.0" }
-ferogram-mtproto   = { path = "ferogram-mtproto",    version = "0.1.0" }
-ferogram           = { path = "ferogram",            version = "0.1.0" }
+ferogram-tl-parser = { path = "ferogram-tl-parser", version = "0.1.1" }
+ferogram-tl-gen    = { path = "ferogram-tl-gen",    version = "0.1.1" }
+ferogram-tl-types  = { path = "ferogram-tl-types",  version = "0.1.1" }
+ferogram-crypto    = { path = "ferogram-crypto",     version = "0.1.1" }
+ferogram-mtproto   = { path = "ferogram-mtproto",    version = "0.1.1" }
+ferogram           = { path = "ferogram",            version = "0.1.1" }

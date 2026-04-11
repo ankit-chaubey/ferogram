@@ -37,7 +37,7 @@ Most users only need `ferogram`.
 
 ```toml
 [dependencies]
-ferogram = "0.1.0"
+ferogram = "0.1.1"
 tokio        = { version = "1", features = ["full"] }
 ```
 
@@ -46,10 +46,10 @@ Get your `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org)
 Optional features:
 
 ```toml
-ferogram = { version = "0.1.0", features = ["sqlite-session"] }  # SQLite session
-ferogram = { version = "0.1.0", features = ["libsql-session"] }  # libsql / Turso
-ferogram = { version = "0.1.0", features = ["html"] }            # HTML parser
-ferogram = { version = "0.1.0", features = ["html5ever"] }       # html5ever parser
+ferogram = { version = "0.1.1", features = ["sqlite-session"] }  # SQLite session
+ferogram = { version = "0.1.1", features = ["libsql-session"] }  # libsql / Turso
+ferogram = { version = "0.1.1", features = ["html"] }            # HTML parser
+ferogram = { version = "0.1.1", features = ["html5ever"] }       # html5ever parser
 ```
 
 `ferogram` re-exports `ferogram_tl_types` as `ferogram::tl`.

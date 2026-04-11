@@ -19,7 +19,7 @@ Opens a TCP connection to Telegram, performs the full 3-step DH key exchange, an
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge">sync</span>
-<span class="api-card-sig">Client::with_string_session(session: &str, api_id: i32, api_hash: &str) → Result&lt;(Client, ShutdownToken), InvocationError&gt; <span class="api-badge-new">New 0.4.8</span></span>
+<span class="api-card-sig">Client::with_string_session(session: &str, api_id: i32, api_hash: &str) → Result&lt;(Client, ShutdownToken), InvocationError&gt; <span class="api-badge-new">New 0.1.1</span></span>
 </div>
 <div class="api-card-body">
 Convenience constructor that connects using a <code>StringSessionBackend</code>. Pass the string exported by <code>export_session_string()</code>.
@@ -49,7 +49,7 @@ Writes the current session (auth key + DC info + peer cache) to the backend. Cal
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.export_session_string() → Result&lt;String, InvocationError&gt; <span class="api-badge-new">New 0.4.8</span></span>
+<span class="api-card-sig">client.export_session_string() → Result&lt;String, InvocationError&gt; <span class="api-badge-new">New 0.1.1</span></span>
 </div>
 <div class="api-card-body">
 Serialises the current session to a portable base64 string. Store it in an env var, DB column, or CI secret. Restore with <code>Client::with_string_session()</code> or <code>StringSessionBackend</code>.
@@ -81,7 +81,7 @@ Immediately closes the TCP connection and stops the reader task without waiting 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.sync_update_state() <span class="api-badge-new">New 0.4.8</span></span>
+<span class="api-card-sig">client.sync_update_state() <span class="api-badge-new">New 0.1.1</span></span>
 </div>
 <div class="api-card-body">
 Forces an immediate <code>updates.getState</code> round-trip and reconciles local pts/seq/qts counters. Useful after a long disconnect or when you suspect a gap but don't want to wait for the gap-detection timer.
@@ -444,7 +444,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <span class="api-badge api-badge-async">async</span>
 <span class="api-card-sig">client.iter_participants(peer: Peer) → ParticipantIter</span>
 </div>
-<div class="api-card-body">Lazy async iterator that pages through all members, including beyond the 200-member limit. Fixed in v0.4.8 to paginate correctly for large channels.</div>
+<div class="api-card-body">Lazy async iterator that pages through all members, including beyond the 200-member limit. Fixed in v0.1.1 to paginate correctly for large channels.</div>
 </div>
 
 <div class="api-card">
@@ -532,7 +532,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <span class="api-badge api-badge-async">async</span>
 <span class="api-card-sig">client.answer_inline_query(query_id: i64, results: Vec&lt;InputBotInlineResult&gt;, cache_time: i32, is_personal: bool, next_offset: Option&lt;&str&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Respond to an inline query with a list of results. <code>cache_time</code> in seconds. Empty result list now handled correctly (fixed in v0.4.8).</div>
+<div class="api-card-body">Respond to an inline query with a list of results. <code>cache_time</code> in seconds. Empty result list now handled correctly (fixed in v0.1.1).</div>
 </div>
 
 ---

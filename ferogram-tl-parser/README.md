@@ -17,7 +17,7 @@ Reads `.tl` schema files and produces a structured AST. Used internally by `fero
 
 ```toml
 [dependencies]
-ferogram-tl-parser = "0.4.8"
+ferogram-tl-parser = "0.1.1"
 ```
 
 ---

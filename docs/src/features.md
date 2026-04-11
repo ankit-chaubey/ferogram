@@ -25,19 +25,19 @@ The following are **always available** without any feature flag:
 
 ```toml
 # SQLite session only
-ferogram = { version = "0.4.8", features = ["sqlite-session"] }
+ferogram = { version = "0.1.1", features = ["sqlite-session"] }
 
-# LibSQL / Turso session (new in 0.4.8)
-ferogram = { version = "0.4.8", features = ["libsql-session"] }
+# LibSQL / Turso session (new in 0.1.1)
+ferogram = { version = "0.1.1", features = ["libsql-session"] }
 
 # HTML parsing (minimal, no extra deps)
-ferogram = { version = "0.4.8", features = ["html"] }
+ferogram = { version = "0.1.1", features = ["html"] }
 
 # HTML parsing (spec-compliant, adds html5ever dep)
-ferogram = { version = "0.4.8", features = ["html5ever"] }
+ferogram = { version = "0.1.1", features = ["html5ever"] }
 
 # Multiple features at once
-ferogram = { version = "0.4.8", features = ["sqlite-session", "html"] }
+ferogram = { version = "0.1.1", features = ["sqlite-session", "html"] }
 ```
 
 ---
@@ -58,7 +58,7 @@ ferogram = { version = "0.4.8", features = ["sqlite-session", "html"] }
 ### Example: enable serde
 
 ```toml
-ferogram-tl-types = { version = "0.4.8", features = ["tl-api", "impl-serde"] }
+ferogram-tl-types = { version = "0.1.1", features = ["tl-api", "impl-serde"] }
 ```
 
 ```rust
@@ -68,7 +68,7 @@ let json = serde_json::to_string(&some_tl_type)?;
 ### Example: name_for_id (debugging)
 
 ```toml
-ferogram-tl-types = { version = "0.4.8", features = ["tl-api", "name-for-id"] }
+ferogram-tl-types = { version = "0.1.1", features = ["tl-api", "name-for-id"] }
 ```
 
 ```rust
@@ -82,7 +82,7 @@ if let Some(name) = name_for_id(0x74ae4240) {
 ### Example: minimal (no Debug, no conversions)
 
 ```toml
-ferogram-tl-types = { version = "0.4.8", default-features = false, features = ["tl-api"] }
+ferogram-tl-types = { version = "0.1.1", default-features = false, features = ["tl-api"] }
 ```
 
 Reduces compile time when you don't need convenience traits.
@@ -94,7 +94,7 @@ Reduces compile time when you don't need convenience traits.
 `StringSessionBackend` and `export_session_string()` are available in the default build: no feature flag required:
 
 ```toml
-ferogram = "0.4.8"   # already includes StringSessionBackend
+ferogram = "0.1.1"   # already includes StringSessionBackend
 ```
 
 ```rust
