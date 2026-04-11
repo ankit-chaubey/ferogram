@@ -22,8 +22,8 @@ use chrono::Utc;
 use rand::{Rng, thread_rng};
 use sha2::{Digest, Sha256};
 
+use ferogram::tl;
 use ferogram::{Client, InputMessage, update::Update};
-use ferogram_tl_types as tl;
 
 const API_ID: i32 = 0;
 const API_HASH: &str = "";

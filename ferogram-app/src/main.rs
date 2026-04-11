@@ -17,7 +17,7 @@ use std::time::Instant;
 
 use chrono::Utc;
 use ferogram::{Client, InputMessage, SignInError, update::Update};
-use ferogram_tl_types::{self as tl, Cursor, Deserializable};
+use ferogram::{tl, tl::Cursor, tl::Deserializable};
 
 const API_ID: i32 = 0;
 const API_HASH: &str = "";
