@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::Utc;
-use ferogram::{Client, InputMessage, SignInError, update::Update};
+use ferogram::{Client, InputMessage, SignInError, TransportKind, update::Update};
 use ferogram::{tl, tl::Cursor, tl::Deserializable};
 
 const API_ID: i32 = 0;
@@ -60,6 +60,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .app_version(APP_VERSION)
         .lang_code(LANG_CODE)
         .system_lang_code(SYSTEM_LANG_CODE)
+        .transport(TransportKind::Abridged)
         .connect()
         .await?;
 

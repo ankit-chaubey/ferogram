@@ -23,7 +23,7 @@ use rand::{Rng, thread_rng};
 use sha2::{Digest, Sha256};
 
 use ferogram::tl;
-use ferogram::{Client, InputMessage, update::Update};
+use ferogram::{Client, InputMessage, TransportKind, update::Update};
 
 const API_ID: i32 = 0;
 const API_HASH: &str = "";
@@ -81,6 +81,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .app_version(APP_VERSION)
         .lang_code(LANG_CODE)
         .system_lang_code(SYSTEM_LANG_CODE)
+        .transport(TransportKind::Abridged)
         .proxy_link(PROXY)
         .connect()
         .await?;
