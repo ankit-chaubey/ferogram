@@ -2031,6 +2031,47 @@ impl Client {
                             });
                         }
                     }
+                    // evict containers older than 600 s and fail their inner RPCs.
+                    // Mirrors tDesktop clearOldContainers(): inner requests that the server
+                    // silently dropped will never get acked, so fail them now so the caller
+                    // can retry rather than hanging until the 30 s RPC timeout.
+                    {
+                        const CONTAINER_MAX_AGE: std::time::Duration =
+                            std::time::Duration::from_secs(600);
+                        let stale: Vec<(i64, i64)> = {
+                            let w = self.inner.writer.lock().await;
+                            w.container_ages.iter()
+                                .filter(|(_, t)| t.elapsed() >= CONTAINER_MAX_AGE)
+                                .filter_map(|(&cid, _)| {
+                                    w.container_map.get(&cid).map(|&iid| (cid, iid))
+                                })
+                                .collect()
+                        };
+                        if !stale.is_empty() {
+                            let mut w = self.inner.writer.lock().await;
+                            for (cid, inner_id) in &stale {
+                                w.container_map.remove(cid);
+                                w.container_ages.remove(cid);
+                                w.sent_bodies.remove(inner_id);
+                                tracing::warn!(
+                                    "[ferogram] container cid={cid} age > 600 s, \
+                                     failing inner request msg_id={inner_id}"
+                                );
+                            }
+                            drop(w);
+                            let mut pending = self.inner.pending.lock().await;
+                            for (_, inner_id) in stale {
+                                if let Some(tx) = pending.remove(&inner_id) {
+                                    let _ = tx.send(Err(InvocationError::Io(
+                                        std::io::Error::new(
+                                            std::io::ErrorKind::TimedOut,
+                                            "container unacked for >600 s",
+                                        ),
+                                    )));
+                                }
+                            }
+                        }
+                    }
                 }
                 _ = async {
                     if let Some(ref mut i) = restart_interval { i.tick().await; }
@@ -2081,6 +2122,42 @@ impl Client {
                             // (it's not the "server salt" we should use: that only comes
                             // from new_session_created, bad_server_salt, or future_salts).
                             // Overwriting enc.salt here would clobber the managed salt pool.
+
+                            // validate msg_id lower 2 bits.
+                            // Server messages must have bits 0-1 == 0b01 or 0b11
+                            // (i.e. odd lower bit set, as per MTProto spec §4.1.3).
+                            // Bits 0b00 or 0b10 indicate a malformed/replayed frame -
+                            // tDesktop restarts the session on this violation.
+                            let lower2 = (msg.msg_id & 0x03) as u8;
+                            if lower2 != 1 && lower2 != 3 {
+                                tracing::warn!(
+                                    "[ferogram] msg_id lower bits invalid (0b{lower2:02b}): \
+                                     expected 0b01 or 0b11: reconnecting"
+                                );
+                                drop(init_rx.take());
+                                {
+                                    let mut pending = self.inner.pending.lock().await;
+                                    let msg_str = format!("msg_id bits invalid: 0b{lower2:02b}");
+                                    for (_, tx) in pending.drain() {
+                                        let _ = tx.send(Err(InvocationError::Io(
+                                            std::io::Error::new(
+                                                std::io::ErrorKind::InvalidData,
+                                                msg_str.clone(),
+                                            )
+                                        )));
+                                    }
+                                }
+                                self.inner.writer.lock().await.sent_bodies.clear();
+                                match self.do_reconnect_loop(
+                                    RECONNECT_BASE_MS, &mut rh, &mut fk, &mut ak, &mut sid,
+                                    network_hint_rx,
+                                ).await {
+                                    Some(rx) => { init_rx = Some(rx); }
+                                    None      => return,
+                                }
+                                continue;
+                            }
+
                             self.route_frame(msg.body, msg.msg_id).await;
 
                             //: Acks are NOT flushed here standalone.
@@ -2351,6 +2428,31 @@ impl Client {
                     let inner_msg_id = i64::from_le_bytes(body[pos..pos + 8].try_into().unwrap());
                     let inner_len =
                         u32::from_le_bytes(body[pos + 12..pos + 16].try_into().unwrap()) as usize;
+                    // tDesktop rejects containers with unaligned or too-small
+                    // inner_len, and inner msg_ids that are not strictly greater than the
+                    // container msg_id (would allow replay / ordering attacks).
+                    if inner_len & 3 != 0 || inner_len < 4 {
+                        tracing::warn!(
+                            "[ferogram] msg_container: inner_len {inner_len} bad alignment or < 4: dropping container"
+                        );
+                        break;
+                    }
+                    if inner_msg_id <= msg_id {
+                        tracing::warn!(
+                            "[ferogram] msg_container: inner_msg_id {inner_msg_id} <= container msg_id {msg_id}: dropping container"
+                        );
+                        break;
+                    }
+                    // inner msg_id lower 2 bits must be 1 or 3 (tDesktop: RestartConnection).
+                    {
+                        let bits = (inner_msg_id & 0x03) as u8;
+                        if bits != 1 && bits != 3 {
+                            tracing::warn!(
+                                "[ferogram] msg_container: inner_msg_id bits 0b{bits:02b} invalid: dropping container"
+                            );
+                            break;
+                        }
+                    }
                     pos += 16;
                     if pos + inner_len > body.len() {
                         break;
@@ -2394,59 +2496,58 @@ impl Client {
                         "[ferogram] bad_server_salt: bad_msg_id={bad_msg_id} new_salt={new_salt:#x}"
                     );
 
-                    // Re-transmit the original request under the new salt.
-                    // if bad_msg_id is not in sent_bodies directly, check
-                    // container_map: the server may have sent the notification for
-                    // the outer container msg_id rather than the inner request msg_id.
+                    // Re-transmit ALL in-flight requests under the new salt.
+                    // tDesktop calls resendAll() here: every pending request sent under
+                    // the stale salt is replayed immediately so none time out or produce
+                    // spurious errors at the caller layer.
                     {
                         let mut w = self.inner.writer.lock().await;
+                        let fk = w.frame_kind.clone();
 
-                        // Resolve: if bad_msg_id points to a container, get the inner id.
-                        let resolved_id = if w.sent_bodies.contains_key(&bad_msg_id) {
-                            bad_msg_id
-                        } else if let Some(&inner_id) = w.container_map.get(&bad_msg_id) {
-                            w.container_map.remove(&bad_msg_id);
-                            inner_id
-                        } else {
-                            bad_msg_id // will fall through to else-branch below
-                        };
-
-                        if let Some(orig_body) = w.sent_bodies.remove(&resolved_id) {
-                            let (wire, new_msg_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
-                            let fk = w.frame_kind.clone();
-                            // Intentionally NOT re-inserting into sent_bodies: a second
-                            // bad_server_salt for new_msg_id finds nothing -> stops chain.
-                            drop(w);
-                            let mut pending = self.inner.pending.lock().await;
-                            if let Some(tx) = pending.remove(&resolved_id) {
-                                pending.insert(new_msg_id, tx);
-                                drop(pending);
-                                if let Err(e) = send_frame_write(
-                                    &mut *self.inner.write_half.lock().await,
-                                    &wire,
-                                    &fk,
-                                )
-                                .await
-                                {
-                                    tracing::warn!(
-                                        "[ferogram] bad_server_salt re-send failed: {e}"
-                                    );
-                                } else {
-                                    tracing::debug!(
-                                        "[ferogram] bad_server_salt re-sent \
-                                         {resolved_id}→{new_msg_id}"
-                                    );
-                                }
+                        // Collect and re-pack every in-flight body under the new salt.
+                        // Do NOT re-insert into sent_bodies: a second bad_server_salt on
+                        // re-sent messages finds nothing → stops infinite correction chains.
+                        let all_ids: Vec<i64> = w.sent_bodies.keys().copied().collect();
+                        let mut repacked: Vec<(i64, i64, Vec<u8>)> = Vec::new();
+                        for old_id in all_ids {
+                            if let Some(orig_body) = w.sent_bodies.remove(&old_id) {
+                                let (wire, new_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
+                                repacked.push((old_id, new_id, wire));
                             }
-                        } else {
-                            // Not in sent_bodies (re-sent message rejected again, or unknown).
-                            // Fail the pending caller so it doesn't hang.
-                            drop(w);
+                        }
+                        drop(w);
+
+                        if repacked.is_empty() {
+                            // Nothing in flight: fail original waiter so it doesn't hang.
                             if let Some(tx) = self.inner.pending.lock().await.remove(&bad_msg_id) {
                                 let _ = tx.send(Err(InvocationError::Io(std::io::Error::new(
                                     std::io::ErrorKind::InvalidData,
                                     "bad_server_salt on re-sent message; caller should retry",
                                 ))));
+                            }
+                        } else {
+                            // Re-key all pending waiters then send all re-packed frames.
+                            let mut to_send: Vec<(Vec<u8>, i64)> = Vec::new();
+                            {
+                                let mut pending = self.inner.pending.lock().await;
+                                for (old_id, new_id, wire) in repacked {
+                                    if let Some(tx) = pending.remove(&old_id) {
+                                        pending.insert(new_id, tx);
+                                        to_send.push((wire, new_id));
+                                    }
+                                }
+                            }
+                            let mut wh = self.inner.write_half.lock().await;
+                            for (wire, new_id) in to_send {
+                                if let Err(e) = send_frame_write(&mut wh, &wire, &fk).await {
+                                    tracing::warn!(
+                                        "[ferogram] bad_server_salt resendAll:                                          send failed →{new_id}: {e}"
+                                    );
+                                } else {
+                                    tracing::debug!(
+                                        "[ferogram] bad_server_salt resendAll: re-sent →{new_id}"
+                                    );
+                                }
                             }
                         }
                     }
@@ -2468,7 +2569,16 @@ impl Client {
                     if let Some(tx) = self.inner.pending.lock().await.remove(&ping_msg_id) {
                         let mut w = self.inner.writer.lock().await;
                         w.sent_bodies.remove(&ping_msg_id);
-                        w.container_map.retain(|_, inner| *inner != ping_msg_id);
+                        let stale_cids: Vec<i64> = w
+                            .container_map
+                            .iter()
+                            .filter(|(_, inner)| **inner == ping_msg_id)
+                            .map(|(cid, _)| *cid)
+                            .collect();
+                        for cid in stale_cids {
+                            w.container_map.remove(&cid);
+                            w.container_ages.remove(&cid);
+                        }
                         drop(w);
                         let _ = tx.send(Ok(body));
                     }
@@ -2552,7 +2662,16 @@ impl Client {
                     if let Some(tx) = self.inner.pending.lock().await.remove(&req_msg_id) {
                         let mut w = self.inner.writer.lock().await;
                         w.sent_bodies.remove(&req_msg_id);
-                        w.container_map.retain(|_, inner| *inner != req_msg_id);
+                        let stale_cids: Vec<i64> = w
+                            .container_map
+                            .iter()
+                            .filter(|(_, inner)| **inner == req_msg_id)
+                            .map(|(cid, _)| *cid)
+                            .collect();
+                        for cid in stale_cids {
+                            w.container_map.remove(&cid);
+                            w.container_ages.remove(&cid);
+                        }
                         drop(w);
                         let _ = tx.send(Ok(body));
                     }
@@ -2607,9 +2726,11 @@ impl Client {
                     _ => "unknown bad_msg code",
                 };
 
-                // codes 16/17/48 are retryable; 32/33 are non-fatal seq corrections; rest are fatal.
+                // codes 16/17/48 are retryable; 32/33 → session reset (tDesktop ResetSession);
+                // rest are fatal.
                 let retryable = matches!(error_code, 16 | 17 | 48);
-                let fatal = !retryable && !matches!(error_code, 32 | 33);
+                let seq_desync = matches!(error_code, 32 | 33);
+                let fatal = !retryable && !seq_desync;
 
                 if fatal {
                     tracing::error!(
@@ -2623,103 +2744,118 @@ impl Client {
                     );
                 }
 
-                // Phase 1: hold writer only for enc-state mutations + packing.
-                // The lock is dropped BEFORE we touch `pending`, eliminating the
-                // writer→pending lock-order deadlock that existed before this fix.
-                let resend: Option<(Vec<u8>, i64, i64, FrameKind)> = {
-                    let mut w = self.inner.writer.lock().await;
-
-                    // correct clock skew on codes 16/17.
-                    if error_code == 16 || error_code == 17 {
-                        w.enc.correct_time_offset(msg_id);
+                // AE fix: codes 32/33 (seq_no desync) → tDesktop ResetSession.
+                // correct_seq_no() can loop forever on persistent desync; creating a
+                // fresh session_id is the correct MTProto behaviour.
+                if seq_desync {
+                    {
+                        let mut w = self.inner.writer.lock().await;
+                        w.enc.reset_session();
+                        w.sent_bodies.clear();
+                        w.container_map.clear();
                     }
-                    // correct seq_no on codes 32/33
-                    if error_code == 32 || error_code == 33 {
-                        w.enc.correct_seq_no(error_code);
+                    // Drain all pending waiters so callers get a clean retry error.
+                    let mut pending = self.inner.pending.lock().await;
+                    for (_, tx) in pending.drain() {
+                        let _ = tx.send(Err(InvocationError::Deserialize(format!(
+                            "bad_msg_notification code={error_code} ({description}):                              session reset: please retry your request"
+                        ))));
                     }
+                    // Do not fall through to resend logic.
+                } else {
+                    // Phase 1: hold writer only for enc-state mutations + packing.
+                    // The lock is dropped BEFORE we touch `pending`, eliminating the
+                    // writer→pending lock-order deadlock that existed before this fix.
+                    let resend: Option<(Vec<u8>, i64, i64, FrameKind)> = {
+                        let mut w = self.inner.writer.lock().await;
 
-                    if retryable {
-                        // if bad_msg_id is not in sent_bodies directly, check
-                        // container_map: the server sends the notification for the
-                        // outer container msg_id when a whole container was bad.
-                        let resolved_id = if w.sent_bodies.contains_key(&bad_msg_id) {
-                            bad_msg_id
-                        } else if let Some(&inner_id) = w.container_map.get(&bad_msg_id) {
-                            w.container_map.remove(&bad_msg_id);
-                            inner_id
-                        } else {
-                            bad_msg_id
-                        };
+                        // correct clock skew on codes 16/17.
+                        if error_code == 16 || error_code == 17 {
+                            w.enc.correct_time_offset(msg_id);
+                        }
 
-                        if let Some(orig_body) = w.sent_bodies.remove(&resolved_id) {
-                            let (wire, new_msg_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
-                            let fk = w.frame_kind.clone();
-                            w.sent_bodies.insert(new_msg_id, orig_body);
-                            // resolved_id is the inner msg_id we move in pending
-                            Some((wire, resolved_id, new_msg_id, fk))
+                        if retryable {
+                            let resolved_id = if w.sent_bodies.contains_key(&bad_msg_id) {
+                                bad_msg_id
+                            } else if let Some(&inner_id) = w.container_map.get(&bad_msg_id) {
+                                w.container_map.remove(&bad_msg_id);
+                                w.container_ages.remove(&bad_msg_id);
+                                inner_id
+                            } else {
+                                bad_msg_id
+                            };
+
+                            if let Some(orig_body) = w.sent_bodies.remove(&resolved_id) {
+                                let (wire, new_msg_id) =
+                                    w.enc.pack_body_with_msg_id(&orig_body, true);
+                                let fk = w.frame_kind.clone();
+                                w.sent_bodies.insert(new_msg_id, orig_body);
+                                Some((wire, resolved_id, new_msg_id, fk))
+                            } else {
+                                None
+                            }
                         } else {
+                            // Non-retryable: clean up so maps don't grow unbounded.
+                            w.sent_bodies.remove(&bad_msg_id);
+                            if let Some(&inner_id) = w.container_map.get(&bad_msg_id) {
+                                w.sent_bodies.remove(&inner_id);
+                                w.container_map.remove(&bad_msg_id);
+                                w.container_ages.remove(&bad_msg_id);
+                            }
                             None
                         }
-                    } else {
-                        // Non-retryable: clean up so maps don't grow unbounded.
-                        w.sent_bodies.remove(&bad_msg_id);
-                        if let Some(&inner_id) = w.container_map.get(&bad_msg_id) {
-                            w.sent_bodies.remove(&inner_id);
-                            w.container_map.remove(&bad_msg_id);
-                        }
-                        None
-                    }
-                }; // ← writer lock released here
+                    }; // ← writer lock released here
 
-                match resend {
-                    Some((wire, old_msg_id, new_msg_id, fk)) => {
-                        // Phase 2: re-key pending (no writer lock held).
-                        let has_waiter = {
-                            let mut pending = self.inner.pending.lock().await;
-                            if let Some(tx) = pending.remove(&old_msg_id) {
-                                pending.insert(new_msg_id, tx);
-                                true
+                    match resend {
+                        Some((wire, old_msg_id, new_msg_id, fk)) => {
+                            // Phase 2: re-key pending (no writer lock held).
+                            let has_waiter = {
+                                let mut pending = self.inner.pending.lock().await;
+                                if let Some(tx) = pending.remove(&old_msg_id) {
+                                    pending.insert(new_msg_id, tx);
+                                    true
+                                } else {
+                                    false
+                                }
+                            };
+                            if has_waiter {
+                                // Phase 3: TCP send : no writer lock needed.
+                                if let Err(e) = send_frame_write(
+                                    &mut *self.inner.write_half.lock().await,
+                                    &wire,
+                                    &fk,
+                                )
+                                .await
+                                {
+                                    tracing::warn!("[ferogram] re-send failed: {e}");
+                                    self.inner
+                                        .writer
+                                        .lock()
+                                        .await
+                                        .sent_bodies
+                                        .remove(&new_msg_id);
+                                } else {
+                                    tracing::debug!("[ferogram] re-sent {old_msg_id}→{new_msg_id}");
+                                }
                             } else {
-                                false
-                            }
-                        };
-                        if has_waiter {
-                            // Phase 3: TCP send : no writer lock needed.
-                            if let Err(e) = send_frame_write(
-                                &mut *self.inner.write_half.lock().await,
-                                &wire,
-                                &fk,
-                            )
-                            .await
-                            {
-                                tracing::warn!("[ferogram] re-send failed: {e}");
                                 self.inner
                                     .writer
                                     .lock()
                                     .await
                                     .sent_bodies
                                     .remove(&new_msg_id);
-                            } else {
-                                tracing::debug!("[ferogram] re-sent {old_msg_id}→{new_msg_id}");
                             }
-                        } else {
-                            self.inner
-                                .writer
-                                .lock()
-                                .await
-                                .sent_bodies
-                                .remove(&new_msg_id);
+                        }
+                        None => {
+                            // Not re-sending: surface error to the waiter so caller can retry.
+                            if let Some(tx) = self.inner.pending.lock().await.remove(&bad_msg_id) {
+                                let _ = tx.send(Err(InvocationError::Deserialize(format!(
+                                    "bad_msg_notification code={error_code} ({description})"
+                                ))));
+                            }
                         }
                     }
-                    None => {
-                        // Not re-sending: surface error to the waiter so caller can retry.
-                        if let Some(tx) = self.inner.pending.lock().await.remove(&bad_msg_id) {
-                            let _ = tx.send(Err(InvocationError::Deserialize(format!(
-                                "bad_msg_notification code={error_code} ({description})"
-                            ))));
-                        }
-                    }
-                }
+                } // end else (non-seq_desync path)
             }
             // MsgDetailedInfo -> ack the answer_msg_id
             ID_MSG_DETAILED_INFO => {
@@ -2817,7 +2953,7 @@ impl Client {
             | ID_UPDATES_TOO_LONG => {
                 // ack update frames too
                 self.inner.writer.lock().await.pending_ack.push(msg_id);
-                // Bug #1 fix: route through pts/qts/seq gap-checkers
+                // route through pts/qts/seq gap-checkers
                 self.dispatch_updates(&body).await;
             }
             _ => {}
@@ -2848,7 +2984,7 @@ impl Client {
         }
     }
 
-    // Bug #1: pts-aware update dispatch
+    // pts-aware update dispatch
 
     /// Parse an incoming update container and route each update through the
     /// pts/qts/seq gap-checkers before forwarding to `update_tx`.
@@ -2885,7 +3021,7 @@ impl Client {
         // next updateNewMessage (e.g. the bot's own reply) triggered a false gap ->
         // getDifference -> re-delivery of already-processed messages -> duplicate replies.
         //
-        // Fix: deserialize pts/pts_count from the compact struct, build the high-level
+        // deserialize pts/pts_count from the compact struct, build the high-level
         // Update, then route through check_and_fill_gap exactly like every other pts update.
         if cid == 0x313bc7f8 {
             // updateShortMessage
@@ -5192,7 +5328,7 @@ impl Client {
             if acks.is_empty() {
                 // Simple path: standalone request
                 let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
-                w.sent_bodies.insert(msg_id, body); //
+                w.sent_bodies.insert(msg_id, body);
                 self.inner.pending.lock().await.insert(msg_id, tx);
                 (wire, fk)
             } else {
@@ -5208,9 +5344,10 @@ impl Client {
 
                 let (wire, container_msg_id) = w.enc.pack_container(&container_payload);
 
-                w.sent_bodies.insert(req_msg_id, body); //
-                w.container_map.insert(container_msg_id, req_msg_id); // 
-                self.inner.pending.lock().await.insert(req_msg_id, tx);
+                w.sent_bodies.insert(req_msg_id, body);
+                w.container_map.insert(container_msg_id, req_msg_id);
+                w.container_ages
+                    .insert(container_msg_id, std::time::Instant::now()); //                 self.inner.pending.lock().await.insert(req_msg_id, tx);
                 tracing::debug!(
                     "[ferogram] container: bundled {} acks + request (cid={container_msg_id})",
                     acks.len()
@@ -5271,7 +5408,7 @@ impl Client {
 
             if acks.is_empty() {
                 let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
-                w.sent_bodies.insert(msg_id, body); //
+                w.sent_bodies.insert(msg_id, body);
                 self.inner.pending.lock().await.insert(msg_id, tx);
                 (wire, fk)
             } else {
@@ -5283,9 +5420,10 @@ impl Client {
                     (req_msg_id, req_seqno, body.as_slice()),
                 ]);
                 let (wire, container_msg_id) = w.enc.pack_container(&container_payload);
-                w.sent_bodies.insert(req_msg_id, body); //
-                w.container_map.insert(container_msg_id, req_msg_id); // 
-                self.inner.pending.lock().await.insert(req_msg_id, tx);
+                w.sent_bodies.insert(req_msg_id, body);
+                w.container_map.insert(container_msg_id, req_msg_id);
+                w.container_ages
+                    .insert(container_msg_id, std::time::Instant::now()); //                 self.inner.pending.lock().await.insert(req_msg_id, tx);
                 tracing::debug!(
                     "[ferogram] write container: bundled {} acks + write (cid={container_msg_id})",
                     acks.len()
@@ -5576,13 +5714,13 @@ impl Client {
         let (tx, rx) = oneshot::channel();
         let wire = {
             let raw_body = req.to_bytes();
-            let body = maybe_gz_pack(&raw_body); //
+            let body = maybe_gz_pack(&raw_body);
             let mut w = self.inner.writer.lock().await;
             let fk = w.frame_kind.clone();
-            let acks: Vec<i64> = w.pending_ack.drain(..).collect(); // 
+            let acks: Vec<i64> = w.pending_ack.drain(..).collect();
             if acks.is_empty() {
                 let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
-                w.sent_bodies.insert(msg_id, body); //
+                w.sent_bodies.insert(msg_id, body);
                 self.inner.pending.lock().await.insert(msg_id, tx);
                 (wire, fk)
             } else {
@@ -5594,9 +5732,10 @@ impl Client {
                     (req_msg_id, req_seqno, body.as_slice()),
                 ]);
                 let (wire, container_msg_id) = w.enc.pack_container(&container_payload);
-                w.sent_bodies.insert(req_msg_id, body); //
-                w.container_map.insert(container_msg_id, req_msg_id); // 
-                self.inner.pending.lock().await.insert(req_msg_id, tx);
+                w.sent_bodies.insert(req_msg_id, body);
+                w.container_map.insert(container_msg_id, req_msg_id);
+                w.container_ages
+                    .insert(container_msg_id, std::time::Instant::now()); //                 self.inner.pending.lock().await.insert(req_msg_id, tx);
                 (wire, fk)
             }
         };
@@ -6089,8 +6228,11 @@ enum FrameKind {
         cipher: std::sync::Arc<tokio::sync::Mutex<ferogram_crypto::ObfuscatedCipher>>,
     },
     /// FakeTLS framing (`0xEE` MTProxy).
+    /// Data flows as raw TLS Application Data records: no additional cipher.
+    /// `first_send` starts `true`; the CCS prefix `\x14\x03\x03\x00\x01\x01`
+    /// is written once before the first AppData frame, then set to `false`.
     FakeTls {
-        cipher: std::sync::Arc<tokio::sync::Mutex<ferogram_crypto::ObfuscatedCipher>>,
+        first_send: std::sync::Arc<std::sync::atomic::AtomicBool>,
     },
 }
 
@@ -6113,28 +6255,17 @@ struct ConnectionWriter {
     enc: EncryptedSession,
     frame_kind: FrameKind,
     /// msg_ids of received content messages waiting to be acked.
-    /// Drained into a MsgsAck on every outgoing frame (bundled into container
-    /// when sending an RPC, or sent standalone after route_frame).
     pending_ack: Vec<i64>,
     /// raw TL body bytes of every sent request, keyed by msg_id.
-    /// On bad_msg_notification the matching body is re-encrypted with a fresh
-    /// msg_id and re-sent transparently.
     sent_bodies: std::collections::HashMap<i64, Vec<u8>>,
     /// maps container_msg_id -> inner request msg_id.
-    /// When bad_msg_notification / bad_server_salt arrives for a container
-    /// rather than the individual inner message, we look here to find the
-    /// inner request to retry.
-    ///
     container_map: std::collections::HashMap<i64, i64>,
+    /// tracks when each container was sent so inner messages can be
+    /// resent after 600 s if no ack arrives (tDesktop: clearOldContainers).
+    container_ages: std::collections::HashMap<i64, std::time::Instant>,
     /// -style future salt pool.
-    /// Sorted by valid_since ascending so the newest salt is LAST
-    /// (.valid_since), which puts
-    /// the highest valid_since at the end in ascending-key order).
     salts: Vec<FutureSalt>,
     /// Server-time anchor received with the last GetFutureSalts response.
-    /// (server_now, local_instant) lets us approximate server time at any
-    /// moment so we can check whether a salt's valid_since window has opened.
-    ///
     start_salt_time: Option<(i32, std::time::Instant)>,
 }
 
@@ -6425,66 +6556,233 @@ impl Connection {
                 Ok((stream, FrameKind::PaddedIntermediate { cipher: cipher_arc }))
             }
             TransportKind::FakeTls { secret, domain } => {
-                // Fake TLS 1.3 ClientHello with HMAC-SHA256 random field.
-                // After the handshake, data flows as TLS Application Data records
-                // over a shared Obfuscated2 cipher seeded from the secret+HMAC.
-                let domain_bytes = domain.as_bytes();
+                // FakeTLS (0xEE MTProxy)
+                //
+                // Protocol (matches tDesktop mtproto_tls_socket.cpp exactly):
+                //
+                // 1. Build a realistic TLS 1.3 ClientHello.
+                //    The 32-byte "random" field is all zeros; HMAC-SHA256(secret, record)
+                //    is computed over the whole record and written into that field.
+                //    The last 4 bytes of the digest are XOR'd with the current unix
+                //    timestamp so the server can detect replays (tDesktop: injectTimestamp).
+                //
+                // 2. Server sends:  [ServerHello] [CCS+Finished AppData]
+                //    We read the exact tDesktop byte patterns kServerHelloPart1/Part3,
+                //    verify the server's HMAC, then enter data mode.
+                //
+                // 3. Data mode: send/recv raw TLS Application Data records (0x17 0x03 0x03).
+                //    NO additional cipher: the MTProxy server terminates FakeTLS itself.
+                //    The client sends a ChangeCipherSpec prefix (\x14\x03\x03\x00\x01\x01)
+                //    exactly ONCE before the first data AppData record.
+
+                // GREASE helpers
+                // GREASE = random nibble-aligned byte pairs, no two adjacent equal.
+                let mut gs = [0u8; 8];
+                getrandom::getrandom(&mut gs).unwrap_or(());
+                let grease_byte = |b: u8| (b & 0xF0) | 0x0A;
+                let g = [
+                    grease_byte(gs[0]),
+                    grease_byte(gs[2]),
+                    grease_byte(gs[4]),
+                    grease_byte(gs[6]),
+                ];
+                // ensure g[0] != g[2] and g[1] != g[3] (adjacent-pair rule)
+                let g0 = g[0];
+                let g1 = if g[1] == g0 { g0 ^ 0x10 } else { g[1] };
+                let g2 = g[2];
+                let g3 = if g[3] == g2 { g2 ^ 0x10 } else { g[3] };
+
+                // Ephemeral x25519 public key (32 random bytes)
+                let mut x25519_pub = [0u8; 32];
+                getrandom::getrandom(&mut x25519_pub).unwrap_or(());
+
+                // Random session ID
                 let mut session_id = [0u8; 32];
-                getrandom::getrandom(&mut session_id)
-                    .map_err(|_| InvocationError::Deserialize("getrandom".into()))?;
+                getrandom::getrandom(&mut session_id).unwrap_or(());
 
-                // Build ClientHello body (random placeholder = zeros)
-                let cipher_suites: &[u8] = &[0x00, 0x04, 0x13, 0x01, 0x13, 0x02];
-                let compression: &[u8] = &[0x01, 0x00];
+                let domain_bytes = domain.as_bytes();
+
+                // Extensions
+                // Helper: TLS extension = [type_u16_be][data_len_u16_be][data]
+                let ext = |typ: u16, data: &[u8]| -> Vec<u8> {
+                    let mut v = Vec::with_capacity(4 + data.len());
+                    v.extend_from_slice(&typ.to_be_bytes());
+                    v.extend_from_slice(&(data.len() as u16).to_be_bytes());
+                    v.extend_from_slice(data);
+                    v
+                };
+                // Helper: length-prefixed list
+                let with_u16_len = |data: &[u8]| -> Vec<u8> {
+                    let mut v = Vec::with_capacity(2 + data.len());
+                    v.extend_from_slice(&(data.len() as u16).to_be_bytes());
+                    v.extend_from_slice(data);
+                    v
+                };
+
+                // SNI (0x0000)
                 let sni_name_len = domain_bytes.len() as u16;
-                let sni_list_len = sni_name_len + 3;
-                let sni_ext_len = sni_list_len + 2;
-                let mut sni_ext = Vec::new();
-                sni_ext.extend_from_slice(&[0x00, 0x00]);
-                sni_ext.extend_from_slice(&sni_ext_len.to_be_bytes());
-                sni_ext.extend_from_slice(&sni_list_len.to_be_bytes());
-                sni_ext.push(0x00);
-                sni_ext.extend_from_slice(&sni_name_len.to_be_bytes());
-                sni_ext.extend_from_slice(domain_bytes);
-                let sup_ver: &[u8] = &[0x00, 0x2b, 0x00, 0x03, 0x02, 0x03, 0x04];
-                let sup_grp: &[u8] = &[0x00, 0x0a, 0x00, 0x04, 0x00, 0x02, 0x00, 0x1d];
-                let sess_tick: &[u8] = &[0x00, 0x23, 0x00, 0x00];
-                let ext_body_len = sni_ext.len() + sup_ver.len() + sup_grp.len() + sess_tick.len();
-                let mut extensions = Vec::new();
-                extensions.extend_from_slice(&(ext_body_len as u16).to_be_bytes());
-                extensions.extend_from_slice(&sni_ext);
-                extensions.extend_from_slice(sup_ver);
-                extensions.extend_from_slice(sup_grp);
-                extensions.extend_from_slice(sess_tick);
+                let mut sni_body = Vec::new();
+                sni_body.push(0x00); // host_name type
+                sni_body.extend_from_slice(&sni_name_len.to_be_bytes());
+                sni_body.extend_from_slice(domain_bytes);
+                let ext_sni = ext(0x0000, &with_u16_len(&sni_body));
 
+                // status_request (0x0005): \x01\x00\x00\x00\x00
+                let ext_status = ext(0x0005, &[0x01, 0x00, 0x00, 0x00, 0x00]);
+
+                // supported_groups (0x000a): GREASE, x25519kyber768(0x11ec), x25519, p256, p384
+                let mut grp_list = Vec::new();
+                grp_list.extend_from_slice(&[g2, g2]);
+                grp_list.extend_from_slice(&[0x11, 0xec]);
+                grp_list.extend_from_slice(&[0x00, 0x1d]);
+                grp_list.extend_from_slice(&[0x00, 0x17]);
+                grp_list.extend_from_slice(&[0x00, 0x18]);
+                let ext_groups = ext(0x000a, &with_u16_len(&grp_list));
+
+                // ec_point_formats (0x000b): uncompressed only
+                let ext_ec_pts = ext(0x000b, &[0x01, 0x00]);
+
+                // signature_algorithms (0x000d)
+                let sig_algs: &[u8] = &[
+                    0x04, 0x03, 0x08, 0x04, 0x04, 0x01, 0x05, 0x03, 0x08, 0x05, 0x05, 0x01, 0x08,
+                    0x06, 0x06, 0x01,
+                ];
+                let ext_sig = ext(0x000d, &with_u16_len(sig_algs));
+
+                // ALPN (0x0010): h2, http/1.1
+                let alpn_body: &[u8] = &[
+                    0x00, 0x0c, // protocol list length = 12
+                    0x02, 0x68, 0x32, // "h2"
+                    0x08, 0x68, 0x74, 0x74, 0x70, 0x2f, 0x31, 0x2e, 0x31, // "http/1.1"
+                ];
+                let ext_alpn = ext(0x0010, alpn_body);
+
+                // signed_certificate_timestamp (0x0012): empty
+                let ext_sct = ext(0x0012, &[]);
+
+                // extended_master_secret (0x0017): empty
+                let ext_ems = ext(0x0017, &[]);
+
+                // compress_certificate (0x001b)
+                let ext_compress = ext(0x001b, &[0x02, 0x00, 0x02]);
+
+                // session_ticket (0x0023): empty
+                let ext_sess_tick = ext(0x0023, &[]);
+
+                // supported_versions (0x002b): GREASE, TLS 1.3, TLS 1.2
+                let mut sup_ver = Vec::new();
+                sup_ver.push(0x06); // 3 versions × 2 bytes = 6
+                sup_ver.extend_from_slice(&[g3, g3]);
+                sup_ver.extend_from_slice(&[0x03, 0x04]); // TLS 1.3
+                sup_ver.extend_from_slice(&[0x03, 0x03]); // TLS 1.2
+                let ext_sup_ver = ext(0x002b, &sup_ver);
+
+                // psk_key_exchange_modes (0x002d): psk_dhe_ke only
+                let ext_psk_modes = ext(0x002d, &[0x01, 0x01]);
+
+                // key_share (0x0033): GREASE share + x25519 share
+                let mut ks_list = Vec::new();
+                // GREASE entry (group=g2,g2, key_exchange=1 byte)
+                ks_list.extend_from_slice(&[g2, g2]);
+                ks_list.extend_from_slice(&[0x00, 0x01]); // key len = 1
+                ks_list.push(0x00);
+                // x25519 entry (group=0x001d, key_exchange=32 bytes)
+                ks_list.extend_from_slice(&[0x00, 0x1d]);
+                ks_list.extend_from_slice(&[0x00, 0x20]); // key len = 32
+                ks_list.extend_from_slice(&x25519_pub);
+                let ext_ks = ext(0x0033, &with_u16_len(&ks_list));
+
+                // application_layer_protocol_settings (0x4469 / ALPS): h2
+                let alps_body: &[u8] = &[0x00, 0x03, 0x02, 0x68, 0x32];
+                let ext_alps = ext(0x4469, alps_body);
+
+                // renegotiation_info (0xff01): empty RI
+                let ext_reneg = ext(0xff01, &[0x00]);
+
+                // Collect extensions in tDesktop-matching order (permuted subset):
+                // GREASE(0) | SNI | status | groups | ec_pts | sig_algs | alpn | sct |
+                // ems | compress | session_ticket | sup_ver | psk_modes | ks | alps |
+                // GREASE(1) | reneg
+                let mut ext_block = Vec::new();
+                // GREASE extension type g0,g0 with empty data
+                ext_block.extend_from_slice(&[g0, g0, 0x00, 0x00]);
+                ext_block.extend_from_slice(&ext_sni);
+                ext_block.extend_from_slice(&ext_status);
+                ext_block.extend_from_slice(&ext_groups);
+                ext_block.extend_from_slice(&ext_ec_pts);
+                ext_block.extend_from_slice(&ext_sig);
+                ext_block.extend_from_slice(&ext_alpn);
+                ext_block.extend_from_slice(&ext_sct);
+                ext_block.extend_from_slice(&ext_ems);
+                ext_block.extend_from_slice(&ext_compress);
+                ext_block.extend_from_slice(&ext_sess_tick);
+                ext_block.extend_from_slice(&ext_sup_ver);
+                ext_block.extend_from_slice(&ext_psk_modes);
+                ext_block.extend_from_slice(&ext_ks);
+                ext_block.extend_from_slice(&ext_alps);
+                // GREASE extension type g1,g1 with 1-byte data \x00
+                ext_block.extend_from_slice(&[g1, g1, 0x00, 0x01, 0x00]);
+                // renegotiation_info (0xff01)
+                ext_block.extend_from_slice(&ext_reneg);
+
+                // Padding (0x0015): pad total ClientHello body to >= 513 bytes.
+                // ClientHello body = 2(ver) + 32(random) + 1(sess_len) + 32(sess)
+                //                  + 2(cs_len) + 32(cs) + 2(comp) + 2(ext_len) + ext_block
+                let body_before_pad = 2 + 32 + 1 + 32 + 2 + 32 + 2 + 2 + ext_block.len();
+                if body_before_pad < 513 {
+                    let need = 513 - body_before_pad;
+                    // padding ext = 4 header bytes + need bytes of zeros
+                    let pad_data = vec![0u8; need];
+                    ext_block.extend_from_slice(&ext(0x0015, &pad_data));
+                }
+
+                // Cipher suites
+                // GREASE + 15 real suites = 16 × 2 = 32 bytes
+                let mut cipher_suites = Vec::new();
+                cipher_suites.extend_from_slice(&[g0, g0]);
+                cipher_suites.extend_from_slice(&[
+                    0x13, 0x01, 0x13, 0x02, 0x13, 0x03, 0xc0, 0x2b, 0xc0, 0x2f, 0xc0, 0x2c, 0xc0,
+                    0x30, 0xcc, 0xa9, 0xcc, 0xa8, 0xc0, 0x13, 0xc0, 0x14, 0x00, 0x9c, 0x00, 0x9d,
+                    0x00, 0x2f, 0x00, 0x35,
+                ]);
+
+                // Assemble ClientHello body
+                // [version(2)][random(32)][sess_id_len(1)][sess_id(32)]
+                // [cs_len(2)][cs][comp_len(1)][comp(1)][ext_len(2)][exts]
                 let mut hello_body = Vec::new();
-                hello_body.extend_from_slice(&[0x03, 0x03]);
-                hello_body.extend_from_slice(&[0u8; 32]); // random placeholder
-                hello_body.push(session_id.len() as u8);
+                hello_body.extend_from_slice(&[0x03, 0x03]); // TLS 1.2 version
+                let _digest_offset_in_body = hello_body.len();
+                hello_body.extend_from_slice(&[0u8; 32]); // random = zeros (HMAC goes here)
+                hello_body.push(0x20); // session_id length = 32
                 hello_body.extend_from_slice(&session_id);
-                hello_body.extend_from_slice(cipher_suites);
-                hello_body.extend_from_slice(compression);
-                hello_body.extend_from_slice(&extensions);
+                hello_body.extend_from_slice(&(cipher_suites.len() as u16).to_be_bytes());
+                hello_body.extend_from_slice(&cipher_suites);
+                hello_body.extend_from_slice(&[0x01, 0x00]); // compression: 1 method, null
+                hello_body.extend_from_slice(&(ext_block.len() as u16).to_be_bytes());
+                hello_body.extend_from_slice(&ext_block);
 
-                let hs_len = hello_body.len() as u32;
+                // Wrap in Handshake header (type=ClientHello=0x01, 3-byte length)
+                let body_len = hello_body.len() as u32;
                 let mut handshake = vec![
-                    0x01,
-                    ((hs_len >> 16) & 0xff) as u8,
-                    ((hs_len >> 8) & 0xff) as u8,
-                    (hs_len & 0xff) as u8,
+                    0x01u8, // ClientHello
+                    ((body_len >> 16) & 0xff) as u8,
+                    ((body_len >> 8) & 0xff) as u8,
+                    (body_len & 0xff) as u8,
                 ];
                 handshake.extend_from_slice(&hello_body);
 
-                let rec_len = handshake.len() as u16;
+                // Wrap in TLS record (type=Handshake=0x16, version=0x03 0x01)
+                let hs_len = handshake.len() as u16;
                 let mut record = Vec::new();
-                record.push(0x16);
-                record.extend_from_slice(&[0x03, 0x01]);
-                record.extend_from_slice(&rec_len.to_be_bytes());
+                record.push(0x16); // Handshake
+                record.extend_from_slice(&[0x03, 0x01]); // TLS 1.0 (standard for ClientHello)
+                record.extend_from_slice(&hs_len.to_be_bytes());
                 record.extend_from_slice(&handshake);
 
-                // HMAC-SHA256(secret, record) -> fill random field at offset 11
-                use sha2::Digest;
-                let random_offset = 5 + 4 + 2; // TLS-rec(5) + HS-hdr(4) + version(2)
+                // HMAC-SHA256(secret, record) → inject into random field
+                // random field is at: 5 (rec header) + 4 (hs header) + 2 (version)
+                //                   = record[11..43]
+                let random_in_record = 5 + 4 + 2; // = 11
                 let hmac_result: [u8; 32] = {
                     use hmac::{Hmac, Mac};
                     type HmacSha256 = Hmac<sha2::Sha256>;
@@ -6493,19 +6791,122 @@ impl Connection {
                     mac.update(&record);
                     mac.finalize().into_bytes().into()
                 };
-                record[random_offset..random_offset + 32].copy_from_slice(&hmac_result);
+                record[random_in_record..random_in_record + 32].copy_from_slice(&hmac_result);
+
+                // Timestamp injection (tDesktop: injectTimestamp)
+                // XOR the last 4 bytes of the HMAC digest with the current unix time LE.
+                // This lets the server reject replayed ClientHellos (timestamp too old).
+                let unix_now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as u32;
+                let ts_bytes = unix_now.to_le_bytes();
+                let ts_pos = random_in_record + 32 - 4; // last 4 bytes of random field
+                for i in 0..4 {
+                    record[ts_pos + i] ^= ts_bytes[i];
+                }
+
                 stream.write_all(&record).await?;
 
-                // Derive Obfuscated2 key from secret + HMAC
-                let mut h = sha2::Sha256::new();
-                h.update(secret.as_ref());
-                h.update(hmac_result);
-                let derived: [u8; 32] = h.finalize().into();
-                let iv = [0u8; 16];
-                let cipher =
-                    ferogram_crypto::ObfuscatedCipher::from_keys(&derived, &iv, &derived, &iv);
-                let cipher_arc = std::sync::Arc::new(tokio::sync::Mutex::new(cipher));
-                Ok((stream, FrameKind::FakeTls { cipher: cipher_arc }))
+                // Read and verify server TLS handshake
+                // tDesktop reads exactly: kServerHelloPart1(3) + len1(2) + ServerHello(len1)
+                //                      + kServerHelloPart3(9) + len2(2) + Finished(len2)
+                // kServerHelloPart1 = "\x16\x03\x03"
+                // kServerHelloPart3 = "\x14\x03\x03\x00\x01\x01\x17\x03\x03"
+                //   (= ChangeCipherSpec record + start of AppData record header)
+                // Server HMAC is at kServerHelloDigestPosition=11 within the server stream,
+                // which = server_stream[11..43] (the server's "random" field in ServerHello).
+                //
+                // Verification: build full_data = [client_hmac_32][server_stream],
+                // zero positions 32+11..32+43, compute HMAC-SHA256(secret, full_data),
+                // compare with saved[0..32].
+
+                // Part 1: "\x16\x03\x03" + 2-byte length
+                let mut part1 = [0u8; 5];
+                stream
+                    .read_exact(&mut part1)
+                    .await
+                    .map_err(InvocationError::Io)?;
+                if &part1[0..3] != b"\x16\x03\x03" {
+                    return Err(InvocationError::Deserialize(format!(
+                        "FakeTLS: bad ServerHello record header: {:02x?}",
+                        &part1[0..3]
+                    )));
+                }
+                let len1 = u16::from_be_bytes([part1[3], part1[4]]) as usize;
+
+                // Part 2: ServerHello body (len1 bytes)
+                let mut server_hello_body = vec![0u8; len1];
+                stream
+                    .read_exact(&mut server_hello_body)
+                    .await
+                    .map_err(InvocationError::Io)?;
+
+                // Part 3: kServerHelloPart3 = CCS + AppData start (9 bytes)
+                const PART3: &[u8] = b"\x14\x03\x03\x00\x01\x01\x17\x03\x03";
+                let mut part3 = [0u8; 9];
+                stream
+                    .read_exact(&mut part3)
+                    .await
+                    .map_err(InvocationError::Io)?;
+                if part3 != *PART3 {
+                    return Err(InvocationError::Deserialize(format!(
+                        "FakeTLS: bad CCS+AppData header: {:02x?}",
+                        part3
+                    )));
+                }
+
+                // Part 4: 2-byte AppData length + Finished body
+                let mut len2_buf = [0u8; 2];
+                stream
+                    .read_exact(&mut len2_buf)
+                    .await
+                    .map_err(InvocationError::Io)?;
+                let len2 = u16::from_be_bytes(len2_buf) as usize;
+                let mut finished_body = vec![0u8; len2];
+                stream
+                    .read_exact(&mut finished_body)
+                    .await
+                    .map_err(InvocationError::Io)?;
+
+                // Server HMAC verification
+                // full_data = [client_hmac_32] [part1(5)] [sh_body(len1)] [part3(9)] [len2(2)] [fin(len2)]
+                // server digest at full_data[32+11 .. 32+43] = full_data[43..75]
+                let mut full_data = Vec::new();
+                full_data.extend_from_slice(&hmac_result); // client HMAC (32 bytes)
+                full_data.extend_from_slice(&part1);
+                full_data.extend_from_slice(&server_hello_body);
+                full_data.extend_from_slice(&part3);
+                full_data.extend_from_slice(&len2_buf);
+                full_data.extend_from_slice(&finished_body);
+
+                const SERVER_DIGEST_POS: usize = 32 + 11; // = 43
+                if full_data.len() >= SERVER_DIGEST_POS + 32 {
+                    let saved_digest: [u8; 32] = full_data
+                        [SERVER_DIGEST_POS..SERVER_DIGEST_POS + 32]
+                        .try_into()
+                        .unwrap();
+                    // Zero the digest position, recompute HMAC, compare
+                    full_data[SERVER_DIGEST_POS..SERVER_DIGEST_POS + 32].fill(0);
+                    let expected: [u8; 32] = {
+                        use hmac::{Hmac, Mac};
+                        type HmacSha256 = Hmac<sha2::Sha256>;
+                        let mut mac = HmacSha256::new_from_slice(secret)
+                            .map_err(|_| InvocationError::Deserialize("HMAC key error".into()))?;
+                        mac.update(&full_data);
+                        mac.finalize().into_bytes().into()
+                    };
+                    if expected != saved_digest {
+                        return Err(InvocationError::Deserialize(
+                            "FakeTLS: server Hello HMAC mismatch: possible MITM".into(),
+                        ));
+                    }
+                }
+
+                // Handshake done.  Data now flows as raw TLS AppData records.
+                // CCS prefix is sent once before the first AppData frame.
+                let first_send = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+                Ok((stream, FrameKind::FakeTls { first_send }))
             }
         }
     }
@@ -6670,6 +7071,7 @@ impl Connection {
             pending_ack: Vec::new(),
             sent_bodies: std::collections::HashMap::new(),
             container_map: std::collections::HashMap::new(),
+            container_ages: std::collections::HashMap::new(),
             salts: Vec::new(),
             start_salt_time: None,
         };
@@ -6744,25 +7146,35 @@ async fn send_frame(
             stream.write_all(&frame).await?;
             Ok(())
         }
-        FrameKind::FakeTls { cipher } => {
-            // Wrap each MTProto message as a TLS Application Data record (type 0x17).
-            // Telegram's FakeTLS sends one MTProto frame per TLS record, encrypted
-            // with the Obfuscated2 cipher (no real TLS encryption).
-            const TLS_APP_DATA: u8 = 0x17;
-            const TLS_VER: [u8; 2] = [0x03, 0x03];
-            // Split into 2878-byte chunks if needed (tDesktop limit).
+        FrameKind::FakeTls { first_send } => {
+            // raw plaintext AppData, CCS prefix once on first send.
+            const CCS: &[u8] = b"\x14\x03\x03\x00\x01\x01";
             const CHUNK: usize = 2878;
-            let mut locked = cipher.lock().await;
+            let is_first = first_send
+                .compare_exchange(
+                    true,
+                    false,
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                )
+                .is_ok();
+            let mut first_chunk = true;
             for chunk in data.chunks(CHUNK) {
-                let chunk_len = chunk.len() as u16;
-                let mut record = Vec::with_capacity(5 + chunk.len());
-                record.push(TLS_APP_DATA);
-                record.extend_from_slice(&TLS_VER);
-                record.extend_from_slice(&chunk_len.to_be_bytes());
-                record.extend_from_slice(chunk);
-                // Encrypt only the payload portion (after the 5-byte header).
-                locked.encrypt(&mut record[5..]);
-                stream.write_all(&record).await?;
+                let clen = chunk.len() as u16;
+                let mut rec = Vec::with_capacity(5 + chunk.len());
+                rec.push(0x17u8);
+                rec.extend_from_slice(&[0x03, 0x03]);
+                rec.extend_from_slice(&clen.to_be_bytes());
+                rec.extend_from_slice(chunk);
+                if is_first && first_chunk {
+                    let mut full = Vec::with_capacity(CCS.len() + rec.len());
+                    full.extend_from_slice(CCS);
+                    full.extend_from_slice(&rec);
+                    stream.write_all(&full).await?;
+                } else {
+                    stream.write_all(&rec).await?;
+                }
+                first_chunk = false;
             }
             Ok(())
         }
@@ -6909,20 +7321,35 @@ async fn send_frame_write(
             stream.write_all(&frame).await?;
             Ok(())
         }
-        FrameKind::FakeTls { cipher } => {
-            const TLS_APP_DATA: u8 = 0x17;
-            const TLS_VER: [u8; 2] = [0x03, 0x03];
+        FrameKind::FakeTls { first_send } => {
+            // raw plaintext AppData, CCS prefix once on first send.
+            const CCS: &[u8] = b"\x14\x03\x03\x00\x01\x01";
             const CHUNK: usize = 2878;
-            let mut locked = cipher.lock().await;
+            let is_first = first_send
+                .compare_exchange(
+                    true,
+                    false,
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                )
+                .is_ok();
+            let mut first_chunk = true;
             for chunk in data.chunks(CHUNK) {
-                let chunk_len = chunk.len() as u16;
-                let mut record = Vec::with_capacity(5 + chunk.len());
-                record.push(TLS_APP_DATA);
-                record.extend_from_slice(&TLS_VER);
-                record.extend_from_slice(&chunk_len.to_be_bytes());
-                record.extend_from_slice(chunk);
-                locked.encrypt(&mut record[5..]);
-                stream.write_all(&record).await?;
+                let clen = chunk.len() as u16;
+                let mut rec = Vec::with_capacity(5 + chunk.len());
+                rec.push(0x17u8);
+                rec.extend_from_slice(&[0x03, 0x03]);
+                rec.extend_from_slice(&clen.to_be_bytes());
+                rec.extend_from_slice(chunk);
+                if is_first && first_chunk {
+                    let mut full = Vec::with_capacity(CCS.len() + rec.len());
+                    full.extend_from_slice(CCS);
+                    full.extend_from_slice(&rec);
+                    stream.write_all(&full).await?;
+                } else {
+                    stream.write_all(&rec).await?;
+                }
+                first_chunk = false;
             }
             Ok(())
         }
@@ -6951,6 +7378,16 @@ async fn recv_frame_read(
             if buf.len() == 4 {
                 let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
                 if code < 0 {
+                    // AK/AL: log specific transport-level flood/bad-dc codes explicitly.
+                    if code == -429 {
+                        tracing::warn!(
+                            "[ferogram] Transport -429: server-level flood limit hit;                              reconnecting (distinct from application-layer FLOOD_WAIT)"
+                        );
+                    } else if code == -444 {
+                        tracing::warn!(
+                            "[ferogram] Transport -444: bad DC configuration;                              reconnecting: consider refreshing DcOptions via help.getConfig"
+                        );
+                    }
                     return Err(InvocationError::Rpc(RpcError::from_telegram(
                         code,
                         "transport error",
@@ -6964,6 +7401,16 @@ async fn recv_frame_read(
             stream.read_exact(&mut len_buf).await?;
             let len_i32 = i32::from_le_bytes(len_buf);
             if len_i32 < 0 {
+                // AK/AL: log specific transport-level codes.
+                if len_i32 == -429 {
+                    tracing::warn!(
+                        "[ferogram] Transport -429: server-level flood limit hit;                          reconnecting (distinct from application-layer FLOOD_WAIT)"
+                    );
+                } else if len_i32 == -444 {
+                    tracing::warn!(
+                        "[ferogram] Transport -444: bad DC configuration;                          reconnecting: consider refreshing DcOptions via help.getConfig"
+                    );
+                }
                 return Err(InvocationError::Rpc(RpcError::from_telegram(
                     len_i32,
                     "transport error",
@@ -6973,6 +7420,15 @@ async fn recv_frame_read(
                 let mut code_buf = [0u8; 4];
                 stream.read_exact(&mut code_buf).await?;
                 let code = i32::from_le_bytes(code_buf);
+                if code == -429 {
+                    tracing::warn!(
+                        "[ferogram] Transport -429: server-level flood limit hit;                          reconnecting (distinct from application-layer FLOOD_WAIT)"
+                    );
+                } else if code == -444 {
+                    tracing::warn!(
+                        "[ferogram] Transport -444: bad DC configuration;                          reconnecting: consider refreshing DcOptions via help.getConfig"
+                    );
+                }
                 return Err(InvocationError::Rpc(RpcError::from_telegram(
                     code,
                     "transport error",
@@ -6988,6 +7444,15 @@ async fn recv_frame_read(
             stream.read_exact(&mut len_buf).await?;
             let total_len_i32 = i32::from_le_bytes(len_buf);
             if total_len_i32 < 0 {
+                if total_len_i32 == -429 {
+                    tracing::warn!(
+                        "[ferogram] Transport -429: server-level flood limit hit;                          reconnecting (distinct from application-layer FLOOD_WAIT)"
+                    );
+                } else if total_len_i32 == -444 {
+                    tracing::warn!(
+                        "[ferogram] Transport -444: bad DC configuration;                          reconnecting: consider refreshing DcOptions via help.getConfig"
+                    );
+                }
                 return Err(InvocationError::Rpc(RpcError::from_telegram(
                     total_len_i32,
                     "transport error",
@@ -7039,6 +7504,16 @@ async fn recv_frame_read(
             if buf.len() == 4 {
                 let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
                 if code < 0 {
+                    // AK/AL: log specific transport-level flood/bad-dc codes explicitly.
+                    if code == -429 {
+                        tracing::warn!(
+                            "[ferogram] Transport -429: server-level flood limit hit;                              reconnecting (distinct from application-layer FLOOD_WAIT)"
+                        );
+                    } else if code == -444 {
+                        tracing::warn!(
+                            "[ferogram] Transport -444: bad DC configuration;                              reconnecting: consider refreshing DcOptions via help.getConfig"
+                        );
+                    }
                     return Err(InvocationError::Rpc(RpcError::from_telegram(
                         code,
                         "transport error",
@@ -7054,6 +7529,15 @@ async fn recv_frame_read(
             cipher.lock().await.decrypt(&mut len_buf);
             let total_len = i32::from_le_bytes(len_buf);
             if total_len < 0 {
+                if total_len == -429 {
+                    tracing::warn!(
+                        "[ferogram] Transport -429: server-level flood limit hit;                          reconnecting (distinct from application-layer FLOOD_WAIT)"
+                    );
+                } else if total_len == -444 {
+                    tracing::warn!(
+                        "[ferogram] Transport -444: bad DC configuration;                          reconnecting: consider refreshing DcOptions via help.getConfig"
+                    );
+                }
                 return Err(InvocationError::Rpc(RpcError::from_telegram(
                     total_len,
                     "transport error",
@@ -7067,8 +7551,8 @@ async fn recv_frame_read(
             // uses body_len from the plaintext header, so padding is harmlessly ignored.
             Ok(buf)
         }
-        FrameKind::FakeTls { cipher } => {
-            // Read TLS Application Data record: 5-byte header + payload.
+        FrameKind::FakeTls { .. } => {
+            // raw plaintext: no cipher on recv.
             let mut hdr = [0u8; 5];
             stream.read_exact(&mut hdr).await?;
             if hdr[0] != 0x17 {
@@ -7080,7 +7564,6 @@ async fn recv_frame_read(
             let payload_len = u16::from_be_bytes([hdr[3], hdr[4]]) as usize;
             let mut buf = vec![0u8; payload_len];
             stream.read_exact(&mut buf).await?;
-            cipher.lock().await.decrypt(&mut buf);
             Ok(buf)
         }
     }
@@ -7123,6 +7606,15 @@ async fn recv_abridged(stream: &mut TcpStream) -> Result<Vec<u8>, InvocationErro
             let mut code_buf = [0u8; 4];
             stream.read_exact(&mut code_buf).await?;
             let code = i32::from_le_bytes(code_buf);
+            if code == -429 {
+                tracing::warn!(
+                    "[ferogram] Transport -429: server-level flood limit hit;                      reconnecting (distinct from application-layer FLOOD_WAIT)"
+                );
+            } else if code == -444 {
+                tracing::warn!(
+                    "[ferogram] Transport -444: bad DC configuration;                      reconnecting: consider refreshing DcOptions via help.getConfig"
+                );
+            }
             return Err(InvocationError::Rpc(RpcError::from_telegram(
                 code,
                 "transport error",
@@ -7238,7 +7730,8 @@ async fn recv_frame_plain<T: Deserializable>(
             cipher.lock().await.decrypt(&mut buf);
             buf
         }
-        FrameKind::FakeTls { cipher } => {
+        FrameKind::FakeTls { .. } => {
+            // raw plaintext: no cipher on recv.
             let mut hdr = [0u8; 5];
             stream.read_exact(&mut hdr).await?;
             if hdr[0] != 0x17 {
@@ -7250,7 +7743,6 @@ async fn recv_frame_plain<T: Deserializable>(
             let payload_len = u16::from_be_bytes([hdr[3], hdr[4]]) as usize;
             let mut buf = vec![0u8; payload_len];
             stream.read_exact(&mut buf).await?;
-            cipher.lock().await.decrypt(&mut buf);
             buf
         }
     };
@@ -7317,7 +7809,16 @@ fn unwrap_envelope(body: Vec<u8>) -> Result<EnvelopeResult, InvocationError> {
 
             for _ in 0..count {
                 if pos + 16 > body.len() { break; }
+                let inner_msg_id = i64::from_le_bytes(body[pos..pos + 8].try_into().unwrap());
                 let inner_len = u32::from_le_bytes(body[pos + 12..pos + 16].try_into().unwrap()) as usize;
+                // reject unaligned or undersized inner frames (tDesktop validates this).
+                if inner_len & 3 != 0 || inner_len < 4 {
+                    tracing::warn!(
+                        "[ferogram] unwrap_envelope container: inner_len {inner_len} bad alignment or < 4: dropping"
+                    );
+                    break;
+                }
+                let _ = inner_msg_id; // available for future ordering checks
                 pos += 16;
                 if pos + inner_len > body.len() { break; }
                 let inner = body[pos..pos + inner_len].to_vec();
@@ -7376,7 +7877,7 @@ fn unwrap_envelope(body: Vec<u8>) -> Result<EnvelopeResult, InvocationError> {
         // Bots do NOT receive a push updateNewMessage for their own messages,
         // so if we absorb this silently, pts stays stale -> false gap -> getDifference
         // -> re-delivery of already-processed messages -> duplicate replies.
-        // Fix: extract pts/pts_count and return Pts variant so route_frame advances the counter.
+        // extract pts/pts_count and return Pts variant so route_frame advances the counter.
         ID_UPDATE_SHORT_SENT_MSG => {
             let mut cur = Cursor::from_slice(&body[4..]);
             match tl::types::UpdateShortSentMessage::deserialize(&mut cur) {

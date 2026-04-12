@@ -333,7 +333,10 @@ impl EncryptedSession {
             return Err(DecryptError::SessionMismatch);
         }
 
-        // #3 reject if server time (upper 32 bits of msg_id) deviates > 300 s.
+        // #3 Check server time (upper 32 bits of msg_id) against ±300 s window.
+        // tDesktop sets badTime=true and continues: msgs_ack / pong / bad_msg_notification
+        // can self-heal the clock without a reconnect. We warn and continue rather than
+        // hard-reject, so a drifted-clock client does not loop-reconnect on every message.
         let server_secs = (msg_id as u64 >> 32) as i64;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -341,7 +344,12 @@ impl EncryptedSession {
             .as_secs() as i64;
         let corrected = now + self.time_offset as i64;
         if (server_secs - corrected).abs() > MSG_ID_TIME_WINDOW_SECS {
-            return Err(DecryptError::MsgIdTimeWindow);
+            log::warn!(
+                "[ferogram] msg_id time-window violation: server_secs={server_secs} \
+                 corrected_local={corrected} skew={}s: processing anyway, \
+                 clock will self-correct via bad_msg_notification/pong",
+                (server_secs - corrected).abs()
+            );
         }
 
         // #2 rolling 500-entry dedup.
@@ -356,7 +364,16 @@ impl EncryptedSession {
             }
         }
 
+        // body_len upper bound (tDesktop kMaxMessageLength = 16 MB).
+        if body_len > 16 * 1024 * 1024 {
+            return Err(DecryptError::FrameTooShort);
+        }
         if 32 + body_len > plaintext.len() {
+            return Err(DecryptError::FrameTooShort);
+        }
+        // padding must be 12–1024 bytes (tDesktop kMinPaddingSize/kMaxPaddingSize).
+        let padding = plaintext.len() - 32 - body_len;
+        if !(12..=1024).contains(&padding) {
             return Err(DecryptError::FrameTooShort);
         }
         let body = plaintext[32..32 + body_len].to_vec();
@@ -378,6 +395,28 @@ impl EncryptedSession {
     /// Return the current session_id.
     pub fn session_id(&self) -> i64 {
         self.session_id
+    }
+
+    /// Reset session state: new random session_id, zeroed seq_no and last_msg_id,
+    /// cleared dedup buffer.
+    ///
+    /// Called on `bad_msg_notification` error codes 32/33 (seq_no mismatch).
+    /// This matches tDesktop's `ResetSession` which creates a new session_id
+    /// rather than trying to correct the seq_no counter, which can loop forever
+    /// on a persistent desync.
+    pub fn reset_session(&mut self) {
+        let mut rnd = [0u8; 8];
+        getrandom::getrandom(&mut rnd).expect("getrandom");
+        let old_session = self.session_id;
+        self.session_id = i64::from_le_bytes(rnd);
+        self.sequence = 0;
+        self.last_msg_id = 0;
+        self.seen_msg_ids.lock().unwrap().clear();
+        log::debug!(
+            "[ferogram] session reset: {:#018x} → {:#018x}",
+            old_session,
+            self.session_id
+        );
     }
 }
 
@@ -414,7 +453,8 @@ impl EncryptedSession {
         if sid != session_id {
             return Err(DecryptError::SessionMismatch);
         }
-        // Time-window check.
+        // Time-window check: warn but continue (matches tDesktop badTime=true behaviour).
+        // Clock self-corrects via bad_msg_notification or pong; hard-reject causes reconnect loops.
         let server_secs = (msg_id as u64 >> 32) as i64;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -422,9 +462,22 @@ impl EncryptedSession {
             .as_secs() as i64;
         let corrected = now + time_offset as i64;
         if (server_secs - corrected).abs() > MSG_ID_TIME_WINDOW_SECS {
-            return Err(DecryptError::MsgIdTimeWindow);
+            log::warn!(
+                "[ferogram] msg_id time-window violation (split-reader): server_secs={server_secs} \
+                 corrected_local={corrected} skew={}s: processing anyway",
+                (server_secs - corrected).abs()
+            );
+        }
+        // body_len upper bound (tDesktop kMaxMessageLength = 16 MB).
+        if body_len > 16 * 1024 * 1024 {
+            return Err(DecryptError::FrameTooShort);
         }
         if 32 + body_len > plaintext.len() {
+            return Err(DecryptError::FrameTooShort);
+        }
+        // padding must be 12–1024 bytes.
+        let padding = plaintext.len() - 32 - body_len;
+        if !(12..=1024).contains(&padding) {
             return Err(DecryptError::FrameTooShort);
         }
         let body = plaintext[32..32 + body_len].to_vec();
