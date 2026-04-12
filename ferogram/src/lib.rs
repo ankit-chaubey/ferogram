@@ -2428,25 +2428,14 @@ impl Client {
                     let inner_msg_id = i64::from_le_bytes(body[pos..pos + 8].try_into().unwrap());
                     let inner_len =
                         u32::from_le_bytes(body[pos + 12..pos + 16].try_into().unwrap()) as usize;
-                    // tDesktop rejects containers with unaligned or too-small
-                    // inner_len, and inner msg_ids that are not strictly greater than the
-                    // container msg_id (would allow replay / ordering attacks).
+                    // Reject unaligned or too-short inner frames (tDesktop validates this).
+                    // Note: inner_msg_id may legitimately be less than the container msg_id
+                    // because the server prepares inner messages before assembling the container.
                     if inner_len & 3 != 0 || inner_len < 4 {
                         tracing::warn!(
                             "[ferogram] msg_container: inner_len {inner_len} bad alignment or < 4: dropping container"
                         );
                         break;
-                    }
-                    if inner_msg_id <= msg_id {
-                        tracing::warn!(
-                            "[ferogram] msg_container: inner_msg_id {inner_msg_id} <= container msg_id {msg_id}: skipping message"
-                        );
-                        pos += 16;
-                        if pos + inner_len > body.len() {
-                            break;
-                        }
-                        pos += inner_len;
-                        continue;
                     }
                     // inner msg_id lower 2 bits must be 1 or 3 (tDesktop: RestartConnection).
                     {

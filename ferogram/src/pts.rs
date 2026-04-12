@@ -407,7 +407,21 @@ impl Client {
             let body = self.rpc_call_raw_pub(&req).await?;
             let body = crate::maybe_gz_decompress(body)?;
             let mut cur = Cursor::from_slice(&body);
-            let diff = tl::enums::updates::Difference::deserialize(&mut cur)?;
+            let diff = match tl::enums::updates::Difference::deserialize(&mut cur) {
+                Ok(d) => d,
+                Err(e) => {
+                    let cid = body
+                        .get(..4)
+                        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+                        .unwrap_or(0);
+                    tracing::debug!(
+                        "[ferogram] getDifference: unrecognised response {cid:#010x}, \
+                         returning {} buffered updates ({e})",
+                        all_updates.len()
+                    );
+                    return Ok(all_updates);
+                }
+            };
 
             match diff {
                 tl::enums::updates::Difference::Empty(e) => {
