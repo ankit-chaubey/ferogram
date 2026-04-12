@@ -646,7 +646,7 @@ mod tests {
     }
 }
 
-// ─── SqliteBackend ────────────────────────────────────────────────────────────
+// SqliteBackend
 
 /// SQLite-backed session (via `rusqlite`).
 ///
@@ -951,7 +951,7 @@ impl SessionBackend for SqliteBackend {
         &self.label
     }
 
-    // ── Granular overrides (single-row SQL, no full round-trip) ──────────────
+    // Granular overrides (single-row SQL, no full round-trip)
 
     fn update_dc(&self, entry: &DcEntry) -> io::Result<()> {
         let conn = self.conn.lock().unwrap();
@@ -1052,7 +1052,7 @@ impl SessionBackend for SqliteBackend {
     }
 }
 
-// ─── LibSqlBackend ────────────────────────────────────────────────────────────
+// LibSqlBackend
 
 /// libSQL-backed session (Turso / embedded replica / in-process).
 ///
@@ -1407,7 +1407,7 @@ impl SessionBackend for LibSqlBackend {
         &self.label
     }
 
-    // ── Granular overrides ───────────────────────────────────────────────────
+    // Granular overrides
 
     fn update_dc(&self, entry: &DcEntry) -> io::Result<()> {
         let conn = self.conn.clone();

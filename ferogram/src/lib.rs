@@ -2439,18 +2439,28 @@ impl Client {
                     }
                     if inner_msg_id <= msg_id {
                         tracing::warn!(
-                            "[ferogram] msg_container: inner_msg_id {inner_msg_id} <= container msg_id {msg_id}: dropping container"
+                            "[ferogram] msg_container: inner_msg_id {inner_msg_id} <= container msg_id {msg_id}: skipping message"
                         );
-                        break;
+                        pos += 16;
+                        if pos + inner_len > body.len() {
+                            break;
+                        }
+                        pos += inner_len;
+                        continue;
                     }
                     // inner msg_id lower 2 bits must be 1 or 3 (tDesktop: RestartConnection).
                     {
                         let bits = (inner_msg_id & 0x03) as u8;
                         if bits != 1 && bits != 3 {
                             tracing::warn!(
-                                "[ferogram] msg_container: inner_msg_id bits 0b{bits:02b} invalid: dropping container"
+                                "[ferogram] msg_container: inner_msg_id bits 0b{bits:02b} invalid: skipping message"
                             );
-                            break;
+                            pos += 16;
+                            if pos + inner_len > body.len() {
+                                break;
+                            }
+                            pos += inner_len;
+                            continue;
                         }
                     }
                     pos += 16;
@@ -5347,7 +5357,8 @@ impl Client {
                 w.sent_bodies.insert(req_msg_id, body);
                 w.container_map.insert(container_msg_id, req_msg_id);
                 w.container_ages
-                    .insert(container_msg_id, std::time::Instant::now()); //                 self.inner.pending.lock().await.insert(req_msg_id, tx);
+                    .insert(container_msg_id, std::time::Instant::now());
+                self.inner.pending.lock().await.insert(req_msg_id, tx);
                 tracing::debug!(
                     "[ferogram] container: bundled {} acks + request (cid={container_msg_id})",
                     acks.len()
@@ -5423,7 +5434,8 @@ impl Client {
                 w.sent_bodies.insert(req_msg_id, body);
                 w.container_map.insert(container_msg_id, req_msg_id);
                 w.container_ages
-                    .insert(container_msg_id, std::time::Instant::now()); //                 self.inner.pending.lock().await.insert(req_msg_id, tx);
+                    .insert(container_msg_id, std::time::Instant::now());
+                self.inner.pending.lock().await.insert(req_msg_id, tx);
                 tracing::debug!(
                     "[ferogram] write container: bundled {} acks + write (cid={container_msg_id})",
                     acks.len()
@@ -5735,7 +5747,8 @@ impl Client {
                 w.sent_bodies.insert(req_msg_id, body);
                 w.container_map.insert(container_msg_id, req_msg_id);
                 w.container_ages
-                    .insert(container_msg_id, std::time::Instant::now()); //                 self.inner.pending.lock().await.insert(req_msg_id, tx);
+                    .insert(container_msg_id, std::time::Instant::now());
+                self.inner.pending.lock().await.insert(req_msg_id, tx);
                 (wire, fk)
             }
         };
