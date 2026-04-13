@@ -5,9 +5,7 @@ Cryptographic primitives for the Telegram MTProto 2.0 protocol.
 [![Crates.io](https://img.shields.io/crates/v/ferogram-crypto?color=fc8d62)](https://crates.io/crates/ferogram-crypto)
 [![Telegram](https://img.shields.io/badge/community-%40FerogramChat-2CA5E0?logo=telegram)](https://t.me/FerogramChat) [![Channel](https://img.shields.io/badge/channel-%40Ferogram-2CA5E0?logo=telegram)](https://t.me/Ferogram)
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram--crypto-5865F2)](https://docs.rs/ferogram-crypto)
-[![Telegram](https://img.shields.io/badge/community-%40FerogramChat-2CA5E0?logo=telegram)](https://t.me/FerogramChat) [![Channel](https://img.shields.io/badge/channel-%40Ferogram-2CA5E0?logo=telegram)](https://t.me/Ferogram)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![Telegram](https://img.shields.io/badge/community-%40FerogramChat-2CA5E0?logo=telegram)](https://t.me/FerogramChat) [![Channel](https://img.shields.io/badge/channel-%40Ferogram-2CA5E0?logo=telegram)](https://t.me/Ferogram)
 
 Implements AES-IGE, RSA, SHA-1/256, Diffie-Hellman, PQ factorization, auth key derivation, and transport obfuscation. All algorithms are written from scratch to match Telegram's specification.
 
