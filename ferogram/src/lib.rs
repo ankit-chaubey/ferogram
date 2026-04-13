@@ -1350,6 +1350,36 @@ impl Client {
         } else {
             // No saved state or catch_up disabled: sync from server.
             let _ = client.sync_pts_state().await;
+
+            // Drain any updates that arrived during the connection handshake.
+            // Mirrors tDesktop's new_session_created → getDifference path.
+            // If this is a first-boot bot session, bot_sign_in() will call
+            // its own get_difference() after auth; this call is a no-op there
+            // because pts==0 triggers an inner sync_pts_state and returns [].
+            let c = client.clone();
+            let utx = client.inner.update_tx.clone();
+            tokio::spawn(async move {
+                match c.get_difference().await {
+                    Ok(missed) => {
+                        if !missed.is_empty() {
+                            tracing::info!(
+                                "[ferogram] connect: {} updates replayed from handshake gap",
+                                missed.len()
+                            );
+                        }
+                        for u in missed {
+                            let u = attach_client_to_update(u, &c);
+                            if utx.try_send(u).is_err() {
+                                tracing::warn!(
+                                    "[ferogram] update channel full: dropping handshake gap update"
+                                );
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!("[ferogram] connect: handshake getDifference: {e}"),
+                }
+            });
         }
 
         Ok((client, shutdown_token))
@@ -1559,6 +1589,53 @@ impl Client {
         self.inner
             .is_bot
             .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        // Sync pts/qts/seq from the server so the very first incoming update
+        // is not treated as a gap (pts=0 → expected=1, got=real_pts → gap →
+        // 1-second buffer → first message never replied to).
+        //
+        // tDesktop sends MTPupdates_GetState immediately at session init.
+        // We do it here, after sign-in, so pts is valid before the update
+        // stream opens.  Failure is non-fatal: the next gap_tick will recover.
+        if let Err(e) = self.sync_pts_state().await {
+            tracing::warn!("[ferogram] bot_sign_in: sync_pts_state failed (non-fatal): {e}");
+        }
+
+        // Resolve any gaps that accumulated during the auth handshake.
+        //
+        // The MTProto handshake + importBotAuthorization RPC can take several
+        // seconds.  Updates that arrived at the server in that window are
+        // queued but not yet pushed; getDifference drains them before the
+        // update stream starts delivering live pushes.  This mirrors the
+        // tDesktop new_session_created → getDifference path.
+        //
+        // If pts == 0 (sync_pts_state failed), get_difference's early-return
+        // guard calls sync_pts_state itself and returns Ok([]); harmless.
+        let c = self.clone();
+        let utx = self.inner.update_tx.clone();
+        tokio::spawn(async move {
+            match c.get_difference().await {
+                Ok(missed) => {
+                    if !missed.is_empty() {
+                        tracing::info!(
+                            "[ferogram] bot_sign_in: {} updates replayed from auth-window gap",
+                            missed.len()
+                        );
+                    }
+                    for u in missed {
+                        let u = attach_client_to_update(u, &c);
+                        if utx.try_send(u).is_err() {
+                            tracing::warn!(
+                                "[ferogram] update channel full: dropping auth-window update"
+                            );
+                            break;
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("[ferogram] bot_sign_in: auth-window getDifference: {e}"),
+            }
+        });
+
         Ok(name)
     }
 
@@ -1998,7 +2075,7 @@ impl Client {
         // This prevents a transient 30 s timeout from nuking a valid session.
         let mut init_fail_count: u32 = 0;
 
-        let mut gap_tick = tokio::time::interval(std::time::Duration::from_millis(1500));
+        let mut gap_tick = tokio::time::interval(std::time::Duration::from_millis(200));
         gap_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut restart_interval = self.inner.restart_policy.restart_interval().map(|d| {
