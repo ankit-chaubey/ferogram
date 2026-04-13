@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c5d5afa1.js";
+            window.path_to_searchindex_js = "../searchindex-fd41c8e7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-3a947583.js"></script>
@@ -200,7 +200,7 @@ Opens a TCP connection to Telegram, performs the full 3-step DH key exchange, an
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge">sync</span>
-<span class="api-card-sig">Client::with_string_session(session: &amp;str, api_id: i32, api_hash: &amp;str) → Result&lt;(Client, ShutdownToken), InvocationError&gt; <span class="api-badge-new">New 0.1.1</span></span>
+<span class="api-card-sig">Client::with_string_session(session: &amp;str, api_id: i32, api_hash: &amp;str) → Result&lt;(Client, ShutdownToken), InvocationError&gt; <span class="api-badge-new">New 0.2.0</span></span>
 </div>
 
 <div class="api-card-body">
@@ -236,7 +236,7 @@ Writes the current session (auth key + DC info + peer cache) to the backend. Cal
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.export_session_string() → Result&lt;String, InvocationError&gt; <span class="api-badge-new">New 0.1.1</span></span>
+<span class="api-card-sig">client.export_session_string() → Result&lt;String, InvocationError&gt; <span class="api-badge-new">New 0.2.0</span></span>
 </div>
 
 <div class="api-card-body">
@@ -275,7 +275,7 @@ Immediately closes the TCP connection and stops the reader task without waiting 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.sync_update_state() <span class="api-badge-new">New 0.1.1</span></span>
+<span class="api-card-sig">client.sync_update_state() <span class="api-badge-new">New 0.2.0</span></span>
 </div>
 
 <div class="api-card-body">
@@ -693,7 +693,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <span class="api-card-sig">client.iter_participants(peer: Peer) → ParticipantIter</span>
 </div>
 
-<div class="api-card-body">Lazy async iterator that pages through all members, including beyond the 200-member limit. Fixed in v0.1.1 to paginate correctly for large channels.</div>
+<div class="api-card-body">Lazy async iterator that pages through all members, including beyond the 200-member limit. Fixed in v0.2.0 to paginate correctly for large channels.</div>
 
 </div>
 
@@ -797,7 +797,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <span class="api-card-sig">client.answer_inline_query(query_id: i64, results: Vec&lt;InputBotInlineResult&gt;, cache_time: i32, is_personal: bool, next_offset: Option&lt;&amp;str&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Respond to an inline query with a list of results. <code>cache_time</code> in seconds. Empty result list now handled correctly (fixed in v0.1.1).</div>
+<div class="api-card-body">Respond to an inline query with a list of results. <code>cache_time</code> in seconds. Empty result list now handled correctly (fixed in v0.2.0).</div>
 
 </div>
 

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c5d5afa1.js";
+            window.path_to_searchindex_js = "../searchindex-fd41c8e7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-3a947583.js"></script>
@@ -217,7 +217,7 @@ let (client, _shutdown) = Client::builder()
 <p>Login is required on every run since nothing persists.</p>
 <hr>
 <h2 id="sqlite-robust-long-running-servers"><a class="header" href="#sqlite-robust-long-running-servers">SQLite (robust, long-running servers)</a></h2>
-<pre><code class="language-toml">ferogram = { version = "0.1.1", features = ["sqlite-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.2.0", features = ["sqlite-session"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -227,7 +227,7 @@ let (client, _shutdown) = Client::builder()
 <span class="boring">}</span></code></pre>
 <p>SQLite is more resilient against crash-corruption than the binary format. Ideal for production bots.</p>
 <hr>
-<h2 id="string-session-new-in-v011"><a class="header" href="#string-session-new-in-v011">String session: New in v0.1.1</a></h2>
+<h2 id="string-session-new-in-v020"><a class="header" href="#string-session-new-in-v020">String session: New in v0.2.0</a></h2>
 <p>Encode the entire session as a portable base64 string. Store it in an env var, a DB column, or CI secrets:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {

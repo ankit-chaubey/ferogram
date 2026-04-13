@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c5d5afa1.js";
+            window.path_to_searchindex_js = "../searchindex-fd41c8e7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-3a947583.js"></script>
@@ -183,37 +183,76 @@
                     <main>
                         <h1 id="message-formatting"><a class="header" href="#message-formatting">Message Formatting</a></h1>
 <p>Telegram supports rich text formatting through <strong>message entities</strong>: positional markers that indicate bold, italic, code, links, and more.</p>
-<h2 id="using-parse_markdown"><a class="header" href="#using-parse_markdown">Using parse_markdown</a></h2>
-<p>The easiest way is <code>parse_markdown</code>, which converts a Markdown-like syntax into a <code>(String, Vec&lt;MessageEntity&gt;)</code> tuple:</p>
+<h2 id="quickest-way-inputmessage-constructors"><a class="header" href="#quickest-way-inputmessage-constructors">Quickest way: InputMessage constructors</a></h2>
+<p>The simplest approach is <code>InputMessage::markdown</code> or <code>InputMessage::html</code>, which parse the text and attach entities in one call:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::InputMessage;
+
+// Markdown
+let msg = InputMessage::markdown("**Bold**, _italic_, `code`");
+
+// HTML
+let msg = InputMessage::html("&lt;b&gt;Bold&lt;/b&gt;, &lt;i&gt;italic&lt;/i&gt;, &lt;code&gt;code&lt;/code&gt;");
+
+client.send_message_to_peer_ex(peer, &amp;msg).await?;
+<span class="boring">}</span></code></pre>
+<h2 id="using-parse_markdown-directly"><a class="header" href="#using-parse_markdown-directly">Using parse_markdown directly</a></h2>
+<p>If you need the <code>(String, Vec&lt;MessageEntity&gt;)</code> tuple for further processing:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use ferogram::parsers::parse_markdown;
 use ferogram::InputMessage;
 
-let (plain, entities) = parse_markdown(
-    "**Bold text**, _italic text_, `inline code`\n\
-     and a [clickable link](https://example.com)"
-);
+let (plain, entities) = parse_markdown("**Bold text**, _italic_, `inline code`");
 
 let msg = InputMessage::text(plain).entities(entities);
 client.send_message_to_peer_ex(peer, &amp;msg).await?;
 <span class="boring">}</span></code></pre>
-<h2 id="supported-syntax"><a class="header" href="#supported-syntax">Supported syntax</a></h2>
+<h2 id="markdown-syntax"><a class="header" href="#markdown-syntax">Markdown syntax</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Markdown</th><th>Entity type</th><th>Example</th></tr>
+<tr><th>Syntax</th><th>Entity</th></tr>
 </thead>
 <tbody>
-<tr><td><code>**text**</code></td><td>Bold</td><td><strong>Hello</strong></td></tr>
-<tr><td><code>_text_</code></td><td>Italic</td><td><em>Hello</em></td></tr>
-<tr><td><code>*text*</code></td><td>Italic</td><td><em>Hello</em></td></tr>
-<tr><td><code>__text__</code></td><td>Underline</td><td>Hello</td></tr>
-<tr><td><code>~~text~~</code></td><td>Strikethrough</td><td><del>Hello</del></td></tr>
-<tr><td><code>`text`</code></td><td>Code (inline)</td><td><code>Hello</code></td></tr>
-<tr><td><code>```text```</code></td><td>Pre (code block)</td><td>block</td></tr>
-<tr><td><code>||text||</code></td><td>Spoiler</td><td>▓▓▓▓▓</td></tr>
-<tr><td><code>[label](url)</code></td><td>Text link</td><td>clickable</td></tr>
+<tr><td><code>**text**</code></td><td>Bold</td></tr>
+<tr><td><code>*text*</code></td><td>Bold</td></tr>
+<tr><td><code>_text_</code></td><td>Italic</td></tr>
+<tr><td><code>__text__</code></td><td>Italic</td></tr>
+<tr><td><code>~~text~~</code></td><td>Strikethrough</td></tr>
+<tr><td><code>`text`</code></td><td>Code (inline)</td></tr>
+<tr><td><code>```lang\ncode\n```</code></td><td>Pre (code block)</td></tr>
+<tr><td><code>||text||</code></td><td>Spoiler</td></tr>
+<tr><td><code>[label](url)</code></td><td>TextUrl</td></tr>
+<tr><td><code>[label](tg://user?id=123)</code></td><td>MentionName</td></tr>
+<tr><td><code>![text](tg://emoji?id=123)</code></td><td>CustomEmoji</td></tr>
+<tr><td><code>\*</code>, <code>\_</code>, <code>\~</code> …</td><td>Escaped literal character</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>Note:</strong> Underline has no markdown syntax. Use HTML <code>&lt;u&gt;</code> if you need it.</p>
+</blockquote>
+<h2 id="html-syntax"><a class="header" href="#html-syntax">HTML syntax</a></h2>
+<p>Supported tags:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tag</th><th>Entity</th></tr>
+</thead>
+<tbody>
+<tr><td><code>&lt;b&gt;</code>, <code>&lt;strong&gt;</code></td><td>Bold</td></tr>
+<tr><td><code>&lt;i&gt;</code>, <code>&lt;em&gt;</code></td><td>Italic</td></tr>
+<tr><td><code>&lt;u&gt;</code></td><td>Underline</td></tr>
+<tr><td><code>&lt;s&gt;</code>, <code>&lt;del&gt;</code>, <code>&lt;strike&gt;</code></td><td>Strikethrough</td></tr>
+<tr><td><code>&lt;code&gt;</code></td><td>Code (inline)</td></tr>
+<tr><td><code>&lt;pre&gt;</code></td><td>Pre (code block)</td></tr>
+<tr><td><code>&lt;tg-spoiler&gt;</code></td><td>Spoiler</td></tr>
+<tr><td><code>&lt;a href="url"&gt;</code></td><td>TextUrl</td></tr>
+<tr><td><code>&lt;a href="tg://user?id=123"&gt;</code></td><td>MentionName</td></tr>
+<tr><td><code>&lt;tg-emoji emoji-id="123"&gt;</code></td><td>CustomEmoji</td></tr>
+<tr><td><code>&lt;br&gt;</code></td><td>Newline</td></tr>
 </tbody>
 </table>
 </div>
@@ -225,12 +264,10 @@ client.send_message_to_peer_ex(peer, &amp;msg).await?;
 
 let text = "Hello world";
 let entities = vec![
-    // Bold "Hello"
     tl::enums::MessageEntity::Bold(tl::types::MessageEntityBold {
         offset: 0,
         length: 5,
     }),
-    // Code "world"
     tl::enums::MessageEntity::Code(tl::types::MessageEntityCode {
         offset: 6,
         length: 5,
@@ -239,19 +276,75 @@ let entities = vec![
 
 let msg = InputMessage::text(text).entities(entities);
 <span class="boring">}</span></code></pre>
-<h2 id="all-entity-types-layer-224"><a class="header" href="#all-entity-types-layer-224">All entity types (Layer 224)</a></h2>
+<h2 id="pre-block-with-language"><a class="header" href="#pre-block-with-language">Pre block with language</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>tl::enums::MessageEntity::Pre(tl::types::MessageEntityPre {
+    offset:   0,
+    length:   code_text.encode_utf16().count() as i32,
+    language: "rust".into(),
+})
+<span class="boring">}</span></code></pre>
+<h2 id="mention-by-user-id"><a class="header" href="#mention-by-user-id">Mention by user ID</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>tl::enums::MessageEntity::MentionName(tl::types::MessageEntityMentionName {
+    offset:  0,
+    length:  label.encode_utf16().count() as i32,
+    user_id: 123456789,
+})
+<span class="boring">}</span></code></pre>
+<h2 id="blockquote"><a class="header" href="#blockquote">Blockquote</a></h2>
+<p><code>messageEntityBlockquote</code> has an optional <code>collapsed</code> flag:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>tl::enums::MessageEntity::Blockquote(tl::types::MessageEntityBlockquote {
+    collapsed: false, // true = collapsible quote
+    offset: 0,
+    length: text.encode_utf16().count() as i32,
+})
+<span class="boring">}</span></code></pre>
+<h2 id="formatteddate"><a class="header" href="#formatteddate">FormattedDate</a></h2>
+<p>Displays a Unix timestamp in the user’s local timezone and locale. Set the boolean flags you want; the rest default to false:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>tl::enums::MessageEntity::FormattedDate(tl::types::MessageEntityFormattedDate {
+    relative:    false,
+    short_time:  false,
+    long_time:   false,
+    short_date:  true,  // e.g. "Jan 5"
+    long_date:   false,
+    day_of_week: false,
+    offset: 0,
+    length: placeholder_text.encode_utf16().count() as i32,
+    date:   1736000000, // Unix timestamp
+})
+<span class="boring">}</span></code></pre>
+<h2 id="generating-markup-from-entities"><a class="header" href="#generating-markup-from-entities">Generating markup from entities</a></h2>
+<p>Both <code>generate_markdown</code> and <code>generate_html</code> are available if you need to serialise entities back to text:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::parsers::{generate_markdown, generate_html};
+
+let md  = generate_markdown(plain_text, &amp;entities);
+let htm = generate_html(plain_text, &amp;entities);
+<span class="boring">}</span></code></pre>
+<blockquote>
+<p><code>generate_markdown</code> skips <code>Underline</code> (no unambiguous delimiter). Use <code>generate_html</code> if you need it.</p>
+</blockquote>
+<h2 id="all-entity-types"><a class="header" href="#all-entity-types">All entity types</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Enum variant</th><th>Description</th></tr>
+<tr><th>Variant</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Bold</code></td><td><strong>Bold text</strong></td></tr>
-<tr><td><code>Italic</code></td><td><em>Italic text</em></td></tr>
-<tr><td><code>Underline</code></td><td>Underlined</td></tr>
-<tr><td><code>Strike</code></td><td><del>Strikethrough</del></td></tr>
+<tr><td><code>Bold</code></td><td>Bold text</td></tr>
+<tr><td><code>Italic</code></td><td>Italic text</td></tr>
+<tr><td><code>Underline</code></td><td>Underlined (HTML only)</td></tr>
+<tr><td><code>Strike</code></td><td>Strikethrough</td></tr>
 <tr><td><code>Spoiler</code></td><td>Hidden until tapped</td></tr>
-<tr><td><code>Code</code></td><td><code>Monospace inline</code></td></tr>
+<tr><td><code>Code</code></td><td>Monospace inline</td></tr>
 <tr><td><code>Pre</code></td><td>Code block (optional language)</td></tr>
 <tr><td><code>TextUrl</code></td><td>Hyperlink with custom label</td></tr>
 <tr><td><code>Url</code></td><td>Auto-detected URL</td></tr>
@@ -263,47 +356,12 @@ let msg = InputMessage::text(text).entities(entities);
 <tr><td><code>Cashtag</code></td><td>$TICKER</td></tr>
 <tr><td><code>BotCommand</code></td><td>/command</td></tr>
 <tr><td><code>BankCard</code></td><td>Bank card number</td></tr>
-<tr><td><code>BlockquoteCollapsible</code></td><td>Collapsible quote block</td></tr>
+<tr><td><code>Blockquote</code></td><td>Block quote, optionally collapsible</td></tr>
 <tr><td><code>CustomEmoji</code></td><td>Custom emoji by document ID</td></tr>
-<tr><td><code>FormattedDate</code></td><td>✨ New in Layer 223: displays a date in local time</td></tr>
+<tr><td><code>FormattedDate</code></td><td>Unix timestamp rendered in local time</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="pre-block-with-language"><a class="header" href="#pre-block-with-language">Pre block with language</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>tl::enums::MessageEntity::Pre(tl::types::MessageEntityPre {
-    offset:   0,
-    length:   code_text.len() as i32,
-    language: "rust".into(),
-})
-<span class="boring">}</span></code></pre>
-<h2 id="mention-by-user-id-no-username-needed"><a class="header" href="#mention-by-user-id-no-username-needed">Mention by user ID (no @username needed)</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>tl::enums::MessageEntity::MentionName(tl::types::MessageEntityMentionName {
-    offset:  0,
-    length:  5,   // length of the label text
-    user_id: 123456789,
-})
-<span class="boring">}</span></code></pre>
-<h2 id="formatteddate-layer-224"><a class="header" href="#formatteddate-layer-224">FormattedDate: Layer 224</a></h2>
-<p>A new entity that automatically formats a unix timestamp into the user’s local timezone and locale:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>tl::enums::MessageEntity::FormattedDate(tl::types::MessageEntityFormattedDate {
-    flags:    0,
-    relative:    false, // "yesterday", "2 days ago"
-    short_time:  false, // "14:30"
-    long_time:   false, // "2:30 PM"
-    short_date:  true,  // "Jan 5"
-    long_date:   false, // "January 5, 2026"
-    day_of_week: false, // "Monday"
-    offset:      0,
-    length:      text.len() as i32,
-    date:        1736000000, // unix timestamp
-})
-<span class="boring">}</span></code></pre>
 
                     </main>
 
