@@ -30,7 +30,7 @@ pub struct IncomingMessage {
     /// An embedded client reference, populated for messages received via
     /// `stream_updates()` and returned from send/search/history APIs.
     /// When present, the clientless action methods (`reply`, `respond`,
-    /// `edit`, `delete`, `pin`, `unpin`, `react`, …) can be called without
+    /// `edit`, `delete`, `pin`, `unpin`, `react`, ...) can be called without
     /// passing a `&Client` argument.
     pub client: Option<Client>,
 }
@@ -416,7 +416,7 @@ impl IncomingMessage {
     // Two tiers for every action:
     //  1. Clientless : `msg.reply("hi").await?`
     // Uses the embedded `self.client`. Returns an error if the message was
-    // constructed without `.with_client(…)`.
+    // constructed without `.with_client(...)`.
     //  2. Explicit   : `msg.reply_with(&client, "hi").await?`
     // Always works, even when no client is embedded.
 
@@ -849,7 +849,7 @@ impl CallbackQuery {
             .map(|_| ())
     }
 
-    /// Answer with a popup alert (flat helper: prefer `answer().alert(…)`).
+    /// Answer with a popup alert (flat helper: prefer `answer().alert(...)`).
     pub async fn answer_alert(&self, client: &Client, text: &str) -> Result<(), Error> {
         client
             .answer_callback_query(self.query_id, Some(text), true)
@@ -1016,7 +1016,7 @@ pub struct UserStatusUpdate {
     pub status: tl::enums::UserStatus,
 }
 
-/// A user is performing a chat action (typing, uploading, recording…).
+/// A user is performing a chat action (typing, uploading, recording...).
 ///
 /// Delivered as [`Update::UserTyping`].  Covers DMs, groups, and channels.
 ///

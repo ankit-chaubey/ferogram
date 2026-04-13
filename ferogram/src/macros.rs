@@ -45,7 +45,7 @@
 /// ```text
 /// dispatch!(client, update,
 /// VariantName(binding) [if guard] => { body },
-/// ...
+///.
 /// [_ => { fallback }]
 /// );
 /// ```

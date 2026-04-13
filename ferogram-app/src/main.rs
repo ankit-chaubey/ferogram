@@ -32,7 +32,7 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const LANG_CODE: &str = "en";
 const SYSTEM_LANG_CODE: &str = "en";
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() {
     if std::env::var("RUST_LOG").is_err() {
         unsafe {
@@ -318,7 +318,7 @@ async fn cmd_dc(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
 
 async fn cmd_ferogram(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
     rh(client, peer, reply_to, &format!(
-        "📡 <b>layer</b>\n\n<b>MTProto Layer:</b> <code>{}</code>\n<b>Crate:</b> <code>ferogram 0.4.6</code>\n<b>Language:</b> Rust 🦀\nhttps://github.com/ankit-chaubey/ferogram",
+        "📡 <b>layer</b>\n\n<b>MTProto Layer:</b> <code>{}</code>\n<b>Crate:</b> <code>ferogram 0.1.1</code>\n<b>Language:</b> Rust 🦀\nhttps://github.com/ankit-chaubey/ferogram",
         tl::LAYER
     )).await;
 }

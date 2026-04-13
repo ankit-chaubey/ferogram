@@ -149,7 +149,7 @@ pub(crate) fn type_qual_name(ty: &Type) -> String {
     type_path(ty, false)
 }
 
-/// Same as `type_qual_name` but uses `::<…>` turbofish syntax.
+/// Same as `type_qual_name` but uses `::<...>` turbofish syntax.
 pub(crate) fn type_item_path(ty: &Type) -> String {
     type_path(ty, true)
 }
@@ -169,7 +169,7 @@ fn type_path(ty: &Type, turbofish: bool) -> String {
         //
         // 2. Array builtins (`"[u8; 16]"`, `"[u8; 32]"`): the type is not a
         //  named path, so `[u8; 16]::deserialize` is a hard syntax error.
-        //  Wrap in `<…>` to get `<[u8; 16]>::deserialize`.
+        //  Wrap in `<...>` to get `<[u8; 16]>::deserialize`.
         if turbofish {
             if b.starts_with('[') {
                 // Array type: wrap in angle brackets for path syntax.

@@ -31,7 +31,7 @@
 //! // numeric user ID (positive)
 //! client.send_message_to_peer(12345678_i64, "hi").await?;
 //!
-//! // Bot-API channel ID (negative, -100… prefix)
+//! // Bot-API channel ID (negative, -100... prefix)
 //! client.iter_messages(-1001234567890_i64);
 //!
 //! // Bot-API basic-group ID (negative, small)

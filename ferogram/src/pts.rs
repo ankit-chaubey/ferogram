@@ -316,7 +316,7 @@ impl Client {
         // Fix: check-and-set inside a SINGLE lock acquisition.  Only the first caller
         // proceeds; all others see true and return Ok(vec![]) immediately.
         {
-            let mut s = self.inner.pts_state.lock().await;
+            let mut s = self.inner.pts_state.lock();
             if s.getting_global_diff {
                 return Ok(vec![]);
             }
@@ -334,7 +334,7 @@ impl Client {
         // Note: updates arriving DURING the RPC flight are now force-dispatched by
         // check_and_fill_gap and never accumulate in possible_gap,
         // so there is nothing extra to drain after the call returns.
-        let pre_diff = self.inner.possible_gap.lock().await.drain_global();
+        let pre_diff = self.inner.possible_gap.lock().drain_global();
 
         // Wrap the RPC in a hard 30-second timeout so a hung TCP connection
         // (half-open socket, unresponsive DC) cannot hold getting_global_diff=true
@@ -354,7 +354,7 @@ impl Client {
 
         // Always clear the guard, even on error.
         {
-            let mut s = self.inner.pts_state.lock().await;
+            let mut s = self.inner.pts_state.lock();
             s.getting_global_diff = false;
             s.getting_global_diff_since = None;
         }
@@ -366,7 +366,7 @@ impl Client {
             }
             Err(_) => {
                 // Restore pre-existing items so the next gap_tick retry sees them.
-                let mut gap = self.inner.possible_gap.lock().await;
+                let mut gap = self.inner.possible_gap.lock();
                 for u in pre_diff {
                     gap.push_global(u);
                 }
@@ -384,7 +384,7 @@ impl Client {
         // loop until the server sends a final (non-Slice) response.
         loop {
             let (pts, qts, date) = {
-                let s = self.inner.pts_state.lock().await;
+                let s = self.inner.pts_state.lock();
                 (s.pts, s.qts, s.date)
             };
 
@@ -425,7 +425,7 @@ impl Client {
 
             match diff {
                 tl::enums::updates::Difference::Empty(e) => {
-                    let mut s = self.inner.pts_state.lock().await;
+                    let mut s = self.inner.pts_state.lock();
                     s.date = e.date;
                     s.seq = e.seq;
                     s.touch();
@@ -451,7 +451,7 @@ impl Client {
                     }
                     let tl::enums::updates::State::State(ns) = d.state;
                     let saved_channel_pts = {
-                        let s = self.inner.pts_state.lock().await;
+                        let s = self.inner.pts_state.lock();
                         s.channel_pts.clone()
                     };
                     let mut new_state = PtsState::from_server_state(&ns);
@@ -462,7 +462,7 @@ impl Client {
                     // Preserve in-flight sets: we clear getting_global_diff ourselves.
                     new_state.getting_global_diff = true; // will be cleared by caller
                     {
-                        let mut s = self.inner.pts_state.lock().await;
+                        let mut s = self.inner.pts_state.lock();
                         let getting_diff_for = std::mem::take(&mut s.getting_diff_for);
                         let since = s.getting_global_diff_since; // preserve watchdog timestamp
                         *s = new_state;
@@ -494,7 +494,7 @@ impl Client {
                     }
                     let tl::enums::updates::State::State(ns) = d.intermediate_state;
                     let saved_channel_pts = {
-                        let s = self.inner.pts_state.lock().await;
+                        let s = self.inner.pts_state.lock();
                         s.channel_pts.clone()
                     };
                     let mut new_state = PtsState::from_server_state(&ns);
@@ -503,7 +503,7 @@ impl Client {
                     }
                     new_state.getting_global_diff = true;
                     {
-                        let mut s = self.inner.pts_state.lock().await;
+                        let mut s = self.inner.pts_state.lock();
                         let getting_diff_for = std::mem::take(&mut s.getting_diff_for);
                         let since = s.getting_global_diff_since; // preserve watchdog timestamp
                         *s = new_state;
@@ -519,7 +519,7 @@ impl Client {
                         "[ferogram] getDifference: TooLong (pts={}): re-syncing",
                         d.pts
                     );
-                    self.inner.pts_state.lock().await.pts = d.pts;
+                    self.inner.pts_state.lock().pts = d.pts;
                     self.sync_pts_state().await?;
                     return Ok(all_updates);
                 }
@@ -538,21 +538,12 @@ impl Client {
             .inner
             .pts_state
             .lock()
-            .await
             .channel_pts
             .get(&channel_id)
             .copied()
             .unwrap_or(0);
 
-        let access_hash = self
-            .inner
-            .peer_cache
-            .read()
-            .await
-            .channels
-            .get(&channel_id)
-            .copied()
-            .unwrap_or(0);
+        let access_hash = self.inner.peer_cache.channels.get(&channel_id).unwrap_or(0);
 
         // No access hash in cache → we can't call getChannelDifference.
         // Attempting GetChannels with access_hash=0 also returns CHANNEL_INVALID,
@@ -585,7 +576,6 @@ impl Client {
                 .inner
                 .pts_state
                 .lock()
-                .await
                 .channel_diff_calls
                 .get(&channel_id)
                 .copied()
@@ -607,7 +597,6 @@ impl Client {
                 self.inner
                     .pts_state
                     .lock()
-                    .await
                     .channel_diff_calls
                     .entry(channel_id)
                     .and_modify(|c| *c = c.saturating_add(1))
@@ -633,7 +622,6 @@ impl Client {
                 self.inner
                     .pts_state
                     .lock()
-                    .await
                     .advance_channel(channel_id, e.pts);
             }
             tl::enums::updates::ChannelDifference::ChannelDifference(d) => {
@@ -655,7 +643,6 @@ impl Client {
                 self.inner
                     .pts_state
                     .lock()
-                    .await
                     .advance_channel(channel_id, d.pts);
             }
             tl::enums::updates::ChannelDifference::TooLong(d) => {
@@ -669,11 +656,7 @@ impl Client {
                         update::IncomingMessage::from_raw(msg).with_client(self.clone()),
                     ));
                 }
-                self.inner
-                    .pts_state
-                    .lock()
-                    .await
-                    .advance_channel(channel_id, 0);
+                self.inner.pts_state.lock().advance_channel(channel_id, 0);
             }
         }
 
@@ -688,7 +671,7 @@ impl Client {
             .await?;
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::updates::State::State(s) = tl::enums::updates::State::deserialize(&mut cur)?;
-        let mut state = self.inner.pts_state.lock().await;
+        let mut state = self.inner.pts_state.lock();
         state.pts = s.pts;
         state.qts = s.qts;
         state.date = s.date;
@@ -726,17 +709,12 @@ impl Client {
         // updates received during getDiff "should also have been retrieved through
         // getDifference". Application-layer deduplication by message_id handles doubles.
         // pts is NOT advanced here; getDiff sets it authoritatively when it returns.
-        if self.inner.pts_state.lock().await.getting_global_diff {
+        if self.inner.pts_state.lock().getting_global_diff {
             tracing::debug!("[ferogram] global diff in flight: force-applying pts={new_pts}");
             return Ok(upd.into_iter().collect());
         }
 
-        let result = self
-            .inner
-            .pts_state
-            .lock()
-            .await
-            .check_pts(new_pts, pts_count);
+        let result = self.inner.pts_state.lock().check_pts(new_pts, pts_count);
         match result {
             PtsCheckResult::Ok => {
                 // Advance pts and dispatch only this update.
@@ -763,7 +741,7 @@ impl Client {
                 // drains possible_gap into pre_diff, lets the server fill the
                 // gap, and advances pts to the true server state; no stale pts,
                 // no secondary cascade, no duplicates.
-                self.inner.pts_state.lock().await.advance(new_pts);
+                self.inner.pts_state.lock().advance(new_pts);
                 Ok(upd.into_iter().collect())
             }
             PtsCheckResult::Gap { expected, got } => {
@@ -777,19 +755,14 @@ impl Client {
                 // subsequent user message arrived.  touch_global_timer() starts the
                 // 1-second deadline clock even without a buffered update.
                 {
-                    let mut gap = self.inner.possible_gap.lock().await;
+                    let mut gap = self.inner.possible_gap.lock();
                     if let Some(u) = upd {
                         gap.push_global(u);
                     } else {
                         gap.touch_global_timer();
                     }
                 }
-                let deadline_elapsed = self
-                    .inner
-                    .possible_gap
-                    .lock()
-                    .await
-                    .global_deadline_elapsed();
+                let deadline_elapsed = self.inner.possible_gap.lock().global_deadline_elapsed();
                 if deadline_elapsed {
                     tracing::warn!(
                         "[ferogram] global pts gap: expected {expected}, got {got}: getDifference"
@@ -820,15 +793,10 @@ impl Client {
         new_qts: i32,
         qts_count: i32,
     ) -> Result<Vec<update::Update>, InvocationError> {
-        let result = self
-            .inner
-            .pts_state
-            .lock()
-            .await
-            .check_qts(new_qts, qts_count);
+        let result = self.inner.pts_state.lock().check_qts(new_qts, qts_count);
         match result {
             PtsCheckResult::Ok => {
-                self.inner.pts_state.lock().await.advance_qts(new_qts);
+                self.inner.pts_state.lock().advance_qts(new_qts);
                 Ok(vec![])
             }
             PtsCheckResult::Gap { expected, got } => {
@@ -845,15 +813,10 @@ impl Client {
         new_seq: i32,
         seq_start: i32,
     ) -> Result<Vec<update::Update>, InvocationError> {
-        let result = self
-            .inner
-            .pts_state
-            .lock()
-            .await
-            .check_seq(new_seq, seq_start);
+        let result = self.inner.pts_state.lock().check_seq(new_seq, seq_start);
         match result {
             PtsCheckResult::Ok => {
-                self.inner.pts_state.lock().await.advance_seq(new_seq);
+                self.inner.pts_state.lock().advance_seq(new_seq);
                 Ok(vec![])
             }
             PtsCheckResult::Gap { expected, got } => {
@@ -878,17 +841,12 @@ impl Client {
             .inner
             .pts_state
             .lock()
-            .await
             .getting_diff_for
             .contains(&channel_id)
         {
             tracing::debug!("[ferogram] channel {channel_id} diff already in flight, skipping");
             if let Some(u) = upd {
-                self.inner
-                    .possible_gap
-                    .lock()
-                    .await
-                    .push_channel(channel_id, u);
+                self.inner.possible_gap.lock().push_channel(channel_id, u);
             }
             return Ok(vec![]);
         }
@@ -897,20 +855,13 @@ impl Client {
             .inner
             .pts_state
             .lock()
-            .await
             .check_channel_pts(channel_id, new_pts, pts_count);
         match result {
             PtsCheckResult::Ok => {
-                let mut buffered = self
-                    .inner
-                    .possible_gap
-                    .lock()
-                    .await
-                    .drain_channel(channel_id);
+                let mut buffered = self.inner.possible_gap.lock().drain_channel(channel_id);
                 self.inner
                     .pts_state
                     .lock()
-                    .await
                     .advance_channel(channel_id, new_pts);
                 if let Some(u) = upd {
                     buffered.push(u);
@@ -919,17 +870,12 @@ impl Client {
             }
             PtsCheckResult::Gap { expected, got } => {
                 if let Some(u) = upd {
-                    self.inner
-                        .possible_gap
-                        .lock()
-                        .await
-                        .push_channel(channel_id, u);
+                    self.inner.possible_gap.lock().push_channel(channel_id, u);
                 }
                 let deadline_elapsed = self
                     .inner
                     .possible_gap
                     .lock()
-                    .await
                     .channel_deadline_elapsed(channel_id);
                 if deadline_elapsed {
                     tracing::warn!(
@@ -939,22 +885,15 @@ impl Client {
                     self.inner
                         .pts_state
                         .lock()
-                        .await
                         .getting_diff_for
                         .insert(channel_id);
-                    let buffered = self
-                        .inner
-                        .possible_gap
-                        .lock()
-                        .await
-                        .drain_channel(channel_id);
+                    let buffered = self.inner.possible_gap.lock().drain_channel(channel_id);
                     match self.get_channel_difference(channel_id).await {
                         Ok(mut diff_updates) => {
                             // diff complete, allow future gaps to be handled.
                             self.inner
                                 .pts_state
                                 .lock()
-                                .await
                                 .getting_diff_for
                                 .remove(&channel_id);
                             diff_updates.splice(0..0, buffered);
@@ -981,7 +920,7 @@ impl Client {
                                 e.name
                             );
                             {
-                                let mut s = self.inner.pts_state.lock().await;
+                                let mut s = self.inner.pts_state.lock();
                                 s.getting_diff_for.remove(&channel_id);
                                 s.channel_pts.remove(&channel_id); // ←  fix: delete, not advance
                             }
@@ -995,7 +934,7 @@ impl Client {
                                  removing from pts tracking"
                             );
                             {
-                                let mut s = self.inner.pts_state.lock().await;
+                                let mut s = self.inner.pts_state.lock();
                                 s.getting_diff_for.remove(&channel_id);
                                 s.channel_pts.remove(&channel_id);
                             }
@@ -1006,7 +945,6 @@ impl Client {
                             self.inner
                                 .pts_state
                                 .lock()
-                                .await
                                 .getting_diff_for
                                 .remove(&channel_id);
                             Err(e)
@@ -1045,7 +983,7 @@ impl Client {
         // where that timeout itself is somehow delayed.
         {
             let stuck = {
-                let s = self.inner.pts_state.lock().await;
+                let s = self.inner.pts_state.lock();
                 s.getting_global_diff
                     && s.getting_global_diff_since
                         .map(|t| t.elapsed().as_secs() > 30)
@@ -1056,14 +994,14 @@ impl Client {
                     "[ferogram] getDifference in-flight for >30 s: \
                      resetting guard so gap_tick can retry"
                 );
-                let mut s = self.inner.pts_state.lock().await;
+                let mut s = self.inner.pts_state.lock();
                 s.getting_global_diff = false;
                 s.getting_global_diff_since = None;
             }
         }
 
         // existing 5-minute global timeout
-        let exceeded = self.inner.pts_state.lock().await.deadline_exceeded();
+        let exceeded = self.inner.pts_state.lock().deadline_exceeded();
         if exceeded {
             tracing::info!("[ferogram] update deadline exceeded: fetching getDifference");
             let updates = self.get_difference().await?;
@@ -1078,12 +1016,7 @@ impl Client {
         // If the possible-gap window has expired but no new update has arrived
         // to trigger check_and_fill_gap, fire getDifference from here.
         {
-            let gap_expired = self
-                .inner
-                .possible_gap
-                .lock()
-                .await
-                .global_deadline_elapsed();
+            let gap_expired = self.inner.possible_gap.lock().global_deadline_elapsed();
             // Note: get_difference() is now atomic (check-and-set), so the
             // `already` guard is advisory only; get_difference() will bail
             // safely if another call is already in flight.
@@ -1115,7 +1048,7 @@ impl Client {
         // drive per-channel possible-gap deadlines
         // Collect expired channel IDs up-front to avoid holding the lock across awaits.
         let expired_channels: Vec<i64> = {
-            let gap = self.inner.possible_gap.lock().await;
+            let gap = self.inner.possible_gap.lock();
             gap.channel
                 .keys()
                 .copied()
@@ -1127,7 +1060,6 @@ impl Client {
                 .inner
                 .pts_state
                 .lock()
-                .await
                 .getting_diff_for
                 .contains(&channel_id);
             if already {
@@ -1141,15 +1073,9 @@ impl Client {
             self.inner
                 .pts_state
                 .lock()
-                .await
                 .getting_diff_for
                 .insert(channel_id);
-            let buffered = self
-                .inner
-                .possible_gap
-                .lock()
-                .await
-                .drain_channel(channel_id);
+            let buffered = self.inner.possible_gap.lock().drain_channel(channel_id);
             let c = self.clone();
             let utx = self.inner.update_tx.clone();
             tokio::spawn(async move {
@@ -1158,7 +1084,6 @@ impl Client {
                         c.inner
                             .pts_state
                             .lock()
-                            .await
                             .getting_diff_for
                             .remove(&channel_id);
                         updates.splice(0..0, buffered);
@@ -1175,7 +1100,6 @@ impl Client {
                         c.inner
                             .pts_state
                             .lock()
-                            .await
                             .getting_diff_for
                             .remove(&channel_id);
                     }

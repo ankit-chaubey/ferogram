@@ -39,7 +39,7 @@
 //! };
 //!
 //! let bytes = req.to_bytes();
-//! // Send `bytes` over an MTProto connection…
+//! // Send `bytes` over an MTProto connection...
 //! ```
 //!
 //! # Updating to a new layer

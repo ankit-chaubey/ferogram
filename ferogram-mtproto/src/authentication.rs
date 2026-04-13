@@ -271,7 +271,7 @@ fn do_step1(random: &[u8; 16]) -> Result<(ferogram_tl_types::functions::ReqPqMul
 /// Process `ResPQ` and generate `req_DH_params`.
 ///
 /// `dc_id` must be the numerical DC id of the server we are connecting to
-/// (e.g. 1 … 5).  It is embedded in the `PQInnerDataDc` payload so that
+/// (e.g. 1 ... 5).  It is embedded in the `PQInnerDataDc` payload so that
 /// Telegram can reject misrouted handshakes on non-DC2 endpoints.
 pub fn step2(
     data: Step1,

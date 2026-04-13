@@ -13,7 +13,7 @@
 
 //! RAII typing indicator guard.
 //!
-//! [`TypingGuard`] automatically cancels the "typing…" chat action when
+//! [`TypingGuard`] automatically cancels the "typing..." chat action when
 //! dropped, eliminating the need to remember to call `send_chat_action`
 //! with `SendMessageAction::SendMessageCancelAction` manually.
 //!
@@ -196,7 +196,7 @@ impl Client {
         action: tl::enums::SendMessageAction,
         topic_id: Option<i32>,
     ) -> Result<(), InvocationError> {
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         let req = tl::functions::messages::SetTyping {
             peer: input_peer,
             top_msg_id: topic_id,

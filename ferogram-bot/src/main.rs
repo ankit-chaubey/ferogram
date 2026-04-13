@@ -45,7 +45,7 @@ const SYSTEM_LANG_CODE: &str = "en";
 static MSG_COUNT: AtomicU64 = AtomicU64::new(0);
 static START_TS: AtomicU64 = AtomicU64::new(0);
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() {
     if std::env::var("RUST_LOG").is_err() {
         unsafe {
@@ -288,7 +288,7 @@ async fn dispatch(upd: Update, client: Arc<Client>, me: Arc<tl::types::User>, bo
                     let _ = client
                         .answer_callback_query(
                             qid,
-                            Some(&format!("Layer {} · ferogram 0.1.0 🦀", tl::LAYER)),
+                            Some(&format!("Layer {} · ferogram 0.1.1 🦀", tl::LAYER)),
                             false,
                         )
                         .await;
@@ -541,7 +541,7 @@ async fn h_stats(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
 
 async fn h_ferogram(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
     let text = format!(
-        "📡 <b>layer library</b>\n\n<b>MTProto Layer:</b> <code>{}</code>\n<b>Crate:</b> <code>ferogram 0.4.6</code>\n<b>Language:</b> Rust 🦀\nhttps://github.com/ankit-chaubey/ferogram",
+        "📡 <b>layer library</b>\n\n<b>MTProto Layer:</b> <code>{}</code>\n<b>Crate:</b> <code>ferogram 0.1.1</code>\n<b>Language:</b> Rust 🦀\nhttps://github.com/ankit-chaubey/ferogram",
         tl::LAYER
     );
     let kb = kb(vec![vec![

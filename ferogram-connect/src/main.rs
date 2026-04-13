@@ -16,10 +16,10 @@
 //! # What this does
 //!
 //! 1. TCP connect to Telegram DC1 (test servers by default)
-//! 2. **Step 1**: send `req_pq_multi`
-//! 3. **Step 2**: receive `ResPQ`, factorize PQ, RSA-encrypt → `req_DH_params`
-//! 4. **Step 3**: receive `ServerDhParams`, complete DH → `set_client_DH_params`
-//! 5. **Finish**: receive `DhGenOk`, derive `AuthKey`
+//! 2. Send `req_pq_multi`
+//! 3. Receive `ResPQ`, factorize PQ, RSA-encrypt, send `req_DH_params`
+//! 4. Receive `ServerDhParams`, complete DH, send `set_client_DH_params`
+//! 5. Receive `DhGenOk`, derive `AuthKey`
 //! 6. Call `help.getConfig` using MTProto 2.0 encrypted transport
 //! 7. Print the DC list from the config
 //!
@@ -117,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut session = Session::new();
     println!("✓ TCP connected");
 
-    // 2. Auth key: Step 1: req_pq_multi
+    // req_pq_multi
     let (req1, state1) = auth::step1()?;
     println!("\n[Step 1] Sending req_pq_multi …");
     send_plain(&mut transport, &mut session, &req1)?;
@@ -126,7 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ferogram_tl_types::enums::ResPq::ResPq(pq) = &res_pq;
     println!("  ✓ ResPQ: pq={:02x?}", pq.pq);
 
-    // 3. Auth key: Step 2: req_DH_params
+    // req_DH_params
     let (req2, state2) = auth::step2(state1, res_pq, 1)?;
     println!("[Step 2] Sending req_DH_params …");
     send_plain(&mut transport, &mut session, &req2)?;
@@ -137,7 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ferogram_tl_types::enums::ServerDhParams::Fail(_) => println!("  ✗ ServerDhParamsFail"),
     }
 
-    // 4. Auth key: Step 3: set_client_DH_params
+    // set_client_DH_params
     let (req3, state3) = auth::step3(state2, server_dh)?;
     println!("[Step 3] Sending set_client_DH_params …");
     send_plain(&mut transport, &mut session, &req3)?;

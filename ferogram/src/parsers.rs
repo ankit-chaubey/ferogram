@@ -26,7 +26,7 @@
 //! | `[text](url)` | TextUrl |
 //! | `[text](tg://user?id=123)` | MentionName |
 //! | `![text](tg://emoji?id=123)` | CustomEmoji |
-//! | `\*`, `\_`, `\~` … | Escaped literal char |
+//! | `\*`, `\_`, `\~` ... | Escaped literal char |
 //!
 //! ## Generating (`generate_markdown`)
 //! Produces the same syntax above for all supported entity types.

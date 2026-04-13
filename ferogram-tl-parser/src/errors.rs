@@ -24,11 +24,11 @@ pub enum ParamParseError {
         /// The name of the generic type parameter (e.g. `"X"` from `{X:Type}`).
         name: String,
     },
-    /// A `{…}` block that isn't a valid type definition.
+    /// A `{...}` block that isn't a valid type definition.
     MissingDef,
     /// A flag expression (`name.N?Type`) was malformed.
     InvalidFlag,
-    /// A generic `<…>` argument was malformed (missing closing `>`).
+    /// A generic `<...>` argument was malformed (missing closing `>`).
     InvalidGeneric,
     /// A bare `name` with no `:type`: e.g. old-style `? = Int`.
     NotImplemented,

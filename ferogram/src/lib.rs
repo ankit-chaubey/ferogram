@@ -27,7 +27,7 @@
 //! - Search messages (per-chat and global)
 //! - Mark as read, delete dialogs, clear mentions
 //! - Join chat / accept invite links
-//! - Chat action (typing, uploading, …)
+//! - Chat action (typing, uploading, ...)
 //! - `get_me()`: fetch own User info
 //! - Paginated dialog and message iterators
 //! - DC migration, session persistence, reconnect
@@ -108,14 +108,17 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
+use dashmap::DashMap;
 use ferogram_mtproto::{EncryptedSession, Session, authentication as auth};
 use ferogram_tl_types::{Cursor, Deserializable, RemoteCall};
+use moka::sync::Cache as MokaCache;
+use parking_lot::Mutex;
 use session::PersistedSession;
 use socket2::TcpKeepalive;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
+use tokio::sync::{Mutex as TokioMutex, mpsc, oneshot};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
@@ -174,16 +177,24 @@ const TCP_KEEPALIVE_PROBES: u32 = 3;
 ///
 /// All fields are `pub` so that `save_session` / `connect` can read/write them
 /// directly, and so that advanced callers can inspect the cache.
-#[derive(Default)]
 pub struct PeerCache {
-    /// user_id -> access_hash
-    pub users: HashMap<i64, i64>,
-    /// channel_id -> access_hash
-    pub channels: HashMap<i64, i64>,
+    /// user_id -> access_hash  (bounded LRU, max 10 000 entries)
+    pub users: MokaCache<i64, i64>,
+    /// channel_id -> access_hash (bounded LRU, max 10 000 entries)
+    pub channels: MokaCache<i64, i64>,
+}
+
+impl Default for PeerCache {
+    fn default() -> Self {
+        Self {
+            users: MokaCache::new(10_000),
+            channels: MokaCache::new(10_000),
+        }
+    }
 }
 
 impl PeerCache {
-    fn cache_user(&mut self, user: &tl::enums::User) {
+    fn cache_user(&self, user: &tl::enums::User) {
         if let tl::enums::User::User(u) = user
             && let Some(hash) = u.access_hash
         {
@@ -191,7 +202,7 @@ impl PeerCache {
         }
     }
 
-    fn cache_chat(&mut self, chat: &tl::enums::Chat) {
+    fn cache_chat(&self, chat: &tl::enums::Chat) {
         match chat {
             tl::enums::Chat::Channel(c) => {
                 if let Some(hash) = c.access_hash {
@@ -205,13 +216,13 @@ impl PeerCache {
         }
     }
 
-    fn cache_users(&mut self, users: &[tl::enums::User]) {
+    fn cache_users(&self, users: &[tl::enums::User]) {
         for u in users {
             self.cache_user(u);
         }
     }
 
-    fn cache_chats(&mut self, chats: &[tl::enums::Chat]) {
+    fn cache_chats(&self, chats: &[tl::enums::Chat]) {
         for c in chats {
             self.cache_chat(c);
         }
@@ -221,7 +232,7 @@ impl PeerCache {
         if user_id == 0 {
             return tl::enums::InputPeer::PeerSelf;
         }
-        let hash = self.users.get(&user_id).copied().unwrap_or_else(|| {
+        let hash = self.users.get(&user_id).unwrap_or_else(|| {
             tracing::warn!("[ferogram] PeerCache: no access_hash for user {user_id}, using 0: may cause USER_ID_INVALID");
             0
         });
@@ -232,7 +243,7 @@ impl PeerCache {
     }
 
     fn channel_input_peer(&self, channel_id: i64) -> tl::enums::InputPeer {
-        let hash = self.channels.get(&channel_id).copied().unwrap_or_else(|| {
+        let hash = self.channels.get(&channel_id).unwrap_or_else(|| {
             tracing::warn!("[ferogram] PeerCache: no access_hash for channel {channel_id}, using 0: may cause CHANNEL_INVALID");
             0
         });
@@ -827,16 +838,16 @@ impl Dialog {
 struct ClientInner {
     /// Crypto/state for the connection: EncryptedSession, salts, acks, etc.
     /// Held only for CPU-bound packing : never while awaiting TCP I/O.
-    writer: Mutex<ConnectionWriter>,
+    writer: TokioMutex<ConnectionWriter>,
     /// The TCP send half. Separate from `writer` so the reader task can lock
     /// `writer` for pending_ack / state while a caller awaits `write_all`.
     /// This split eliminates the burst-deadlock at 10+ concurrent RPCs.
-    write_half: Mutex<OwnedWriteHalf>,
+    write_half: TokioMutex<OwnedWriteHalf>,
     /// Pending RPC replies, keyed by MTProto msg_id.
     /// RPC callers insert a oneshot::Sender here before sending; the reader
     /// task routes incoming rpc_result frames to the matching sender.
     #[allow(clippy::type_complexity)]
-    pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Vec<u8>, InvocationError>>>>>,
+    pending: Arc<DashMap<i64, oneshot::Sender<Result<Vec<u8>, InvocationError>>>>,
     /// Channel used to hand a new (OwnedReadHalf, FrameKind, auth_key, session_id)
     /// to the reader task after a reconnect.
     reconnect_tx: mpsc::UnboundedSender<(OwnedReadHalf, FrameKind, [u8; 256], i64)>,
@@ -854,7 +865,7 @@ struct ClientInner {
     dc_options: Mutex<HashMap<i32, DcEntry>>,
     /// Media-only DC options (ipv6/media_only/cdn filtered separately from API DCs).
     media_dc_options: Mutex<HashMap<i32, DcEntry>>,
-    pub peer_cache: RwLock<PeerCache>,
+    pub peer_cache: PeerCache,
     pub pts_state: Mutex<pts::PtsState>,
     /// Buffer for updates received during a possible-gap window.
     pub possible_gap: Mutex<pts::PossibleGapBuffer>,
@@ -872,7 +883,7 @@ struct ClientInner {
     allow_ipv6: bool,
     transport: TransportKind,
     session_backend: Arc<dyn crate::session_backend::SessionBackend>,
-    dc_pool: Mutex<dc_pool::DcPool>,
+    dc_pool: TokioMutex<dc_pool::DcPool>,
     update_tx: mpsc::Sender<update::Update>,
     /// Whether this client is signed in as a bot (set in `bot_sign_in`).
     /// Used by `get_channel_difference` to pick the correct diff limit:
@@ -894,7 +905,7 @@ struct ClientInner {
 #[derive(Clone)]
 pub struct Client {
     pub(crate) inner: Arc<ClientInner>,
-    _update_rx: Arc<Mutex<mpsc::Receiver<update::Update>>>,
+    _update_rx: Arc<TokioMutex<mpsc::Receiver<update::Update>>>,
 }
 
 impl Client {
@@ -1031,9 +1042,8 @@ impl Client {
         let session_id = writer.enc.session_id();
 
         #[allow(clippy::type_complexity)]
-        let pending: Arc<
-            Mutex<HashMap<i64, oneshot::Sender<Result<Vec<u8>, InvocationError>>>>,
-        > = Arc::new(Mutex::new(HashMap::new()));
+        let pending: Arc<DashMap<i64, oneshot::Sender<Result<Vec<u8>, InvocationError>>>> =
+            Arc::new(DashMap::new());
 
         // Channel the reconnect logic uses to hand a new read half to the reader task.
         let (reconnect_tx, reconnect_rx) =
@@ -1049,8 +1059,8 @@ impl Client {
         let restart_policy = config.restart_policy;
 
         let inner = Arc::new(ClientInner {
-            writer: Mutex::new(writer),
-            write_half: Mutex::new(write_half),
+            writer: TokioMutex::new(writer),
+            write_half: TokioMutex::new(write_half),
             pending: pending.clone(),
             reconnect_tx,
             network_hint_tx,
@@ -1060,7 +1070,7 @@ impl Client {
             home_dc_id: Mutex::new(home_dc_id),
             dc_options: Mutex::new(dc_opts),
             media_dc_options: Mutex::new(media_dc_opts),
-            peer_cache: RwLock::new(PeerCache::default()),
+            peer_cache: PeerCache::default(),
             pts_state: Mutex::new(pts::PtsState::default()),
             possible_gap: Mutex::new(pts::PossibleGapBuffer::new()),
             api_id: config.api_id,
@@ -1077,7 +1087,7 @@ impl Client {
             allow_ipv6: config.allow_ipv6,
             transport: config.transport,
             session_backend: config.session_backend,
-            dc_pool: Mutex::new(pool),
+            dc_pool: TokioMutex::new(pool),
             update_tx,
             is_bot: std::sync::atomic::AtomicBool::new(false),
             stream_active: std::sync::atomic::AtomicBool::new(false),
@@ -1087,7 +1097,7 @@ impl Client {
 
         let client = Self {
             inner,
-            _update_rx: Arc::new(Mutex::new(update_rx)),
+            _update_rx: Arc::new(TokioMutex::new(update_rx)),
         };
 
         // Spawn the reader task immediately so that RPC calls during
@@ -1132,8 +1142,8 @@ impl Client {
             if dh_allowed {
                 tracing::warn!("[ferogram] init_connection: definitive bad-key ({e}), fresh DH …");
                 {
-                    let home_dc_id = *client.inner.home_dc_id.lock().await;
-                    let mut opts = client.inner.dc_options.lock().await;
+                    let home_dc_id = *client.inner.home_dc_id.lock();
+                    let mut opts = client.inner.dc_options.lock();
                     if let Some(entry) = opts.get_mut(&home_dc_id)
                         && entry.auth_key.is_some()
                     {
@@ -1144,7 +1154,7 @@ impl Client {
                     }
                 }
                 client.save_session().await.ok();
-                client.inner.pending.lock().await.clear();
+                client.inner.pending.clear();
 
                 let socks5_r = client.inner.socks5.clone();
                 let mtproxy_r = client.inner.mtproxy.clone();
@@ -1153,9 +1163,9 @@ impl Client {
                 // reconnect to the HOME DC with fresh DH, not DC2.
                 // fresh_connect() was hardcoded to DC2 and wiped all learned DC state,
                 // which is why sessions on DC3/DC4/DC5 were corrupted on every -404.
-                let home_dc_id_r = *client.inner.home_dc_id.lock().await;
+                let home_dc_id_r = *client.inner.home_dc_id.lock();
                 let addr_r = {
-                    let opts = client.inner.dc_options.lock().await;
+                    let opts = client.inner.dc_options.lock();
                     opts.get(&home_dc_id_r)
                         .map(|e| e.addr.clone())
                         .unwrap_or_else(|| {
@@ -1175,7 +1185,7 @@ impl Client {
                 let (new_writer, new_wh, new_read, new_fk) = new_conn.into_writer();
                 // Update ONLY the home DC entry: all other DC keys are preserved.
                 {
-                    let mut opts_guard = client.inner.dc_options.lock().await;
+                    let mut opts_guard = client.inner.dc_options.lock();
                     if let Some(entry) = opts_guard.get_mut(&home_dc_id_r) {
                         entry.auth_key = Some(new_writer.auth_key_bytes());
                         entry.first_salt = new_writer.first_salt();
@@ -1232,18 +1242,19 @@ impl Client {
         if let Some(ref s) = loaded_session
             && !s.peers.is_empty()
         {
-            let mut cache = client.inner.peer_cache.write().await;
             for p in &s.peers {
                 if p.is_channel {
-                    cache.channels.entry(p.id).or_insert(p.access_hash);
-                } else {
-                    cache.users.entry(p.id).or_insert(p.access_hash);
+                    if client.inner.peer_cache.channels.get(&p.id).is_none() {
+                        client.inner.peer_cache.channels.insert(p.id, p.access_hash);
+                    }
+                } else if client.inner.peer_cache.users.get(&p.id).is_none() {
+                    client.inner.peer_cache.users.insert(p.id, p.access_hash);
                 }
             }
             tracing::debug!(
                 "[ferogram] Peer cache restored: {} users, {} channels",
-                cache.users.len(),
-                cache.channels.len()
+                client.inner.peer_cache.users.entry_count(),
+                client.inner.peer_cache.channels.entry_count()
             );
         }
 
@@ -1262,7 +1273,7 @@ impl Client {
 
         if catch_up && has_saved_state {
             let snap = &loaded_session.as_ref().unwrap().updates_state;
-            let mut state = client.inner.pts_state.lock().await;
+            let mut state = client.inner.pts_state.lock();
             state.pts = snap.pts;
             state.qts = snap.qts;
             state.date = snap.date;
@@ -1429,43 +1440,46 @@ impl Client {
         use session::{CachedPeer, UpdatesStateSnap};
 
         let writer_guard = self.inner.writer.lock().await;
-        let home_dc_id = *self.inner.home_dc_id.lock().await;
-        let dc_options = self.inner.dc_options.lock().await;
+        let home_dc_id = *self.inner.home_dc_id.lock();
 
-        let mut dcs: Vec<DcEntry> = dc_options
-            .values()
-            .map(|e| DcEntry {
-                dc_id: e.dc_id,
-                addr: e.addr.clone(),
-                auth_key: if e.dc_id == home_dc_id {
-                    Some(writer_guard.auth_key_bytes())
-                } else {
-                    e.auth_key
-                },
-                first_salt: if e.dc_id == home_dc_id {
-                    writer_guard.first_salt()
-                } else {
-                    e.first_salt
-                },
-                time_offset: if e.dc_id == home_dc_id {
-                    writer_guard.time_offset()
-                } else {
-                    e.time_offset
-                },
-                flags: e.flags,
-            })
-            .collect();
-        // Also persist media DCs so they survive restart.
-        {
-            let media_opts = self.inner.media_dc_options.lock().await;
+        // Collect into an owned Vec before any await so no parking_lot::MutexGuard
+        // (!Send) is held across dc_pool.lock().await.
+        let mut dcs: Vec<DcEntry> = {
+            let dc_options = self.inner.dc_options.lock();
+            let mut v: Vec<DcEntry> = dc_options
+                .values()
+                .map(|e| DcEntry {
+                    dc_id: e.dc_id,
+                    addr: e.addr.clone(),
+                    auth_key: if e.dc_id == home_dc_id {
+                        Some(writer_guard.auth_key_bytes())
+                    } else {
+                        e.auth_key
+                    },
+                    first_salt: if e.dc_id == home_dc_id {
+                        writer_guard.first_salt()
+                    } else {
+                        e.first_salt
+                    },
+                    time_offset: if e.dc_id == home_dc_id {
+                        writer_guard.time_offset()
+                    } else {
+                        e.time_offset
+                    },
+                    flags: e.flags,
+                })
+                .collect();
+            let media_opts = self.inner.media_dc_options.lock();
             for e in media_opts.values() {
-                dcs.push(e.clone());
+                v.push(e.clone());
             }
-        }
+            v
+        }; // dc_options and media_opts dropped here, before any await
+
         self.inner.dc_pool.lock().await.collect_keys(&mut dcs);
 
         let pts_snap = {
-            let s = self.inner.pts_state.lock().await;
+            let s = self.inner.pts_state.lock();
             UpdatesStateSnap {
                 pts: s.pts,
                 qts: s.qts,
@@ -1476,18 +1490,19 @@ impl Client {
         };
 
         let peers: Vec<CachedPeer> = {
-            let cache = self.inner.peer_cache.read().await;
-            let mut v = Vec::with_capacity(cache.users.len() + cache.channels.len());
-            for (&id, &hash) in &cache.users {
+            let pc = &self.inner.peer_cache;
+            let mut v =
+                Vec::with_capacity((pc.users.entry_count() + pc.channels.entry_count()) as usize);
+            for (id, hash) in pc.users.iter() {
                 v.push(CachedPeer {
-                    id,
+                    id: *id,
                     access_hash: hash,
                     is_channel: false,
                 });
             }
-            for (&id, &hash) in &cache.channels {
+            for (id, hash) in pc.channels.iter() {
                 v.push(CachedPeer {
-                    id,
+                    id: *id,
                     access_hash: hash,
                     is_channel: true,
                 });
@@ -1533,7 +1548,6 @@ impl Client {
         self.inner
             .media_dc_options
             .lock()
-            .await
             .get(&dc_id)
             .map(|e| e.addr.clone())
     }
@@ -1541,8 +1555,8 @@ impl Client {
     /// Return the best media DC address for the current home DC (falls back to
     /// any known media DC if no home-DC media entry exists).
     pub async fn best_media_dc_addr(&self) -> Option<(i32, String)> {
-        let home = *self.inner.home_dc_id.lock().await;
-        let media = self.inner.media_dc_options.lock().await;
+        let home = *self.inner.home_dc_id.lock();
+        let media = self.inner.media_dc_options.lock();
         media
             .get(&home)
             .map(|e| (home, e.addr.clone()))
@@ -1768,14 +1782,13 @@ impl Client {
         &self,
         ids: &[i64],
     ) -> Result<Vec<Option<crate::types::User>>, InvocationError> {
-        let cache = self.inner.peer_cache.read().await;
         let input_ids: Vec<tl::enums::InputUser> = ids
             .iter()
             .map(|&id| {
                 if id == 0 {
                     tl::enums::InputUser::UserSelf
                 } else {
-                    let hash = cache.users.get(&id).copied().unwrap_or(0);
+                    let hash = self.inner.peer_cache.users.get(&id).unwrap_or(0);
                     tl::enums::InputUser::InputUser(tl::types::InputUser {
                         user_id: id,
                         access_hash: hash,
@@ -1783,7 +1796,6 @@ impl Client {
                 }
             })
             .collect();
-        drop(cache);
         let req = tl::functions::users::GetUsers { id: input_ids };
         let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
@@ -1914,9 +1926,13 @@ impl Client {
                 // Clean shutdown
                 _ = shutdown_token.cancelled() => {
                     tracing::info!("[ferogram] Reader task: shutdown requested, exiting cleanly.");
-                    let mut pending = self.inner.pending.lock().await;
-                    for (_, tx) in pending.drain() {
-                        let _ = tx.send(Err(InvocationError::Dropped));
+                    {
+                        let _pending_keys: Vec<i64> = self.inner.pending.iter().map(|_e| *_e.key()).collect();
+                        for _pk in _pending_keys {
+                            if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
+                                let _ = tx.send(Err(InvocationError::Dropped));
+                            }
+                        }
                     }
                     return;
                 }
@@ -1942,12 +1958,17 @@ impl Client {
             );
 
             {
-                let mut pending = self.inner.pending.lock().await;
-                for (_, tx) in pending.drain() {
-                    let _ = tx.send(Err(InvocationError::Io(std::io::Error::new(
-                        std::io::ErrorKind::ConnectionReset,
-                        "reader task restarted",
-                    ))));
+                {
+                    let _pending_keys: Vec<i64> =
+                        self.inner.pending.iter().map(|_e| *_e.key()).collect();
+                    for _pk in _pending_keys {
+                        if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
+                            let _ = tx.send(Err(InvocationError::Io(std::io::Error::new(
+                                std::io::ErrorKind::ConnectionReset,
+                                "reader task restarted",
+                            ))));
+                        }
+                    }
                 }
             }
             // drain sent_bodies alongside pending to prevent unbounded growth.
@@ -2097,8 +2118,8 @@ impl Client {
                     // lock acquisition), so there is no need to guard against a
                     // concurrent in-flight call here : get_difference() will bail
                     // safely on its own.  Just check has_global() + deadline.
-                    if self.inner.possible_gap.lock().await.has_global() {
-                        let gap_expired = self.inner.possible_gap.lock().await.global_deadline_elapsed();
+                    if self.inner.possible_gap.lock().has_global() {
+                        let gap_expired = self.inner.possible_gap.lock().global_deadline_elapsed();
                         if gap_expired {
                             let c = self.clone();
                             tokio::spawn(async move {
@@ -2136,9 +2157,8 @@ impl Client {
                                 );
                             }
                             drop(w);
-                            let mut pending = self.inner.pending.lock().await;
                             for (_, inner_id) in stale {
-                                if let Some(tx) = pending.remove(&inner_id) {
+                                if let Some((_, tx)) = self.inner.pending.remove(&inner_id) {
                                     let _ = tx.send(Err(InvocationError::Io(
                                         std::io::Error::new(
                                             std::io::ErrorKind::TimedOut,
@@ -2172,16 +2192,19 @@ impl Client {
                                     // unblock immediately instead of hanging for 30 s.
                                     tracing::warn!("[ferogram] Decrypt error: {e:?}: failing pending waiters and reconnecting");
                                     drop(init_rx.take());
-                                    {
-                                        let mut pending = self.inner.pending.lock().await;
-                                        let msg = format!("decrypt error: {e}");
-                                        for (_, tx) in pending.drain() {
-                                            let _ = tx.send(Err(InvocationError::Io(
+                                    { let msg = format!("decrypt error: {e}");
+                                        {
+                                            let _pending_keys: Vec<i64> = self.inner.pending.iter().map(|_e| *_e.key()).collect();
+                                            for _pk in _pending_keys {
+                                                if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
+                                                    let _ = tx.send(Err(InvocationError::Io(
                                                 std::io::Error::new(
                                                     std::io::ErrorKind::InvalidData,
                                                     msg.clone(),
                                                 )
                                             )));
+                                                }
+                                            }
                                         }
                                     }
                                     self.inner.writer.lock().await.sent_bodies.clear();
@@ -2212,16 +2235,19 @@ impl Client {
                                      expected 0b01 or 0b11: reconnecting"
                                 );
                                 drop(init_rx.take());
-                                {
-                                    let mut pending = self.inner.pending.lock().await;
-                                    let msg_str = format!("msg_id bits invalid: 0b{lower2:02b}");
-                                    for (_, tx) in pending.drain() {
-                                        let _ = tx.send(Err(InvocationError::Io(
+                                { let msg_str = format!("msg_id bits invalid: 0b{lower2:02b}");
+                                    {
+                                        let _pending_keys: Vec<i64> = self.inner.pending.iter().map(|_e| *_e.key()).collect();
+                                        for _pk in _pending_keys {
+                                            if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
+                                                let _ = tx.send(Err(InvocationError::Io(
                                             std::io::Error::new(
                                                 std::io::ErrorKind::InvalidData,
                                                 msg_str.clone(),
                                             )
                                         )));
+                                            }
+                                        }
                                     }
                                 }
                                 self.inner.writer.lock().await.sent_bodies.clear();
@@ -2259,8 +2285,8 @@ impl Client {
                                         std::sync::atomic::Ordering::SeqCst)
                                     .is_ok();
                             if clear_key {
-                                let home_dc_id = *self.inner.home_dc_id.lock().await;
-                                let mut opts = self.inner.dc_options.lock().await;
+                                let home_dc_id = *self.inner.home_dc_id.lock();
+                                let mut opts = self.inner.dc_options.lock();
                                 if let Some(entry) = opts.get_mut(&home_dc_id) {
                                     tracing::warn!(
                                         "[ferogram] Stale auth key on DC{home_dc_id} ({e}) \
@@ -2272,14 +2298,17 @@ impl Client {
 
                             // Fail all in-flight RPCs immediately so AutoSleep
                             // retries them as soon as we reconnect.
-                            {
-                                let mut pending = self.inner.pending.lock().await;
-                                let msg = e.to_string();
-                                for (_, tx) in pending.drain() {
-                                    let _ = tx.send(Err(InvocationError::Io(
+                            { let msg = e.to_string();
+                                        {
+                                    let _pending_keys: Vec<i64> = self.inner.pending.iter().map(|_e| *_e.key()).collect();
+                                    for _pk in _pending_keys {
+                                        if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
+                                            let _ = tx.send(Err(InvocationError::Io(
                                         std::io::Error::new(
                                             std::io::ErrorKind::ConnectionReset, msg.clone()))));
-                                }
+                                        }
+                                    }
+                                        }
                             }
                             // drain sent_bodies so it doesn't grow unbounded under loss.
                             self.inner.writer.lock().await.sent_bodies.clear();
@@ -2365,8 +2394,8 @@ impl Client {
                                     : clearing auth key for fresh DH …"
                                 );
                                 init_fail_count = 0;
-                                let home_dc_id = *self.inner.home_dc_id.lock().await;
-                                let mut opts = self.inner.dc_options.lock().await;
+                                let home_dc_id = *self.inner.home_dc_id.lock();
+                                let mut opts = self.inner.dc_options.lock();
                                 if let Some(entry) = opts.get_mut(&home_dc_id) {
                                     entry.auth_key = None;
                                 }
@@ -2378,14 +2407,17 @@ impl Client {
                                     : retrying with same key …"
                                 );
                             }
-                            {
-                                let mut pending = self.inner.pending.lock().await;
-                                let msg = e.to_string();
-                                for (_, tx) in pending.drain() {
-                                    let _ = tx.send(Err(InvocationError::Io(
+                            { let msg = e.to_string();
+                                        {
+                                    let _pending_keys: Vec<i64> = self.inner.pending.iter().map(|_e| *_e.key()).collect();
+                                    for _pk in _pending_keys {
+                                        if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
+                                            let _ = tx.send(Err(InvocationError::Io(
                                         std::io::Error::new(
                                             std::io::ErrorKind::ConnectionReset, msg.clone()))));
-                                }
+                                        }
+                                    }
+                                        }
                             }
                             match self.do_reconnect_loop(
                                 0, &mut rh, &mut fk, &mut ak, &mut sid, network_hint_rx,
@@ -2429,7 +2461,7 @@ impl Client {
                 // ack the rpc_result container message
                 self.inner.writer.lock().await.pending_ack.push(msg_id);
                 let result = unwrap_envelope(inner);
-                if let Some(tx) = self.inner.pending.lock().await.remove(&req_msg_id) {
+                if let Some((_, tx)) = self.inner.pending.remove(&req_msg_id) {
                     // request resolved: remove from sent_bodies and container_map
                     self.inner
                         .writer
@@ -2595,7 +2627,7 @@ impl Client {
 
                         if repacked.is_empty() {
                             // Nothing in flight: fail original waiter so it doesn't hang.
-                            if let Some(tx) = self.inner.pending.lock().await.remove(&bad_msg_id) {
+                            if let Some((_, tx)) = self.inner.pending.remove(&bad_msg_id) {
                                 let _ = tx.send(Err(InvocationError::Io(std::io::Error::new(
                                     std::io::ErrorKind::InvalidData,
                                     "bad_server_salt on re-sent message; caller should retry",
@@ -2605,10 +2637,9 @@ impl Client {
                             // Re-key all pending waiters then send all re-packed frames.
                             let mut to_send: Vec<(Vec<u8>, i64)> = Vec::new();
                             {
-                                let mut pending = self.inner.pending.lock().await;
                                 for (old_id, new_id, wire) in repacked {
-                                    if let Some(tx) = pending.remove(&old_id) {
-                                        pending.insert(new_id, tx);
+                                    if let Some((_, tx)) = self.inner.pending.remove(&old_id) {
+                                        self.inner.pending.insert(new_id, tx);
                                         to_send.push((wire, new_id));
                                     }
                                 }
@@ -2642,7 +2673,7 @@ impl Client {
                     let ping_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
                     // Ack the pong frame itself (outer msg_id, not the ping msg_id).
                     self.inner.writer.lock().await.pending_ack.push(msg_id);
-                    if let Some(tx) = self.inner.pending.lock().await.remove(&ping_msg_id) {
+                    if let Some((_, tx)) = self.inner.pending.remove(&ping_msg_id) {
                         let mut w = self.inner.writer.lock().await;
                         w.sent_bodies.remove(&ping_msg_id);
                         let stale_cids: Vec<i64> = w
@@ -2735,7 +2766,7 @@ impl Client {
                         }
                     }
 
-                    if let Some(tx) = self.inner.pending.lock().await.remove(&req_msg_id) {
+                    if let Some((_, tx)) = self.inner.pending.remove(&req_msg_id) {
                         let mut w = self.inner.writer.lock().await;
                         w.sent_bodies.remove(&req_msg_id);
                         let stale_cids: Vec<i64> = w
@@ -2831,11 +2862,16 @@ impl Client {
                         w.container_map.clear();
                     }
                     // Drain all pending waiters so callers get a clean retry error.
-                    let mut pending = self.inner.pending.lock().await;
-                    for (_, tx) in pending.drain() {
-                        let _ = tx.send(Err(InvocationError::Deserialize(format!(
+                    {
+                        let _pending_keys: Vec<i64> =
+                            self.inner.pending.iter().map(|_e| *_e.key()).collect();
+                        for _pk in _pending_keys {
+                            if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
+                                let _ = tx.send(Err(InvocationError::Deserialize(format!(
                             "bad_msg_notification code={error_code} ({description}):                              session reset: please retry your request"
                         ))));
+                            }
+                        }
                     }
                     // Do not fall through to resend logic.
                 } else {
@@ -2886,9 +2922,8 @@ impl Client {
                         Some((wire, old_msg_id, new_msg_id, fk)) => {
                             // Phase 2: re-key pending (no writer lock held).
                             let has_waiter = {
-                                let mut pending = self.inner.pending.lock().await;
-                                if let Some(tx) = pending.remove(&old_msg_id) {
-                                    pending.insert(new_msg_id, tx);
+                                if let Some((_, tx)) = self.inner.pending.remove(&old_msg_id) {
+                                    self.inner.pending.insert(new_msg_id, tx);
                                     true
                                 } else {
                                     false
@@ -2924,7 +2959,7 @@ impl Client {
                         }
                         None => {
                             // Not re-sending: surface error to the waiter so caller can retry.
-                            if let Some(tx) = self.inner.pending.lock().await.remove(&bad_msg_id) {
+                            if let Some((_, tx)) = self.inner.pending.remove(&bad_msg_id) {
                                 let _ = tx.send(Err(InvocationError::Deserialize(format!(
                                     "bad_msg_notification code={error_code} ({description})"
                                 ))));
@@ -2988,11 +3023,9 @@ impl Client {
                                 i64::from_le_bytes(body[off..off + 8].try_into().unwrap());
                             if let Some(orig_body) = w.sent_bodies.remove(&resend_id) {
                                 let (wire, new_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
-                                let mut pending = self.inner.pending.lock().await;
-                                if let Some(tx) = pending.remove(&resend_id) {
-                                    pending.insert(new_id, tx);
+                                if let Some((_, tx)) = self.inner.pending.remove(&resend_id) {
+                                    self.inner.pending.insert(new_id, tx);
                                 }
-                                drop(pending);
                                 w.sent_bodies.insert(new_id, orig_body);
                                 resends.push((wire, resend_id, new_id));
                             }
@@ -3097,8 +3130,10 @@ impl Client {
         // next updateNewMessage (e.g. the bot's own reply) triggered a false gap ->
         // getDifference -> re-delivery of already-processed messages -> duplicate replies.
         //
-        // deserialize pts/pts_count from the compact struct, build the high-level
-        // Update, then route through check_and_fill_gap exactly like every other pts update.
+        // PERF: With parking_lot::Mutex the pts check is now a sync operation (~50ns).
+        // We no longer spawn a task for the common ok-path; pts is checked and advanced
+        // inline, the update is sent directly to update_tx.
+        // Only the gap path spawns a task (getDifference is a real network round-trip).
         if cid == 0x313bc7f8 {
             // updateShortMessage
             let mut cur = Cursor::from_slice(&body[4..]);
@@ -3112,23 +3147,56 @@ impl Client {
             let pts = m.pts;
             let pts_count = m.pts_count;
             let upd = update::Update::NewMessage(update::make_short_dm(m));
-            let c = self.clone();
             let utx = self.inner.update_tx.clone();
-            tokio::spawn(async move {
-                match c
-                    .check_and_fill_gap(pts, pts_count, Some(attach_client_to_update(upd, &c)))
-                    .await
-                {
-                    Ok(updates) => {
-                        for u in updates {
-                            if utx.try_send(u).is_err() {
-                                tracing::warn!("[ferogram] update channel full: dropping update");
-                            }
-                        }
-                    }
-                    Err(e) => tracing::warn!("[ferogram] updateShortMessage gap fill: {e}"),
+            // Inline pts check: sync, no task allocation on the hot path.
+            use crate::pts::PtsCheckResult;
+            let result = {
+                let s = self.inner.pts_state.lock();
+                if s.getting_global_diff {
+                    drop(s);
+                    let _ = utx.try_send(attach_client_to_update(upd, self));
+                    return;
                 }
-            });
+                s.check_pts(pts, pts_count)
+            };
+            match result {
+                PtsCheckResult::Ok => {
+                    self.inner.pts_state.lock().advance(pts);
+                    let _ = utx.try_send(attach_client_to_update(upd, self));
+                }
+                PtsCheckResult::Gap { expected, got } => {
+                    tracing::debug!(
+                        "[ferogram] updateShortMessage pts gap: expected {expected}, got {got}"
+                    );
+                    let deadline = {
+                        let mut gap = self.inner.possible_gap.lock();
+                        gap.push_global(attach_client_to_update(upd, self));
+                        gap.global_deadline_elapsed()
+                    };
+                    if deadline {
+                        let c = self.clone();
+                        tokio::spawn(async move {
+                            match c.get_difference().await {
+                                Ok(updates) => {
+                                    for u in updates {
+                                        if c.inner.update_tx.try_send(u).is_err() {
+                                            tracing::warn!(
+                                                "[ferogram] update channel full: dropping update"
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("[ferogram] updateShortMessage gap fill: {e}")
+                                }
+                            }
+                        });
+                    }
+                }
+                PtsCheckResult::Duplicate => {
+                    tracing::debug!("[ferogram] updateShortMessage duplicate, discarding");
+                }
+            }
             return;
         }
         if cid == 0x4d6deea5 {
@@ -3144,29 +3212,61 @@ impl Client {
             let pts = m.pts;
             let pts_count = m.pts_count;
             let upd = update::Update::NewMessage(update::make_short_chat(m));
-            let c = self.clone();
             let utx = self.inner.update_tx.clone();
-            tokio::spawn(async move {
-                match c
-                    .check_and_fill_gap(pts, pts_count, Some(attach_client_to_update(upd, &c)))
-                    .await
-                {
-                    Ok(updates) => {
-                        for u in updates {
-                            if utx.try_send(u).is_err() {
-                                tracing::warn!("[ferogram] update channel full: dropping update");
-                            }
-                        }
-                    }
-                    Err(e) => tracing::warn!("[ferogram] updateShortChatMessage gap fill: {e}"),
+            use crate::pts::PtsCheckResult;
+            let result = {
+                let s = self.inner.pts_state.lock();
+                if s.getting_global_diff {
+                    drop(s);
+                    let _ = utx.try_send(attach_client_to_update(upd, self));
+                    return;
                 }
-            });
+                s.check_pts(pts, pts_count)
+            };
+            match result {
+                PtsCheckResult::Ok => {
+                    self.inner.pts_state.lock().advance(pts);
+                    let _ = utx.try_send(attach_client_to_update(upd, self));
+                }
+                PtsCheckResult::Gap { expected, got } => {
+                    tracing::debug!(
+                        "[ferogram] updateShortChatMessage pts gap: expected {expected}, got {got}"
+                    );
+                    let deadline = {
+                        let mut gap = self.inner.possible_gap.lock();
+                        gap.push_global(attach_client_to_update(upd, self));
+                        gap.global_deadline_elapsed()
+                    };
+                    if deadline {
+                        let c = self.clone();
+                        tokio::spawn(async move {
+                            match c.get_difference().await {
+                                Ok(updates) => {
+                                    for u in updates {
+                                        if c.inner.update_tx.try_send(u).is_err() {
+                                            tracing::warn!(
+                                                "[ferogram] update channel full: dropping update"
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => tracing::warn!(
+                                    "[ferogram] updateShortChatMessage gap fill: {e}"
+                                ),
+                            }
+                        });
+                    }
+                }
+                PtsCheckResult::Duplicate => {
+                    tracing::debug!("[ferogram] updateShortChatMessage duplicate, discarding");
+                }
+            }
             return;
         }
 
         // updateShortSentMessage push: advance pts without emitting an Update.
         // Telegram can also PUSH updateShortSentMessage (not just in RPC responses).
-        // Same fix: extract pts and route through check_and_fill_gap.
+        // PERF: inline pts check, only spawn on gap path.
         if cid == ID_UPDATE_SHORT_SENT_MSG {
             let mut cur = Cursor::from_slice(&body[4..]);
             match tl::types::UpdateShortSentMessage::deserialize(&mut cur) {
@@ -3176,24 +3276,49 @@ impl Client {
                     tracing::debug!(
                         "[ferogram] updateShortSentMessage (push): pts={pts} pts_count={pts_count}: advancing pts"
                     );
-                    let c = self.clone();
-                    let utx = self.inner.update_tx.clone();
-                    tokio::spawn(async move {
-                        match c.check_and_fill_gap(pts, pts_count, None).await {
-                            Ok(replayed) => {
-                                for u in replayed {
-                                    if utx.try_send(u).is_err() {
-                                        tracing::warn!(
-                                            "[ferogram] update channel full: dropping update"
-                                        );
-                                    }
-                                }
-                            }
-                            Err(e) => tracing::warn!(
-                                "[ferogram] updateShortSentMessage push pts advance: {e}"
-                            ),
+                    use crate::pts::PtsCheckResult;
+                    let result = {
+                        let s = self.inner.pts_state.lock();
+                        if s.getting_global_diff {
+                            return; // getDiff will cover this pts range
                         }
-                    });
+                        s.check_pts(pts, pts_count)
+                    };
+                    match result {
+                        PtsCheckResult::Ok => {
+                            self.inner.pts_state.lock().advance(pts);
+                        }
+                        PtsCheckResult::Gap { expected, got } => {
+                            tracing::debug!(
+                                "[ferogram] updateShortSentMessage pts gap: expected {expected}, got {got}"
+                            );
+                            let deadline = {
+                                let mut gap = self.inner.possible_gap.lock();
+                                gap.touch_global_timer();
+                                gap.global_deadline_elapsed()
+                            };
+                            if deadline {
+                                let c = self.clone();
+                                tokio::spawn(async move {
+                                    match c.get_difference().await {
+                                        Ok(replayed) => {
+                                            for u in replayed {
+                                                if c.inner.update_tx.try_send(u).is_err() {
+                                                    tracing::warn!(
+                                                        "[ferogram] update channel full: dropping update"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        Err(e) => tracing::warn!(
+                                            "[ferogram] updateShortSentMessage push pts advance: {e}"
+                                        ),
+                                    }
+                                });
+                            }
+                        }
+                        PtsCheckResult::Duplicate => {}
+                    }
                 }
                 Err(e) => {
                     tracing::debug!("[ferogram] updateShortSentMessage push deserialize error: {e}")
@@ -3294,7 +3419,7 @@ impl Client {
         if let Some((seq, seq_start)) = parsed.seq_info
             && seq != 0
         {
-            let result = self.inner.pts_state.lock().await.check_seq(seq, seq_start);
+            let result = self.inner.pts_state.lock().check_seq(seq, seq_start);
             match result {
                 PtsCheckResult::Ok => {
                     // Good: will advance seq after the batch below.
@@ -3354,7 +3479,7 @@ impl Client {
         if let Some((seq, _)) = parsed.seq_info
             && seq != 0
         {
-            self.inner.pts_state.lock().await.advance_seq(seq);
+            self.inner.pts_state.lock().advance_seq(seq);
         }
     }
 
@@ -3701,9 +3826,9 @@ impl Client {
         _old_auth_key: &[u8; 256],
         _old_frame_kind: &FrameKind,
     ) -> Result<(OwnedReadHalf, FrameKind, [u8; 256], i64), InvocationError> {
-        let home_dc_id = *self.inner.home_dc_id.lock().await;
+        let home_dc_id = *self.inner.home_dc_id.lock();
         let (addr, saved_key, first_salt, time_offset) = {
-            let opts = self.inner.dc_options.lock().await;
+            let opts = self.inner.dc_options.lock();
             match opts.get(&home_dc_id) {
                 Some(e) => (e.addr.clone(), e.auth_key, e.first_salt, e.time_offset),
                 None => (
@@ -3769,7 +3894,7 @@ impl Client {
         // key not saved -> next disconnect clears nothing -> but dc_options still
         // None -> DH again -> AUTH_KEY_UNREGISTERED on getDifference forever.)
         {
-            let mut opts = self.inner.dc_options.lock().await;
+            let mut opts = self.inner.dc_options.lock();
             if let Some(entry) = opts.get_mut(&home_dc_id) {
                 entry.auth_key = Some(new_ak);
             }
@@ -3824,7 +3949,7 @@ impl Client {
         msg: &InputMessage,
     ) -> Result<update::IncomingMessage, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         let schedule = if msg.schedule_once_online {
             Some(0x7FFF_FFFEi32)
         } else {
@@ -4199,7 +4324,7 @@ impl Client {
         new_text: &str,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         let req = tl::functions::messages::EditMessage {
             no_webpage: false,
             invert_media: false,
@@ -4225,10 +4350,8 @@ impl Client {
     ) -> Result<(), InvocationError> {
         let dest = destination.into().resolve(self).await?;
         let src = source.into().resolve(self).await?;
-        let cache = self.inner.peer_cache.read().await;
-        let to_peer = cache.peer_to_input(&dest);
-        let from_peer = cache.peer_to_input(&src);
-        drop(cache);
+        let to_peer = self.inner.peer_cache.peer_to_input(&dest);
+        let from_peer = self.inner.peer_cache.peer_to_input(&src);
 
         let req = tl::functions::messages::ForwardMessages {
             silent: false,
@@ -4268,10 +4391,8 @@ impl Client {
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
         let dest = destination.into().resolve(self).await?;
         let src = source.into().resolve(self).await?;
-        let cache = self.inner.peer_cache.read().await;
-        let to_peer = cache.peer_to_input(&dest);
-        let from_peer = cache.peer_to_input(&src);
-        drop(cache);
+        let to_peer = self.inner.peer_cache.peer_to_input(&dest);
+        let from_peer = self.inner.peer_cache.peer_to_input(&src);
 
         let req = tl::functions::messages::ForwardMessages {
             silent: false,
@@ -4351,7 +4472,7 @@ impl Client {
         ids: &[i32],
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         let id_list: Vec<tl::enums::InputMessage> = ids
             .iter()
             .map(|&id| tl::enums::InputMessage::Id(tl::types::InputMessageId { id }))
@@ -4408,7 +4529,7 @@ impl Client {
         peer: impl Into<PeerRef>,
     ) -> Result<Option<update::IncomingMessage>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         let req = tl::functions::messages::Search {
             peer: input_peer,
             q: String::new(),
@@ -4450,7 +4571,7 @@ impl Client {
         pm_oneside: bool,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         let req = tl::functions::messages::UpdatePinnedMessage {
             silent,
             unpin,
@@ -4496,7 +4617,7 @@ impl Client {
             Some(p) => p.clone(),
             None => return Ok(None),
         };
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         let id = vec![tl::enums::InputMessage::Id(tl::types::InputMessageId {
             id: reply_id,
         })];
@@ -4537,7 +4658,7 @@ impl Client {
         peer: impl Into<PeerRef>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         let req = tl::functions::messages::UnpinAllMessages {
             peer: input_peer,
             top_msg_id: None,
@@ -4602,7 +4723,7 @@ impl Client {
         peer: impl Into<PeerRef>,
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         let req = tl::functions::messages::GetScheduledHistory {
             peer: input_peer,
             hash: 0,
@@ -4628,7 +4749,7 @@ impl Client {
         ids: Vec<i32>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         let req = tl::functions::messages::DeleteScheduledMessages {
             peer: input_peer,
             id: ids,
@@ -5089,7 +5210,7 @@ impl Client {
 
     pub async fn delete_dialog(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         let req = tl::functions::messages::DeleteHistory {
             just_clear: false,
             revoke: false,
@@ -5104,7 +5225,7 @@ impl Client {
     /// Mark all messages in a chat as read.
     pub async fn mark_as_read(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         match &input_peer {
             tl::enums::InputPeer::Channel(c) => {
                 let req = tl::functions::channels::ReadHistory {
@@ -5130,7 +5251,7 @@ impl Client {
     /// Clear unread mention markers.
     pub async fn clear_mentions(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         let req = tl::functions::messages::ReadMentions {
             peer: input_peer,
             top_msg_id: None,
@@ -5159,7 +5280,7 @@ impl Client {
     /// Join a public chat or channel by username/peer.
     pub async fn join_chat(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         match input_peer {
             tl::enums::InputPeer::Channel(c) => {
                 let req = tl::functions::channels::JoinChannel {
@@ -5317,14 +5438,14 @@ impl Client {
                 (wire, fk, id)
             };
             let (tx, rx) = tokio::sync::oneshot::channel();
-            inner.pending.lock().await.insert(fs_msg_id, tx);
+            inner.pending.insert(fs_msg_id, tx);
             let send_ok = {
                 send_frame_write(&mut *inner.write_half.lock().await, &wire, &fk)
                     .await
                     .is_ok()
             };
             if !send_ok {
-                inner.pending.lock().await.remove(&fs_msg_id);
+                inner.pending.remove(&fs_msg_id);
                 inner.writer.lock().await.sent_bodies.remove(&fs_msg_id);
                 inner
                     .salt_request_in_flight
@@ -5405,7 +5526,7 @@ impl Client {
                 // Simple path: standalone request
                 let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
                 w.sent_bodies.insert(msg_id, body);
-                self.inner.pending.lock().await.insert(msg_id, tx);
+                self.inner.pending.insert(msg_id, tx);
                 (wire, fk)
             } else {
                 // container path: [MsgsAck, request]
@@ -5424,7 +5545,7 @@ impl Client {
                 w.container_map.insert(container_msg_id, req_msg_id);
                 w.container_ages
                     .insert(container_msg_id, std::time::Instant::now());
-                self.inner.pending.lock().await.insert(req_msg_id, tx);
+                self.inner.pending.insert(req_msg_id, tx);
                 tracing::debug!(
                     "[ferogram] container: bundled {} acks + request (cid={container_msg_id})",
                     acks.len()
@@ -5486,7 +5607,7 @@ impl Client {
             if acks.is_empty() {
                 let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
                 w.sent_bodies.insert(msg_id, body);
-                self.inner.pending.lock().await.insert(msg_id, tx);
+                self.inner.pending.insert(msg_id, tx);
                 (wire, fk)
             } else {
                 let ack_body = build_msgs_ack_body(&acks);
@@ -5501,7 +5622,7 @@ impl Client {
                 w.container_map.insert(container_msg_id, req_msg_id);
                 w.container_ages
                     .insert(container_msg_id, std::time::Instant::now());
-                self.inner.pending.lock().await.insert(req_msg_id, tx);
+                self.inner.pending.insert(req_msg_id, tx);
                 tracing::debug!(
                     "[ferogram] write container: bundled {} acks + write (cid={container_msg_id})",
                     acks.len()
@@ -5542,8 +5663,8 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         if let Ok(tl::enums::Config::Config(cfg)) = tl::enums::Config::deserialize(&mut cur) {
             let allow_ipv6 = self.inner.allow_ipv6;
-            let mut opts = self.inner.dc_options.lock().await;
-            let mut media_opts = self.inner.media_dc_options.lock().await;
+            let mut opts = self.inner.dc_options.lock();
+            let mut media_opts = self.inner.media_dc_options.lock();
             for opt in &cfg.dc_options {
                 let tl::enums::DcOption::DcOption(o) = opt;
                 if o.ipv6 && !allow_ipv6 {
@@ -5602,7 +5723,7 @@ impl Client {
 
     async fn migrate_to(&self, new_dc_id: i32) -> Result<(), InvocationError> {
         let addr = {
-            let opts = self.inner.dc_options.lock().await;
+            let opts = self.inner.dc_options.lock();
             opts.get(&new_dc_id)
                 .map(|e| e.addr.clone())
                 .unwrap_or_else(|| crate::dc_migration::fallback_dc_addr(new_dc_id).to_string())
@@ -5610,7 +5731,7 @@ impl Client {
         tracing::info!("[ferogram] Migrating to DC{new_dc_id} ({addr}) …");
 
         let saved_key = {
-            let opts = self.inner.dc_options.lock().await;
+            let opts = self.inner.dc_options.lock();
             opts.get(&new_dc_id).and_then(|e| e.auth_key)
         };
 
@@ -5641,7 +5762,7 @@ impl Client {
 
         let new_key = conn.auth_key_bytes();
         {
-            let mut opts = self.inner.dc_options.lock().await;
+            let mut opts = self.inner.dc_options.lock();
             let entry = opts.entry(new_dc_id).or_insert_with(|| DcEntry {
                 dc_id: new_dc_id,
                 addr: addr.clone(),
@@ -5659,7 +5780,7 @@ impl Client {
         let new_sid = new_writer.enc.session_id();
         *self.inner.writer.lock().await = new_writer;
         *self.inner.write_half.lock().await = new_wh;
-        *self.inner.home_dc_id.lock().await = new_dc_id;
+        *self.inner.home_dc_id.lock() = new_dc_id;
 
         // Hand the new read half to the reader task FIRST so it can route
         // the upcoming init_connection RPC response.
@@ -5717,24 +5838,21 @@ impl Client {
     }
 
     async fn cache_user(&self, user: &tl::enums::User) {
-        self.inner.peer_cache.write().await.cache_user(user);
+        self.inner.peer_cache.cache_user(user);
     }
 
     async fn cache_users_slice(&self, users: &[tl::enums::User]) {
-        let mut cache = self.inner.peer_cache.write().await;
-        cache.cache_users(users);
+        self.inner.peer_cache.cache_users(users);
     }
 
     async fn cache_chats_slice(&self, chats: &[tl::enums::Chat]) {
-        let mut cache = self.inner.peer_cache.write().await;
-        cache.cache_chats(chats);
+        self.inner.peer_cache.cache_chats(chats);
     }
 
     /// Cache users and chats in a single write-lock acquisition.
     async fn cache_users_and_chats(&self, users: &[tl::enums::User], chats: &[tl::enums::Chat]) {
-        let mut cache = self.inner.peer_cache.write().await;
-        cache.cache_users(users);
-        cache.cache_chats(chats);
+        self.inner.peer_cache.cache_users(users);
+        self.inner.peer_cache.cache_chats(chats);
     }
 
     #[doc(hidden)]
@@ -5799,7 +5917,7 @@ impl Client {
             if acks.is_empty() {
                 let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
                 w.sent_bodies.insert(msg_id, body);
-                self.inner.pending.lock().await.insert(msg_id, tx);
+                self.inner.pending.insert(msg_id, tx);
                 (wire, fk)
             } else {
                 let ack_body = build_msgs_ack_body(&acks);
@@ -5814,7 +5932,7 @@ impl Client {
                 w.container_map.insert(container_msg_id, req_msg_id);
                 w.container_ages
                     .insert(container_msg_id, std::time::Instant::now());
-                self.inner.pending.lock().await.insert(req_msg_id, tx);
+                self.inner.pending.insert(req_msg_id, tx);
                 (wire, fk)
             }
         };
@@ -5890,14 +6008,14 @@ impl Client {
         &self,
         peer: &tl::enums::Peer,
     ) -> Result<tl::enums::InputPeer, InvocationError> {
-        let cache = self.inner.peer_cache.read().await;
+        let pc = &self.inner.peer_cache;
         match peer {
             tl::enums::Peer::User(u) => {
                 if u.user_id == 0 {
                     return Ok(tl::enums::InputPeer::PeerSelf);
                 }
-                match cache.users.get(&u.user_id) {
-                    Some(&hash) => Ok(tl::enums::InputPeer::User(tl::types::InputPeerUser {
+                match pc.users.get(&u.user_id) {
+                    Some(hash) => Ok(tl::enums::InputPeer::User(tl::types::InputPeerUser {
                         user_id: u.user_id,
                         access_hash: hash,
                     })),
@@ -5910,8 +6028,8 @@ impl Client {
             tl::enums::Peer::Chat(c) => Ok(tl::enums::InputPeer::Chat(tl::types::InputPeerChat {
                 chat_id: c.chat_id,
             })),
-            tl::enums::Peer::Channel(c) => match cache.channels.get(&c.channel_id) {
-                Some(&hash) => Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+            tl::enums::Peer::Channel(c) => match pc.channels.get(&c.channel_id) {
+                Some(hash) => Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
                     channel_id: c.channel_id,
                     access_hash: hash,
                 })),
@@ -5952,7 +6070,7 @@ impl Client {
 
         if needs_new {
             let addr = {
-                let opts = self.inner.dc_options.lock().await;
+                let opts = self.inner.dc_options.lock();
                 opts.get(&dc_id)
                     .map(|e| e.addr.clone())
                     .unwrap_or_else(|| crate::dc_migration::fallback_dc_addr(dc_id).to_string())
@@ -5961,7 +6079,7 @@ impl Client {
             let socks5 = self.inner.socks5.clone();
             let transport = self.inner.transport.clone();
             let saved_key = {
-                let opts = self.inner.dc_options.lock().await;
+                let opts = self.inner.dc_options.lock();
                 opts.get(&dc_id).and_then(|e| e.auth_key)
             };
 
@@ -5985,7 +6103,7 @@ impl Client {
                 )
                 .await?;
                 // Export auth from home DC and import into worker DC
-                let home_dc_id = *self.inner.home_dc_id.lock().await;
+                let home_dc_id = *self.inner.home_dc_id.lock();
                 if dc_id != home_dc_id
                     && let Err(e) = self.export_import_auth(dc_id, &conn).await
                 {
@@ -5996,7 +6114,7 @@ impl Client {
 
             let key = dc_conn.auth_key_bytes();
             {
-                let mut opts = self.inner.dc_options.lock().await;
+                let mut opts = self.inner.dc_options.lock();
                 if let Some(e) = opts.get_mut(&dc_id) {
                     e.auth_key = Some(key);
                 }
@@ -6004,14 +6122,7 @@ impl Client {
             self.inner.dc_pool.lock().await.insert(dc_id, dc_conn);
         }
 
-        let dc_entries: Vec<DcEntry> = self
-            .inner
-            .dc_options
-            .lock()
-            .await
-            .values()
-            .cloned()
-            .collect();
+        let dc_entries: Vec<DcEntry> = self.inner.dc_options.lock().values().cloned().collect();
         self.inner
             .dc_pool
             .lock()
@@ -6038,14 +6149,7 @@ impl Client {
             id: exported.id,
             bytes: exported.bytes,
         };
-        let dc_entries: Vec<DcEntry> = self
-            .inner
-            .dc_options
-            .lock()
-            .await
-            .values()
-            .cloned()
-            .collect();
+        let dc_entries: Vec<DcEntry> = self.inner.dc_options.lock().values().cloned().collect();
         self.inner
             .dc_pool
             .lock()
@@ -6192,7 +6296,7 @@ impl DialogIter {
                 .unwrap_or(0);
             self.offset_id = last.top_message();
             if let Some(peer) = last.peer() {
-                self.offset_peer = client.inner.peer_cache.read().await.peer_to_input(peer);
+                self.offset_peer = client.inner.peer_cache.peer_to_input(peer);
             }
         }
 
@@ -6247,7 +6351,7 @@ impl MessageIter {
             p
         };
 
-        let input_peer = client.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = client.inner.peer_cache.peer_to_input(&peer);
         let (page, count) = client
             .get_messages_with_count(input_peer, Self::PAGE_SIZE, self.offset_id)
             .await?;
@@ -7989,11 +8093,11 @@ fn random_i64() -> i64 {
 /// Prevents thundering-herd when many clients reconnect simultaneously
 /// (e.g. after a server restart or a shared network outage).
 fn jitter_delay(base_ms: u64) -> Duration {
-    // Use two random bytes for the jitter factor (0..=65535 -> 0.80 … 1.20).
+    // Use two random bytes for the jitter factor (0..=65535 -> 0.80 ... 1.20).
     let mut b = [0u8; 2];
     getrandom::getrandom(&mut b).unwrap_or(());
-    let rand_frac = u16::from_le_bytes(b) as f64 / 65535.0; // 0.0 … 1.0
-    let factor = 0.80 + rand_frac * 0.40; // 0.80 … 1.20
+    let rand_frac = u16::from_le_bytes(b) as f64 / 65535.0; // 0.0 ... 1.0
+    let factor = 0.80 + rand_frac * 0.40; // 0.80 ... 1.20
     Duration::from_millis((base_ms as f64 * factor) as u64)
 }
 

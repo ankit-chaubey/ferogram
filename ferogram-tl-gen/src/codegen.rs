@@ -58,11 +58,11 @@ impl Default for Config {
 pub struct Outputs<W: Write> {
     /// Receives the layer constant, `name_for_id`, etc.
     pub common: W,
-    /// Receives `pub mod types { … }` (concrete constructors as structs).
+    /// Receives `pub mod types { ... }` (concrete constructors as structs).
     pub types: W,
-    /// Receives `pub mod functions { … }` (RPC functions as structs).
+    /// Receives `pub mod functions { ... }` (RPC functions as structs).
     pub functions: W,
-    /// Receives `pub mod enums { … }` (boxed types as enums).
+    /// Receives `pub mod enums { ... }` (boxed types as enums).
     pub enums: W,
 }
 

@@ -46,6 +46,7 @@
 use std::io;
 use std::path::PathBuf;
 
+use crate::DcFlags;
 use crate::session::{CachedPeer, DcEntry, PersistedSession, UpdatesStateSnap};
 
 // Core trait (unchanged)
@@ -659,7 +660,7 @@ mod tests {
 /// | Table          | Purpose                                          |
 /// |----------------|--------------------------------------------------|
 /// | `meta`         | `home_dc_id` and future scalar values            |
-/// | `dcs`          | One row per DC (auth key, address, flags, …)     |
+/// | `dcs`          | One row per DC (auth key, address, flags, ...)     |
 /// | `update_state` | Single-row pts / qts / date / seq                |
 /// | `channel_pts`  | Per-channel pts                                  |
 /// | `peers`        | Access-hash cache                                |
@@ -721,10 +722,8 @@ impl SqliteBackend {
     pub fn open(path: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();
         let label = path.display().to_string();
-        let conn = rusqlite::Connection::open(&path)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        conn.execute_batch(Self::SCHEMA)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let conn = rusqlite::Connection::open(&path).map_err(io::Error::other)?;
+        conn.execute_batch(Self::SCHEMA).map_err(io::Error::other)?;
         Ok(Self {
             conn: std::sync::Mutex::new(conn),
             label,
@@ -733,10 +732,8 @@ impl SqliteBackend {
 
     /// Open an in-process SQLite database (useful for tests).
     pub fn in_memory() -> io::Result<Self> {
-        let conn = rusqlite::Connection::open_in_memory()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        conn.execute_batch(Self::SCHEMA)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let conn = rusqlite::Connection::open_in_memory().map_err(io::Error::other)?;
+        conn.execute_batch(Self::SCHEMA).map_err(io::Error::other)?;
         Ok(Self {
             conn: std::sync::Mutex::new(conn),
             label: ":memory:".into(),
@@ -744,7 +741,7 @@ impl SqliteBackend {
     }
 
     fn map_err(e: rusqlite::Error) -> io::Error {
-        io::Error::new(io::ErrorKind::Other, e)
+        io::Error::other(e)
     }
 
     /// Read the full session out of the database.
@@ -1059,7 +1056,7 @@ impl SessionBackend for SqliteBackend {
 /// Enabled with the `libsql-session` Cargo feature.
 ///
 /// The libSQL API is async; since [`SessionBackend`] methods are sync we
-/// block via `tokio::runtime::Handle::current().block_on(…)`.  Always
+/// block via `tokio::runtime::Handle::current().block_on(...)`.  Always
 /// call from inside a Tokio runtime (i.e. the same runtime as the rest of
 /// `ferogram`).
 ///
@@ -1117,7 +1114,7 @@ impl LibSqlBackend {
     {
         tokio::runtime::Handle::current()
             .block_on(fut)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+            .map_err(io::Error::other)
     }
 
     async fn apply_schema(conn: &libsql::Connection) -> Result<(), libsql::Error> {
@@ -1129,8 +1126,7 @@ impl LibSqlBackend {
         let path = path.into();
         let label = path.display().to_string();
         let db = Self::block(async { libsql::Builder::new_local(path).build().await })?;
-        let conn = Self::block(async { db.connect() })
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let conn = Self::block(async { db.connect() }).map_err(io::Error::other)?;
         Self::block(Self::apply_schema(&conn))?;
         Ok(Self {
             conn: std::sync::Arc::new(tokio::sync::Mutex::new(conn)),
@@ -1141,8 +1137,7 @@ impl LibSqlBackend {
     /// Open an in-process in-memory database (useful for tests).
     pub fn in_memory() -> io::Result<Self> {
         let db = Self::block(async { libsql::Builder::new_local(":memory:").build().await })?;
-        let conn = Self::block(async { db.connect() })
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let conn = Self::block(async { db.connect() }).map_err(io::Error::other)?;
         Self::block(Self::apply_schema(&conn))?;
         Ok(Self {
             conn: std::sync::Arc::new(tokio::sync::Mutex::new(conn)),
@@ -1159,8 +1154,7 @@ impl LibSqlBackend {
                 .build()
                 .await
         })?;
-        let conn = Self::block(async { db.connect() })
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let conn = Self::block(async { db.connect() }).map_err(io::Error::other)?;
         Self::block(Self::apply_schema(&conn))?;
         Ok(Self {
             conn: std::sync::Arc::new(tokio::sync::Mutex::new(conn)),
@@ -1181,8 +1175,7 @@ impl LibSqlBackend {
                 .build()
                 .await
         })?;
-        let conn = Self::block(async { db.connect() })
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let conn = Self::block(async { db.connect() }).map_err(io::Error::other)?;
         Self::block(Self::apply_schema(&conn))?;
         Ok(Self {
             conn: std::sync::Arc::new(tokio::sync::Mutex::new(conn)),

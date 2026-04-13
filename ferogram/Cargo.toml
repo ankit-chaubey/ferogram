@@ -20,6 +20,9 @@ ferogram-tl-parser = { workspace = true, optional = true }
 ferogram-tl-gen    = { workspace = true, optional = true }
 tokio          = { version = "1",   features = ["net", "io-util", "sync", "time", "rt", "rt-multi-thread", "macros"] }
 tokio-util     = { version = "0.7", features = ["rt"] }
+parking_lot    = "0.12"
+dashmap        = "6"
+moka           = { version = "0.12", features = ["sync"] }
 getrandom      = "0.2"
 flate2         = "1"
 num-bigint     = "0.4"

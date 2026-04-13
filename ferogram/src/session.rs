@@ -71,7 +71,7 @@ pub struct DcEntry {
     pub auth_key: Option<[u8; 256]>,
     pub first_salt: i64,
     pub time_offset: i32,
-    /// DC capability flags (IPv6, media-only, CDN, …).
+    /// DC capability flags (IPv6, media-only, CDN, ...).
     pub flags: DcFlags,
 }
 

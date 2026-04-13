@@ -74,10 +74,12 @@ async fn main() -> anyhow::Result<()> {
     client.save_session().await?;
 
     let mut stream = client.stream_updates();
-    while let Some(Update::NewMessage(msg)) = stream.next().await {
-        if !msg.outgoing() {
-            if let Some(peer) = msg.peer_id() {
-                client.send_message_to_peer(peer.clone(), msg.text().unwrap_or("")).await?;
+    while let Some(upd) = stream.next().await {
+        if let Update::NewMessage(msg) = upd {
+            if !msg.outgoing() {
+                if let Some(peer) = msg.peer_id() {
+                    client.send_message_to_peer(peer.clone(), msg.text().unwrap_or("")).await?;
+                }
             }
         }
     }
@@ -133,7 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 let s = client.export_session_string().await?;
-let (client, _) = Client::with_string_session(&s).await?;
+let (client, _) = Client::builder().session_string(s).connect().await?;
 ```
 
 ---
@@ -158,7 +160,7 @@ let req = tl::functions::bots::SetBotCommands {
 client.invoke(&req).await?;
 
 // Target a specific DC
-client.invoke_on_dc(&req, 2).await?;
+client.invoke_on_dc(2, &req).await?;
 ```
 
 ---
@@ -198,15 +200,10 @@ Use it at your own risk. Its future and stability are not yet guaranteed.
 
 ---
 
-## Acknowledgements
+## Thanks
 
-**[grammers](https://codeberg.org/Lonami/grammers)** by Lonami was a big reference when figuring out how a Rust MTProto client should be structured. Things like how updates flow, how sessions are handled, and how to deal with the messier parts of the protocol were clearer after reading that codebase. Licensed MIT or Apache-2.0.
-
-**[tdesktop](https://github.com/telegramdesktop/tdesktop)** is the official Telegram desktop client. A lot of MTProto edge cases are not documented anywhere except in how tdesktop actually behaves. When the spec was vague or silent, we looked at what tdesktop does and matched it.
-
-**[TDLib](https://github.com/tdlib/td)** is Telegram's official cross-platform library and probably the most complete MTProto implementation out there. It was useful for understanding pts/qts/seq gap detection, getDifference handling, and how auth key issues are supposed to be recovered from.
-
-ferogram is built on top of [layer](https://github.com/ankit-chaubey/layer), the earlier version of this library, also by Ankit Chaubey.
+Thanks to Lonami and the [grammers](https://codeberg.org/Lonami/grammers) project for early learning and inspiration in understanding MTProto structure.
+Thanks to [Telegram Desktop](https://github.com/telegramdesktop/tdesktop) and [TDLib](https://github.com/tdlib/td) for serving as references when implementing MTProto behavior.
 
 ---
 

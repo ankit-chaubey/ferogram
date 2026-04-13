@@ -564,7 +564,7 @@ impl Client {
         media: tl::enums::InputMedia,
         caption: &str,
     ) -> Result<(), InvocationError> {
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
         let req = tl::functions::messages::SendMedia {
             silent: false,
             background: false,
@@ -615,7 +615,7 @@ impl Client {
         peer: tl::enums::Peer,
         items: Vec<AlbumItem>,
     ) -> Result<(), InvocationError> {
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
 
         // Use reply_to from the first item that has one.
         let reply_to = items.iter().find_map(|i| i.reply_to).map(|id| {

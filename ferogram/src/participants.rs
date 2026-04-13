@@ -65,9 +65,12 @@ impl Client {
         let peer = peer.into().resolve(self).await?;
         match &peer {
             tl::enums::Peer::Channel(c) => {
-                let cache = self.inner.peer_cache.read().await;
-                let access_hash = cache.channels.get(&c.channel_id).copied().unwrap_or(0);
-                drop(cache);
+                let access_hash = self
+                    .inner
+                    .peer_cache
+                    .channels
+                    .get(&c.channel_id)
+                    .unwrap_or(0);
                 self.get_channel_participants(c.channel_id, access_hash, limit)
                     .await
             }
@@ -114,10 +117,9 @@ impl Client {
 
         // Cache them
         {
-            let mut cache = self.inner.peer_cache.write().await;
             for u in user_map.values() {
                 if let Some(h) = u.access_hash {
-                    cache.users.insert(u.id, h);
+                    self.inner.peer_cache.users.insert(u.id, h);
                 }
             }
         }
@@ -169,10 +171,9 @@ impl Client {
             .collect();
 
         {
-            let mut cache = self.inner.peer_cache.write().await;
             for u in user_map.values() {
                 if let Some(h) = u.access_hash {
-                    cache.users.insert(u.id, h);
+                    self.inner.peer_cache.users.insert(u.id, h);
                 }
             }
         }
@@ -211,9 +212,7 @@ impl Client {
         chat_id: i64,
         user_id: i64,
     ) -> Result<(), InvocationError> {
-        let cache = self.inner.peer_cache.read().await;
-        let access_hash = cache.users.get(&user_id).copied().unwrap_or(0);
-        drop(cache);
+        let access_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
         let req = tl::functions::messages::DeleteChatUser {
             revoke_history: false,
             chat_id,
@@ -241,11 +240,8 @@ impl Client {
                 let h = self
                     .inner
                     .peer_cache
-                    .read()
-                    .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
                     .unwrap_or(0);
                 (c.channel_id, h)
             }
@@ -255,15 +251,7 @@ impl Client {
                 ));
             }
         };
-        let user_hash = self
-            .inner
-            .peer_cache
-            .read()
-            .await
-            .users
-            .get(&user_id)
-            .copied()
-            .unwrap_or(0);
+        let user_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
 
         let req = tl::functions::channels::EditBanned {
             channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
@@ -320,11 +308,8 @@ impl Client {
                 let h = self
                     .inner
                     .peer_cache
-                    .read()
-                    .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
                     .unwrap_or(0);
                 (c.channel_id, h)
             }
@@ -334,15 +319,7 @@ impl Client {
                 ));
             }
         };
-        let user_hash = self
-            .inner
-            .peer_cache
-            .read()
-            .await
-            .users
-            .get(&user_id)
-            .copied()
-            .unwrap_or(0);
+        let user_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
 
         let rights = if promote {
             tl::types::ChatAdminRights {
@@ -411,10 +388,7 @@ impl Client {
         limit: i32,
     ) -> Result<Vec<tl::enums::Photo>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = {
-            let cache = self.inner.peer_cache.read().await;
-            cache.peer_to_input(&peer)
-        };
+        let input_peer = { self.inner.peer_cache.peer_to_input(&peer) };
 
         let req = tl::functions::photos::GetUserPhotos {
             user_id: match &input_peer {
@@ -469,10 +443,7 @@ impl Client {
     ) -> Result<ProfilePhotoIter, InvocationError> {
         let chunk_size = if chunk_size <= 0 { 100 } else { chunk_size };
         let peer = peer.into().resolve(self).await?;
-        let input_peer = {
-            let cache = self.inner.peer_cache.read().await;
-            cache.peer_to_input(&peer)
-        };
+        let input_peer = { self.inner.peer_cache.peer_to_input(&peer) };
         let input_user = match &input_peer {
             tl::enums::InputPeer::User(u) => {
                 tl::enums::InputUser::InputUser(tl::types::InputUser {
@@ -543,10 +514,7 @@ impl Client {
         reaction: impl Into<crate::reactions::InputReactions>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = {
-            let cache = self.inner.peer_cache.read().await;
-            cache.peer_to_input(&peer)
-        };
+        let input_peer = { self.inner.peer_cache.peer_to_input(&peer) };
 
         let r: crate::reactions::InputReactions = reaction.into();
         let req = tl::functions::messages::SendReaction {
@@ -881,11 +849,8 @@ impl Client {
                 let h = self
                     .inner
                     .peer_cache
-                    .read()
-                    .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
                     .unwrap_or(0);
                 (c.channel_id, h)
             }
@@ -895,15 +860,7 @@ impl Client {
                 ));
             }
         };
-        let user_hash = self
-            .inner
-            .peer_cache
-            .read()
-            .await
-            .users
-            .get(&user_id)
-            .copied()
-            .unwrap_or(0);
+        let user_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
         let req = tl::functions::channels::EditBanned {
             channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
                 channel_id,
@@ -939,11 +896,8 @@ impl Client {
                 let h = self
                     .inner
                     .peer_cache
-                    .read()
-                    .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
                     .unwrap_or(0);
                 (c.channel_id, h)
             }
@@ -953,15 +907,7 @@ impl Client {
                 ));
             }
         };
-        let user_hash = self
-            .inner
-            .peer_cache
-            .read()
-            .await
-            .users
-            .get(&user_id)
-            .copied()
-            .unwrap_or(0);
+        let user_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
         let req = tl::functions::channels::EditAdmin {
             channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
                 channel_id,
@@ -995,11 +941,8 @@ impl Client {
                 let access_hash = self
                     .inner
                     .peer_cache
-                    .read()
-                    .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
                     .unwrap_or(0);
                 let filter = filter
                     .unwrap_or(tl::enums::ChannelParticipantsFilter::ChannelParticipantsRecent);
@@ -1029,10 +972,9 @@ impl Client {
                     })
                     .collect();
                 {
-                    let mut cache = self.inner.peer_cache.write().await;
                     for u in user_map.values() {
                         if let Some(h) = u.access_hash {
-                            cache.users.insert(u.id, h);
+                            self.inner.peer_cache.users.insert(u.id, h);
                         }
                     }
                 }
@@ -1096,11 +1038,8 @@ impl Client {
                 let h = self
                     .inner
                     .peer_cache
-                    .read()
-                    .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
                     .unwrap_or(0);
                 (c.channel_id, h)
             }
@@ -1110,15 +1049,7 @@ impl Client {
                 ));
             }
         };
-        let user_hash = self
-            .inner
-            .peer_cache
-            .read()
-            .await
-            .users
-            .get(&user_id)
-            .copied()
-            .unwrap_or(0);
+        let user_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
         let req = tl::functions::channels::GetParticipant {
             channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
                 channel_id,

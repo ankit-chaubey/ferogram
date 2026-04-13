@@ -80,10 +80,7 @@ impl InlineResult {
 
     /// Send this inline result to the given peer.
     pub async fn send(&self, peer: tl::enums::Peer) -> Result<(), InvocationError> {
-        let input_peer = {
-            let cache = self.client.inner.peer_cache.read().await;
-            cache.peer_to_input(&peer)
-        };
+        let input_peer = self.client.inner.peer_cache.peer_to_input(&peer);
         let req = tl::functions::messages::SendInlineBotResult {
             silent: false,
             background: false,
@@ -206,8 +203,7 @@ impl Client {
         query: &str,
     ) -> Result<InlineResultIter, InvocationError> {
         let input_bot = {
-            let cache = self.inner.peer_cache.read().await;
-            match cache.peer_to_input(&bot) {
+            match self.inner.peer_cache.peer_to_input(&bot) {
                 tl::enums::InputPeer::User(u) => {
                     tl::enums::InputUser::InputUser(tl::types::InputUser {
                         user_id: u.user_id,

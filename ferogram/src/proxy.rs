@@ -50,7 +50,7 @@ impl MtProxyConfig {
     }
 }
 
-/// Parse a `tg://proxy?server=…&port=…&secret=…` or `https://t.me/proxy?…` link.
+/// Parse a `tg://proxy?server=...&port=...&secret=...` or `https://t.me/proxy?...` link.
 pub fn parse_proxy_link(url: &str) -> Option<MtProxyConfig> {
     let query = url
         .strip_prefix("tg://proxy?")
