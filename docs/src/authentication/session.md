@@ -46,7 +46,7 @@ Login is required on every run since nothing persists.
 ## SQLite (robust, long-running servers)
 
 ```toml
-ferogram = { version = "0.1.1", features = ["sqlite-session"] }
+ferogram = { version = "0.2.0", features = ["sqlite-session"] }
 ```
 
 ```rust
@@ -59,7 +59,7 @@ SQLite is more resilient against crash-corruption than the binary format. Ideal 
 
 ---
 
-## String session: New in v0.1.1
+## String session: New in v0.2.0
 
 Encode the entire session as a portable base64 string. Store it in an env var, a DB column, or CI secrets:
 

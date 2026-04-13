@@ -13,7 +13,7 @@ High-level async Telegram client for Rust.
 
 ```toml
 [dependencies]
-ferogram = "0.1.1"
+ferogram = "0.2.0"
 tokio        = { version = "1", features = ["full"] }
 ```
 
@@ -22,10 +22,10 @@ Get your `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org)
 ### Feature Flags
 
 ```toml
-ferogram = { version = "0.1.1", features = ["sqlite-session"] }  # SQLite session
-ferogram = { version = "0.1.1", features = ["libsql-session"] }  # libsql / Turso
-ferogram = { version = "0.1.1", features = ["html"] }            # HTML parser
-ferogram = { version = "0.1.1", features = ["html5ever"] }       # html5ever parser
+ferogram = { version = "0.2.0", features = ["sqlite-session"] }  # SQLite session
+ferogram = { version = "0.2.0", features = ["libsql-session"] }  # libsql / Turso
+ferogram = { version = "0.2.0", features = ["html"] }            # HTML parser
+ferogram = { version = "0.2.0", features = ["html5ever"] }       # html5ever parser
 ```
 
 `StringSessionBackend`, `InMemoryBackend`, and `BinaryFileBackend` are always available.

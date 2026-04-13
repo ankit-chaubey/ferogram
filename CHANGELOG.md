@@ -10,7 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.2.0]: 2026-04-13
+
+### Changed
+
+- Peer cache moved from `RwLock<HashMap>` to `moka` concurrent cache to eliminate lock contention during peer lookups.
+- Pending RPC map replaced with `DashMap`, enabling lock-free response routing.
+- `dc_pool` now uses `tokio::sync::Mutex` instead of `parking_lot::Mutex` to avoid blocking the async runtime.
+- Fresh DH sessions now wait **2 seconds** after key derivation to allow Telegram to propagate the new auth key across DCs.
+- Stale key detection simplified: only error `-404` now triggers key rotation.
+- FakeTLS transport now prepends the **Change Cipher Spec** record to the first application data chunk to match Telegram’s expected TLS handshake pattern.
+- `getDifference` deserialization now tolerates unknown server responses instead of failing and dropping buffered updates.
+- Container message parsing now validates inner message alignment and safely discards malformed frames.
+- Transport errors `-429` and `-444` are now logged clearly before reconnecting.
+
+### Fixed
+
+- All known bugs yet
+
 
 ## [0.1.0]: 2026-04-11
 

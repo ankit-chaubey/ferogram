@@ -83,7 +83,7 @@ Most Telegram libraries are thin wrappers around generated code or ports from Py
 
 ```toml
 [dependencies]
-ferogram = "0.1.1"
+ferogram = "0.2.0"
 tokio        = { version = "1", features = ["full"] }
 ```
 

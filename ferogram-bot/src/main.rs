@@ -288,7 +288,7 @@ async fn dispatch(upd: Update, client: Arc<Client>, me: Arc<tl::types::User>, bo
                     let _ = client
                         .answer_callback_query(
                             qid,
-                            Some(&format!("Layer {} · ferogram 0.1.1 🦀", tl::LAYER)),
+                            Some(&format!("Layer {} · ferogram 0.2.0 🦀", tl::LAYER)),
                             false,
                         )
                         .await;
@@ -541,7 +541,7 @@ async fn h_stats(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
 
 async fn h_ferogram(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
     let text = format!(
-        "📡 <b>layer library</b>\n\n<b>MTProto Layer:</b> <code>{}</code>\n<b>Crate:</b> <code>ferogram 0.1.1</code>\n<b>Language:</b> Rust 🦀\nhttps://github.com/ankit-chaubey/ferogram",
+        "📡 <b>layer library</b>\n\n<b>MTProto Layer:</b> <code>{}</code>\n<b>Crate:</b> <code>ferogram 0.2.0</code>\n<b>Language:</b> Rust 🦀\nhttps://github.com/ankit-chaubey/ferogram",
         tl::LAYER
     );
     let kb = kb(vec![vec![

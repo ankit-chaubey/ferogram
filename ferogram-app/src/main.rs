@@ -318,7 +318,7 @@ async fn cmd_dc(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
 
 async fn cmd_ferogram(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
     rh(client, peer, reply_to, &format!(
-        "📡 <b>layer</b>\n\n<b>MTProto Layer:</b> <code>{}</code>\n<b>Crate:</b> <code>ferogram 0.1.1</code>\n<b>Language:</b> Rust 🦀\nhttps://github.com/ankit-chaubey/ferogram",
+        "📡 <b>layer</b>\n\n<b>MTProto Layer:</b> <code>{}</code>\n<b>Crate:</b> <code>ferogram 0.2.0</code>\n<b>Language:</b> Rust 🦀\nhttps://github.com/ankit-chaubey/ferogram",
         tl::LAYER
     )).await;
 }

@@ -13,8 +13,8 @@ Developed by **[Ankit Chaubey](https://github.com/ankit-chaubey)**.
 
 </div>
 
-> **Pre-production (`0.x.x`)**: APIs may change between minor versions. See [CHANGELOG](CHANGELOG.md) before upgrading.
-
+> [!NOTE]
+> **Pre-production**: APIs may change between minor versions. See [CHANGELOG](CHANGELOG.md) before upgrading.
 
 ---
 
@@ -25,7 +25,7 @@ Most users only need `ferogram`.
 | Crate | Description |
 |---|---|
 | [`ferogram`](./ferogram) | High-level async client: auth, messaging, media, bots |
-| [`ferogram-tl-types`](./ferogram-tl-types) | Layer 224 types, functions, enums (2,329 definitions) |
+| [`ferogram-tl-types`](./ferogram-tl-types) | Layer types, functions, enums (definitions) |
 | [`ferogram-mtproto`](./ferogram-mtproto) | MTProto session, DH exchange, framing, transports |
 | [`ferogram-crypto`](./ferogram-crypto) | AES-IGE, RSA, SHA, Diffie-Hellman, auth key derivation |
 | [`ferogram-tl-gen`](./ferogram-tl-gen) | Build-time code generator from the TL AST |
@@ -37,7 +37,7 @@ Most users only need `ferogram`.
 
 ```toml
 [dependencies]
-ferogram = "0.1.1"
+ferogram = "0.2.0"
 tokio        = { version = "1", features = ["full"] }
 ```
 
@@ -46,10 +46,10 @@ Get your `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org)
 Optional features:
 
 ```toml
-ferogram = { version = "0.1.1", features = ["sqlite-session"] }  # SQLite session
-ferogram = { version = "0.1.1", features = ["libsql-session"] }  # libsql / Turso
-ferogram = { version = "0.1.1", features = ["html"] }            # HTML parser
-ferogram = { version = "0.1.1", features = ["html5ever"] }       # html5ever parser
+ferogram = { version = "0.2.0", features = ["sqlite-session"] }  # SQLite session
+ferogram = { version = "0.2.0", features = ["libsql-session"] }  # libsql / Turso
+ferogram = { version = "0.2.0", features = ["html"] }            # HTML parser
+ferogram = { version = "0.2.0", features = ["html5ever"] }       # html5ever parser
 ```
 
 `ferogram` re-exports `ferogram_tl_types` as `ferogram::tl`.
@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-## Quick Start User Account
+## Quick Start User
 
 ```rust
 use ferogram::{Client, SignInError};
@@ -196,13 +196,14 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR. Run `cargo test --w
 Developed by [**Ankit Chaubey**](https://github.com/ankit-chaubey) out of curiosity to explore.
 
 ferogram is developed as part of exploration, learning, and experimentation with the Telegram MTProto protocol.
-Use it at your own risk. Its future and stability are not yet guaranteed.
+**Use it at your own risk.** Its future and stability are not yet guaranteed.
 
 ---
 
 ## Thanks
 
 Thanks to Lonami and the [grammers](https://codeberg.org/Lonami/grammers) project for early learning and inspiration in understanding MTProto structure.
+
 Thanks to [Telegram Desktop](https://github.com/telegramdesktop/tdesktop) and [TDLib](https://github.com/tdlib/td) for serving as references when implementing MTProto behavior.
 
 ---
