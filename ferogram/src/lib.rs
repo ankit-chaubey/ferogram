@@ -6160,6 +6160,2238 @@ impl Client {
         Ok(())
     }
 
+    // Chat lifecycle
+    /// Create a new legacy group chat and return its `Chat` object.
+    ///
+    /// `user_ids` is the list of user IDs to add on creation (at least one required).
+    /// Forward limit `fwd_limit` controls how many recent messages new members can see.
+    pub async fn create_group(
+        &self,
+        title: impl Into<String>,
+        user_ids: Vec<i64>,
+    ) -> Result<tl::enums::Chat, InvocationError> {
+        let users: Vec<tl::enums::InputUser> = user_ids
+            .into_iter()
+            .map(|id| {
+                let hash = self.inner.peer_cache.users.get(&id).unwrap_or(0);
+                tl::enums::InputUser::InputUser(tl::types::InputUser {
+                    user_id: id,
+                    access_hash: hash,
+                })
+            })
+            .collect();
+
+        let req = tl::functions::messages::CreateChat {
+            users,
+            title: title.into(),
+            ttl_period: None,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let updates = tl::enums::Updates::deserialize(&mut cur)?;
+        // Extract the chat from updates
+        let chats = match updates {
+            tl::enums::Updates::Updates(u) => u.chats,
+            tl::enums::Updates::Combined(u) => u.chats,
+            _ => vec![],
+        };
+        chats
+            .into_iter()
+            .next()
+            .ok_or_else(|| InvocationError::Deserialize("create_group: no chat in response".into()))
+    }
+
+    /// Create a new channel or supergroup.
+    ///
+    /// Set `broadcast = true` for a channel, `false` for a supergroup (megagroup).
+    pub async fn create_channel(
+        &self,
+        title: impl Into<String>,
+        about: impl Into<String>,
+        broadcast: bool,
+    ) -> Result<tl::enums::Chat, InvocationError> {
+        let req = tl::functions::channels::CreateChannel {
+            broadcast,
+            megagroup: !broadcast,
+            for_import: false,
+            forum: false,
+            title: title.into(),
+            about: about.into(),
+            geo_point: None,
+            address: None,
+            ttl_period: None,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let updates = tl::enums::Updates::deserialize(&mut cur)?;
+        let chats = match updates {
+            tl::enums::Updates::Updates(u) => u.chats,
+            tl::enums::Updates::Combined(u) => u.chats,
+            _ => vec![],
+        };
+        chats.into_iter().next().ok_or_else(|| {
+            InvocationError::Deserialize("create_channel: no chat in response".into())
+        })
+    }
+
+    /// Permanently delete a channel or supergroup.
+    ///
+    /// Only the creator can delete a channel. This action is irreversible.
+    pub async fn delete_channel(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let channel = match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                    channel_id: c.channel_id,
+                    access_hash: c.access_hash,
+                })
+            }
+            _ => {
+                return Err(InvocationError::Deserialize(
+                    "delete_channel: peer must be a channel or supergroup".into(),
+                ));
+            }
+        };
+        let req = tl::functions::channels::DeleteChannel { channel };
+        self.rpc_write(&req).await
+    }
+
+    /// Delete a legacy group chat (basic group).
+    ///
+    /// Only the creator can delete the chat. For channels use [`delete_channel`].
+    pub async fn delete_chat(&self, chat_id: i64) -> Result<(), InvocationError> {
+        let req = tl::functions::messages::DeleteChat { chat_id };
+        self.rpc_write(&req).await
+    }
+
+    /// Leave a channel or supergroup.
+    ///
+    /// For basic groups, kick yourself with [`kick_participant`] or use
+    /// [`delete_dialog`] to just hide it.
+    pub async fn leave_chat(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let channel = match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                    channel_id: c.channel_id,
+                    access_hash: c.access_hash,
+                })
+            }
+            _ => {
+                return Err(InvocationError::Deserialize(
+                    "leave_chat: peer must be a channel or supergroup".into(),
+                ));
+            }
+        };
+        let req = tl::functions::channels::LeaveChannel { channel };
+        self.rpc_write(&req).await
+    }
+
+    /// Edit the title of a chat, group, channel, or supergroup.
+    ///
+    /// Works for both legacy groups (`messages.editChatTitle`) and
+    /// channels/supergroups (`channels.editTitle`).
+    pub async fn edit_chat_title(
+        &self,
+        peer: impl Into<PeerRef>,
+        title: impl Into<String>,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let title = title.into();
+        match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                let req = tl::functions::channels::EditTitle {
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id: c.channel_id,
+                        access_hash: c.access_hash,
+                    }),
+                    title,
+                };
+                self.rpc_write(&req).await
+            }
+            tl::enums::InputPeer::Chat(c) => {
+                let req = tl::functions::messages::EditChatTitle {
+                    chat_id: c.chat_id,
+                    title,
+                };
+                self.rpc_write(&req).await
+            }
+            _ => Err(InvocationError::Deserialize(
+                "edit_chat_title: peer must be a chat or channel".into(),
+            )),
+        }
+    }
+
+    /// Edit the description / about text of a chat, group, channel, or supergroup.
+    pub async fn edit_chat_about(
+        &self,
+        peer: impl Into<PeerRef>,
+        about: impl Into<String>,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::EditChatAbout {
+            peer: input_peer,
+            about: about.into(),
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Change the profile photo of a chat, group, channel, or supergroup.
+    ///
+    /// Pass `tl::enums::InputChatPhoto::Empty` to remove the current photo.
+    pub async fn edit_chat_photo(
+        &self,
+        peer: impl Into<PeerRef>,
+        photo: tl::enums::InputChatPhoto,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                let req = tl::functions::channels::EditPhoto {
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id: c.channel_id,
+                        access_hash: c.access_hash,
+                    }),
+                    photo,
+                };
+                self.rpc_write(&req).await
+            }
+            tl::enums::InputPeer::Chat(c) => {
+                let req = tl::functions::messages::EditChatPhoto {
+                    chat_id: c.chat_id,
+                    photo,
+                };
+                self.rpc_write(&req).await
+            }
+            _ => Err(InvocationError::Deserialize(
+                "edit_chat_photo: peer must be a chat or channel".into(),
+            )),
+        }
+    }
+
+    /// Set the default banned rights for all members of a group or channel.
+    ///
+    /// These rights apply to everyone who hasn't been granted or restricted
+    /// individually. Use [`BannedRightsBuilder`] via the closure to specify
+    /// which actions should be restricted.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # async fn f(client: ferogram::Client, peer: ferogram_tl_types::enums::Peer)
+    /// #   -> Result<(), ferogram::InvocationError> {
+    /// // Disable sending media and polls for all members
+    /// client.edit_chat_default_banned_rights(peer, |b| b.send_media(true).send_polls(true)).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn edit_chat_default_banned_rights(
+        &self,
+        peer: impl Into<PeerRef>,
+        build: impl FnOnce(participants::BannedRightsBuilder) -> participants::BannedRightsBuilder,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let rights = build(participants::BannedRightsBuilder::new()).into_tl();
+        let req = tl::functions::messages::EditChatDefaultBannedRights {
+            peer: input_peer,
+            banned_rights: rights,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Get the full info object for a chat, group, channel, or supergroup.
+    ///
+    /// Returns `messages.ChatFull` which contains the full chat description,
+    /// pinned message id, linked channel, members count, and more.
+    pub async fn get_chat_full(
+        &self,
+        peer: impl Into<PeerRef>,
+    ) -> Result<tl::enums::messages::ChatFull, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let body = match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                let req = tl::functions::channels::GetFullChannel {
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id: c.channel_id,
+                        access_hash: c.access_hash,
+                    }),
+                };
+                self.rpc_call_raw(&req).await?
+            }
+            tl::enums::InputPeer::Chat(c) => {
+                let req = tl::functions::messages::GetFullChat { chat_id: c.chat_id };
+                self.rpc_call_raw(&req).await?
+            }
+            _ => {
+                return Err(InvocationError::Deserialize(
+                    "get_chat_full: peer must be a chat or channel".into(),
+                ));
+            }
+        };
+        // Cache users/chats from the response so subsequent calls work.
+        let mut cur = Cursor::from_slice(&body);
+        let full = tl::enums::messages::ChatFull::deserialize(&mut cur)?;
+        let tl::enums::messages::ChatFull::ChatFull(ref f) = full;
+        self.cache_users_slice_pub(&f.users).await;
+        self.cache_chats_slice_pub(&f.chats).await;
+        Ok(full)
+    }
+
+    /// Upgrade a legacy group to a supergroup (megagroup).
+    ///
+    /// Returns the new channel/supergroup peer. The original chat ID becomes
+    /// invalid after migration.
+    pub async fn migrate_chat(&self, chat_id: i64) -> Result<tl::enums::Chat, InvocationError> {
+        let req = tl::functions::messages::MigrateChat { chat_id };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let updates = tl::enums::Updates::deserialize(&mut cur)?;
+        let chats = match updates {
+            tl::enums::Updates::Updates(u) => u.chats,
+            tl::enums::Updates::Combined(u) => u.chats,
+            _ => vec![],
+        };
+        // The migrated supergroup is the channel in the chats list.
+        chats
+            .into_iter()
+            .find(|c| matches!(c, tl::enums::Chat::Channel(_)))
+            .ok_or_else(|| {
+                InvocationError::Deserialize("migrate_chat: no channel in response".into())
+            })
+    }
+
+    /// Invite one or more users to a channel, supergroup, or legacy group.
+    ///
+    /// For channels and supergroups all users are added in one request.
+    /// For legacy groups each user is added individually (multiple RPCs).
+    pub async fn invite_users(
+        &self,
+        peer: impl Into<PeerRef>,
+        user_ids: Vec<i64>,
+    ) -> Result<(), InvocationError> {
+        if user_ids.is_empty() {
+            return Ok(());
+        }
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+
+        match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                let users: Vec<tl::enums::InputUser> = user_ids
+                    .into_iter()
+                    .map(|id| {
+                        let hash = self.inner.peer_cache.users.get(&id).unwrap_or(0);
+                        tl::enums::InputUser::InputUser(tl::types::InputUser {
+                            user_id: id,
+                            access_hash: hash,
+                        })
+                    })
+                    .collect();
+                let req = tl::functions::channels::InviteToChannel {
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id: c.channel_id,
+                        access_hash: c.access_hash,
+                    }),
+                    users,
+                };
+                self.rpc_write(&req).await
+            }
+            tl::enums::InputPeer::Chat(c) => {
+                // Legacy groups: add one at a time
+                for id in user_ids {
+                    let hash = self.inner.peer_cache.users.get(&id).unwrap_or(0);
+                    let req = tl::functions::messages::AddChatUser {
+                        chat_id: c.chat_id,
+                        user_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
+                            user_id: id,
+                            access_hash: hash,
+                        }),
+                        fwd_limit: 0,
+                    };
+                    self.rpc_write(&req).await?;
+                }
+                Ok(())
+            }
+            _ => Err(InvocationError::Deserialize(
+                "invite_users: peer must be a chat or channel".into(),
+            )),
+        }
+    }
+
+    /// Set the auto-delete (history TTL) timer for a chat.
+    ///
+    /// `period` is in seconds. Common values: `86400` (1 day), `604800` (1 week),
+    /// `2678400` (1 month). Pass `0` to disable.
+    pub async fn set_history_ttl(
+        &self,
+        peer: impl Into<PeerRef>,
+        period: i32,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::SetHistoryTtl {
+            peer: input_peer,
+            period,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Get the list of chats that the current user has in common with `user_id`.
+    ///
+    /// `max_id` can be used for pagination (pass `0` for the first page).
+    /// `limit` controls how many results to return (max 100).
+    pub async fn get_common_chats(
+        &self,
+        user_id: i64,
+        max_id: i64,
+        limit: i32,
+    ) -> Result<Vec<tl::enums::Chat>, InvocationError> {
+        let hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let req = tl::functions::messages::GetCommonChats {
+            user_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
+                user_id,
+                access_hash: hash,
+            }),
+            max_id,
+            limit,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let chats = tl::enums::messages::Chats::deserialize(&mut cur)?;
+        Ok(match chats {
+            tl::enums::messages::Chats::Chats(c) => c.chats,
+            tl::enums::messages::Chats::Slice(c) => c.chats,
+        })
+    }
+
+    // Invite links
+    /// Create or regenerate the primary invite link for a chat, group, channel,
+    /// or supergroup and return the link string.
+    ///
+    /// Pass `expire_date` (unix timestamp) and/or `usage_limit` to restrict the
+    /// link. Pass `request_needed = true` to require admin approval before new
+    /// members can join.
+    pub async fn export_invite_link(
+        &self,
+        peer: impl Into<PeerRef>,
+        expire_date: Option<i32>,
+        usage_limit: Option<i32>,
+        request_needed: bool,
+        title: Option<String>,
+    ) -> Result<tl::enums::ExportedChatInvite, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::ExportChatInvite {
+            legacy_revoke_permanent: false,
+            request_needed,
+            peer: input_peer,
+            expire_date,
+            usage_limit,
+            title,
+            subscription_pricing: None,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        Ok(tl::enums::ExportedChatInvite::deserialize(&mut cur)?)
+    }
+
+    /// Revoke an existing invite link so it can no longer be used.
+    ///
+    /// The link remains visible in the invite list with `revoked = true`.
+    /// To also remove it from the list call [`delete_invite_link`] afterwards.
+    pub async fn revoke_invite_link(
+        &self,
+        peer: impl Into<PeerRef>,
+        link: impl Into<String>,
+    ) -> Result<tl::enums::ExportedChatInvite, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::EditExportedChatInvite {
+            revoked: true,
+            peer: input_peer,
+            link: link.into(),
+            expire_date: None,
+            usage_limit: None,
+            request_needed: None,
+            title: None,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let invite = tl::enums::messages::ExportedChatInvite::deserialize(&mut cur)?;
+        let result = match invite {
+            tl::enums::messages::ExportedChatInvite::ExportedChatInvite(i) => i,
+            _ => {
+                return Err(InvocationError::Deserialize(
+                    "unexpected ExportedChatInvite variant".into(),
+                ));
+            }
+        };
+        Ok(result.invite)
+    }
+
+    /// Edit the settings of an existing invite link (expiry, usage cap, title,
+    /// approval requirement).
+    ///
+    /// Only fields wrapped in `Some` are updated; pass `None` to leave a field
+    /// unchanged.
+    pub async fn edit_invite_link(
+        &self,
+        peer: impl Into<PeerRef>,
+        link: impl Into<String>,
+        expire_date: Option<i32>,
+        usage_limit: Option<i32>,
+        request_needed: Option<bool>,
+        title: Option<String>,
+    ) -> Result<tl::enums::ExportedChatInvite, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::EditExportedChatInvite {
+            revoked: false,
+            peer: input_peer,
+            link: link.into(),
+            expire_date,
+            usage_limit,
+            request_needed,
+            title,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let invite = tl::enums::messages::ExportedChatInvite::deserialize(&mut cur)?;
+        let result = match invite {
+            tl::enums::messages::ExportedChatInvite::ExportedChatInvite(i) => i,
+            _ => {
+                return Err(InvocationError::Deserialize(
+                    "unexpected ExportedChatInvite variant".into(),
+                ));
+            }
+        };
+        Ok(result.invite)
+    }
+
+    /// List invite links for a chat, optionally filtered to a specific admin.
+    ///
+    /// Set `revoked = true` to list only revoked links.
+    /// `limit` controls page size (max 100). Use `offset_date` and `offset_link`
+    /// from the last result for pagination.
+    pub async fn get_invite_links(
+        &self,
+        peer: impl Into<PeerRef>,
+        admin_id: i64,
+        revoked: bool,
+        limit: i32,
+        offset_date: Option<i32>,
+        offset_link: Option<String>,
+    ) -> Result<Vec<tl::enums::ExportedChatInvite>, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let admin_hash = self.inner.peer_cache.users.get(&admin_id).unwrap_or(0);
+        let req = tl::functions::messages::GetExportedChatInvites {
+            revoked,
+            peer: input_peer,
+            admin_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
+                user_id: admin_id,
+                access_hash: admin_hash,
+            }),
+            offset_date,
+            offset_link,
+            limit,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let invites = tl::enums::messages::ExportedChatInvites::deserialize(&mut cur)?;
+        let tl::enums::messages::ExportedChatInvites::ExportedChatInvites(result) = invites;
+        self.cache_users_slice_pub(&result.users).await;
+        Ok(result.invites)
+    }
+
+    /// Permanently delete an invite link.
+    ///
+    /// The link must already be revoked first (use [`revoke_invite_link`]).
+    /// Active links cannot be deleted, only revoked.
+    pub async fn delete_invite_link(
+        &self,
+        peer: impl Into<PeerRef>,
+        link: impl Into<String>,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::DeleteExportedChatInvite {
+            peer: input_peer,
+            link: link.into(),
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Delete all revoked invite links created by `admin_id`.
+    ///
+    /// Useful for cleaning up the invite link list after revoking many links.
+    pub async fn delete_revoked_invite_links(
+        &self,
+        peer: impl Into<PeerRef>,
+        admin_id: i64,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let admin_hash = self.inner.peer_cache.users.get(&admin_id).unwrap_or(0);
+        let req = tl::functions::messages::DeleteRevokedExportedChatInvites {
+            peer: input_peer,
+            admin_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
+                user_id: admin_id,
+                access_hash: admin_hash,
+            }),
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Approve a pending join request from `user_id`.
+    ///
+    /// Only works for chats with `request_needed` invite links or join-request
+    /// enabled channels. Approving adds the user immediately.
+    pub async fn approve_join_request(
+        &self,
+        peer: impl Into<PeerRef>,
+        user_id: i64,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let user_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let req = tl::functions::messages::HideChatJoinRequest {
+            approved: true,
+            peer: input_peer,
+            user_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
+                user_id,
+                access_hash: user_hash,
+            }),
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Reject (dismiss) a pending join request from `user_id`.
+    ///
+    /// The user is not added to the chat and can request again later unless
+    /// they are subsequently banned.
+    pub async fn reject_join_request(
+        &self,
+        peer: impl Into<PeerRef>,
+        user_id: i64,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let user_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let req = tl::functions::messages::HideChatJoinRequest {
+            approved: false,
+            peer: input_peer,
+            user_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
+                user_id,
+                access_hash: user_hash,
+            }),
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Approve all pending join requests for a chat, optionally filtered to a
+    /// specific invite link.
+    ///
+    /// Pass `link = None` to approve requests from all invite links at once.
+    pub async fn approve_all_join_requests(
+        &self,
+        peer: impl Into<PeerRef>,
+        link: Option<String>,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::HideAllChatJoinRequests {
+            approved: true,
+            peer: input_peer,
+            link,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Reject all pending join requests for a chat, optionally filtered to a
+    /// specific invite link.
+    pub async fn reject_all_join_requests(
+        &self,
+        peer: impl Into<PeerRef>,
+        link: Option<String>,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::HideAllChatJoinRequests {
+            approved: false,
+            peer: input_peer,
+            link,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// List users who joined via a specific invite link (importers).
+    ///
+    /// Set `requested = true` to list pending requests instead of accepted joins.
+    /// `limit` controls page size (max 100).
+    pub async fn get_invite_link_members(
+        &self,
+        peer: impl Into<PeerRef>,
+        link: Option<String>,
+        requested: bool,
+        limit: i32,
+        offset_date: i32,
+        offset_user_id: i64,
+    ) -> Result<Vec<tl::types::ChatInviteImporter>, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let offset_hash = self
+            .inner
+            .peer_cache
+            .users
+            .get(&offset_user_id)
+            .unwrap_or(0);
+        let req = tl::functions::messages::GetChatInviteImporters {
+            requested,
+            subscription_expired: false,
+            peer: input_peer,
+            link,
+            q: None,
+            offset_date,
+            offset_user: tl::enums::InputUser::InputUser(tl::types::InputUser {
+                user_id: offset_user_id,
+                access_hash: offset_hash,
+            }),
+            limit,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::ChatInviteImporters::ChatInviteImporters(result) =
+            tl::enums::messages::ChatInviteImporters::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        Ok(result
+            .importers
+            .into_iter()
+            .map(|x| {
+                let tl::enums::ChatInviteImporter::ChatInviteImporter(i) = x;
+                i
+            })
+            .collect())
+    }
+
+    /// Get the list of admins that have created invite links, along with
+    /// their invite count.
+    pub async fn get_admins_with_invites(
+        &self,
+        peer: impl Into<PeerRef>,
+    ) -> Result<tl::types::messages::ChatAdminsWithInvites, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::GetAdminsWithInvites { peer: input_peer };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::ChatAdminsWithInvites::ChatAdminsWithInvites(result) =
+            tl::enums::messages::ChatAdminsWithInvites::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        Ok(result)
+    }
+
+    // Contacts
+    /// Fetch the full contact list of the current user.
+    ///
+    /// Returns `None` when the server indicates the list hasn't changed since
+    /// the last fetch (contacts.ContactsNotModified).
+    pub async fn get_contacts(&self) -> Result<Option<Vec<tl::enums::User>>, InvocationError> {
+        let req = tl::functions::contacts::GetContacts { hash: 0 };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        match tl::enums::contacts::Contacts::deserialize(&mut cur)? {
+            tl::enums::contacts::Contacts::Contacts(c) => {
+                self.cache_users_slice_pub(&c.users).await;
+                Ok(Some(c.users))
+            }
+            tl::enums::contacts::Contacts::NotModified => Ok(None),
+        }
+    }
+
+    /// Add a user to the contact list.
+    ///
+    /// `add_phone_privacy_exception` allows the contact to see your phone number
+    /// even if your privacy settings normally prevent it.
+    pub async fn add_contact(
+        &self,
+        user_id: i64,
+        first_name: impl Into<String>,
+        last_name: impl Into<String>,
+        phone: impl Into<String>,
+        add_phone_privacy_exception: bool,
+    ) -> Result<(), InvocationError> {
+        let hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let req = tl::functions::contacts::AddContact {
+            add_phone_privacy_exception,
+            id: tl::enums::InputUser::InputUser(tl::types::InputUser {
+                user_id,
+                access_hash: hash,
+            }),
+            first_name: first_name.into(),
+            last_name: last_name.into(),
+            phone: phone.into(),
+            note: None,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Remove one or more users from the contact list.
+    pub async fn delete_contacts(&self, user_ids: Vec<i64>) -> Result<(), InvocationError> {
+        if user_ids.is_empty() {
+            return Ok(());
+        }
+        let users: Vec<tl::enums::InputUser> = user_ids
+            .into_iter()
+            .map(|id| {
+                let hash = self.inner.peer_cache.users.get(&id).unwrap_or(0);
+                tl::enums::InputUser::InputUser(tl::types::InputUser {
+                    user_id: id,
+                    access_hash: hash,
+                })
+            })
+            .collect();
+        let req = tl::functions::contacts::DeleteContacts { id: users };
+        self.rpc_write(&req).await
+    }
+
+    /// Block a user or peer so they can no longer send you messages.
+    pub async fn block_user(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::contacts::Block {
+            my_stories_from: false,
+            id: input_peer,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Unblock a previously blocked user or peer.
+    pub async fn unblock_user(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::contacts::Unblock {
+            my_stories_from: false,
+            id: input_peer,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Fetch the list of blocked users.
+    ///
+    /// `offset` and `limit` can be used for pagination.
+    pub async fn get_blocked_users(
+        &self,
+        offset: i32,
+        limit: i32,
+    ) -> Result<Vec<tl::enums::Peer>, InvocationError> {
+        let req = tl::functions::contacts::GetBlocked {
+            my_stories_from: false,
+            offset,
+            limit,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let (blocked, chats, users) = match tl::enums::contacts::Blocked::deserialize(&mut cur)? {
+            tl::enums::contacts::Blocked::Blocked(b) => (b.blocked, b.chats, b.users),
+            tl::enums::contacts::Blocked::Slice(b) => (b.blocked, b.chats, b.users),
+        };
+        self.cache_users_slice_pub(&users).await;
+        self.cache_chats_slice_pub(&chats).await;
+        Ok(blocked
+            .into_iter()
+            .map(|b| match b {
+                tl::enums::PeerBlocked::PeerBlocked(pb) => pb.peer_id,
+            })
+            .collect())
+    }
+
+    /// Search for users and groups by name or username.
+    ///
+    /// Returns matching peers from your contacts and globally.
+    pub async fn search_contacts(
+        &self,
+        query: impl Into<String>,
+        limit: i32,
+    ) -> Result<Vec<tl::enums::Peer>, InvocationError> {
+        let req = tl::functions::contacts::Search {
+            q: query.into(),
+            limit,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::contacts::Found::Found(found) =
+            tl::enums::contacts::Found::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&found.users).await;
+        self.cache_chats_slice_pub(&found.chats).await;
+        // Combine my_results + results, deduplicated by position
+        let mut peers = found.my_results;
+        for p in found.results {
+            if !peers.contains(&p) {
+                peers.push(p);
+            }
+        }
+        Ok(peers)
+    }
+
+    // Profile & account
+    /// Upload a new profile photo from an already-uploaded file.
+    ///
+    /// Call `client.upload_file(path).await` first to get an [`UploadedFile`],
+    /// then pass it here. Returns the new [`Photo`] object.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # async fn f(client: ferogram::Client) -> Result<(), ferogram::InvocationError> {
+    /// let file = client.upload_file("avatar.jpg").await?;
+    /// client.set_profile_photo(file).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_profile_photo(
+        &self,
+        file: media::UploadedFile,
+    ) -> Result<tl::enums::Photo, InvocationError> {
+        let req = tl::functions::photos::UploadProfilePhoto {
+            fallback: false,
+            bot: None,
+            file: Some(file.inner),
+            video: None,
+            video_start_ts: None,
+            video_emoji_markup: None,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::photos::Photo::Photo(result) =
+            tl::enums::photos::Photo::deserialize(&mut cur)?;
+        Ok(result.photo)
+    }
+
+    /// Delete one or more of the current user's profile photos by their IDs.
+    ///
+    /// Photo IDs can be obtained from `get_user_full` or `get_profile_photos`.
+    pub async fn delete_profile_photos(
+        &self,
+        photo_ids: Vec<(i64, i64, Vec<u8>)>,
+    ) -> Result<Vec<i64>, InvocationError> {
+        let id: Vec<tl::enums::InputPhoto> = photo_ids
+            .into_iter()
+            .map(|(id, access_hash, file_reference)| {
+                tl::enums::InputPhoto::InputPhoto(tl::types::InputPhoto {
+                    id,
+                    access_hash,
+                    file_reference,
+                })
+            })
+            .collect();
+        let req = tl::functions::photos::DeletePhotos { id };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        // Returns Vector<long> - the IDs that were actually deleted.
+        let v = Vec::<i64>::deserialize(&mut cur)?;
+        Ok(v)
+    }
+
+    /// Update the current user's display name and/or bio.
+    ///
+    /// Pass `None` for any field you do not want to change.
+    pub async fn update_profile(
+        &self,
+        first_name: Option<String>,
+        last_name: Option<String>,
+        about: Option<String>,
+    ) -> Result<tl::enums::User, InvocationError> {
+        let req = tl::functions::account::UpdateProfile {
+            first_name,
+            last_name,
+            about,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        Ok(tl::enums::User::deserialize(&mut cur)?)
+    }
+
+    /// Set the username of the current account.
+    ///
+    /// Pass an empty string to remove the username.
+    pub async fn update_username(
+        &self,
+        username: impl Into<String>,
+    ) -> Result<tl::enums::User, InvocationError> {
+        let req = tl::functions::account::UpdateUsername {
+            username: username.into(),
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        Ok(tl::enums::User::deserialize(&mut cur)?)
+    }
+
+    /// Set the online/offline status of the current account.
+    ///
+    /// Pass `offline = true` to appear offline immediately.
+    /// Pass `offline = false` to appear online.
+    pub async fn update_status(&self, offline: bool) -> Result<(), InvocationError> {
+        let req = tl::functions::account::UpdateStatus { offline };
+        self.rpc_write(&req).await
+    }
+
+    /// Get the list of all active sessions (authorizations) for the current account.
+    pub async fn get_authorizations(
+        &self,
+    ) -> Result<Vec<tl::types::Authorization>, InvocationError> {
+        let req = tl::functions::account::GetAuthorizations {};
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::account::Authorizations::Authorizations(result) =
+            tl::enums::account::Authorizations::deserialize(&mut cur)?;
+        Ok(result
+            .authorizations
+            .into_iter()
+            .map(|x| {
+                let tl::enums::Authorization::Authorization(a) = x;
+                a
+            })
+            .collect())
+    }
+
+    /// Terminate a specific session by its `hash` (obtained from [`get_authorizations`]).
+    pub async fn terminate_session(&self, hash: i64) -> Result<(), InvocationError> {
+        let req = tl::functions::account::ResetAuthorization { hash };
+        self.rpc_write(&req).await
+    }
+
+    // Messages (missing pieces)
+    /// Delete a chat's message history.
+    ///
+    /// For channels/supergroups, set `for_everyone = true` to delete history
+    /// for all members (requires admin rights). For regular chats, `revoke = true`
+    /// removes messages from both sides.
+    ///
+    /// The operation may require multiple round-trips for large histories;
+    /// this method handles the pagination automatically.
+    pub async fn delete_chat_history(
+        &self,
+        peer: impl Into<PeerRef>,
+        max_id: i32,
+        revoke: bool,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                let req = tl::functions::channels::DeleteHistory {
+                    for_everyone: revoke,
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id: c.channel_id,
+                        access_hash: c.access_hash,
+                    }),
+                    max_id,
+                };
+                self.rpc_write(&req).await
+            }
+            _ => {
+                // For regular chats the server may return an offset != 0, indicating
+                // that more messages remain and we must call again.
+                loop {
+                    let req = tl::functions::messages::DeleteHistory {
+                        just_clear: false,
+                        revoke,
+                        peer: input_peer.clone(),
+                        max_id,
+                        min_date: None,
+                        max_date: None,
+                    };
+                    let body = self.rpc_call_raw(&req).await?;
+                    let mut cur = Cursor::from_slice(&body);
+                    let tl::enums::messages::AffectedHistory::AffectedHistory(result) =
+                        tl::enums::messages::AffectedHistory::deserialize(&mut cur)?;
+                    if result.offset == 0 {
+                        break;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Send one or more scheduled messages immediately.
+    ///
+    /// `ids` is the list of scheduled message IDs to send now.
+    pub async fn send_scheduled_now(
+        &self,
+        peer: impl Into<PeerRef>,
+        ids: Vec<i32>,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::SendScheduledMessages {
+            peer: input_peer,
+            id: ids,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Get the list of users who have read a specific message, along with
+    /// the time they read it.
+    ///
+    /// Only works for groups; returns an empty list for channels and private chats.
+    pub async fn get_message_read_participants(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+    ) -> Result<Vec<tl::types::ReadParticipantDate>, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::GetMessageReadParticipants {
+            peer: input_peer,
+            msg_id,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        Ok(
+            Vec::<tl::enums::ReadParticipantDate>::deserialize(&mut cur)?
+                .into_iter()
+                .map(|r| match r {
+                    tl::enums::ReadParticipantDate::ReadParticipantDate(d) => d,
+                })
+                .collect(),
+        )
+    }
+
+    /// Fetch the thread replies under a message.
+    ///
+    /// `msg_id` is the ID of the root message. `limit` controls how many
+    /// replies to return per page (max 100). Use `offset_id` for pagination.
+    pub async fn get_replies(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+        limit: i32,
+        offset_id: i32,
+    ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::GetReplies {
+            peer: input_peer,
+            msg_id,
+            offset_id,
+            offset_date: 0,
+            add_offset: 0,
+            limit,
+            max_id: 0,
+            min_id: 0,
+            hash: 0,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let msgs = match tl::enums::messages::Messages::deserialize(&mut cur)? {
+            tl::enums::messages::Messages::Messages(m) => m.messages,
+            tl::enums::messages::Messages::Slice(m) => m.messages,
+            tl::enums::messages::Messages::ChannelMessages(m) => m.messages,
+            tl::enums::messages::Messages::NotModified(_) => vec![],
+        };
+        Ok(msgs
+            .into_iter()
+            .map(|m| update::IncomingMessage::from_raw(m).with_client(self.clone()))
+            .collect())
+    }
+
+    /// Get the linked discussion message for a channel post.
+    ///
+    /// Returns the corresponding message in the linked discussion group,
+    /// along with unread counts and the max read IDs.
+    pub async fn get_discussion_message(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+    ) -> Result<tl::types::messages::DiscussionMessage, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::GetDiscussionMessage {
+            peer: input_peer,
+            msg_id,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::DiscussionMessage::DiscussionMessage(result) =
+            tl::enums::messages::DiscussionMessage::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        self.cache_chats_slice_pub(&result.chats).await;
+        Ok(result)
+    }
+
+    /// Mark a discussion thread as read up to `read_max_id`.
+    ///
+    /// `peer` is the channel, `msg_id` is the root post, and `read_max_id`
+    /// is the last message ID in the thread you have read.
+    pub async fn read_discussion(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+        read_max_id: i32,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::ReadDiscussion {
+            peer: input_peer,
+            msg_id,
+            read_max_id,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Get a preview of the web page that `text` links to.
+    ///
+    /// Returns the `MessageMedia` that Telegram would attach to the message,
+    /// e.g. a webpage card, article embed, or video thumbnail.
+    pub async fn get_web_page_preview(
+        &self,
+        text: impl Into<String>,
+    ) -> Result<tl::enums::MessageMedia, InvocationError> {
+        let req = tl::functions::messages::GetWebPagePreview {
+            message: text.into(),
+            entities: None,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::WebPagePreview::WebPagePreview(result) =
+            tl::enums::messages::WebPagePreview::deserialize(&mut cur)?;
+        Ok(result.media)
+    }
+
+    /// Upload a media object to Telegram's servers without sending it as a message.
+    ///
+    /// Returns a `MessageMedia` that can be reused as `InputMedia` in subsequent
+    /// `send_message` calls (via `InputMessage::copy_media`).
+    pub async fn upload_media(
+        &self,
+        peer: impl Into<PeerRef>,
+        media: tl::enums::InputMedia,
+    ) -> Result<tl::enums::MessageMedia, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::UploadMedia {
+            business_connection_id: None,
+            peer: input_peer,
+            media,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        Ok(tl::enums::MessageMedia::deserialize(&mut cur)?)
+    }
+
+    /// Get the full info object for a user.
+    ///
+    /// Returns `UserFull` which contains bio, common chats count, bot info,
+    /// profile/fallback photos, privacy settings, and more.
+    pub async fn get_user_full(
+        &self,
+        user_id: i64,
+    ) -> Result<tl::types::UserFull, InvocationError> {
+        let hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let req = tl::functions::users::GetFullUser {
+            id: tl::enums::InputUser::InputUser(tl::types::InputUser {
+                user_id,
+                access_hash: hash,
+            }),
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::users::UserFull::UserFull(result) =
+            tl::enums::users::UserFull::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        self.cache_chats_slice_pub(&result.chats).await;
+        let tl::enums::UserFull::UserFull(full_user) = result.full_user;
+        Ok(full_user)
+    }
+
+    // Reactions
+    /// Fetch the reaction counters for a list of messages.
+    ///
+    /// The server pushes an `updateMessageReactions` update; this call
+    /// triggers that refresh for the given `msg_ids`.
+    pub async fn get_message_reactions(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_ids: Vec<i32>,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::GetMessagesReactions {
+            peer: input_peer,
+            id: msg_ids,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Get the list of users who reacted to a message with a specific reaction.
+    ///
+    /// Pass `reaction = None` to get all reactions. `limit` is max 100.
+    /// Use `offset` from the previous response for pagination.
+    pub async fn get_reaction_list(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+        reaction: Option<tl::enums::Reaction>,
+        limit: i32,
+        offset: Option<String>,
+    ) -> Result<tl::types::messages::MessageReactionsList, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::GetMessageReactionsList {
+            peer: input_peer,
+            id: msg_id,
+            reaction,
+            offset,
+            limit,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::MessageReactionsList::MessageReactionsList(result) =
+            tl::enums::messages::MessageReactionsList::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        self.cache_chats_slice_pub(&result.chats).await;
+        Ok(result)
+    }
+
+    /// Send a paid reaction (Stars) to a message.
+    ///
+    /// `count` is the number of Stars to spend on the reaction.
+    pub async fn send_paid_reaction(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+        count: i32,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::SendPaidReaction {
+            peer: input_peer,
+            msg_id,
+            count,
+            random_id: random_i64(),
+            private: None,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Mark all unread reactions in a chat as read.
+    pub async fn read_reactions(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::ReadReactions {
+            peer: input_peer,
+            top_msg_id: None,
+            saved_peer_id: None,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Clear the recent reactions list shown in the reaction picker.
+    pub async fn clear_recent_reactions(&self) -> Result<(), InvocationError> {
+        let req = tl::functions::messages::ClearRecentReactions {};
+        self.rpc_write(&req).await
+    }
+
+    // Translation & transcription
+    /// Translate one or more messages to `to_lang` (e.g. `"en"`, `"ru"`).
+    ///
+    /// Returns the translated text for each message ID in the same order.
+    pub async fn translate_messages(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_ids: Vec<i32>,
+        to_lang: impl Into<String>,
+    ) -> Result<Vec<tl::types::TextWithEntities>, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::TranslateText {
+            peer: Some(input_peer),
+            id: Some(msg_ids),
+            text: None,
+            to_lang: to_lang.into(),
+            tone: None,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::TranslatedText::TranslateResult(result) =
+            tl::enums::messages::TranslatedText::deserialize(&mut cur)?;
+        Ok(result
+            .result
+            .into_iter()
+            .map(|x| {
+                let tl::enums::TextWithEntities::TextWithEntities(t) = x;
+                t
+            })
+            .collect())
+    }
+
+    /// Transcribe the audio/voice message at `msg_id` to text.
+    ///
+    /// The `pending` flag in the response means transcription is still in
+    /// progress - poll again until `pending = false`.
+    pub async fn transcribe_audio(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+    ) -> Result<tl::types::messages::TranscribedAudio, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::TranscribeAudio {
+            peer: input_peer,
+            msg_id,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::TranscribedAudio::TranscribedAudio(result) =
+            tl::enums::messages::TranscribedAudio::deserialize(&mut cur)?;
+        Ok(result)
+    }
+
+    /// Enable or disable the translation toolbar for a peer.
+    ///
+    /// `disabled = true` hides the "Translate" button for this chat.
+    pub async fn toggle_peer_translations(
+        &self,
+        peer: impl Into<PeerRef>,
+        disabled: bool,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::TogglePeerTranslations {
+            disabled,
+            peer: input_peer,
+        };
+        self.rpc_write(&req).await
+    }
+
+    // Channel admin tools
+    /// Fetch the admin action log for a channel or supergroup.
+    ///
+    /// `query` filters by keyword; pass `""` for all events.
+    /// `limit` is max 100. Use `max_id` / `min_id` for pagination.
+    pub async fn get_admin_log(
+        &self,
+        peer: impl Into<PeerRef>,
+        query: impl Into<String>,
+        limit: i32,
+        max_id: i64,
+        min_id: i64,
+    ) -> Result<Vec<tl::types::ChannelAdminLogEvent>, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let channel = match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                    channel_id: c.channel_id,
+                    access_hash: c.access_hash,
+                })
+            }
+            _ => {
+                return Err(InvocationError::Deserialize(
+                    "get_admin_log: peer must be a channel or supergroup".into(),
+                ));
+            }
+        };
+        let req = tl::functions::channels::GetAdminLog {
+            channel,
+            q: query.into(),
+            events_filter: None,
+            admins: None,
+            max_id,
+            min_id,
+            limit,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::channels::AdminLogResults::AdminLogResults(result) =
+            tl::enums::channels::AdminLogResults::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        self.cache_chats_slice_pub(&result.chats).await;
+        Ok(result
+            .events
+            .into_iter()
+            .map(|e| match e {
+                tl::enums::ChannelAdminLogEvent::ChannelAdminLogEvent(ev) => ev,
+            })
+            .collect())
+    }
+
+    /// Get the approximate number of online members in a group or channel.
+    pub async fn get_online_count(&self, peer: impl Into<PeerRef>) -> Result<i32, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::GetOnlines { peer: input_peer };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::ChatOnlines::ChatOnlines(result) =
+            tl::enums::ChatOnlines::deserialize(&mut cur)?;
+        Ok(result.onlines)
+    }
+
+    /// Enable or disable the no-forwards restriction for a chat.
+    ///
+    /// When enabled, members cannot forward messages from this chat.
+    pub async fn toggle_no_forwards(
+        &self,
+        peer: impl Into<PeerRef>,
+        enabled: bool,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::ToggleNoForwards {
+            peer: input_peer,
+            enabled,
+            request_msg_id: None,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Set the chat theme by emoticon string (e.g. `"🌸"`).
+    ///
+    /// Pass an empty string to remove the current theme.
+    pub async fn set_chat_theme(
+        &self,
+        peer: impl Into<PeerRef>,
+        emoticon: impl Into<String>,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::SetChatTheme {
+            peer: input_peer,
+            theme: tl::enums::InputChatTheme::InputChatTheme(tl::types::InputChatTheme {
+                emoticon: emoticon.into(),
+            }),
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Set which reactions members can use in a chat.
+    ///
+    /// Pass `tl::enums::ChatReactions::All(...)` to allow all, or
+    /// `tl::enums::ChatReactions::Some(...)` to restrict to specific ones,
+    /// or `tl::enums::ChatReactions::None` to disable reactions entirely.
+    pub async fn set_chat_reactions(
+        &self,
+        peer: impl Into<PeerRef>,
+        reactions: tl::enums::ChatReactions,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::SetChatAvailableReactions {
+            peer: input_peer,
+            available_reactions: reactions,
+            reactions_limit: None,
+            paid_enabled: None,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Export a permanent link to a specific message in a channel.
+    ///
+    /// Returns the `t.me/channel/msgid` link string.
+    pub async fn export_message_link(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+        grouped: bool,
+        thread: bool,
+    ) -> Result<String, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let channel = match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                    channel_id: c.channel_id,
+                    access_hash: c.access_hash,
+                })
+            }
+            _ => {
+                return Err(InvocationError::Deserialize(
+                    "export_message_link: peer must be a channel".into(),
+                ));
+            }
+        };
+        let req = tl::functions::channels::ExportMessageLink {
+            grouped,
+            thread,
+            channel,
+            id: msg_id,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::ExportedMessageLink::ExportedMessageLink(result) =
+            tl::enums::ExportedMessageLink::deserialize(&mut cur)?;
+        Ok(result.link)
+    }
+
+    /// Get the list of peers the current user can send messages as in a chat.
+    ///
+    /// Returns the available "send as" identities (user account, linked channel, etc.).
+    pub async fn get_send_as_peers(
+        &self,
+        peer: impl Into<PeerRef>,
+    ) -> Result<Vec<tl::enums::Peer>, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::channels::GetSendAs {
+            for_paid_reactions: false,
+            for_live_stories: false,
+            peer: input_peer,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::channels::SendAsPeers::SendAsPeers(result) =
+            tl::enums::channels::SendAsPeers::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        self.cache_chats_slice_pub(&result.chats).await;
+        Ok(result
+            .peers
+            .into_iter()
+            .map(|p| match p {
+                tl::enums::SendAsPeer::SendAsPeer(sp) => sp.peer,
+            })
+            .collect())
+    }
+
+    /// Set the default "send as" peer for a chat.
+    ///
+    /// `send_as_peer` must be one of the peers returned by [`get_send_as_peers`].
+    pub async fn set_default_send_as(
+        &self,
+        peer: impl Into<PeerRef>,
+        send_as_peer: impl Into<PeerRef>,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let send_as = send_as_peer.into().resolve(self).await?;
+        let send_as_input = self.inner.peer_cache.peer_to_input(&send_as);
+        let req = tl::functions::messages::SaveDefaultSendAs {
+            peer: input_peer,
+            send_as: send_as_input,
+        };
+        self.rpc_write(&req).await
+    }
+
+    // Drafts
+    /// Save a message draft for a chat.
+    ///
+    /// Pass an empty string to clear the draft.
+    pub async fn save_draft(
+        &self,
+        peer: impl Into<PeerRef>,
+        text: impl Into<String>,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::SaveDraft {
+            no_webpage: false,
+            invert_media: false,
+            reply_to: None,
+            peer: input_peer,
+            message: text.into(),
+            entities: None,
+            media: None,
+            effect: None,
+            suggested_post: None,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Fetch all saved drafts across all chats.
+    ///
+    /// The server responds with an `Updates` containing `updateDraftMessage`
+    /// entries; this method triggers that push and returns immediately.
+    pub async fn get_all_drafts(&self) -> Result<(), InvocationError> {
+        let req = tl::functions::messages::GetAllDrafts {};
+        self.rpc_write(&req).await
+    }
+
+    /// Delete all saved drafts across all chats.
+    pub async fn clear_all_drafts(&self) -> Result<(), InvocationError> {
+        let req = tl::functions::messages::ClearAllDrafts {};
+        self.rpc_write(&req).await
+    }
+
+    // Dialog management
+    /// Pin a dialog to the top of the dialog list.
+    pub async fn pin_dialog(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::ToggleDialogPin {
+            pinned: true,
+            peer: tl::enums::InputDialogPeer::InputDialogPeer(tl::types::InputDialogPeer {
+                peer: input_peer,
+            }),
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Unpin a previously pinned dialog.
+    pub async fn unpin_dialog(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::ToggleDialogPin {
+            pinned: false,
+            peer: tl::enums::InputDialogPeer::InputDialogPeer(tl::types::InputDialogPeer {
+                peer: input_peer,
+            }),
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Get all pinned dialogs in a folder.
+    ///
+    /// Use `folder_id = 0` for the main dialog list, `1` for the archive.
+    pub async fn get_pinned_dialogs(
+        &self,
+        folder_id: i32,
+    ) -> Result<Vec<tl::enums::Dialog>, InvocationError> {
+        let req = tl::functions::messages::GetPinnedDialogs { folder_id };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::PeerDialogs::PeerDialogs(result) =
+            tl::enums::messages::PeerDialogs::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        self.cache_chats_slice_pub(&result.chats).await;
+        Ok(result.dialogs)
+    }
+
+    /// Mark a dialog as unread (or read).
+    ///
+    /// `unread = true` adds the unread mark; `false` removes it.
+    pub async fn mark_dialog_unread(
+        &self,
+        peer: impl Into<PeerRef>,
+        unread: bool,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::MarkDialogUnread {
+            unread,
+            parent_peer: None,
+            peer: tl::enums::InputDialogPeer::InputDialogPeer(tl::types::InputDialogPeer {
+                peer: input_peer,
+            }),
+        };
+        self.rpc_write(&req).await
+    }
+
+    // Polls
+    /// Vote in a poll.
+    ///
+    /// `options` is a list of raw option bytes from the `Poll` object.
+    /// Pass a single option to vote, or multiple for multi-choice polls.
+    pub async fn send_vote(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+        options: Vec<Vec<u8>>,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::SendVote {
+            peer: input_peer,
+            msg_id,
+            options,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Get the current vote results for a poll.
+    ///
+    /// The server responds with an `updateMessagePoll` update push.
+    pub async fn get_poll_results(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+        poll_hash: i64,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::GetPollResults {
+            peer: input_peer,
+            msg_id,
+            poll_hash,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Get the list of users who voted for a specific poll option.
+    ///
+    /// `option` is the raw option bytes; pass `None` to get all voters.
+    /// Use `offset` from the previous response for pagination.
+    pub async fn get_poll_votes(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+        option: Option<Vec<u8>>,
+        limit: i32,
+        offset: Option<String>,
+    ) -> Result<tl::types::messages::VotesList, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::GetPollVotes {
+            peer: input_peer,
+            id: msg_id,
+            option,
+            offset,
+            limit,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::VotesList::VotesList(result) =
+            tl::enums::messages::VotesList::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        self.cache_chats_slice_pub(&result.chats).await;
+        Ok(result)
+    }
+
+    // Forum topics
+    /// Get the list of forum topics (threads) in a forum supergroup.
+    ///
+    /// `limit` is max 100. Use `offset_date`, `offset_id`, `offset_topic`
+    /// from the last result for pagination.
+    pub async fn get_forum_topics(
+        &self,
+        peer: impl Into<PeerRef>,
+        query: Option<String>,
+        limit: i32,
+        offset_date: i32,
+        offset_id: i32,
+        offset_topic: i32,
+    ) -> Result<Vec<tl::enums::ForumTopic>, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::GetForumTopics {
+            peer: input_peer,
+            q: query,
+            offset_date,
+            offset_id,
+            offset_topic,
+            limit,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::ForumTopics::ForumTopics(result) =
+            tl::enums::messages::ForumTopics::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        self.cache_chats_slice_pub(&result.chats).await;
+        Ok(result.topics)
+    }
+
+    /// Get specific forum topics by their IDs.
+    pub async fn get_forum_topics_by_id(
+        &self,
+        peer: impl Into<PeerRef>,
+        topic_ids: Vec<i32>,
+    ) -> Result<Vec<tl::enums::ForumTopic>, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::GetForumTopicsById {
+            peer: input_peer,
+            topics: topic_ids,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::ForumTopics::ForumTopics(result) =
+            tl::enums::messages::ForumTopics::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        self.cache_chats_slice_pub(&result.chats).await;
+        Ok(result.topics)
+    }
+
+    /// Create a new topic in a forum supergroup.
+    ///
+    /// `icon_emoji_id` is optional; pass `None` for the default coloured icon.
+    pub async fn create_forum_topic(
+        &self,
+        peer: impl Into<PeerRef>,
+        title: impl Into<String>,
+        icon_color: Option<i32>,
+        icon_emoji_id: Option<i64>,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::CreateForumTopic {
+            title_missing: false,
+            peer: input_peer,
+            title: title.into(),
+            icon_color,
+            icon_emoji_id,
+            random_id: random_i64(),
+            send_as: None,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Edit a forum topic's title, icon, or closed/hidden state.
+    ///
+    /// Pass `None` for fields you do not want to change.
+    pub async fn edit_forum_topic(
+        &self,
+        peer: impl Into<PeerRef>,
+        topic_id: i32,
+        title: Option<String>,
+        icon_emoji_id: Option<i64>,
+        closed: Option<bool>,
+        hidden: Option<bool>,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::EditForumTopic {
+            peer: input_peer,
+            topic_id,
+            title,
+            icon_emoji_id,
+            closed,
+            hidden,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Delete all messages in a forum topic.
+    ///
+    /// `top_msg_id` is the ID of the topic's root message (same as the topic ID).
+    pub async fn delete_forum_topic_history(
+        &self,
+        peer: impl Into<PeerRef>,
+        top_msg_id: i32,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        loop {
+            let req = tl::functions::messages::DeleteTopicHistory {
+                peer: input_peer.clone(),
+                top_msg_id,
+            };
+            let body = self.rpc_call_raw(&req).await?;
+            let mut cur = Cursor::from_slice(&body);
+            let tl::enums::messages::AffectedHistory::AffectedHistory(result) =
+                tl::enums::messages::AffectedHistory::deserialize(&mut cur)?;
+            if result.offset == 0 {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Enable or disable the forum (topics) mode for a supergroup.
+    pub async fn toggle_forum(
+        &self,
+        peer: impl Into<PeerRef>,
+        enabled: bool,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let channel = match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                    channel_id: c.channel_id,
+                    access_hash: c.access_hash,
+                })
+            }
+            _ => {
+                return Err(InvocationError::Deserialize(
+                    "toggle_forum: peer must be a supergroup channel".into(),
+                ));
+            }
+        };
+        let req = tl::functions::channels::ToggleForum {
+            channel,
+            enabled,
+            tabs: false,
+        };
+        self.rpc_write(&req).await
+    }
+
+    // Bot-specific
+    /// Start a bot conversation by sending `/start start_param` as if the user
+    /// pressed a deep-link button.
+    pub async fn start_bot(
+        &self,
+        bot_user_id: i64,
+        peer: impl Into<PeerRef>,
+        start_param: impl Into<String>,
+    ) -> Result<(), InvocationError> {
+        let bot_hash = self.inner.peer_cache.users.get(&bot_user_id).unwrap_or(0);
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::messages::StartBot {
+            bot: tl::enums::InputUser::InputUser(tl::types::InputUser {
+                user_id: bot_user_id,
+                access_hash: bot_hash,
+            }),
+            peer: input_peer,
+            random_id: random_i64(),
+            start_param: start_param.into(),
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Set a user's score in an inline game.
+    ///
+    /// `force = true` allows decreasing the score below its current value.
+    /// `edit_message = true` edits the game message to reflect the new score.
+    pub async fn set_game_score(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+        user_id: i64,
+        score: i32,
+        force: bool,
+        edit_message: bool,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let user_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let req = tl::functions::messages::SetGameScore {
+            edit_message,
+            force,
+            peer: input_peer,
+            id: msg_id,
+            user_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
+                user_id,
+                access_hash: user_hash,
+            }),
+            score,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Get the high score table for an inline game.
+    pub async fn get_game_high_scores(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+        user_id: i64,
+    ) -> Result<Vec<tl::types::HighScore>, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let user_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let req = tl::functions::messages::GetGameHighScores {
+            peer: input_peer,
+            id: msg_id,
+            user_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
+                user_id,
+                access_hash: user_hash,
+            }),
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::HighScores::HighScores(result) =
+            tl::enums::messages::HighScores::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        Ok(result
+            .scores
+            .into_iter()
+            .map(|s| match s {
+                tl::enums::HighScore::HighScore(h) => h,
+            })
+            .collect())
+    }
+
+    /// Answer a shipping query from a user.
+    ///
+    /// Pass `error = Some(msg)` to decline, or `shipping_options` to confirm.
+    pub async fn answer_shipping_query(
+        &self,
+        query_id: i64,
+        error: Option<String>,
+        shipping_options: Option<Vec<tl::enums::ShippingOption>>,
+    ) -> Result<(), InvocationError> {
+        let req = tl::functions::messages::SetBotShippingResults {
+            query_id,
+            error,
+            shipping_options,
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Answer a pre-checkout query from a user.
+    ///
+    /// Pass `ok = true` to confirm the payment, or `ok = false` with an
+    /// `error_message` to decline it.
+    pub async fn answer_precheckout_query(
+        &self,
+        query_id: i64,
+        ok: bool,
+        error_message: Option<String>,
+    ) -> Result<(), InvocationError> {
+        let req = tl::functions::messages::SetBotPrecheckoutResults {
+            success: ok,
+            query_id,
+            error: error_message,
+        };
+        self.rpc_write(&req).await
+    }
+
+    // Stickers
+    /// Get a sticker set by its `InputStickerSet` (short name, ID, or emoji).
+    pub async fn get_sticker_set(
+        &self,
+        stickerset: tl::enums::InputStickerSet,
+    ) -> Result<tl::types::messages::StickerSet, InvocationError> {
+        let req = tl::functions::messages::GetStickerSet {
+            stickerset,
+            hash: 0,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::StickerSet::StickerSet(result) =
+            tl::enums::messages::StickerSet::deserialize(&mut cur)?
+        else {
+            return Err(InvocationError::Deserialize(
+                "unexpected StickerSet variant".into(),
+            ));
+        };
+        Ok(result)
+    }
+
+    /// Install a sticker set.
+    ///
+    /// Set `archived = true` to archive instead of install.
+    /// Returns whether the set was newly installed or was already archived.
+    pub async fn install_sticker_set(
+        &self,
+        stickerset: tl::enums::InputStickerSet,
+        archived: bool,
+    ) -> Result<tl::enums::messages::StickerSetInstallResult, InvocationError> {
+        let req = tl::functions::messages::InstallStickerSet {
+            stickerset,
+            archived,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        Ok(tl::enums::messages::StickerSetInstallResult::deserialize(
+            &mut cur,
+        )?)
+    }
+
+    /// Uninstall a sticker set.
+    pub async fn uninstall_sticker_set(
+        &self,
+        stickerset: tl::enums::InputStickerSet,
+    ) -> Result<(), InvocationError> {
+        let req = tl::functions::messages::UninstallStickerSet { stickerset };
+        self.rpc_write(&req).await
+    }
+
+    /// Get all installed sticker sets.
+    ///
+    /// Returns `None` when the list hasn't changed (pass the `hash` from the
+    /// previous response; use `0` on the first call).
+    pub async fn get_all_stickers(
+        &self,
+        hash: i64,
+    ) -> Result<Option<Vec<tl::types::StickerSet>>, InvocationError> {
+        let req = tl::functions::messages::GetAllStickers { hash };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        match tl::enums::messages::AllStickers::deserialize(&mut cur)? {
+            tl::enums::messages::AllStickers::AllStickers(s) => Ok(Some(
+                s.sets
+                    .into_iter()
+                    .map(|s| match s {
+                        tl::enums::StickerSet::StickerSet(ss) => ss,
+                    })
+                    .collect(),
+            )),
+            tl::enums::messages::AllStickers::NotModified => Ok(None),
+        }
+    }
+
+    /// Fetch the `Document` objects for a list of custom emoji IDs.
+    ///
+    /// `document_ids` are the custom emoji IDs (e.g. from `MessageEntity::CustomEmoji`).
+    pub async fn get_custom_emoji_documents(
+        &self,
+        document_ids: Vec<i64>,
+    ) -> Result<Vec<tl::enums::Document>, InvocationError> {
+        let req = tl::functions::messages::GetCustomEmojiDocuments {
+            document_id: document_ids,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        Ok(Vec::<tl::enums::Document>::deserialize(&mut cur)?)
+    }
+
+    // Privacy & notifications
+    /// Get the privacy rules for a specific key (e.g. phone number, last seen).
+    pub async fn get_privacy(
+        &self,
+        key: tl::enums::InputPrivacyKey,
+    ) -> Result<Vec<tl::enums::PrivacyRule>, InvocationError> {
+        let req = tl::functions::account::GetPrivacy { key };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::account::PrivacyRules::PrivacyRules(result) =
+            tl::enums::account::PrivacyRules::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        self.cache_chats_slice_pub(&result.chats).await;
+        Ok(result.rules)
+    }
+
+    /// Set the privacy rules for a specific key.
+    ///
+    /// `rules` is an ordered list of `InputPrivacyRule` values; the first
+    /// matching rule wins.
+    pub async fn set_privacy(
+        &self,
+        key: tl::enums::InputPrivacyKey,
+        rules: Vec<tl::enums::InputPrivacyRule>,
+    ) -> Result<Vec<tl::enums::PrivacyRule>, InvocationError> {
+        let req = tl::functions::account::SetPrivacy { key, rules };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::account::PrivacyRules::PrivacyRules(result) =
+            tl::enums::account::PrivacyRules::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        self.cache_chats_slice_pub(&result.chats).await;
+        Ok(result.rules)
+    }
+
+    /// Get the notification settings for a peer.
+    pub async fn get_notify_settings(
+        &self,
+        peer: impl Into<PeerRef>,
+    ) -> Result<tl::enums::PeerNotifySettings, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::account::GetNotifySettings {
+            peer: tl::enums::InputNotifyPeer::InputNotifyPeer(tl::types::InputNotifyPeer {
+                peer: input_peer,
+            }),
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        Ok(tl::enums::PeerNotifySettings::deserialize(&mut cur)?)
+    }
+
+    /// Update the notification settings for a peer.
+    ///
+    /// Pass `tl::enums::InputPeerNotifySettings` with only the fields you want
+    /// to change set; unset optional fields are left unchanged by the server.
+    pub async fn update_notify_settings(
+        &self,
+        peer: impl Into<PeerRef>,
+        settings: tl::enums::InputPeerNotifySettings,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let req = tl::functions::account::UpdateNotifySettings {
+            peer: tl::enums::InputNotifyPeer::InputNotifyPeer(tl::types::InputNotifyPeer {
+                peer: input_peer,
+            }),
+            settings,
+        };
+        self.rpc_write(&req).await
+    }
+
     async fn get_password_info(&self) -> Result<PasswordToken, InvocationError> {
         let body = self
             .rpc_call_raw(&tl::functions::account::GetPassword {})
