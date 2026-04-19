@@ -30,6 +30,37 @@ use std::collections::HashMap;
 use std::io::{self, ErrorKind};
 use std::path::Path;
 
+#[cfg(feature = "serde")]
+mod auth_key_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &Option<[u8; 256]>, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(k) => s.serialize_some(k.as_slice()),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(d: D) -> Result<Option<[u8; 256]>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt: Option<Vec<u8>> = Option::deserialize(d)?;
+        match opt {
+            None => Ok(None),
+            Some(v) => {
+                let arr: [u8; 256] = v
+                    .try_into()
+                    .map_err(|_| serde::de::Error::custom("auth_key must be exactly 256 bytes"))?;
+                Ok(Some(arr))
+            }
+        }
+    }
+}
+
 /// Per-DC option flags.
 ///
 /// Stored in the session (v3+) so media DCs survive restarts.
@@ -67,6 +98,7 @@ impl std::ops::BitOr for DcFlags {
 pub struct DcEntry {
     pub dc_id: i32,
     pub addr: String,
+    #[cfg_attr(feature = "serde", serde(with = "auth_key_serde"))]
     pub auth_key: Option<[u8; 256]>,
     pub first_salt: i64,
     pub time_offset: i32,

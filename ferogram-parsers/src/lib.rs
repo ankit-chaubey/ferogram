@@ -761,8 +761,7 @@ pub fn parse_html(html: &str) -> (String, Vec<tl::enums::MessageEntity>) {
                                     })
                                     .map(|s| s.to_string())
                                     .unwrap_or_default();
-                                if let Some(tl::enums::MessageEntity::Pre(ref mut p)) =
-                                    entities.last_mut()
+                                if let Some(tl::enums::MessageEntity::Pre(p)) = entities.last_mut()
                                 {
                                     p.language = lang;
                                 }
