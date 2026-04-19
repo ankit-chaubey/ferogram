@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../theme/custom-044eaa15.css">
+        <link rel="stylesheet" href="../theme/custom-3cd05ff1.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fd41c8e7.js";
+            window.path_to_searchindex_js = "../searchindex-f77cdc82.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-3a947583.js"></script>
+        <script src="../toc-ba5e127b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -200,11 +200,19 @@ Opens a TCP connection to Telegram, performs the full 3-step DH key exchange, an
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge">sync</span>
-<span class="api-card-sig">Client::with_string_session(session: &amp;str, api_id: i32, api_hash: &amp;str) → Result&lt;(Client, ShutdownToken), InvocationError&gt; <span class="api-badge-new">New 0.2.0</span></span>
+<span class="api-card-sig">Config::with_string_session(s: impl Into&lt;String&gt;) → Config <span class="api-badge-new">New 0.2.0</span></span>
 </div>
 
 <div class="api-card-body">
-Convenience constructor that connects using a <code>StringSessionBackend</code>. Pass the string exported by <code>export_session_string()</code>.
+Convenience constructor that builds a <code>Config</code> pre-wired with a <code>StringSessionBackend</code>. Pass the string exported by <code>export_session_string()</code>, or an empty string to start a fresh session. All other <code>Config</code> fields default to their standard values.
+<pre><code>let cfg = Config {
+    api_id:   12345,
+    api_hash: "abc".into(),
+    catch_up: true,
+    ..Config::with_string_session(std::env::var("SESSION").unwrap_or_default())
+};
+let (client, _token) = Client::connect(cfg).await?;</code></pre>
+
 </div>
 
 </div>
@@ -377,7 +385,7 @@ while let Some(update) = updates.next().await {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_message(peer: &amp;str, text: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.send_message(peer: &amp;str, text: &amp;str) → Result&lt;IncomingMessage, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -389,7 +397,7 @@ Send a plain-text message. <code>peer</code> can be <code>"me"</code>, <code>"@u
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_to_self(text: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.send_to_self(text: &amp;str) → Result&lt;IncomingMessage, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Sends a message to your own Saved Messages. Shorthand for <code>send_message("me", text)</code>.</div>
@@ -399,7 +407,7 @@ Send a plain-text message. <code>peer</code> can be <code>"me"</code>, <code>"@u
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_message_to_peer(peer: Peer, text: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.send_message_to_peer(peer: Peer, text: &amp;str) → Result&lt;IncomingMessage, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Send a plain text message to a resolved <code>tl::enums::Peer</code>.</div>
@@ -409,7 +417,7 @@ Send a plain-text message. <code>peer</code> can be <code>"me"</code>, <code>"@u
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_message_to_peer_ex(peer: Peer, msg: &amp;InputMessage) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.send_message_to_peer_ex(peer: Peer, msg: &amp;InputMessage) → Result&lt;IncomingMessage, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -461,7 +469,7 @@ Full-featured send with the <a href="./input-message.html"><code>InputMessage</c
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_messages_by_id(peer: Peer, ids: &amp;[i32]) → Result&lt;Vec&lt;tl::enums::Message&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_messages_by_id(peer: Peer, ids: &amp;[i32]) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Fetch specific messages by their IDs from a peer. Returns messages in the same order as the input IDs.</div>
@@ -501,7 +509,7 @@ Full-featured send with the <a href="./input-message.html"><code>InputMessage</c
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_pinned_message(peer: Peer) → Result&lt;Option&lt;tl::enums::Message&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_pinned_message(peer: Peer) → Result&lt;Option&lt;IncomingMessage&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Fetch the currently pinned message, or <code>None</code> if nothing is pinned.</div>
@@ -513,7 +521,7 @@ Full-featured send with the <a href="./input-message.html"><code>InputMessage</c
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_reaction(peer: Peer, msg_id: i32, reaction: Reaction) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.send_reaction(peer: Peer, msg_id: i32, reaction: impl Into&lt;InputReactions&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -525,12 +533,62 @@ client.send_reaction(peer, msg_id, InputReactions::emoticon(“🔥”).big()).a
 See <a href="../messaging/reactions.html">Reactions</a> for the full guide.</p>
 
 
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_message_reactions(peer: impl Into&lt;PeerRef&gt;, msg_ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Trigger a server push of the current reaction counters for the given message IDs. The server responds with <code>updateMessageReactions</code> updates in the stream.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_reaction_list(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, reaction: Option&lt;tl::enums::Reaction&gt;, limit: i32, offset: Option&lt;String&gt;) → Result&lt;tl::types::messages::MessageReactionsList, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Get the list of users who reacted to a message. Pass <code>reaction = None</code> for all reactions. <code>limit</code> max 100; use <code>offset</code> from the previous response to paginate.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.send_paid_reaction(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, count: i32) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Send a paid (Stars) reaction to a message. <code>count</code> is the number of Stars to spend.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.read_reactions(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Mark all unread reactions in a chat as seen (clears reaction badges).</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.clear_recent_reactions() → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Clear the recent reactions list shown in the reaction picker.</div>
+
+</div>
+
 <hr>
 <h2 id="sending-chat-actions"><a class="header" href="#sending-chat-actions">Sending chat actions</a></h2>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_chat_action(peer: Peer, action: SendMessageAction, top_msg_id: Option&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.send_chat_action(peer: Peer, action: SendMessageAction) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -564,7 +622,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.search_messages(peer: Peer, query: &amp;str, limit: i32) → Result&lt;Vec&lt;tl::enums::Message&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.search_messages(peer: Peer, query: &amp;str, limit: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Simple one-shot search within a peer. For advanced options use <code>client.search()</code>.</div>
@@ -574,7 +632,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.search_global(query: &amp;str, limit: i32) → Result&lt;Vec&lt;tl::enums::Message&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.search_global(query: &amp;str, limit: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Simple one-shot global search. For advanced options use <code>client.search_global_builder()</code>.</div>
@@ -616,7 +674,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_messages(peer: Peer, limit: i32, offset_id: i32) → Result&lt;Vec&lt;tl::enums::Message&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_messages(peer: Peer, limit: i32, offset_id: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Fetch a page of messages. Pass the lowest message ID from the previous page as <code>offset_id</code> to paginate.</div>
@@ -653,25 +711,95 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 
 </div>
 
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.delete_chat_history(peer: impl Into&lt;PeerRef&gt;, max_id: i32, revoke: bool) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Delete message history up to <code>max_id</code>. Pass <code>max_id = 0</code> to delete everything. <code>revoke = true</code> also removes messages for all other participants (requires admin rights in channels).</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.pin_dialog(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Pin a dialog to the top of the dialog list.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.unpin_dialog(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Unpin a previously pinned dialog.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_pinned_dialogs(folder_id: i32) → Result&lt;Vec&lt;tl::enums::Dialog&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetch all pinned dialogs in a folder. Use <code>folder_id = 0</code> for the main list, <code>1</code> for the archive.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.mark_dialog_unread(peer: impl Into&lt;PeerRef&gt;, unread: bool) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Manually mark a dialog as unread (<code>true</code>) or read (<code>false</code>). This sets the unread dot without actually having new messages.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.count_channels() → Result&lt;usize, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Count how many channel dialogs the logged-in account is currently in. Iterates all dialogs internally.</div>
+
+</div>
+
 <hr>
 <h2 id="scheduled-messages"><a class="header" href="#scheduled-messages">Scheduled messages</a></h2>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_scheduled_messages(peer: Peer) → Result&lt;Vec&lt;tl::enums::Message&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_scheduled_messages(peer: impl Into&lt;PeerRef&gt;) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Fetch all messages scheduled to be sent in a chat.</div>
+<div class="api-card-body">Fetch all messages currently scheduled in a chat.</div>
 
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.delete_scheduled_messages(peer: Peer, ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.delete_scheduled_messages(peer: impl Into&lt;PeerRef&gt;, ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Cancel and delete scheduled messages by ID.</div>
+<div class="api-card-body">Cancel and delete scheduled messages by their scheduled message IDs.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.send_scheduled_now(peer: impl Into&lt;PeerRef&gt;, ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Immediately deliver one or more scheduled messages. <code>ids</code> are the scheduled message IDs returned by <code>get_scheduled_messages</code>.</div>
 
 </div>
 
@@ -680,7 +808,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_participants(peer: Peer, limit: i32) → Result&lt;Vec&lt;Participant&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_participants(peer: impl Into&lt;PeerRef&gt;, limit: i32) → Result&lt;Vec&lt;Participant&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Fetch members of a chat or channel. Pass <code>limit = 0</code> for the default server maximum per page. Use <code>iter_participants</code> to lazily page all members.</div>
@@ -690,17 +818,47 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.iter_participants(peer: Peer) → ParticipantIter</span>
+<span class="api-card-sig">client.iter_participants(peer: impl Into&lt;PeerRef&gt;, filter: Option&lt;tl::enums::ChannelParticipantsFilter&gt;, limit: i32) → Result&lt;Vec&lt;Participant&gt;, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Lazy async iterator that pages through all members, including beyond the 200-member limit. Fixed in v0.2.0 to paginate correctly for large channels.</div>
+<div class="api-card-body">Fetch all members of a channel or supergroup, optionally filtered and limited. Pass <code>filter = None</code> and <code>limit = 0</code> to retrieve all members up to the server default. For basic groups use <code>get_participants</code>.</div>
 
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_admin_rights(peer: Peer, user_id: i64, rights: AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.kick_participant(chat_id: i64, user_id: i64) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Remove a user from a basic group by chat ID. For channels and supergroups use <code>ban_participant</code> instead (with <code>until_date = 0</code> for a permanent ban, or unban immediately after).</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.ban_participant(channel: impl Into&lt;PeerRef&gt;, user_id: i64, until_date: i32) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Ban a user from a channel or supergroup. <code>until_date</code> is a Unix timestamp; pass <code>0</code> for a permanent ban. To unban, pass a past timestamp or call again with <code>0</code> and then immediately unban via <code>set_banned_rights</code> with an empty builder.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.promote_participant(channel: impl Into&lt;PeerRef&gt;, user_id: i64, promote: bool) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Quick-promote (<code>true</code>) or demote (<code>false</code>) a user in a channel or supergroup. Promotion grants all standard admin rights except <code>add_admins</code>. For fine-grained control use <code>set_admin_rights</code> with <code>AdminRightsBuilder</code>.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.set_admin_rights(peer: impl Into&lt;PeerRef&gt;, user_id: i64, rights: AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Promote a user to admin with specified rights. See <a href="./admin-rights.html">Admin &amp; Ban Rights</a>.</div>
@@ -710,30 +868,50 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_banned_rights(peer: Peer, user_id: i64, rights: BanRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_banned_rights(peer: impl Into&lt;PeerRef&gt;, user_id: i64, rights: BannedRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Restrict or ban a user. Pass <code>BanRightsBuilder::full_ban()</code> to fully ban. See <a href="./admin-rights.html">Admin &amp; Ban Rights</a>.</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_profile_photos(peer: Peer, limit: i32) → Result&lt;Vec&lt;tl::enums::Photo&gt;, InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">Fetch a user's profile photo list.</div>
+<div class="api-card-body">Restrict or ban a user. Pass <code>BannedRightsBuilder::full_ban()</code> to fully ban. See <a href="./admin-rights.html">Admin &amp; Ban Rights</a>.</div>
 
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_permissions(peer: Peer, user_id: i64) → Result&lt;Participant, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_profile_photos(peer: impl Into&lt;PeerRef&gt;, limit: i32) → Result&lt;Vec&lt;tl::enums::Photo&gt;, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Fetch the effective permissions of a user in a chat. Check <code>.is_admin()</code>, <code>.is_banned()</code>, etc. on the returned <code>Participant</code>.</div>
+<div class="api-card-body">Fetch a page of a user's profile photos.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.iter_profile_photos(peer: impl Into&lt;PeerRef&gt;, chunk_size: i32) → Result&lt;ProfilePhotoIter, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Lazy iterator over all profile photos of a user, fetched in pages of <code>chunk_size</code>. Pass <code>chunk_size = 0</code> for the default (100). Call <code>iter.next().await?</code> to advance. Only works for users.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.search_peer(query: &amp;str) → Result&lt;Vec&lt;tl::enums::Peer&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Search for a peer (user, group, or channel) by name prefix. Searches contacts, dialogs, and globally. Returns combined results.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_permissions(peer: impl Into&lt;PeerRef&gt;, user_id: i64) → Result&lt;ParticipantPermissions, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetch the effective permissions of a user in a channel or supergroup. See <a href="./participants.html">Participants &amp; Members</a>.</div>
 
 </div>
 
@@ -742,40 +920,54 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_file(path: &amp;str) → Result&lt;UploadedFile, InvocationError&gt;</span>
+<span class="api-card-sig">client.upload_file(data: &amp;[u8], name: &amp;str, mime_type: &amp;str) → Result&lt;UploadedFile, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Upload a file from a local path. Returns an <code>UploadedFile</code> with <code>.as_photo_media()</code> and <code>.as_document_media()</code> methods.</div>
+<div class="api-card-body">
+Upload raw bytes as a file. <code>name</code> is used as the filename; <code>mime_type</code> is auto-detected from the extension if you pass <code>""</code>. Returns an <code>UploadedFile</code> with <code>.as_photo_media()</code> and <code>.as_document_media()</code> methods. For large files, prefer <code>upload_file_concurrent</code>.
+<pre><code>let data = std::fs::read("photo.jpg")?;
+let uploaded = client.upload_file(&amp;data, "photo.jpg", "image/jpeg").await?;
+let media = uploaded.as_photo_media();</code></pre>
 
 </div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_file(peer: Peer, media: InputMedia, caption: Option&lt;&amp;str&gt;) → Result&lt;(), InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">Send an uploaded file as a photo or document with an optional caption.</div>
 
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_album(peer: Peer, media: Vec&lt;InputMedia&gt;, caption: Option&lt;&amp;str&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.send_file(peer: tl::enums::Peer, media: tl::enums::InputMedia, caption: &amp;str) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Send multiple media items as a grouped album (2–10 items).</div>
+<div class="api-card-body">Send an uploaded file as a photo or document. <code>caption</code> is the message text shown below the media; pass <code>""</code> for no caption (it is <strong>not</strong> <code>Option</code>).</div>
 
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.download_media_to_file(location: impl Downloadable, path: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.send_album(peer: tl::enums::Peer, items: Vec&lt;AlbumItem&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Download a media attachment and write it directly to a file path.</div>
+<div class="api-card-body">
+Send 2–10 media items as a grouped album. Each <code>AlbumItem</code> carries its own caption and optional <code>reply_to</code>. See <a href="../messaging/media.html"><code>AlbumItem</code></a> for builder details.
+<pre><code>use ferogram::media::AlbumItem;
+client.send_album(peer, vec![
+    AlbumItem::new(photo1).caption("First"),
+    AlbumItem::new(photo2).caption("Second"),
+]).await?;</code></pre>
+
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.download_media_to_file(location: tl::enums::InputFileLocation, path: impl AsRef&lt;Path&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Download a media file and write it to <code>path</code>. The <code>path</code> argument accepts anything that implements <code>AsRef&lt;Path&gt;</code> (e.g. <code>&amp;str</code>, <code>String</code>, <code>PathBuf</code>). Uses DC 0 (auto-routed); for explicit DC routing use <code>download_media_to_file_on_dc</code>.</div>
 
 </div>
 
@@ -843,7 +1035,7 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.invoke_on_dc&lt;R: RemoteCall&gt;(req: &amp;R, dc_id: i32) → Result&lt;R::Return, InvocationError&gt;</span>
+<span class="api-card-sig">client.invoke_on_dc&lt;R: RemoteCall&gt;(dc_id: i32, req: &amp;R) → Result&lt;R::Return, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Send a request to a specific Telegram data centre. Used for file downloads from CDN DCs.</div>
@@ -872,6 +1064,480 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
 
 </div>
 
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.create_group(title: impl Into&lt;String&gt;, user_ids: Vec&lt;i64&gt;) → Result&lt;tl::enums::Chat, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Create a new basic group with the given title and initial member list. Returns the created <code>Chat</code>. Basic groups support up to 200 members; migrate to supergroup with <code>migrate_chat</code> if you need more.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.create_channel(title: impl Into&lt;String&gt;, about: impl Into&lt;String&gt;, broadcast: bool) → Result&lt;tl::enums::Chat, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Create a new channel (<code>broadcast = true</code>) or supergroup (<code>broadcast = false</code>). Returns the created <code>Chat</code>.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.delete_channel(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Permanently delete a channel or supergroup. Only the creator can do this. Irreversible.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.delete_chat(chat_id: i64) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Delete a legacy basic group by its chat ID. Only the creator can do this. Use <code>delete_channel</code> for supergroups and channels.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.leave_chat(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Leave a channel or supergroup. For basic groups, use <code>kick_participant</code> on yourself or <code>delete_dialog</code> to just hide it.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.edit_chat_title(peer: impl Into&lt;PeerRef&gt;, title: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Rename a chat, group, channel, or supergroup. Works for both basic groups and channels/supergroups.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.edit_chat_about(peer: impl Into&lt;PeerRef&gt;, about: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Set or update the description/about text for any chat type.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.edit_chat_photo(peer: impl Into&lt;PeerRef&gt;, photo: tl::enums::InputChatPhoto) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Change the profile photo of a chat. Pass <code>tl::enums::InputChatPhoto::Empty</code> to remove the current photo.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.edit_chat_default_banned_rights(peer: impl Into&lt;PeerRef&gt;, build: impl FnOnce(BannedRightsBuilder) → BannedRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Set default permissions for all members of a group or channel via a closure:
+<pre><code>// Disable media and polls for everyone
+client.edit_chat_default_banned_rights(peer, |b| {
+    b.send_media(true).send_polls(true)
+}).await?;</code></pre>
+
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_chat_full(peer: impl Into&lt;PeerRef&gt;) → Result&lt;tl::enums::messages::ChatFull, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Get the full info object for any chat type. Contains full description, pinned message ID, linked channel, member count, slow mode, and more.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.migrate_chat(chat_id: i64) → Result&lt;tl::enums::Chat, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Upgrade a legacy basic group to a supergroup. Returns the new channel peer. The original chat ID becomes invalid after migration.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.invite_users(peer: impl Into&lt;PeerRef&gt;, user_ids: Vec&lt;i64&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Add one or more users to a chat. For channels all users are added in one request; for basic groups each user is added individually.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.set_history_ttl(peer: impl Into&lt;PeerRef&gt;, period: i32) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Set the auto-delete timer for a chat. <code>period</code> is in seconds. Common values: <code>86400</code> (1 day), <code>604800</code> (1 week), <code>2678400</code> (1 month). Pass <code>0</code> to disable.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_common_chats(user_id: i64, max_id: i64, limit: i32) → Result&lt;Vec&lt;tl::enums::Chat&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Get chats shared between the logged-in account and <code>user_id</code>. Pass <code>max_id = 0</code> for the first page. Max <code>limit</code> is 100.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_online_count(peer: impl Into&lt;PeerRef&gt;) → Result&lt;i32, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Get the approximate number of members currently online in a group or channel.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.toggle_no_forwards(peer: impl Into&lt;PeerRef&gt;, enabled: bool) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Enable or disable the no-forwards restriction. When enabled, members cannot forward messages out of this chat.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">sync</span>
+<span class="api-card-sig">Client::parse_invite_hash(link: &amp;str) → Option&lt;&amp;str&gt;</span>
+</div>
+
+<div class="api-card-body">Parse the invite hash out of any <code>t.me/+…</code> or <code>t.me/joinchat/…</code> link format. Returns <code>None</code> if the link is not a valid invite.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.set_chat_theme(peer: impl Into&lt;PeerRef&gt;, emoticon: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Set the emoji-based colour theme for a chat. Pass a single emoji string such as <code>"🌈"</code> or <code>"❄️"</code> to apply a theme, or an empty string to reset to default.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.set_chat_reactions(peer: impl Into&lt;PeerRef&gt;, reactions: tl::enums::ChatReactions) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Control which reactions are allowed in a chat. Use <code>ChatReactionsAll</code>, <code>ChatReactionsSome</code>, or <code>ChatReactionsNone</code>.
+<pre><code>// Allow all (including custom emoji)
+client.set_chat_reactions(peer.clone(),
+    tl::enums::ChatReactions::ChatReactionsAll(
+        tl::types::ChatReactionsAll { allow_custom: true }
+    )
+).await?;
+<p>// Disable all reactions
+client.set_chat_reactions(peer.clone(),
+tl::enums::ChatReactions::ChatReactionsNone
+).await?;</p>
+
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.toggle_forum(peer: impl Into&lt;PeerRef&gt;, enabled: bool) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Enable or disable forum (topics) mode on a supergroup. Requires channel admin rights. Once enabled the group gains a <em>General</em> topic (ID 1) automatically. See <a href="./forum-topics.html">Forum Topics</a> for full topic management.</div>
+
+</div>
+
+<hr>
+<h2 id="advanced-messaging"><a class="header" href="#advanced-messaging">Advanced Messaging</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.forward_messages_returning(destination: impl Into&lt;PeerRef&gt;, message_ids: &amp;[i32], source: impl Into&lt;PeerRef&gt;) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Like <code>forward_messages</code> but returns the newly created message objects in the destination chat. Useful when you need the forwarded message IDs immediately.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_reply_to_message(message: &amp;IncomingMessage) → Result&lt;Option&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetch the message that <code>message</code> replies to. Returns <code>None</code> if it is not a reply or the original message is deleted/inaccessible.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_users_by_id(ids: &amp;[i64]) → Result&lt;Vec&lt;Option&lt;User&gt;&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Bulk-fetch typed <code>User</code> objects by their IDs. The result is in the same order as <code>ids</code>; entries are <code>None</code> for deleted/unknown users.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_user_full(user_id: i64) → Result&lt;tl::types::UserFull, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Get the full info object for a user. Contains bio, common chats count, bot info, profile/fallback photos, privacy settings, pinned message ID, and more.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_pinned_message(peer: impl Into&lt;PeerRef&gt;) → Result&lt;Option&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetch the currently pinned message in a chat. Returns <code>None</code> if nothing is pinned.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.pin_message(peer: impl Into&lt;PeerRef&gt;, message_id: i32, silent: bool, unpin: bool, pm_oneside: bool) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Pin (or unpin) a message. Set <code>silent = true</code> to avoid a pin notification. <code>pm_oneside = true</code> pins only for the logged-in user in DMs.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.unpin_message(peer: impl Into&lt;PeerRef&gt;, message_id: i32) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Shorthand for unpinning a specific message (calls <code>pin_message</code> with <code>unpin = true</code>).</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.unpin_all_messages(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Unpin every pinned message in a chat at once.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_message_read_participants(peer: impl Into&lt;PeerRef&gt;, msg_id: i32) → Result&lt;Vec&lt;tl::types::ReadParticipantDate&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Get the list of users who have read a specific message and the time each read it. Only works in groups; returns an empty list for channels and private chats.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_replies(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, limit: i32, offset_id: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Fetch thread replies under a message. <code>msg_id</code> is the root message ID. Pass <code>offset_id = 0</code> for the first page; use the lowest ID from the previous page to paginate. Max <code>limit</code> is 100.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_discussion_message(peer: impl Into&lt;PeerRef&gt;, msg_id: i32) → Result&lt;tl::types::messages::DiscussionMessage, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Get the linked discussion message in the comments group for a channel post. Returns the discussion metadata including unread counts and max-read IDs.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.read_discussion(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, read_max_id: i32) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Mark a discussion thread as read up to <code>read_max_id</code>. <code>peer</code> is the channel, <code>msg_id</code> is the root post.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_web_page_preview(text: impl Into&lt;String&gt;) → Result&lt;tl::enums::MessageMedia, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Generate a link preview for a URL embedded in <code>text</code>. Returns the <code>MessageMedia</code> that Telegram would attach (webpage card, article embed, video thumbnail, etc.).</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.upload_media(peer: impl Into&lt;PeerRef&gt;, media: tl::enums::InputMedia) → Result&lt;tl::enums::MessageMedia, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Upload a media object to Telegram servers without sending it as a message. The returned <code>MessageMedia</code> can be reused in subsequent <code>send_message</code> calls via <code>InputMessage::copy_media()</code>. Distinct from <code>upload_file</code>  -  this works with an existing <code>InputMedia</code>.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.export_message_link(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, grouped: bool, thread: bool) → Result&lt;String, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Get a <code>t.me/c/…</code> permalink for a message in a channel. <code>grouped = true</code> returns a link to the album group; <code>thread = true</code> links to the discussion thread. Only works for channels (not basic groups).
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_send_as_peers(peer: impl Into&lt;PeerRef&gt;) → Result&lt;Vec&lt;tl::enums::Peer&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Get the list of identities the logged-in user can send messages as in a chat (e.g. own account, linked anonymous channel). Used to implement "send as channel" / anonymous posting.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.set_default_send_as(peer: impl Into&lt;PeerRef&gt;, send_as_peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body"><code>send_as_peer</code> must be one of the peers returned by <code>get_send_as_peers</code>. Sets the default identity for new messages in <code>peer</code>.</div>
+
+</div>
+
+<hr>
+<h2 id="translation--transcription"><a class="header" href="#translation--transcription">Translation &amp; Transcription</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.translate_messages(peer: impl Into&lt;PeerRef&gt;, msg_ids: Vec&lt;i32&gt;, to_lang: impl Into&lt;String&gt;) → Result&lt;Vec&lt;tl::types::TextWithEntities&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Translate one or more messages to <code>to_lang</code> (e.g. <code>"en"</code>, <code>"ru"</code>). Returns translated text in the same order as <code>msg_ids</code>. Requires Telegram Premium for many language pairs.
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.transcribe_audio(peer: impl Into&lt;PeerRef&gt;, msg_id: i32) → Result&lt;tl::types::messages::TranscribedAudio, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Request speech-to-text transcription of a voice message or video note. Transcription may be pending on first call; poll again if <code>result.pending == true</code>. Requires Telegram Premium.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.toggle_peer_translations(peer: impl Into&lt;PeerRef&gt;, disabled: bool) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Show or hide the "Translate" toolbar button for a chat. <code>disabled = true</code> hides it.</div>
+
+</div>
+
+<hr>
+<h2 id="admin-log"><a class="header" href="#admin-log">Admin Log</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_admin_log(peer: impl Into&lt;PeerRef&gt;, query: impl Into&lt;String&gt;, limit: i32, max_id: i64, min_id: i64) → Result&lt;Vec&lt;tl::types::ChannelAdminLogEvent&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Fetch the admin action log for a channel or supergroup. <code>query</code> filters by keyword (pass <code>""</code> for all events). Max <code>limit</code> is 100. Use <code>max_id</code> / <code>min_id</code> for pagination; pass <code>0</code> for both on the first call. Only works for channels/supergroups; returns an error for basic groups.
+</div>
+
+</div>
+
+<hr>
+<h2 id="drafts"><a class="header" href="#drafts">Drafts</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.save_draft(peer: impl Into&lt;PeerRef&gt;, text: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Save a draft message for a chat. Pass an empty string to clear the current draft.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_all_drafts() → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Trigger a server push of all saved drafts across all chats. The server responds with <code>updateDraftMessage</code> updates in the update stream.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.clear_all_drafts() → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Delete all saved drafts across all chats at once.</div>
+
+</div>
+
+</code></pre>
+</div>
+</div>
 </code></pre>
 </div>
 </div>
@@ -884,7 +1550,7 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../api/input-message.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../api/client-builder.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -898,7 +1564,7 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../api/input-message.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../api/client-builder.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -927,7 +1593,7 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
         <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="../theme/custom-ff45141f.js"></script>
+        <script src="../theme/custom-a37c2a24.js"></script>
 
 
 

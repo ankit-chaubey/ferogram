@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="theme/custom-044eaa15.css">
+        <link rel="stylesheet" href="theme/custom-3cd05ff1.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fd41c8e7.js";
+            window.path_to_searchindex_js = "searchindex-f77cdc82.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-3a947583.js"></script>
+        <script src="toc-ba5e127b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -316,6 +316,44 @@ use ferogram::retry::{AutoSleep, NoRetries};
 .retry_policy(Arc::new(AutoSleep::default()))   // sleep and retry
 .retry_policy(Arc::new(NoRetries))              // propagate immediately
 <span class="boring">}</span></code></pre>
+<h3 id="restart_policy"><a class="header" href="#restart_policy"><code>restart_policy</code></a></h3>
+<p>What to do when the TCP connection drops. Default: <code>NeverRestart</code> (exit the event loop; the shutdown signal fires).</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::sync::Arc;
+use std::time::Duration;
+use ferogram::FixedInterval;
+
+.restart_policy(Arc::new(FixedInterval {
+    interval: Duration::from_secs(5),
+}))
+<span class="boring">}</span></code></pre>
+<p>See <a href="./advanced/connection-restart.html">Connection Restart Policy</a> for all built-in types and custom implementations.</p>
+<h3 id="probe_transport"><a class="header" href="#probe_transport"><code>probe_transport</code></a></h3>
+<p>Race Obfuscated, Abridged, and HTTP transports in parallel on connect and keep the fastest. Incompatible with MTProxy. Default: <code>false</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>.probe_transport(true)
+<span class="boring">}</span></code></pre>
+<h3 id="resilient_connect"><a class="header" href="#resilient_connect"><code>resilient_connect</code></a></h3>
+<p>If direct TCP fails, retry via DNS-over-HTTPS then Firebase special-config. Useful in ISP-blocked regions. Default: <code>false</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>.resilient_connect(true)
+<span class="boring">}</span></code></pre>
+<p>See <a href="./advanced/transport-probing.html">Transport Probing &amp; Resilient Connect</a> for the full fallback chain.</p>
+<h3 id="experimental_features"><a class="header" href="#experimental_features"><code>experimental_features</code></a></h3>
+<p>Opt-in flags that deviate from strict Telegram spec. All default to <code>false</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::ExperimentalFeatures;
+
+.experimental_features(ExperimentalFeatures {
+    allow_zero_hash: true,   // bots only
+    ..Default::default()
+})
+<span class="boring">}</span></code></pre>
+<p>See <a href="./advanced/experimental-features.html">Experimental Features</a> for all flags and safety constraints.</p>
 <hr>
 <h2 id="building-config-without-connecting"><a class="header" href="#building-config-without-connecting">Building Config without connecting</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -334,7 +372,7 @@ let (client, _shutdown) = Client::connect(config).await?;
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="advanced/layer-upgrade.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="advanced/cdn-downloads.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -348,7 +386,7 @@ let (client, _shutdown) = Client::connect(config).await?;
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="advanced/layer-upgrade.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="advanced/cdn-downloads.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
@@ -381,7 +419,7 @@ let (client, _shutdown) = Client::connect(config).await?;
         <script src="book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="theme/custom-ff45141f.js"></script>
+        <script src="theme/custom-a37c2a24.js"></script>
 
 
 

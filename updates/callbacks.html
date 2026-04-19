@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../theme/custom-044eaa15.css">
+        <link rel="stylesheet" href="../theme/custom-3cd05ff1.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fd41c8e7.js";
+            window.path_to_searchindex_js = "../searchindex-f77cdc82.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-3a947583.js"></script>
+        <script src="../toc-ba5e127b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -244,6 +244,7 @@ cb.answer().send(&amp;client).await?;
 <tr><td><code>.text(str)</code></td><td>Toast message shown to the user</td></tr>
 <tr><td><code>.alert(str)</code></td><td>Modal popup shown to the user</td></tr>
 <tr><td><code>.url(str)</code></td><td>URL to open (with user confirmation)</td></tr>
+<tr><td><code>.cache_time(Duration)</code></td><td>How long Telegram caches this answer client-side (default: 0)</td></tr>
 <tr><td><code>.send(&amp;client)</code></td><td>Execute: always call this</td></tr>
 </tbody>
 </table>
@@ -363,7 +364,7 @@ client.answer_callback_query(cb.query_id, None, false).await?;  // silent
         <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="../theme/custom-ff45141f.js"></script>
+        <script src="../theme/custom-a37c2a24.js"></script>
 
 
 

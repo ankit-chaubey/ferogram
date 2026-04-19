@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="theme/custom-044eaa15.css">
+        <link rel="stylesheet" href="theme/custom-3cd05ff1.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fd41c8e7.js";
+            window.path_to_searchindex_js = "searchindex-f77cdc82.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-3a947583.js"></script>
+        <script src="toc-ba5e127b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -186,6 +186,8 @@
 <h2 id="dependency-graph"><a class="header" href="#dependency-graph">Dependency graph</a></h2>
 <pre><code>Your App
  └ ferogram ← high-level Client, UpdateStream, InputMessage
+ ├ ferogram-session ← session persistence, DC table, backends
+ ├ ferogram-parsers ← Markdown and HTML entity parsing
  ├ ferogram-mtproto ← MTProto session, DH, message framing
  │ └ ferogram-crypto ← AES-IGE, RSA, SHA, factorize
  └ ferogram-tl-types ← all generated types + LAYER constant
@@ -320,6 +322,87 @@
 <li><code>impl Identifiable</code>: <code>const CONSTRUCTOR_ID: u32</code></li>
 <li>Optional: <code>impl Debug</code>, <code>impl From</code>, <code>impl TryFrom</code>, <code>impl Serialize/Deserialize</code></li>
 </ul>
+<hr>
+<h2 id="ferogram-session"><a class="header" href="#ferogram-session">ferogram-session</a></h2>
+<p><strong>Session persistence types and pluggable storage backends.</strong></p>
+<h3 id="what-it-provides-3"><a class="header" href="#what-it-provides-3">What it provides</a></h3>
+<ul>
+<li><code>PersistedSession</code>: versioned binary format holding the full DC table, update state, and peer cache</li>
+<li><code>SessionBackend</code> trait: implement to add custom storage (Redis, Postgres, etc.)</li>
+<li><code>BinaryFileBackend</code>: stores session as a binary file on disk (default)</li>
+<li><code>InMemoryBackend</code>: in-memory only, useful for testing or short-lived bots</li>
+<li><code>StringSessionBackend</code>: base64 string, useful for environment-variable sessions</li>
+<li><code>SqliteBackend</code> (feature: <code>sqlite-session</code>): SQLite-backed persistent sessions</li>
+<li><code>LibSqlBackend</code> (feature: <code>libsql-session</code>): libSQL-backed persistent sessions</li>
+<li><code>DcEntry</code> / <code>DcFlags</code>: per-DC auth key, salt, and capability flag storage</li>
+<li><code>UpdatesStateSnap</code>: pts, qts, seq, date, and per-channel pts counters</li>
+<li><code>CachedPeer</code> / <code>CachedMinPeer</code>: peer access-hash cache for users, channels, groups</li>
+</ul>
+<h3 id="feature-flags"><a class="header" href="#feature-flags">Feature flags</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>What it enables</th></tr>
+</thead>
+<tbody>
+<tr><td><code>sqlite-session</code></td><td><code>SqliteBackend</code> via rusqlite</td></tr>
+<tr><td><code>libsql-session</code></td><td><code>LibSqlBackend</code> via libsql</td></tr>
+<tr><td><code>serde</code></td><td><code>Serialize</code>/<code>Deserialize</code> on session types</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="stack-position"><a class="header" href="#stack-position">Stack position</a></h3>
+<pre><code>ferogram
+└ ferogram-session
+</code></pre>
+<hr>
+<h2 id="ferogram-parsers"><a class="header" href="#ferogram-parsers">ferogram-parsers</a></h2>
+<p><strong>Telegram HTML and Markdown entity parsers.</strong></p>
+<h3 id="what-it-provides-4"><a class="header" href="#what-it-provides-4">What it provides</a></h3>
+<ul>
+<li><code>parse_markdown(src)</code> → <code>(String, Vec&lt;MessageEntity&gt;)</code>: Telegram-flavoured Markdown to plain text + entity list</li>
+<li><code>generate_markdown(text, entities)</code> → <code>String</code>: entity list back to Markdown</li>
+<li><code>parse_html(src)</code> → <code>(String, Vec&lt;MessageEntity&gt;)</code>: Telegram HTML to plain text + entity list</li>
+<li><code>generate_html(text, entities)</code> → <code>String</code>: entity list back to HTML</li>
+</ul>
+<p>Used by <code>ferogram</code> for <code>InputMessage::markdown()</code> and <code>InputMessage::html()</code>, and available standalone for any crate that works with Telegram formatted text.</p>
+<h3 id="supported-markdown-syntax"><a class="header" href="#supported-markdown-syntax">Supported Markdown syntax</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Syntax</th><th>Entity</th></tr>
+</thead>
+<tbody>
+<tr><td><code>**bold**</code> or <code>*bold*</code></td><td>Bold</td></tr>
+<tr><td><code>__italic__</code> or <code>_italic_</code></td><td>Italic</td></tr>
+<tr><td><code>~~strike~~</code></td><td>Strikethrough</td></tr>
+<tr><td><code>||spoiler||</code></td><td>Spoiler</td></tr>
+<tr><td><code>`code`</code></td><td>Code</td></tr>
+<tr><td><code>```lang\npre\n```</code></td><td>Pre (code block)</td></tr>
+<tr><td><code>[text](url)</code></td><td>TextUrl</td></tr>
+<tr><td><code>[text](tg://user?id=123)</code></td><td>MentionName</td></tr>
+<tr><td><code>![text](tg://emoji?id=123)</code></td><td>CustomEmoji</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="supported-html-tags"><a class="header" href="#supported-html-tags">Supported HTML tags</a></h3>
+<p><code>&lt;b&gt;</code>, <code>&lt;strong&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;em&gt;</code>, <code>&lt;u&gt;</code>, <code>&lt;s&gt;</code>, <code>&lt;del&gt;</code>, <code>&lt;code&gt;</code>, <code>&lt;pre&gt;</code>, <code>&lt;tg-spoiler&gt;</code>, <code>&lt;a href="url"&gt;</code>, <code>&lt;tg-emoji emoji-id="id"&gt;</code></p>
+<h3 id="feature-flags-1"><a class="header" href="#feature-flags-1">Feature flags</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>What it enables</th></tr>
+</thead>
+<tbody>
+<tr><td><code>html5ever</code></td><td>Replaces <code>parse_html</code> with a spec-compliant html5ever tokenizer</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="stack-position-1"><a class="header" href="#stack-position-1">Stack position</a></h3>
+<pre><code>ferogram
+└ ferogram-parsers
+  └ ferogram-tl-types (tl-api feature)
+</code></pre>
 
                     </main>
 
@@ -372,7 +455,7 @@
         <script src="book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="theme/custom-ff45141f.js"></script>
+        <script src="theme/custom-a37c2a24.js"></script>
 
 
 

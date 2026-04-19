@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="theme/custom-044eaa15.css">
+        <link rel="stylesheet" href="theme/custom-3cd05ff1.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fd41c8e7.js";
+            window.path_to_searchindex_js = "searchindex-f77cdc82.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-3a947583.js"></script>
+        <script src="toc-ba5e127b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -273,6 +273,8 @@
 <tr><td><code>ferogram-tl-types</code></td><td>All Layer 224 constructors, functions, enums</td><td>Raw API calls</td></tr>
 <tr><td><code>ferogram-mtproto</code></td><td>MTProto session, DH, framing, transport</td><td>Library authors</td></tr>
 <tr><td><code>ferogram-crypto</code></td><td>AES-IGE, RSA, SHA, auth key derivation</td><td>Internal</td></tr>
+<tr><td><code>ferogram-session</code></td><td>Session persistence types and pluggable storage backends</td><td>Custom session storage</td></tr>
+<tr><td><code>ferogram-parsers</code></td><td>Telegram HTML and Markdown entity parsers</td><td>Formatted text handling</td></tr>
 <tr><td><code>ferogram-tl-gen</code></td><td>Build-time Rust code generator</td><td>Build tool</td></tr>
 <tr><td><code>ferogram-tl-parser</code></td><td><code>.tl</code> schema → AST parser</td><td>Build tool</td></tr>
 </tbody>
@@ -284,7 +286,7 @@
 <hr>
 <h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.2.0"
+ferogram = "0.3.0"
 tokio        = { version = "1", features = ["full"] }
 </code></pre>
 <p>Then head to <a href="./installation.html">Installation</a> for credentials setup, or jump straight to:</p>
@@ -293,28 +295,8 @@ tokio        = { version = "1", features = ["full"] }
 <li><a href="./quickstart-bot.html">Quick Start: Bot</a>: bot token login, commands, callbacks</li>
 </ul>
 <hr>
-<h2 id="initial-release-v010"><a class="header" href="#initial-release-v010">Initial Release v0.1.0</a></h2>
-<h4 id="proxy--transport"><a class="header" href="#proxy--transport">Proxy &amp; Transport</a></h4>
-<ul>
-<li><strong>MTProxy support</strong>: connect via <code>t.me/proxy</code> / <code>tg://proxy</code> links or manual host/port/secret config</li>
-<li><strong>PaddedIntermediate transport</strong> (<code>0xDD</code> secrets): randomized padding to mimic official Telegram traffic</li>
-<li><strong>FakeTLS transport</strong> (<code>0xEE</code> secrets): TLS-like framing to make MTProto traffic resemble HTTPS</li>
-<li><strong>SOCKS5 proxy support</strong> in <code>Config</code> with optional username/password authentication</li>
-<li><strong>IPv6 connectivity</strong> for Telegram DCs and proxy connections</li>
-</ul>
-<h4 id="session--client"><a class="header" href="#session--client">Session &amp; Client</a></h4>
-<ul>
-<li><strong>Multiple session backend support</strong> with new <code>Config</code> helpers and builder methods for MTProxy</li>
-</ul>
-<h4 id="protocol-fixes"><a class="header" href="#protocol-fixes">Protocol Fixes</a></h4>
-<ul>
-<li><strong>Auth key generation fixed</strong>: now uses correct <code>PQInnerDataDc</code> constructor including the DC id: resolves auth failures on many DCs</li>
-<li><strong>Incoming message validation</strong>: rolling buffer of last 500 server <code>msg_id</code>s + ±300 s timestamp window to prevent replay attacks</li>
-<li><strong><code>dh_gen_retry</code> handling</strong>: step 3 now retries with cached params, up to 5 attempts (matching Telegram Desktop)</li>
-<li><strong>MTProxy routing bug fixed</strong>: connections now correctly route through the proxy host instead of going directly to Telegram DCs</li>
-<li><strong>Channel difference sync</strong>: initial <code>getChannelDifference</code> starts at limit 100, subsequent calls increase to 1000</li>
-</ul>
-<p>See the full <a href="https://github.com/ankit-chaubey/ferogram/blob/main/CHANGELOG.md">CHANGELOG</a>.</p>
+<h2 id="release-history"><a class="header" href="#release-history">Release history</a></h2>
+<p>See <a href="./whats-new.html">What’s New</a> for a full version-by-version breakdown, or the <a href="https://github.com/ankit-chaubey/ferogram/blob/main/CHANGELOG.md">CHANGELOG</a> for the raw diff summary.</p>
 <hr>
 <h2 id="author"><a class="header" href="#author">Author</a></h2>
 <p>Developed by <a href="https://github.com/ankit-chaubey"><strong>Ankit Chaubey</strong></a> out of curiosity to explore.</p>
@@ -323,7 +305,8 @@ tokio        = { version = "1", features = ["full"] }
 <a href="https://docs.rs/ferogram"><img src="https://img.shields.io/badge/docs.rs-ferogram-5865F2?style=flat-square" alt="docs.rs"></a>
 <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue?style=flat-square" alt="License"></a>
 <a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-224-8b5cf6?style=flat-square" alt="TL Layer"></a>
-<a href="https://t.me/FerogramChat"><img src="https://img.shields.io/badge/chat-%40FerogramChat-2CA5E0?style=flat-square&amp;logo=telegram" alt="Telegram"></a></p>
+<a href="https://t.me/FerogramChat"><img src="https://img.shields.io/badge/chat-%40FerogramChat-2CA5E0?style=flat-square&amp;logo=telegram" alt="Telegram"></a>
+<a href="https://t.me/Ferogram"><img src="https://img.shields.io/badge/channel-%40ferogram-2CA5E0?style=flat-square&amp;logo=telegram" alt="Channel"></a></p>
 </div>
 
 <p>ferogram is developed as part of exploration, learning, and experimentation with the Telegram MTProto protocol.
@@ -337,7 +320,7 @@ Use it at your own risk. Its future and stability are not yet guaranteed.</p>
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
 
-                            <a rel="next prefetch" href="installation.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="whats-new.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -348,7 +331,7 @@ Use it at your own risk. Its future and stability are not yet guaranteed.</p>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
 
-                    <a rel="next prefetch" href="installation.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="whats-new.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -377,7 +360,7 @@ Use it at your own risk. Its future and stability are not yet guaranteed.</p>
         <script src="book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="theme/custom-ff45141f.js"></script>
+        <script src="theme/custom-a37c2a24.js"></script>
 
 
 

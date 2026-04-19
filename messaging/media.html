@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../theme/custom-044eaa15.css">
+        <link rel="stylesheet" href="../theme/custom-3cd05ff1.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fd41c8e7.js";
+            window.path_to_searchindex_js = "../searchindex-f77cdc82.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-3a947583.js"></script>
+        <script src="../toc-ba5e127b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,23 +184,149 @@
                         <h1 id="media--files"><a class="header" href="#media--files">Media &amp; Files</a></h1>
 <hr>
 <h2 id="upload"><a class="header" href="#upload">Upload</a></h2>
+<p>ferogram provides three upload methods. Choose based on file size and where
+the data comes from.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Input</th><th>Best for</th></tr>
+</thead>
+<tbody>
+<tr><td><code>upload_file</code></td><td><code>&amp;[u8]</code></td><td>Small files already in memory (under ~10 MB)</td></tr>
+<tr><td><code>upload_file_concurrent</code></td><td><code>Arc&lt;Vec&lt;u8&gt;&gt;</code></td><td>Large files already in memory (10 MB+), parallel chunks</td></tr>
+<tr><td><code>upload_stream</code></td><td><code>impl AsyncRead</code></td><td>Files on disk or any async reader</td></tr>
+</tbody>
+</table>
+</div>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.upload_file(name: &amp;str, data: &amp;[u8]) → Result&lt;UploadedFile, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Upload a byte slice sequentially. Uses a single worker and sends chunks one at
+a time. Suitable for files under ~10 MB or when parallelism is not needed.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Upload from bytes: sequential
-let uploaded: UploadedFile = client
-    .upload_file("photo.jpg", &amp;bytes)
-    .await?;
-
-// Upload from bytes: parallel chunks (faster for large files)
-let uploaded = client
-    .upload_file_concurrent("video.mp4", &amp;bytes)
-    .await?;
-
-// Upload from an async reader (e.g. tokio::fs::File)
-use tokio::fs::File;
-let f = File::open("document.pdf").await?;
-let uploaded = client.upload_stream("document.pdf", f).await?;
+</span>let bytes: Vec&lt;u8&gt; = std::fs::read("photo.jpg")?;
+let uploaded = client.upload_file("photo.jpg", &amp;bytes).await?;
 <span class="boring">}</span></code></pre>
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.upload_file_concurrent(name: &amp;str, data: Arc&lt;Vec&lt;u8&gt;&gt;, mime_type: &amp;str) → Result&lt;UploadedFile, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Upload using a parallel worker pool. Takes <code>Arc&lt;Vec&lt;u8&gt;&gt;</code> for
+zero-copy sharing across worker tasks. Significantly faster for large files
+(video, large documents) because multiple chunks are in flight simultaneously.
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::sync::Arc;
+
+let bytes = Arc::new(std::fs::read("video.mp4")?);
+let uploaded = client
+    .upload_file_concurrent("video.mp4", bytes, "video/mp4")
+    .await?;
+<span class="boring">}</span></code></pre>
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.upload_stream&lt;R: AsyncRead + Unpin&gt;(reader: &amp;mut R, name: &amp;str, mime_type: &amp;str) → Result&lt;UploadedFile, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Upload from any type that implements <code>tokio::io::AsyncRead</code>. Reads
+the entire reader into memory, then automatically delegates to
+<code>upload_file_concurrent</code> for large data or <code>upload_file</code>
+for small data based on a built-in threshold.
+<p>This is the most convenient method when working with files on disk, network
+streams, or in-memory cursors.</p>
+<h3 id="parameters"><a class="header" href="#parameters">Parameters</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Param</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>reader</code></td><td><code>&amp;mut impl AsyncRead + Unpin</code></td><td>Any async reader: <code>tokio::fs::File</code>, <code>tokio::io::BufReader</code>, <code>std::io::Cursor</code>, etc.</td></tr>
+<tr><td><code>name</code></td><td><code>&amp;str</code></td><td>Filename that Telegram stores and shows to recipients.</td></tr>
+<tr><td><code>mime_type</code></td><td><code>&amp;str</code></td><td>MIME type. Pass <code>""</code> to auto-detect from the file extension in <code>name</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="examples"><a class="header" href="#examples">Examples</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Upload from a file on disk
+use tokio::fs::File;
+
+let mut f = File::open("document.pdf").await?;
+let uploaded = client
+    .upload_stream(&amp;mut f, "document.pdf", "application/pdf")
+    .await?;
+<span class="boring">}</span></code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Auto-detect MIME type from the filename extension
+let mut f = File::open("photo.jpg").await?;
+let uploaded = client
+    .upload_stream(&amp;mut f, "photo.jpg", "")   // "" -&gt; auto-detects image/jpeg
+    .await?;
+<span class="boring">}</span></code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Upload from an in-memory buffer via std::io::Cursor
+use std::io::Cursor;
+use tokio::io::BufReader;
+
+let data: Vec&lt;u8&gt; = generate_pdf_bytes();
+let mut reader = BufReader::new(Cursor::new(data));
+let uploaded = client
+    .upload_stream(&amp;mut reader, "report.pdf", "application/pdf")
+    .await?;
+<span class="boring">}</span></code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Upload a file produced by an async process (e.g. compression)
+use tokio::io::AsyncWriteExt;
+
+let (reader, mut writer) = tokio::io::duplex(64 * 1024);
+tokio::spawn(async move {
+    // write compressed data to writer ...
+    writer.shutdown().await.unwrap();
+});
+
+let mut r = reader;
+let uploaded = client
+    .upload_stream(&amp;mut r, "archive.gz", "application/gzip")
+    .await?;
+<span class="boring">}</span></code></pre>
+<h3 id="notes"><a class="header" href="#notes">Notes</a></h3>
+<ul>
+<li><code>upload_stream</code> reads the entire reader to completion before uploading.
+There is no true streaming upload to Telegram; the data must fit in memory.</li>
+<li>For data already in memory as <code>Vec&lt;u8&gt;</code>, prefer <code>upload_file</code> or
+<code>upload_file_concurrent</code> to avoid the extra <code>read_to_end</code> allocation.</li>
+<li>The MIME type is used by Telegram clients to decide how to display the file
+(inline image preview, audio player, generic document, etc.). Passing <code>""</code>
+enables built-in MIME detection from the file extension.</li>
+</ul>
+</div>
+
+</div>
+
+<hr>
 <h3 id="uploadedfile-methods"><a class="header" href="#uploadedfile-methods"><code>UploadedFile</code> methods</a></h3>
 <div class="table-wrapper">
 <table>
@@ -453,7 +579,7 @@ msg.download_media("output.jpg").await?;
         <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="../theme/custom-ff45141f.js"></script>
+        <script src="../theme/custom-a37c2a24.js"></script>
 
 
 

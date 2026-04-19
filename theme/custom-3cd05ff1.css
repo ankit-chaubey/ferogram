@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   layer docs — Comfortable Reading Theme
+   ferogram docs  Comfortable Reading Theme
    ═══════════════════════════════════════════════════════════════ */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
@@ -21,7 +21,7 @@
   --shadow-sm:          0 2px 10px rgba(0,0,0,0.2);
 }
 
-/* ── FORCE BASE FONT SIZE — overrides mdBook navy theme ─────── */
+/* ── FORCE BASE FONT SIZE  overrides mdBook navy theme ─────── */
 html {
   font-size: 18px !important;
 }
@@ -188,7 +188,7 @@ table tbody tr:last-child { border-bottom: none !important; }
 .sidebar .sidebar-scrollbox { padding-top: 0 !important; }
 
 .sidebar-scrollbox::before {
-  content: "⚡ layer";
+  content: "⚡ ferogram";
   display: block;
   font-size: 1.4rem;
   font-weight: 700;

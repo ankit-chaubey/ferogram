@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../theme/custom-044eaa15.css">
+        <link rel="stylesheet" href="../theme/custom-3cd05ff1.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fd41c8e7.js";
+            window.path_to_searchindex_js = "../searchindex-f77cdc82.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-3a947583.js"></script>
+        <script src="../toc-ba5e127b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -236,22 +236,40 @@ while let Some(iq) = iter.next().await {
 iq.query_id      // i64
 iq.user_id       // i64: who sent the query
 iq.offset        // String: pagination offset
+iq.peer          // Option&lt;tl::enums::Peer&gt;: chat context the user is in (None if not shared)
 <span class="boring">}</span></code></pre>
+<p><code>peer</code> is populated when the bot has access to the chat  -  use it to tailor results per chat type.</p>
 <hr>
 <h2 id="receiving-inline-sends-bot-side"><a class="header" href="#receiving-inline-sends-bot-side">Receiving inline sends (bot side)</a></h2>
 <p>When a user selects a result from your bot’s inline mode, you get <code>Update::InlineSend</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>Update::InlineSend(is) =&gt; {
-    // is.result_id : which result was chosen
-    // is.user_id   : who chose it
-    // is.query     : the original query
+    println!("User {} chose result '{}'", is.user_id, is.id);
+    println!("Original query: {}", is.query);
+    // is.msg_id is Some(...) when the message is still editable
 }
 <span class="boring">}</span></code></pre>
-<p><code>InlineSend</code> also has <code>edit_message()</code> for editing the sent inline message:</p>
+<h3 id="inlinesend-fields"><a class="header" href="#inlinesend-fields"><code>InlineSend</code> fields</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>is.user_id</code></td><td><code>i64</code></td><td>Who picked the inline result</td></tr>
+<tr><td><code>is.query</code></td><td><code>String</code></td><td>The original query text</td></tr>
+<tr><td><code>is.id</code></td><td><code>String</code></td><td>The result ID that was chosen</td></tr>
+<tr><td><code>is.msg_id</code></td><td><code>Option&lt;tl::enums::InputBotInlineMessageId&gt;</code></td><td>Present when the sent message can still be edited</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="editing-the-sent-inline-message"><a class="header" href="#editing-the-sent-inline-message">Editing the sent inline message</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>is.edit_message(&amp;client, updated_msg).await?;
+</span>Update::InlineSend(is) =&gt; {
+    is.edit_message(&amp;client, updated_msg).await?;
+}
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="sending-inline-queries-user-account-side"><a class="header" href="#sending-inline-queries-user-account-side">Sending inline queries (user account side)</a></h2>
@@ -365,7 +383,7 @@ while let Some(result) = iter.next().await? {
         <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="../theme/custom-ff45141f.js"></script>
+        <script src="../theme/custom-a37c2a24.js"></script>
 
 
 

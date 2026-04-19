@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../theme/custom-044eaa15.css">
+        <link rel="stylesheet" href="../theme/custom-3cd05ff1.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fd41c8e7.js";
+            window.path_to_searchindex_js = "../searchindex-f77cdc82.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-3a947583.js"></script>
+        <script src="../toc-ba5e127b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -206,8 +206,8 @@ for p in &amp;members {
 <h3 id="paginated-iterator-large-groups"><a class="header" href="#paginated-iterator-large-groups">Paginated iterator (large groups)</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let mut iter = client.iter_participants(peer.clone());
-while let Some(p) = iter.next(&amp;client).await? {
+</span>let members = client.iter_participants(peer.clone(), None, 0).await?;
+for p in &amp;members {
     println!("{}", p.user.first_name.as_deref().unwrap_or(""));
 }
 <span class="boring">}</span></code></pre>
@@ -231,41 +231,43 @@ p.is_member()   // bool: active member (not banned, not left)
 <h2 id="kick-participant"><a class="header" href="#kick-participant">Kick participant</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Removes the user from a basic group
+</span>// Removes the user from a basic group by chat_id (i64)
 // For channels/supergroups, use ban_participant instead
-client.kick_participant(peer.clone(), user_id).await?;
+client.kick_participant(chat_id, user_id).await?;
 <span class="boring">}</span></code></pre>
+<blockquote>
+<p><strong>Note:</strong> <code>kick_participant</code> takes a <code>chat_id: i64</code>, not a <code>PeerRef</code>. Use the raw numeric ID of the basic group.</p>
+</blockquote>
 <hr>
-<h2 id="ban-participant-bannedrightsbuilder"><a class="header" href="#ban-participant-bannedrightsbuilder">Ban participant: <code>BannedRightsBuilder</code></a></h2>
-<p>Use the fluent <code>BannedRightsBuilder</code> for granular bans:</p>
+<h2 id="ban-participant"><a class="header" href="#ban-participant">Ban participant</a></h2>
+<p><code>ban_participant</code> takes a Unix timestamp for <code>until_date</code>. For granular per-permission restrictions use <code>set_banned_rights</code> with <code>BannedRightsBuilder</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Permanent full ban (until_date = 0)
+client.ban_participant(peer.clone(), user_id, 0).await?;
+
+// Timed ban: expires in 24 h
+let expires = (std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 86400) as i32;
+client.ban_participant(peer.clone(), user_id, expires).await?;
+
+// Unban: set a past timestamp (e.g. 1) to lift the ban
+client.ban_participant(peer.clone(), user_id, 1).await?;
+<span class="boring">}</span></code></pre>
+<p>For per-permission restrictions (no media, no stickers, etc.) use <code>set_banned_rights</code> with <code>BannedRightsBuilder</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use ferogram::participants::BannedRightsBuilder;
 
-// Permanent full ban
 client
-    .ban_participant(peer.clone(), user_id, BannedRightsBuilder::full_ban())
-    .await?;
-
-// Partial restriction: no media, no stickers, expires in 24 h
-let expires = (std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 86400) as i32;
-
-client
-    .ban_participant(
+    .set_banned_rights(
         peer.clone(),
-        user_id,
+        user_input_peer,
         BannedRightsBuilder::new()
             .send_media(true)
             .send_stickers(true)
-            .send_gifs(true)
             .until_date(expires),
     )
-    .await?;
-
-// Unban: pass an empty builder to restore full permissions
-client
-    .ban_participant(peer.clone(), user_id, BannedRightsBuilder::new())
     .await?;
 <span class="boring">}</span></code></pre>
 <h3 id="bannedrightsbuilder-methods"><a class="header" href="#bannedrightsbuilder-methods"><code>BannedRightsBuilder</code> methods</a></h3>
@@ -294,7 +296,17 @@ client
 </table>
 </div>
 <hr>
-<h2 id="promote-admin-adminrightsbuilder"><a class="header" href="#promote-admin-adminrightsbuilder">Promote admin: <code>AdminRightsBuilder</code></a></h2>
+<h2 id="promote-admin-promote_participant-and-adminrightsbuilder"><a class="header" href="#promote-admin-promote_participant-and-adminrightsbuilder">Promote admin: <code>promote_participant</code> and <code>AdminRightsBuilder</code></a></h2>
+<p><code>promote_participant</code> is a boolean shorthand  -  <code>true</code> grants all standard rights, <code>false</code> demotes:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Quick promote (all standard rights except add_admins)
+client.promote_participant(peer.clone(), user_id, true).await?;
+
+// Demote back to regular member
+client.promote_participant(peer.clone(), user_id, false).await?;
+<span class="boring">}</span></code></pre>
+<p>For fine-grained control, use <code>set_admin_rights</code> with <code>AdminRightsBuilder</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use ferogram::participants::AdminRightsBuilder;
@@ -390,13 +402,13 @@ println!("Admin title: {:?}", perms.admin_rank);
 <h2 id="profile-photos"><a class="header" href="#profile-photos">Profile photos</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Fetch a page of profile photos (user_id, offset, limit)
-let photos = client.get_profile_photos(user_id, 0, 10).await?;
+</span>// Fetch a page of profile photos (limit = number to fetch)
+let photos = client.get_profile_photos(peer.clone(), 10).await?;
 
-// Lazy iterator across all pages
-let mut iter = client.iter_profile_photos(user_id);
-while let Some(photo) = iter.next(&amp;client).await? {
-    let bytes = client.download(&amp;photo).await?;
+// Lazy iterator across all pages (chunk_size = 0 uses default of 100)
+let mut iter = client.iter_profile_photos(peer.clone(), 0).await?;
+while let Some(photo) = iter.next().await? {
+    // download photo bytes...
 }
 <span class="boring">}</span></code></pre>
 <hr>
@@ -530,7 +542,7 @@ client.set_admin_rights(
         <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
-        <script src="../theme/custom-ff45141f.js"></script>
+        <script src="../theme/custom-a37c2a24.js"></script>
 
 
 
