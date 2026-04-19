@@ -62,7 +62,10 @@ iq.query()       // &str: the search text
 iq.query_id      // i64
 iq.user_id       // i64: who sent the query
 iq.offset        // String: pagination offset
+iq.peer          // Option<tl::enums::Peer>: chat context the user is in (None if not shared)
 ```
+
+`peer` is populated when the bot has access to the chat  -  use it to tailor results per chat type.
 
 ---
 
@@ -72,16 +75,27 @@ When a user selects a result from your bot's inline mode, you get `Update::Inlin
 
 ```rust
 Update::InlineSend(is) => {
-    // is.result_id : which result was chosen
-    // is.user_id   : who chose it
-    // is.query     : the original query
+    println!("User {} chose result '{}'", is.user_id, is.id);
+    println!("Original query: {}", is.query);
+    // is.msg_id is Some(...) when the message is still editable
 }
 ```
 
-`InlineSend` also has `edit_message()` for editing the sent inline message:
+### `InlineSend` fields
+
+| Field | Type | Description |
+|---|---|---|
+| `is.user_id` | `i64` | Who picked the inline result |
+| `is.query` | `String` | The original query text |
+| `is.id` | `String` | The result ID that was chosen |
+| `is.msg_id` | `Option<tl::enums::InputBotInlineMessageId>` | Present when the sent message can still be edited |
+
+### Editing the sent inline message
 
 ```rust
-is.edit_message(&client, updated_msg).await?;
+Update::InlineSend(is) => {
+    is.edit_message(&client, updated_msg).await?;
+}
 ```
 
 ---

@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -13,7 +11,13 @@
 
 //! MTProto message framing types.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Process-wide monotonically increasing counter for plaintext message IDs.
+///
+/// A global atomic ensures msg_id monotonicity across concurrent sessions.
+static GLOBAL_MSG_COUNTER: AtomicU32 = AtomicU32::new(1);
 
 /// A 64-bit MTProto message identifier.
 ///
@@ -24,17 +28,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct MessageId(pub u64);
 
 impl MessageId {
-    /// Generate a new message ID using the system clock.
+    /// Generate a new message ID using the system clock and a global counter.
     ///
-    /// Call this from the session rather than directly so that the
-    /// counter is properly sequenced.
-    pub(crate) fn generate(counter: u32) -> Self {
+    /// MTProto msg_id layout:
+    ///   bits 63–32: Unix timestamp in seconds (upper 32 bits)
+    ///   bits 31–2:  intra-second sequencing counter (lower 30 bits, × 4)
+    ///   bits 1–0:   must be 0b00 for client messages
+    ///
+    pub(crate) fn generate(_counter: u32) -> Self {
         let unix_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        // Lower 32 bits = seconds, upper 32 bits = intra-second counter × 4
-        // (the two LSBs must be 0b00 for client messages)
+        // Global atomic: wrapping_add ensures monotonicity across concurrent sessions.
+        let counter = GLOBAL_MSG_COUNTER.fetch_add(1, Ordering::Relaxed);
+        // upper 32 bits = seconds, lower 30 bits = counter × 4 (bits 1-0 = 0b00)
         let id = (unix_secs << 32) | (u64::from(counter) << 2);
         Self(id)
     }

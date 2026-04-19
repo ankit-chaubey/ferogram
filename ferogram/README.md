@@ -13,7 +13,7 @@ High-level async Telegram client for Rust.
 
 ```toml
 [dependencies]
-ferogram = "0.2.0"
+ferogram = "0.3.0"
 tokio        = { version = "1", features = ["full"] }
 ```
 
@@ -22,10 +22,10 @@ Get your `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org)
 ### Feature Flags
 
 ```toml
-ferogram = { version = "0.2.0", features = ["sqlite-session"] }  # SQLite session
-ferogram = { version = "0.2.0", features = ["libsql-session"] }  # libsql / Turso
-ferogram = { version = "0.2.0", features = ["html"] }            # HTML parser
-ferogram = { version = "0.2.0", features = ["html5ever"] }       # html5ever parser
+ferogram = { version = "0.3.0", features = ["sqlite-session"] }  # SQLite session
+ferogram = { version = "0.3.0", features = ["libsql-session"] }  # libsql / Turso
+ferogram = { version = "0.3.0", features = ["html"] }            # HTML parser
+ferogram = { version = "0.3.0", features = ["html5ever"] }       # html5ever parser
 ```
 
 `StringSessionBackend`, `InMemoryBackend`, and `BinaryFileBackend` are always available.
@@ -61,6 +61,10 @@ let (client, _shutdown) = Client::builder()
 | `.socks5(Socks5Config)` | Route connections through SOCKS5 proxy |
 | `.allow_ipv6(bool)` | Allow IPv6 DC addresses (default: false) |
 | `.transport(TransportKind)` | MTProto transport (default: Abridged) |
+| `.probe_transport(bool)` | Race Obfuscated/Abridged/HTTP transports, use the first to connect (default: false) |
+| `.resilient_connect(bool)` | Fall back through DNS-over-HTTPS then Telegram's special-config on TCP failure (default: false) |
+| `.proxy_link(str)` | MTProxy `t.me/proxy?…` link (overrides `.transport()`) |
+| `.experimental_features(ExperimentalFeatures)` | Opt-in to non-default behaviours |
 | `.retry_policy(Arc<dyn RetryPolicy>)` | Override flood-wait retry policy |
 | `.connect()` | Build and connect, returns `(Client, ShutdownToken)` |
 
@@ -345,10 +349,24 @@ Client::builder().session_backend(Arc::new(LibSqlBackend::remote(url, token)))
 ```rust
 use ferogram::{TransportKind, Socks5Config};
 
+// Pick a transport explicitly
 Client::builder().transport(TransportKind::Obfuscated)           // DPI bypass
+Client::builder().transport(TransportKind::FakeTls)              // TLS camouflage
+
+// MTProxy via t.me link (overrides transport setting)
+Client::builder().proxy_link("https://t.me/proxy?server=HOST&port=PORT&secret=SECRET")
+
+// SOCKS5
 Client::builder().socks5(Socks5Config::new("127.0.0.1:1080"))
 Client::builder().socks5(Socks5Config::with_auth("host:1080", "user", "pass"))
 
+// 0.3.0: race all transports and pick the first to succeed
+Client::builder().probe_transport(true)
+
+// 0.3.0: fall back through DoH then Telegram's special-config if TCP fails
+Client::builder().resilient_connect(true)
+
+// Target a specific DC directly
 client.invoke_on_dc(&req, 2).await?;
 client.signal_network_restored();
 ```

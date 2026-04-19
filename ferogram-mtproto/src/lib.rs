@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -26,12 +24,14 @@
 #![warn(missing_docs)]
 
 pub mod authentication;
+pub mod bind_temp_key;
 pub mod encrypted;
 pub mod message;
 pub mod session;
 pub mod transport;
 
 pub use authentication::{Finished, finish, step1, step2, step3};
-pub use encrypted::EncryptedSession;
+pub use bind_temp_key::{encrypt_bind_inner, gen_msg_id, serialize_bind_temp_auth_key};
+pub use encrypted::{DecryptedMessage, EncryptedSession, SeenMsgIds, new_seen_msg_ids};
 pub use message::{Message, MessageId};
 pub use session::Session;

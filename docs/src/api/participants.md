@@ -27,8 +27,8 @@ for p in &members {
 ### Paginated iterator (large groups)
 
 ```rust
-let mut iter = client.iter_participants(peer.clone());
-while let Some(p) = iter.next(&client).await? {
+let members = client.iter_participants(peer.clone(), None, 0).await?;
+for p in &members {
     println!("{}", p.user.first_name.as_deref().unwrap_or(""));
 }
 ```
@@ -57,44 +57,46 @@ p.is_member()   // bool: active member (not banned, not left)
 ## Kick participant
 
 ```rust
-// Removes the user from a basic group
+// Removes the user from a basic group by chat_id (i64)
 // For channels/supergroups, use ban_participant instead
-client.kick_participant(peer.clone(), user_id).await?;
+client.kick_participant(chat_id, user_id).await?;
 ```
+
+> **Note:** `kick_participant` takes a `chat_id: i64`, not a `PeerRef`. Use the raw numeric ID of the basic group.
 
 ---
 
-## Ban participant: `BannedRightsBuilder`
+## Ban participant
 
-Use the fluent `BannedRightsBuilder` for granular bans:
+`ban_participant` takes a Unix timestamp for `until_date`. For granular per-permission restrictions use `set_banned_rights` with `BannedRightsBuilder`.
+
+```rust
+// Permanent full ban (until_date = 0)
+client.ban_participant(peer.clone(), user_id, 0).await?;
+
+// Timed ban: expires in 24 h
+let expires = (std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 86400) as i32;
+client.ban_participant(peer.clone(), user_id, expires).await?;
+
+// Unban: set a past timestamp (e.g. 1) to lift the ban
+client.ban_participant(peer.clone(), user_id, 1).await?;
+```
+
+For per-permission restrictions (no media, no stickers, etc.) use `set_banned_rights` with `BannedRightsBuilder`:
 
 ```rust
 use ferogram::participants::BannedRightsBuilder;
 
-// Permanent full ban
 client
-    .ban_participant(peer.clone(), user_id, BannedRightsBuilder::full_ban())
-    .await?;
-
-// Partial restriction: no media, no stickers, expires in 24 h
-let expires = (std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 86400) as i32;
-
-client
-    .ban_participant(
+    .set_banned_rights(
         peer.clone(),
-        user_id,
+        user_input_peer,
         BannedRightsBuilder::new()
             .send_media(true)
             .send_stickers(true)
-            .send_gifs(true)
             .until_date(expires),
     )
-    .await?;
-
-// Unban: pass an empty builder to restore full permissions
-client
-    .ban_participant(peer.clone(), user_id, BannedRightsBuilder::new())
     .await?;
 ```
 
@@ -120,7 +122,19 @@ client
 
 ---
 
-## Promote admin: `AdminRightsBuilder`
+## Promote admin: `promote_participant` and `AdminRightsBuilder`
+
+`promote_participant` is a boolean shorthand  -  `true` grants all standard rights, `false` demotes:
+
+```rust
+// Quick promote (all standard rights except add_admins)
+client.promote_participant(peer.clone(), user_id, true).await?;
+
+// Demote back to regular member
+client.promote_participant(peer.clone(), user_id, false).await?;
+```
+
+For fine-grained control, use `set_admin_rights` with `AdminRightsBuilder`:
 
 ```rust
 use ferogram::participants::AdminRightsBuilder;
@@ -211,13 +225,13 @@ println!("Admin title: {:?}", perms.admin_rank);
 ## Profile photos
 
 ```rust
-// Fetch a page of profile photos (user_id, offset, limit)
-let photos = client.get_profile_photos(user_id, 0, 10).await?;
+// Fetch a page of profile photos (limit = number to fetch)
+let photos = client.get_profile_photos(peer.clone(), 10).await?;
 
-// Lazy iterator across all pages
-let mut iter = client.iter_profile_photos(user_id);
-while let Some(photo) = iter.next(&client).await? {
-    let bytes = client.download(&photo).await?;
+// Lazy iterator across all pages (chunk_size = 0 uses default of 100)
+let mut iter = client.iter_profile_photos(peer.clone(), 0).await?;
+while let Some(photo) = iter.next().await? {
+    // download photo bytes...
 }
 ```
 

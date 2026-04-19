@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -124,7 +122,7 @@ const FORBIDDEN: &[[u8; 4]] = &[
 /// let stream = TcpStream::connect("149.154.167.51:443")?;
 /// stream.set_read_timeout(Some(Duration::from_secs(15)))?;
 /// stream.set_write_timeout(Some(Duration::from_secs(15)))?;
-/// let mut transport = ObfuscatedAbridged::new(stream)?;
+/// let mut transport = ObfuscatedAbridged::new(stream, 1)?;
 /// transport.send_message(&payload)?;
 /// let response = transport.recv_message()?;
 /// ```
@@ -135,9 +133,13 @@ pub struct ObfuscatedAbridged {
 }
 
 impl ObfuscatedAbridged {
-    /// Create a new [`ObfuscatedAbridged`] transport, performing the obfuscation
-    /// handshake and sending the 64-byte init header to the server.
-    pub fn new(stream: TcpStream) -> std::io::Result<Self> {
+    /// Create a new [`ObfuscatedAbridged`] transport.
+    ///
+    /// `dc_id` is embedded at bytes 60–61 of the encrypted header so that
+    /// MTProxy servers can route the connection to the correct DC.
+    /// Bug 9: the old `new(stream)` signature omitted `dc_id`, causing MTProxy
+    /// to read random bytes and route the client to the wrong DC.
+    pub fn new(stream: TcpStream, dc_id: i16) -> std::io::Result<Self> {
         let mut init = [0u8; 64];
         loop {
             getrandom::getrandom(&mut init).expect("getrandom");
@@ -152,8 +154,11 @@ impl ObfuscatedAbridged {
             }
             break;
         }
-        // Embed Abridged tag at bytes 56-59.
+        // Embed Abridged tag at bytes 56-59 and dc_id at bytes 60-61.
         init[56..60].copy_from_slice(&[0xef, 0xef, 0xef, 0xef]);
+        let dc_bytes = dc_id.to_le_bytes();
+        init[60] = dc_bytes[0];
+        init[61] = dc_bytes[1];
         // Build cipher, then encrypt bytes 56-63 in the header.
         let mut cipher = ObfuscatedCipher::new(&init);
         let mut enc = init.to_vec();
@@ -193,13 +198,23 @@ impl ObfuscatedAbridged {
         let mut first = [0u8; 1];
         self.stream.read_exact(&mut first)?;
         self.cipher.decrypt(&mut first);
+        // Bug 1: first[0] > 0x7f means a 4-byte transport-level error code.
         let words = if first[0] < 0x7f {
             first[0] as usize
-        } else {
+        } else if first[0] == 0x7f {
             let mut rest = [0u8; 3];
             self.stream.read_exact(&mut rest)?;
             self.cipher.decrypt(&mut rest);
             rest[0] as usize | (rest[1] as usize) << 8 | (rest[2] as usize) << 16
+        } else {
+            let mut rest = [0u8; 3];
+            self.stream.read_exact(&mut rest)?;
+            self.cipher.decrypt(&mut rest);
+            let code = i32::from_le_bytes([first[0], rest[0], rest[1], rest[2]]);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                format!("transport error from server: {code}"),
+            ));
         };
         let mut payload = vec![0u8; words * 4];
         self.stream.read_exact(&mut payload)?;

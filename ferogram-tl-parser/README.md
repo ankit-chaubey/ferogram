@@ -7,7 +7,7 @@ Parser for Telegram's TL (Type Language) schema files.
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram--tl--parser-5865F2)](https://docs.rs/ferogram-tl-parser)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-Reads `.tl` schema files and produces a structured AST. Used internally by `ferogram-tl-gen` as a build-dependency - most users don't depend on this crate directly.
+Reads `.tl` schema files and produces a structured AST. Used by `ferogram-tl-gen` as a build-dependency — most users don't need to depend on this crate directly.
 
 ---
 
@@ -15,7 +15,7 @@ Reads `.tl` schema files and produces a structured AST. Used internally by `fero
 
 ```toml
 [dependencies]
-ferogram-tl-parser = "0.2.0"
+ferogram-tl-parser = "0.3.0"
 ```
 
 ---

@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -23,7 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ferogram_crypto::{AuthKey, DequeBuffer, decrypt_data_v2, encrypt_data_v2};
 use ferogram_tl_types::RemoteCall;
 
-/// Rolling deduplication buffer – mirrors tDesktop's 500-entry seen-msg_id set.
+/// Rolling deduplication buffer for server msg_ids.
 const SEEN_MSG_IDS_MAX: usize = 500;
 /// Maximum clock skew between client and server before a message is rejected.
 const MSG_ID_TIME_WINDOW_SECS: i64 = 300;
@@ -70,6 +68,19 @@ pub struct DecryptedMessage {
     pub body: Vec<u8>,
 }
 
+/// Shared, persistent dedup ring for server msg_ids.
+///
+/// Outlives individual `EncryptedSession` objects so that replayed frames
+/// from a prior connection cycle are still rejected after reconnect.
+pub type SeenMsgIds = std::sync::Arc<std::sync::Mutex<VecDeque<i64>>>;
+
+/// Allocate a fresh seen-msg_id ring.
+pub fn new_seen_msg_ids() -> SeenMsgIds {
+    std::sync::Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(
+        SEEN_MSG_IDS_MAX,
+    )))
+}
+
 /// MTProto 2.0 encrypted session state.
 pub struct EncryptedSession {
     auth_key: AuthKey,
@@ -81,12 +92,27 @@ pub struct EncryptedSession {
     /// Clock skew in seconds vs. server.
     pub time_offset: i32,
     /// Rolling 500-entry dedup buffer of seen server msg_ids.
-    seen_msg_ids: std::sync::Mutex<VecDeque<i64>>,
+    /// Shared with the owning DcConnection so it survives reconnects.
+    seen_msg_ids: SeenMsgIds,
 }
 
 impl EncryptedSession {
     /// Create a new encrypted session from the output of `authentication::finish`.
+    ///
+    /// `seen_msg_ids` should be the persistent ring owned by the `DcConnection`
+    /// (or any other owner that outlives individual sessions).  Pass
+    /// `new_seen_msg_ids()` for the very first connection on a slot.
     pub fn new(auth_key: [u8; 256], first_salt: i64, time_offset: i32) -> Self {
+        Self::with_seen(auth_key, first_salt, time_offset, new_seen_msg_ids())
+    }
+
+    /// Like `new` but reuses an existing seen-msg_id ring (reconnect path).
+    pub fn with_seen(
+        auth_key: [u8; 256],
+        first_salt: i64,
+        time_offset: i32,
+        seen_msg_ids: SeenMsgIds,
+    ) -> Self {
         let mut rnd = [0u8; 8];
         getrandom::getrandom(&mut rnd).expect("getrandom");
         Self {
@@ -96,14 +122,21 @@ impl EncryptedSession {
             last_msg_id: 0,
             salt: first_salt,
             time_offset,
-            seen_msg_ids: std::sync::Mutex::new(VecDeque::with_capacity(SEEN_MSG_IDS_MAX)),
+            seen_msg_ids,
         }
+    }
+
+    /// Return a clone of the shared seen-msg_id ring for passing to a
+    /// replacement session on reconnect.
+    pub fn seen_msg_ids(&self) -> SeenMsgIds {
+        std::sync::Arc::clone(&self.seen_msg_ids)
     }
 
     /// Compute the next message ID (based on corrected server time).
     fn next_msg_id(&mut self) -> i64 {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        let secs = (now.as_secs() as i32).wrapping_add(self.time_offset) as u64;
+        // Keep arithmetic in u64: seconds since epoch with time_offset applied.
+        let secs = now.as_secs().wrapping_add(self.time_offset as i64 as u64);
         let nanos = now.subsec_nanos() as u64;
         let mut id = ((secs << 32) | (nanos << 2)) as i64;
         if self.last_msg_id >= id {
@@ -158,6 +191,16 @@ impl EncryptedSession {
         }
     }
 
+    /// Undo the last `next_seq_no` increment.
+    ///
+    /// Called before retrying a request after `bad_server_salt` so the resent
+    /// message uses the same seq_no slot rather than advancing the counter a
+    /// second time (which would produce seq_no too high → bad_msg_notification
+    /// code 33 → server closes TCP → early eof).
+    pub fn undo_seq_no(&mut self) {
+        self.sequence = self.sequence.saturating_sub(1);
+    }
+
     /// Re-derive the clock skew from a server-provided `msg_id`.
     ///
     /// Called on `bad_msg_notification` error codes 16 (msg_id too low) and
@@ -178,8 +221,9 @@ impl EncryptedSession {
             new_offset
         );
         self.time_offset = new_offset;
-        // Also reset last_msg_id so next_msg_id rebuilds from corrected clock
-        self.last_msg_id = 0;
+        // Seed last_msg_id from the server's msg_id (bits 1-0 cleared to 0b00)
+        // so the next next_msg_id() call produces a strictly larger value.
+        self.last_msg_id = (server_msg_id & !0x3i64).max(self.last_msg_id);
     }
 
     /// Allocate a fresh `(msg_id, seqno)` pair for an inner container message
@@ -238,7 +282,23 @@ impl EncryptedSession {
         self.pack_body_with_msg_id(container_body, false)
     }
 
-    // Original pack methods (unchanged)
+    /// Encrypt `body` using a **caller-supplied** `msg_id` instead of generating one.
+    ///
+    /// Required by `auth.bindTempAuthKey`, which must use the same `msg_id`
+    /// in both the outer MTProto envelope and the inner `bind_auth_key_inner`.
+    pub fn pack_body_at_msg_id(&mut self, body: &[u8], msg_id: i64) -> Vec<u8> {
+        let seq_no = self.next_seq_no();
+        let inner_len = 8 + 8 + 8 + 4 + 4 + body.len();
+        let mut buf = DequeBuffer::with_capacity(inner_len, 32);
+        buf.extend(self.salt.to_le_bytes());
+        buf.extend(self.session_id.to_le_bytes());
+        buf.extend(msg_id.to_le_bytes());
+        buf.extend(seq_no.to_le_bytes());
+        buf.extend((body.len() as u32).to_le_bytes());
+        buf.extend(body.iter().copied());
+        encrypt_data_v2(&mut buf, &self.auth_key);
+        buf.as_ref().to_vec()
+    }
 
     /// Serialize and encrypt a TL function into a wire-ready byte vector.
     pub fn pack_serializable<S: ferogram_tl_types::Serializable>(&mut self, call: &S) -> Vec<u8> {
@@ -333,10 +393,8 @@ impl EncryptedSession {
             return Err(DecryptError::SessionMismatch);
         }
 
-        // #3 Check server time (upper 32 bits of msg_id) against ±300 s window.
-        // tDesktop sets badTime=true and continues: msgs_ack / pong / bad_msg_notification
-        // can self-heal the clock without a reconnect. We warn and continue rather than
-        // hard-reject, so a drifted-clock client does not loop-reconnect on every message.
+        // Check server time (upper 32 bits of msg_id) against ±300 s window.
+        // Warn and continue: clock self-corrects via bad_msg_notification or pong.
         let server_secs = (msg_id as u64 >> 32) as i64;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -352,7 +410,7 @@ impl EncryptedSession {
             );
         }
 
-        // #2 rolling 500-entry dedup.
+        // Rolling 500-entry dedup.
         {
             let mut seen = self.seen_msg_ids.lock().unwrap();
             if seen.contains(&msg_id) {
@@ -364,16 +422,16 @@ impl EncryptedSession {
             }
         }
 
-        // body_len upper bound (tDesktop kMaxMessageLength = 16 MB).
+        // Maximum body length: 16 MB.
         if body_len > 16 * 1024 * 1024 {
             return Err(DecryptError::FrameTooShort);
         }
         if 32 + body_len > plaintext.len() {
             return Err(DecryptError::FrameTooShort);
         }
-        // padding must be 12–1024 bytes (tDesktop kMinPaddingSize/kMaxPaddingSize).
+        // MTProto 2.0: minimum padding is 12 bytes; no upper bound.
         let padding = plaintext.len() - 32 - body_len;
-        if !(12..=1024).contains(&padding) {
+        if padding < 12 {
             return Err(DecryptError::FrameTooShort);
         }
         let body = plaintext[32..32 + body_len].to_vec();
@@ -401,9 +459,7 @@ impl EncryptedSession {
     /// cleared dedup buffer.
     ///
     /// Called on `bad_msg_notification` error codes 32/33 (seq_no mismatch).
-    /// This matches tDesktop's `ResetSession` which creates a new session_id
-    /// rather than trying to correct the seq_no counter, which can loop forever
-    /// on a persistent desync.
+    /// Creates a new session_id and resets seq_no to avoid persistent desync.
     pub fn reset_session(&mut self) {
         let mut rnd = [0u8; 8];
         getrandom::getrandom(&mut rnd).expect("getrandom");
@@ -411,7 +467,8 @@ impl EncryptedSession {
         self.session_id = i64::from_le_bytes(rnd);
         self.sequence = 0;
         self.last_msg_id = 0;
-        self.seen_msg_ids.lock().unwrap().clear();
+        // Do not clear seen_msg_ids: the ring is shared with the owning
+        // DcConnection and must survive session resets to reject replayed frames.
         log::debug!(
             "[ferogram] session reset: {:#018x} → {:#018x}",
             old_session,
@@ -421,6 +478,28 @@ impl EncryptedSession {
 }
 
 impl EncryptedSession {
+    /// Like [`decrypt_frame`] but also performs seen-msg_id deduplication using the
+    /// supplied ring.  Pass `&self.inner.seen_msg_ids` from the client.
+    pub fn decrypt_frame_dedup(
+        auth_key: &[u8; 256],
+        session_id: i64,
+        frame: &mut [u8],
+        seen: &SeenMsgIds,
+    ) -> Result<DecryptedMessage, DecryptError> {
+        let msg = Self::decrypt_frame_with_offset(auth_key, session_id, frame, 0)?;
+        {
+            let mut s = seen.lock().unwrap();
+            if s.contains(&msg.msg_id) {
+                return Err(DecryptError::DuplicateMsgId);
+            }
+            s.push_back(msg.msg_id);
+            if s.len() > SEEN_MSG_IDS_MAX {
+                s.pop_front();
+            }
+        }
+        Ok(msg)
+    }
+
     /// Decrypt a frame using explicit key + session_id: no mutable state needed.
     /// Used by the split-reader task so it can decrypt without locking the writer.
     /// `time_offset` is the session's current clock skew (seconds); pass 0 if unknown.
@@ -453,8 +532,7 @@ impl EncryptedSession {
         if sid != session_id {
             return Err(DecryptError::SessionMismatch);
         }
-        // Time-window check: warn but continue (matches tDesktop badTime=true behaviour).
-        // Clock self-corrects via bad_msg_notification or pong; hard-reject causes reconnect loops.
+        // Warn but continue: clock self-corrects via bad_msg_notification or pong.
         let server_secs = (msg_id as u64 >> 32) as i64;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -468,16 +546,16 @@ impl EncryptedSession {
                 (server_secs - corrected).abs()
             );
         }
-        // body_len upper bound (tDesktop kMaxMessageLength = 16 MB).
+        // Maximum body length: 16 MB.
         if body_len > 16 * 1024 * 1024 {
             return Err(DecryptError::FrameTooShort);
         }
         if 32 + body_len > plaintext.len() {
             return Err(DecryptError::FrameTooShort);
         }
-        // padding must be 12–1024 bytes.
+        // MTProto 2.0: minimum padding is 12 bytes; no upper bound.
         let padding = plaintext.len() - 32 - body_len;
-        if !(12..=1024).contains(&padding) {
+        if padding < 12 {
             return Err(DecryptError::FrameTooShort);
         }
         let body = plaintext[32..32 + body_len].to_vec();

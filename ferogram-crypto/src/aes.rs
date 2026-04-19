@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -41,6 +39,24 @@ pub fn ige_encrypt(buffer: &mut [u8], key: &[u8; 32], iv: &[u8; 32]) {
         iv1.copy_from_slice(block);
         std::mem::swap(&mut iv2, &mut next_iv2);
     }
+}
+
+/// Encrypt/decrypt `buffer` in-place with AES-256-CTR (symmetric).
+/// `key` = 32 bytes, `iv` = 16 bytes (full block = counter starting value).
+pub fn ctr_crypt(buffer: &mut [u8], key: &[u8; 32], iv: &[u8; 16]) {
+    use ctr::Ctr128BE;
+    use ctr::cipher::{KeyIvInit, StreamCipher};
+    let mut cipher =
+        Ctr128BE::<Aes256>::new(GenericArray::from_slice(key), GenericArray::from_slice(iv));
+    cipher.apply_keystream(buffer);
+}
+
+/// Return the effective AES-CTR IV for a CDN chunk starting at `byte_offset`.
+/// Telegram CDN increments the counter (big-endian uint128) by `byte_offset / 16`.
+pub fn ctr_iv_at_offset(base_iv: &[u8; 16], byte_offset: u64) -> [u8; 16] {
+    let block_offset = byte_offset / 16;
+    let iv_int = u128::from_be_bytes(*base_iv);
+    iv_int.wrapping_add(block_offset as u128).to_be_bytes()
 }
 
 /// Decrypt `buffer` in-place with AES-256-IGE.

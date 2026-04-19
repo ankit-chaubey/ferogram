@@ -6,8 +6,8 @@ Security fixes are applied to the **latest published version** on crates.io. Old
 
 | Version | Supported |
 |---|:---:|
-| 0.4.x (latest) | ✅ |
-| 0.3.x and below | ❌ |
+| 0.3.x (latest) | ✅ |
+| 0.2.x and below | ❌ |
 
 ---
 
@@ -55,7 +55,7 @@ This policy covers the `ferogram`, `ferogram-mtproto`, and `ferogram-crypto` cra
 ### Out of scope
 
 - Telegram's own infrastructure or protocol design
-- Vulnerabilities in user code that happens to use layer
+- Vulnerabilities in user code that happens to use ferogram
 - Social engineering attacks
 
 ---

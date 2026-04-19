@@ -157,6 +157,55 @@ use ferogram::retry::{AutoSleep, NoRetries};
 .retry_policy(Arc::new(NoRetries))              // propagate immediately
 ```
 
+### `restart_policy`
+
+What to do when the TCP connection drops. Default: `NeverRestart` (exit the event loop; the shutdown signal fires).
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+use ferogram::FixedInterval;
+
+.restart_policy(Arc::new(FixedInterval {
+    interval: Duration::from_secs(5),
+}))
+```
+
+See [Connection Restart Policy](./advanced/connection-restart.md) for all built-in types and custom implementations.
+
+### `probe_transport`
+
+Race Obfuscated, Abridged, and HTTP transports in parallel on connect and keep the fastest. Incompatible with MTProxy. Default: `false`.
+
+```rust
+.probe_transport(true)
+```
+
+### `resilient_connect`
+
+If direct TCP fails, retry via DNS-over-HTTPS then Firebase special-config. Useful in ISP-blocked regions. Default: `false`.
+
+```rust
+.resilient_connect(true)
+```
+
+See [Transport Probing & Resilient Connect](./advanced/transport-probing.md) for the full fallback chain.
+
+### `experimental_features`
+
+Opt-in flags that deviate from strict Telegram spec. All default to `false`.
+
+```rust
+use ferogram::ExperimentalFeatures;
+
+.experimental_features(ExperimentalFeatures {
+    allow_zero_hash: true,   // bots only
+    ..Default::default()
+})
+```
+
+See [Experimental Features](./advanced/experimental-features.md) for all flags and safety constraints.
+
 ---
 
 ## Building Config without connecting

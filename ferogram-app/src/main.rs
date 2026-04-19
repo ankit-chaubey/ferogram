@@ -35,6 +35,7 @@ const SYSTEM_LANG_CODE: &str = "en";
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() {
     if std::env::var("RUST_LOG").is_err() {
+        // Safe: no other threads exist yet at this point in main.
         unsafe {
             std::env::set_var("RUST_LOG", "ferogram=warn");
         }
@@ -61,6 +62,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .lang_code(LANG_CODE)
         .system_lang_code(SYSTEM_LANG_CODE)
         .transport(TransportKind::Abridged)
+        .probe_transport(true)
+        .resilient_connect(true)
         .connect()
         .await?;
 
@@ -318,8 +321,8 @@ async fn cmd_dc(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
 
 async fn cmd_ferogram(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
     rh(client, peer, reply_to, &format!(
-        "📡 <b>layer</b>\n\n<b>MTProto Layer:</b> <code>{}</code>\n<b>Crate:</b> <code>ferogram 0.2.0</code>\n<b>Language:</b> Rust 🦀\nhttps://github.com/ankit-chaubey/ferogram",
-        tl::LAYER
+        "📡 <b>ferogram</b>\n\n<b>MTProto Layer:</b> <code>{}</code>\n<b>Crate:</b> <code>ferogram {}</code>\n<b>Language:</b> Rust 🦀\nhttps://github.com/ankit-chaubey/ferogram",
+        tl::LAYER, env!("CARGO_PKG_VERSION")
     )).await;
 }
 

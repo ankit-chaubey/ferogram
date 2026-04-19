@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -17,9 +15,6 @@ use ferogram_tl_types as tl;
 use std::sync::Mutex;
 
 use crate::errors::InvocationError;
-
-// Static DC address table.
-// Exposes a pub fn so migrate_to and tests can reference it without hardcoding strings.
 
 /// Return the statically known IPv4 address for a Telegram DC.
 ///
@@ -34,7 +29,7 @@ pub fn fallback_dc_addr(dc_id: i32) -> &'static str {
         3 => "149.154.175.100:443",
         4 => "149.154.167.91:443",
         5 => "91.108.56.130:443",
-        _ => "149.154.167.51:443", // DC2 as last resort
+        _ => "149.154.167.51:443",
     }
 }
 
@@ -45,9 +40,7 @@ pub fn default_dc_addresses() -> Vec<(i32, String)> {
         .collect()
 }
 
-// When operating on a non-home DC (e.g. downloading from DC4 while home is DC1),
-// the client must export its auth from home and import it on the target DC.
-// We track which DCs already have a copy to avoid redundant round-trips.
+// Tracks which DCs already have a copy of the auth to avoid redundant round-trips.
 
 /// State that must live inside `ClientInner` to track which DCs already have
 /// a copy of the account's authorization key.
@@ -122,10 +115,8 @@ where
         return Ok(());
     }
 
-    // Export from home DC
     let tl::enums::auth::ExportedAuthorization::ExportedAuthorization(exported) = invoke_fn.await?;
 
-    // Import on target DC
     invoke_on_dc_fn(
         target_dc_id,
         tl::functions::auth::ImportAuthorization {
@@ -139,71 +130,9 @@ where
     Ok(())
 }
 
-// migrate_to integration patch
-//
-// The following documents what migrate_to must be changed to use
-// fallback_dc_addr() instead of a hardcoded string.
-//
-// In lib.rs, replace:
-//
-// .unwrap_or_else(|| "149.154.167.51:443".to_string())
-//
-// With:
-//
-// .unwrap_or_else(|| crate::dc_migration::fallback_dc_addr(new_dc_id).to_string())
-//
-// And add auto-migration to rpc_call_raw:
-
-/// Patch description for `rpc_call_raw` in lib.rs.
-///
-/// Replace the existing loop body:
-/// ```rust,ignore
-/// // BEFORE: only FLOOD_WAIT handled:
-/// async fn rpc_call_raw<R: RemoteCall>(&self, req: &R) -> Result<Vec<u8>, InvocationError> {
-/// let mut fail_count   = NonZeroU32::new(1).unwrap();
-/// let mut slept_so_far = Duration::default();
-/// loop {
-///     match self.do_rpc_call(req).await {
-///         Ok(body) => return Ok(body),
-///         Err(e) => {
-///             let ctx = RetryContext { fail_count, slept_so_far, error: e };
-///             match self.inner.retry_policy.should_retry(&ctx) {
-///                 ControlFlow::Continue(delay) => { sleep(delay).await; slept_so_far += delay; fail_count = fail_count.saturating_add(1); }
-///                 ControlFlow::Break(())       => return Err(ctx.error),
-///             }
-///         }
-///     }
-/// }
-/// }
-///
-/// // AFTER: MIGRATE auto-handled, RetryLoop used:
-/// async fn rpc_call_raw<R: RemoteCall>(&self, req: &R) -> Result<Vec<u8>, InvocationError> {
-/// let mut rl = RetryLoop::new(Arc::clone(&self.inner.retry_policy));
-/// loop {
-///     match self.do_rpc_call(req).await {
-///         Ok(body) => return Ok(body),
-///         Err(e) if let Some(dc_id) = e.migrate_dc_id() => {
-///             // Telegram is redirecting us to a different DC.
-///             // Migrate transparently and retry: no error surfaces to caller.
-///             self.migrate_to(dc_id).await?;
-///         }
-///         Err(e) => rl.advance(e).await?,
-///     }
-/// }
-/// }
-/// ```
-///
-/// With this change, the manual MIGRATE checks in `bot_sign_in`,
-/// `request_login_code`, and `sign_in` can be deleted.
-pub const MIGRATE_PATCH_DESCRIPTION: &str = "see doc comment above";
-
-// Tests
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // fallback_dc_addr
 
     #[test]
     fn known_dcs_return_correct_ips() {
@@ -228,8 +157,6 @@ mod tests {
             assert!(addrs.iter().any(|(dc_id, _)| *dc_id == id));
         }
     }
-
-    // DcAuthTracker
 
     #[test]
     fn tracker_starts_empty() {
@@ -258,8 +185,6 @@ mod tests {
         assert!(!t.has_copied(1));
         assert!(!t.has_copied(3));
     }
-
-    // migrate_dc_id detection (also in retry.rs but sanity check here)
 
     #[test]
     fn rpc_error_migrate_detection_all_variants() {

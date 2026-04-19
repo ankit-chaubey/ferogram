@@ -1,4 +1,4 @@
-/* layer docs - Custom JS */
+/* ferogram docs  Custom JS */
 
 // ── Font size default ────────────────────────────────────────
 if (!localStorage.getItem('mdbook-font-size')) {

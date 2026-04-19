@@ -25,6 +25,8 @@ Most users only need `ferogram`.
 | Crate | Description |
 |---|---|
 | [`ferogram`](./ferogram) | High-level async client: auth, messaging, media, bots |
+| [`ferogram-session`](./ferogram-session) | Session persistence types and storage backends |
+| [`ferogram-parsers`](./ferogram-parsers) | Telegram Markdown and HTML entity parsers |
 | [`ferogram-tl-types`](./ferogram-tl-types) | Layer types, functions, enums (definitions) |
 | [`ferogram-mtproto`](./ferogram-mtproto) | MTProto session, DH exchange, framing, transports |
 | [`ferogram-crypto`](./ferogram-crypto) | AES-IGE, RSA, SHA, Diffie-Hellman, auth key derivation |
@@ -37,7 +39,7 @@ Most users only need `ferogram`.
 
 ```toml
 [dependencies]
-ferogram = "0.2.0"
+ferogram = "0.3.0"
 tokio        = { version = "1", features = ["full"] }
 ```
 
@@ -46,10 +48,10 @@ Get your `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org)
 Optional features:
 
 ```toml
-ferogram = { version = "0.2.0", features = ["sqlite-session"] }  # SQLite session
-ferogram = { version = "0.2.0", features = ["libsql-session"] }  # libsql / Turso
-ferogram = { version = "0.2.0", features = ["html"] }            # HTML parser
-ferogram = { version = "0.2.0", features = ["html5ever"] }       # html5ever parser
+ferogram = { version = "0.3.0", features = ["sqlite-session"] }  # SQLite session
+ferogram = { version = "0.3.0", features = ["libsql-session"] }  # libsql / Turso
+ferogram = { version = "0.3.0", features = ["html"] }            # HTML parser
+ferogram = { version = "0.3.0", features = ["html5ever"] }       # html5ever parser
 ```
 
 `ferogram` re-exports `ferogram_tl_types` as `ferogram::tl`.

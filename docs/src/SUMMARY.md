@@ -1,6 +1,7 @@
 # Summary
 
 [Introduction](./introduction.md)
+[Release History](./whats-new.md)
 
 ---
 
@@ -45,6 +46,8 @@
 # Client API Reference
 
 - [Client Methods](./api/client.md)
+- [ClientBuilder](./api/client-builder.md)
+- [Types Reference](./api/types.md)
 - [InputMessage Builder](./api/input-message.md)
 - [Peer Types & PeerRef](./api/peer-types.md)
 - [Participants & Members](./api/participants.md)
@@ -52,6 +55,15 @@
 - [Dialogs & History](./api/dialogs.md)
 - [Search](./api/search.md)
 - [Typing Guard](./api/typing-guard.md)
+- [Chat Management](./api/chat-management.md)
+- [Invite Links](./api/invite-links.md)
+- [Contacts & Blocking](./api/contacts.md)
+- [Profile & Account](./api/profile.md)
+- [Forum Topics](./api/forum-topics.md)
+- [Polls & Votes](./api/polls.md)
+- [Stickers](./api/stickers.md)
+- [Games & Payments](./api/games.md)
+- [Privacy & Notifications](./api/privacy.md)
 
 ---
 
@@ -61,7 +73,11 @@
 - [Retry & Flood Wait](./advanced/retry.md)
 - [DC Migration](./advanced/dc-migration.md)
 - [Proxies & Transports](./advanced/proxy.md)
+- [Transport Probing & Resilient Connect](./advanced/transport-probing.md)
+- [Connection Restart Policy](./advanced/connection-restart.md)
+- [Experimental Features](./advanced/experimental-features.md)
 - [Upgrading TL Layer](./advanced/layer-upgrade.md)
+- [CDN Downloads](./advanced/cdn-downloads.md)
 
 ---
 

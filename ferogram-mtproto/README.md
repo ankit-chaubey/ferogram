@@ -14,23 +14,21 @@ MTProto 2.0 session management, DH key exchange, and message framing for Rust.
 
 ```toml
 [dependencies]
-ferogram-mtproto  = "0.2.0"
-ferogram-tl-types = { version = "0.2.0", features = ["tl-mtproto"] }
+ferogram-mtproto  = "0.3.0"
+ferogram-tl-types = { version = "0.3.0", features = ["tl-mtproto"] }
 ```
 
 ---
 
-## Overview
+## What it handles
 
-`ferogram-mtproto` implements the full MTProto 2.0 session layer. It handles:
-
-- 3-step DH key exchange
-- Encrypted sessions (AES-IGE pack/unpack)
+- 3-step DH key exchange (`req_pq_multi` → `req_DH_params` → `set_client_DH_params`)
+- Encrypted sessions: AES-IGE pack/unpack, msg_key derivation, salt management
 - Message framing: salt, session_id, message_id, sequence numbers
-- `msg_container` and `gzip_packed` support
-- Salt management and auto-correction
+- `msg_container` and `gzip_packed` unwrapping
 - Error recovery: `bad_msg_notification`, `bad_server_salt`, `msg_resend_req`
 - Acknowledgements via `MsgsAck`
+- Temporary key binding for PFS (`bind_temp_key` module, v0.3.0)
 
 ---
 
@@ -111,6 +109,27 @@ padding         12-1024 random bytes (total % 16 == 0)
 Prefixed by a 32-byte `msg_key` after encryption.
 
 `msg_key` is SHA-256 of `(auth_key[88..120] || plaintext)` for client-to-server, and `(auth_key[96..128] || plaintext)` for server-to-client.
+
+---
+
+### bind_temp_key (0.3.0)
+
+Implements PFS temporary key binding. Used by `ferogram` when connecting to auxiliary DCs.
+
+```rust
+use ferogram_mtproto::{serialize_bind_temp_auth_key, encrypt_bind_inner, gen_msg_id};
+
+let wire = serialize_bind_temp_auth_key(
+    &perm_auth_key,
+    &temp_auth_key,
+    nonce,
+    expires_at,
+    msg_id,
+    seq_no,
+)?;
+```
+
+Public re-exports: `EncryptedSession`, `SeenMsgIds`, `new_seen_msg_ids`, `gen_msg_id`, `serialize_bind_temp_auth_key`, `encrypt_bind_inner`.
 
 ---
 

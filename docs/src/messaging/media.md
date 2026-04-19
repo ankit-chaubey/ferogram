@@ -4,22 +4,135 @@
 
 ## Upload
 
+ferogram provides three upload methods. Choose based on file size and where
+the data comes from.
+
+| Method | Input | Best for |
+|---|---|---|
+| `upload_file` | `&[u8]` | Small files already in memory (under ~10 MB) |
+| `upload_file_concurrent` | `Arc<Vec<u8>>` | Large files already in memory (10 MB+), parallel chunks |
+| `upload_stream` | `impl AsyncRead` | Files on disk or any async reader |
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.upload_file(name: &str, data: &[u8]) → Result&lt;UploadedFile, InvocationError&gt;</span>
+</div>
+<div class="api-card-body">
+Upload a byte slice sequentially. Uses a single worker and sends chunks one at
+a time. Suitable for files under ~10 MB or when parallelism is not needed.
+
 ```rust
-// Upload from bytes: sequential
-let uploaded: UploadedFile = client
-    .upload_file("photo.jpg", &bytes)
-    .await?;
-
-// Upload from bytes: parallel chunks (faster for large files)
-let uploaded = client
-    .upload_file_concurrent("video.mp4", &bytes)
-    .await?;
-
-// Upload from an async reader (e.g. tokio::fs::File)
-use tokio::fs::File;
-let f = File::open("document.pdf").await?;
-let uploaded = client.upload_stream("document.pdf", f).await?;
+let bytes: Vec<u8> = std::fs::read("photo.jpg")?;
+let uploaded = client.upload_file("photo.jpg", &bytes).await?;
 ```
+</div>
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.upload_file_concurrent(name: &str, data: Arc&lt;Vec&lt;u8&gt;&gt;, mime_type: &str) → Result&lt;UploadedFile, InvocationError&gt;</span>
+</div>
+<div class="api-card-body">
+Upload using a parallel worker pool. Takes <code>Arc&lt;Vec&lt;u8&gt;&gt;</code> for
+zero-copy sharing across worker tasks. Significantly faster for large files
+(video, large documents) because multiple chunks are in flight simultaneously.
+
+```rust
+use std::sync::Arc;
+
+let bytes = Arc::new(std::fs::read("video.mp4")?);
+let uploaded = client
+    .upload_file_concurrent("video.mp4", bytes, "video/mp4")
+    .await?;
+```
+</div>
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.upload_stream&lt;R: AsyncRead + Unpin&gt;(reader: &amp;mut R, name: &str, mime_type: &str) → Result&lt;UploadedFile, InvocationError&gt;</span>
+</div>
+<div class="api-card-body">
+Upload from any type that implements <code>tokio::io::AsyncRead</code>. Reads
+the entire reader into memory, then automatically delegates to
+<code>upload_file_concurrent</code> for large data or <code>upload_file</code>
+for small data based on a built-in threshold.
+
+This is the most convenient method when working with files on disk, network
+streams, or in-memory cursors.
+
+### Parameters
+
+| Param | Type | Description |
+|---|---|---|
+| `reader` | `&mut impl AsyncRead + Unpin` | Any async reader: `tokio::fs::File`, `tokio::io::BufReader`, `std::io::Cursor`, etc. |
+| `name` | `&str` | Filename that Telegram stores and shows to recipients. |
+| `mime_type` | `&str` | MIME type. Pass `""` to auto-detect from the file extension in `name`. |
+
+### Examples
+
+```rust
+// Upload from a file on disk
+use tokio::fs::File;
+
+let mut f = File::open("document.pdf").await?;
+let uploaded = client
+    .upload_stream(&mut f, "document.pdf", "application/pdf")
+    .await?;
+```
+
+```rust
+// Auto-detect MIME type from the filename extension
+let mut f = File::open("photo.jpg").await?;
+let uploaded = client
+    .upload_stream(&mut f, "photo.jpg", "")   // "" -> auto-detects image/jpeg
+    .await?;
+```
+
+```rust
+// Upload from an in-memory buffer via std::io::Cursor
+use std::io::Cursor;
+use tokio::io::BufReader;
+
+let data: Vec<u8> = generate_pdf_bytes();
+let mut reader = BufReader::new(Cursor::new(data));
+let uploaded = client
+    .upload_stream(&mut reader, "report.pdf", "application/pdf")
+    .await?;
+```
+
+```rust
+// Upload a file produced by an async process (e.g. compression)
+use tokio::io::AsyncWriteExt;
+
+let (reader, mut writer) = tokio::io::duplex(64 * 1024);
+tokio::spawn(async move {
+    // write compressed data to writer ...
+    writer.shutdown().await.unwrap();
+});
+
+let mut r = reader;
+let uploaded = client
+    .upload_stream(&mut r, "archive.gz", "application/gzip")
+    .await?;
+```
+
+### Notes
+
+- `upload_stream` reads the entire reader to completion before uploading.
+  There is no true streaming upload to Telegram; the data must fit in memory.
+- For data already in memory as `Vec<u8>`, prefer `upload_file` or
+  `upload_file_concurrent` to avoid the extra `read_to_end` allocation.
+- The MIME type is used by Telegram clients to decide how to display the file
+  (inline image preview, audio player, generic document, etc.). Passing `""`
+  enables built-in MIME detection from the file extension.
+</div>
+</div>
+
+---
 
 ### `UploadedFile` methods
 

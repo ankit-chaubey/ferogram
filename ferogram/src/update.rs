@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -681,8 +679,10 @@ impl IncomingMessage {
         client: &Client,
         path: impl AsRef<std::path::Path>,
     ) -> Result<bool, Error> {
-        if let Some(loc) = crate::media::download_location_from_media(self.media()) {
-            client.download_media_to_file(loc, path).await?;
+        if let Some((loc, dc_id)) = crate::media::download_location_from_media(self.media()) {
+            client
+                .download_media_to_file_on_dc(loc, dc_id, path)
+                .await?;
             Ok(true)
         } else {
             Ok(false)

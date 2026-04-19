@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -27,7 +25,7 @@
 //! - Search messages (per-chat and global)
 //! - Mark as read, delete dialogs, clear mentions
 //! - Join chat / accept invite links
-//! - Chat action (typing, uploading, ...)
+//! - Chat action (typing, uploading, …)
 //! - `get_me()`: fetch own User info
 //! - Paginated dialog and message iterators
 //! - DC migration, session persistence, reconnect
@@ -39,6 +37,7 @@ mod errors;
 pub mod media;
 pub mod parsers;
 pub mod participants;
+pub mod persist;
 pub mod pts;
 mod restart;
 mod retry;
@@ -47,12 +46,15 @@ mod transport;
 mod two_factor_auth;
 pub mod update;
 
+pub mod cdn_download;
 pub mod dc_pool;
+pub mod dns_resolver;
 pub mod inline_iter;
 pub mod keyboard;
 pub mod search;
 pub mod session_backend;
 pub mod socks5;
+pub mod special_config;
 pub mod transport_intermediate;
 pub mod transport_obfuscated;
 pub mod types;
@@ -102,23 +104,21 @@ pub use update::{ChatActionUpdate, UserStatusUpdate};
 pub use ferogram_tl_types as tl;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::num::NonZeroU32;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dashmap::DashMap;
 use ferogram_mtproto::{EncryptedSession, Session, authentication as auth};
 use ferogram_tl_types::{Cursor, Deserializable, RemoteCall};
-use moka::sync::Cache as MokaCache;
-use parking_lot::Mutex;
 use session::PersistedSession;
 use socket2::TcpKeepalive;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::sync::{Mutex as TokioMutex, mpsc, oneshot};
+use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
@@ -146,23 +146,16 @@ const ID_UPDATE_SHORT_CHAT_MSG: u32 = 0x4d6deea5;
 const ID_UPDATE_SHORT_SENT_MSG: u32 = 0x9015e101;
 const ID_UPDATES_TOO_LONG: u32 = 0xe317af7e;
 
-/// How often to send a keepalive ping.
-/// 60 s matches  and Telegram Desktop long-poll cadence.
-/// At 1 M connections this is 4× less keepalive traffic than 15 s.
+/// Keepalive ping interval.
 const PING_DELAY_SECS: u64 = 60;
 
-/// Tell Telegram to close the connection if it hears nothing for this many
-/// seconds.  Must be > PING_DELAY_SECS so a single missed ping doesn't drop us.
-/// 75 s = 60 s interval + 15 s slack, matching .
+/// Disconnect delay for PingDelayDisconnect: 75 s (interval + 15 s slack).
 const NO_PING_DISCONNECT: i32 = 75;
 
 /// Initial backoff before the first reconnect attempt.
 const RECONNECT_BASE_MS: u64 = 500;
 
 /// Maximum backoff between reconnect attempts.
-/// 5 s cap instead of 30 s: on mobile, network outages are brief and a 30 s
-/// sleep means the bot stays dead for up to 30 s after the network returns.
-/// Official Telegram mobile clients use a short cap for the same reason.
 const RECONNECT_MAX_SECS: u64 = 5;
 
 /// TCP socket-level keepalive: start probes after this many seconds of idle.
@@ -172,93 +165,321 @@ const TCP_KEEPALIVE_INTERVAL_SECS: u64 = 5;
 /// Number of failed probes before the OS declares the connection dead.
 const TCP_KEEPALIVE_PROBES: u32 = 3;
 
+/// Opt-in experimental behaviours that deviate from strict Telegram spec.
+///
+/// All flags default to `false` (safe / spec-correct).  Enable only what you
+/// need after reading the per-field warnings.
+///
+/// # Example
+/// ```rust,no_run
+/// use ferogram::{Client, ExperimentalFeatures};
+///
+/// # #[tokio::main] async fn main() -> anyhow::Result<()> {
+/// let (client, _sd) = Client::builder()
+///     .api_id(12345)
+///     .api_hash("abc")
+///     .experimental_features(ExperimentalFeatures {
+///         allow_zero_hash: true,   // bot-only; omit for user accounts
+///         ..Default::default()
+///     })
+///     .connect().await?;
+/// # Ok(()) }
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct ExperimentalFeatures {
+    /// When no `access_hash` is cached for a user or channel, fall back to
+    /// `access_hash = 0` instead of returning [`InvocationError::PeerNotCached`].
+    ///
+    /// **Bot accounts only.** The Telegram spec explicitly permits `hash = 0`
+    /// for bots when only a min-hash is available.  On user accounts this
+    /// produces `USER_ID_INVALID` / `CHANNEL_INVALID`.
+    pub allow_zero_hash: bool,
+
+    /// When resolving a min-user via `InputPeerUserFromMessage`, if the
+    /// containing channel's hash is not cached, proceed with
+    /// `channel access_hash = 0` instead of returning
+    /// [`InvocationError::PeerNotCached`].
+    ///
+    /// Almost always wrong.  The inner `InputPeerChannel { access_hash: 0 }`
+    /// makes the whole `InputPeerUserFromMessage` invalid and Telegram will
+    /// reject it.  Only useful for debugging / testing.
+    pub allow_missing_channel_hash: bool,
+
+    /// *(Reserved  - not yet implemented.)*
+    ///
+    /// When set, a cache miss would automatically call `users.getUsers` /
+    /// `channels.getChannels` to fetch a fresh `access_hash` before
+    /// constructing the `InputPeer`.  Currently has no effect.
+    pub auto_resolve_peers: bool,
+}
+
 /// Caches access hashes for users and channels so every API call carries the
 /// correct hash without re-resolving peers.
 ///
 /// All fields are `pub` so that `save_session` / `connect` can read/write them
 /// directly, and so that advanced callers can inspect the cache.
 pub struct PeerCache {
-    /// user_id -> access_hash  (bounded LRU, max 10 000 entries)
-    pub users: MokaCache<i64, i64>,
-    /// channel_id -> access_hash (bounded LRU, max 10 000 entries)
-    pub channels: MokaCache<i64, i64>,
+    /// user_id -> access_hash (full users only, min=false)
+    pub users: HashMap<i64, i64>,
+    /// channel_id -> access_hash (full channels only, min=false)
+    pub channels: HashMap<i64, i64>,
+    /// Regular group chat IDs (Chat::Chat / ChatForbidden).
+    /// Groups need no access_hash; track existence for peer validation.
+    pub chats: HashSet<i64>,
+    /// Channel IDs seen with min=true. These are real channels but have no
+    /// valid access_hash. Stored separately so they are NEVER confused with
+    /// regular groups. DO NOT put min channels in `chats`. A min channel must
+    /// never become InputPeerChat  - that causes fatal RPC failures.
+    pub channels_min: HashSet<i64>,
+    /// user_id -> (peer_id, msg_id) for min users seen in a message context.
+    /// Min users have an invalid access_hash; they must be referenced via
+    /// InputPeerUserFromMessage using the peer and message where they appeared.
+    pub min_contexts: HashMap<i64, (i64, i32)>,
+    /// Experimental opt-ins that change error-vs-fallback behaviour.
+    experimental: ExperimentalFeatures,
 }
 
 impl Default for PeerCache {
     fn default() -> Self {
-        Self {
-            users: MokaCache::new(10_000),
-            channels: MokaCache::new(10_000),
-        }
+        Self::new(ExperimentalFeatures::default())
     }
 }
 
 impl PeerCache {
-    fn cache_user(&self, user: &tl::enums::User) {
-        if let tl::enums::User::User(u) = user
-            && let Some(hash) = u.access_hash
-        {
-            self.users.insert(u.id, hash);
+    /// Create a new empty cache with the given experimental-feature flags.
+    pub fn new(experimental: ExperimentalFeatures) -> Self {
+        Self {
+            users: HashMap::new(),
+            channels: HashMap::new(),
+            chats: HashSet::new(),
+            channels_min: HashSet::new(),
+            min_contexts: HashMap::new(),
+            experimental,
         }
     }
 
-    fn cache_chat(&self, chat: &tl::enums::Chat) {
+    fn cache_user(&mut self, user: &tl::enums::User) {
+        if let tl::enums::User::User(u) = user {
+            if u.min {
+                // min=true: access_hash is not valid; requires a message context.
+            } else if let Some(hash) = u.access_hash {
+                // Never overwrite a valid non-zero hash with zero.
+                if hash != 0 {
+                    self.users.insert(u.id, hash);
+                } else {
+                    self.users.entry(u.id).or_insert(0);
+                }
+                // Full user always supersedes any min context.
+                self.min_contexts.remove(&u.id);
+            }
+        }
+    }
+
+    /// Cache a user that arrived in a message context.
+    ///
+    /// For min users (access_hash is invalid), stores the peer+msg context so
+    /// they can later be referenced via `InputPeerUserFromMessage`.
+    ///
+    /// Uses **latest-wins** semantics: a newer message context replaces the
+    /// stored one.  Recent messages are less likely to have been deleted.
+    fn cache_user_with_context(&mut self, user: &tl::enums::User, peer_id: i64, msg_id: i32) {
+        if let tl::enums::User::User(u) = user {
+            if u.min {
+                // Never downgrade a cached full user to a min context.
+                if !self.users.contains_key(&u.id) {
+                    // Latest-wins: overwrite with the most recent message context.
+                    self.min_contexts.insert(u.id, (peer_id, msg_id));
+                }
+            } else if let Some(hash) = u.access_hash {
+                // Never overwrite a non-zero hash with zero.
+                if hash != 0 {
+                    self.users.insert(u.id, hash);
+                } else {
+                    self.users.entry(u.id).or_insert(0);
+                }
+                self.min_contexts.remove(&u.id);
+            }
+        }
+    }
+
+    fn cache_chat(&mut self, chat: &tl::enums::Chat) {
         match chat {
             tl::enums::Chat::Channel(c) => {
-                if let Some(hash) = c.access_hash {
-                    self.channels.insert(c.id, hash);
+                if c.min {
+                    // min channel: no access_hash available.
+                    // Store in channels_min; never put in chats (InputPeerChat fails).
+                    if !self.channels.contains_key(&c.id) {
+                        self.channels_min.insert(c.id);
+                    }
+                } else if let Some(hash) = c.access_hash {
+                    // Never overwrite a valid non-zero hash with zero.
+                    if hash != 0 {
+                        self.channels.insert(c.id, hash);
+                    } else {
+                        self.channels.entry(c.id).or_insert(0);
+                    }
+                    // Full channel supersedes any min tracking.
+                    self.channels_min.remove(&c.id);
                 }
             }
             tl::enums::Chat::ChannelForbidden(c) => {
-                self.channels.insert(c.id, c.access_hash);
+                // Only store if the hash is non-zero.
+                if c.access_hash != 0 {
+                    self.channels.insert(c.id, c.access_hash);
+                } else {
+                    self.channels.entry(c.id).or_insert(0);
+                }
+                self.channels_min.remove(&c.id);
+            }
+            tl::enums::Chat::Chat(c) => {
+                // Regular groups need no access_hash; track existence only.
+                self.chats.insert(c.id);
+            }
+            tl::enums::Chat::Forbidden(c) => {
+                self.chats.insert(c.id);
             }
             _ => {}
         }
     }
 
-    fn cache_users(&self, users: &[tl::enums::User]) {
+    fn cache_users(&mut self, users: &[tl::enums::User]) {
         for u in users {
             self.cache_user(u);
         }
     }
 
-    fn cache_chats(&self, chats: &[tl::enums::Chat]) {
+    fn cache_chats(&mut self, chats: &[tl::enums::Chat]) {
         for c in chats {
             self.cache_chat(c);
         }
     }
 
-    fn user_input_peer(&self, user_id: i64) -> tl::enums::InputPeer {
+    fn user_input_peer(&self, user_id: i64) -> Result<tl::enums::InputPeer, InvocationError> {
         if user_id == 0 {
-            return tl::enums::InputPeer::PeerSelf;
+            return Ok(tl::enums::InputPeer::PeerSelf);
         }
-        let hash = self.users.get(&user_id).unwrap_or_else(|| {
-            tracing::warn!("[ferogram] PeerCache: no access_hash for user {user_id}, using 0: may cause USER_ID_INVALID");
-            0
-        });
-        tl::enums::InputPeer::User(tl::types::InputPeerUser {
-            user_id,
-            access_hash: hash,
-        })
+
+        // Full hash: best case.
+        if let Some(&hash) = self.users.get(&user_id) {
+            return Ok(tl::enums::InputPeer::User(tl::types::InputPeerUser {
+                user_id,
+                access_hash: hash,
+            }));
+        }
+
+        // Min user: resolve via the message context where they were seen.
+        if let Some(&(peer_id, msg_id)) = self.min_contexts.get(&user_id) {
+            // The containing peer can be a channel, a basic group, or a DM user.
+            // Build the correct InputPeer variant for each case.
+            let container = if let Some(&hash) = self.channels.get(&peer_id) {
+                tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                    channel_id: peer_id,
+                    access_hash: hash,
+                })
+            } else if self.channels_min.contains(&peer_id) {
+                if self.experimental.allow_missing_channel_hash {
+                    tracing::warn!(
+                        "[ferogram] PeerCache: channel {peer_id} is a min channel \
+                         (contains min user {user_id}), using hash=0. \
+                         This will likely cause CHANNEL_INVALID. \
+                         Resolve the channel first."
+                    );
+                    tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                        channel_id: peer_id,
+                        access_hash: 0,
+                    })
+                } else {
+                    return Err(InvocationError::PeerNotCached(format!(
+                        "min user {user_id} was seen in channel {peer_id}, \
+                         but that channel is only known as a min channel (no access_hash). \
+                         Resolve the channel first, or enable \
+                         ExperimentalFeatures::allow_missing_channel_hash."
+                    )));
+                }
+            } else if self.chats.contains(&peer_id) {
+                // Basic group: no access_hash needed.
+                tl::enums::InputPeer::Chat(tl::types::InputPeerChat { chat_id: peer_id })
+            } else if let Some(&hash) = self.users.get(&peer_id) {
+                // DM: min user was seen in a direct message with another user.
+                tl::enums::InputPeer::User(tl::types::InputPeerUser {
+                    user_id: peer_id,
+                    access_hash: hash,
+                })
+            } else {
+                return Err(InvocationError::PeerNotCached(format!(
+                    "min user {user_id} was seen in peer {peer_id}, \
+                     but that peer is not cached (not a known channel, chat, or user). \
+                     Ensure the containing chat flows through the update loop first."
+                )));
+            };
+            return Ok(tl::enums::InputPeer::UserFromMessage(Box::new(
+                tl::types::InputPeerUserFromMessage {
+                    peer: container,
+                    msg_id,
+                    user_id,
+                },
+            )));
+        }
+
+        // No hash at all.
+        if self.experimental.allow_zero_hash {
+            tracing::warn!(
+                "[ferogram] PeerCache: no access_hash for user {user_id}, using 0. \
+                 Valid for bots only (Telegram spec). On user accounts this will \
+                 cause USER_ID_INVALID. Resolve the peer first or disable \
+                 ExperimentalFeatures::allow_zero_hash."
+            );
+            Ok(tl::enums::InputPeer::User(tl::types::InputPeerUser {
+                user_id,
+                access_hash: 0,
+            }))
+        } else {
+            Err(InvocationError::PeerNotCached(format!(
+                "no access_hash cached for user {user_id}. \
+                 Ensure at least one message from this user flows through the \
+                 update loop before using them as a peer, or call \
+                 client.resolve_peer() first."
+            )))
+        }
     }
 
-    fn channel_input_peer(&self, channel_id: i64) -> tl::enums::InputPeer {
-        let hash = self.channels.get(&channel_id).unwrap_or_else(|| {
-            tracing::warn!("[ferogram] PeerCache: no access_hash for channel {channel_id}, using 0: may cause CHANNEL_INVALID");
-            0
-        });
-        tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
-            channel_id,
-            access_hash: hash,
-        })
+    fn channel_input_peer(&self, channel_id: i64) -> Result<tl::enums::InputPeer, InvocationError> {
+        if let Some(&hash) = self.channels.get(&channel_id) {
+            return Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                channel_id,
+                access_hash: hash,
+            }));
+        }
+
+        if self.experimental.allow_zero_hash {
+            tracing::warn!(
+                "[ferogram] PeerCache: no access_hash for channel {channel_id}, using 0. \
+                 Valid for bots only (Telegram spec). On user accounts this will \
+                 cause CHANNEL_INVALID. Resolve the peer first or disable \
+                 ExperimentalFeatures::allow_zero_hash."
+            );
+            Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                channel_id,
+                access_hash: 0,
+            }))
+        } else {
+            Err(InvocationError::PeerNotCached(format!(
+                "no access_hash cached for channel {channel_id}. \
+                 Ensure the channel flows through the update loop before using \
+                 it as a peer, or call client.resolve_peer() first."
+            )))
+        }
     }
 
-    fn peer_to_input(&self, peer: &tl::enums::Peer) -> tl::enums::InputPeer {
+    fn peer_to_input(
+        &self,
+        peer: &tl::enums::Peer,
+    ) -> Result<tl::enums::InputPeer, InvocationError> {
         match peer {
             tl::enums::Peer::User(u) => self.user_input_peer(u.user_id),
-            tl::enums::Peer::Chat(c) => {
-                tl::enums::InputPeer::Chat(tl::types::InputPeerChat { chat_id: c.chat_id })
-            }
+            tl::enums::Peer::Chat(c) => Ok(tl::enums::InputPeer::Chat(tl::types::InputPeerChat {
+                chat_id: c.chat_id,
+            })),
             tl::enums::Peer::Channel(c) => self.channel_input_peer(c.channel_id),
         }
     }
@@ -526,7 +747,7 @@ pub enum TransportKind {
     /// Obfuscated PaddedIntermediate transport (`0xDDDDDDDD` tag in nonce).
     ///
     /// Same AES-256-CTR obfuscation as `Obfuscated`, but uses Intermediate
-    /// framing and appends 0–15 random padding bytes to each frame so that
+    /// framing and appends 0-15 random padding bytes to each frame so that
     /// all frames are not 4-byte multiples.  Required for `0xDD` MTProxy secrets.
     PaddedIntermediate { secret: Option<[u8; 16]> },
     /// FakeTLS transport (`0xEE` prefix in MTProxy secret).
@@ -536,15 +757,15 @@ pub enum TransportKind {
     /// can validate ownership without decrypting real TLS.  Most DPI-resistant
     /// mode; required for `0xEE` MTProxy secrets.
     FakeTls { secret: [u8; 16], domain: String },
+    /// HTTP transport fallback: sends raw MTProto frames as HTTP POST to port 80.
+    ///
+    /// Use when both TCP (Abridged/Obfuscated) and SOCKS5 are blocked.
+    /// Fires DH handshake via `POST http://<dc_ip>:80/api`.
+    Http,
 }
 
 impl Default for TransportKind {
     fn default() -> Self {
-        // Obfuscated (keyless) is the best all-round choice:
-        //  - bypasses DPI / ISP blocks that filter plain MTProto
-        //  - negligible CPU overhead (AES-256-CTR via hardware AES-NI)
-        //  - works on all networks without MTProxy configuration
-        //  - drops in as a replacement for Abridged with zero API changes
         TransportKind::Obfuscated { secret: None }
     }
 }
@@ -604,6 +825,16 @@ pub struct Config {
     pub lang_pack: String,
     /// Language code reported in `InitConnection` (default: `"en"`).
     pub lang_code: String,
+    /// Race Obfuscated / Abridged / HTTP transports in parallel on fresh connect
+    /// and pick the fastest.  Incompatible with MTProxy.  Default: `false`.
+    pub probe_transport: bool,
+    /// If direct TCP fails, retry via DNS-over-HTTPS (Mozilla + Google),
+    /// then fall back to Firebase / Google special-config.  Default: `false`.
+    pub resilient_connect: bool,
+    /// Opt-in experimental behaviours (all off by default).
+    ///
+    /// See [`ExperimentalFeatures`] for per-flag documentation.
+    pub experimental_features: ExperimentalFeatures,
 }
 
 impl Config {
@@ -741,6 +972,9 @@ impl Default for Config {
             system_lang_code: "en".to_string(),
             lang_pack: String::new(),
             lang_code: "en".to_string(),
+            probe_transport: false,
+            resilient_connect: false,
+            experimental_features: ExperimentalFeatures::default(),
         }
     }
 }
@@ -838,16 +1072,16 @@ impl Dialog {
 struct ClientInner {
     /// Crypto/state for the connection: EncryptedSession, salts, acks, etc.
     /// Held only for CPU-bound packing : never while awaiting TCP I/O.
-    writer: TokioMutex<ConnectionWriter>,
+    writer: Mutex<ConnectionWriter>,
     /// The TCP send half. Separate from `writer` so the reader task can lock
     /// `writer` for pending_ack / state while a caller awaits `write_all`.
     /// This split eliminates the burst-deadlock at 10+ concurrent RPCs.
-    write_half: TokioMutex<OwnedWriteHalf>,
+    write_half: Mutex<OwnedWriteHalf>,
     /// Pending RPC replies, keyed by MTProto msg_id.
     /// RPC callers insert a oneshot::Sender here before sending; the reader
     /// task routes incoming rpc_result frames to the matching sender.
     #[allow(clippy::type_complexity)]
-    pending: Arc<DashMap<i64, oneshot::Sender<Result<Vec<u8>, InvocationError>>>>,
+    pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Vec<u8>, InvocationError>>>>>,
     /// Channel used to hand a new (OwnedReadHalf, FrameKind, auth_key, session_id)
     /// to the reader task after a reconnect.
     reconnect_tx: mpsc::UnboundedSender<(OwnedReadHalf, FrameKind, [u8; 256], i64)>,
@@ -865,10 +1099,12 @@ struct ClientInner {
     dc_options: Mutex<HashMap<i32, DcEntry>>,
     /// Media-only DC options (ipv6/media_only/cdn filtered separately from API DCs).
     media_dc_options: Mutex<HashMap<i32, DcEntry>>,
-    pub peer_cache: PeerCache,
+    pub peer_cache: RwLock<PeerCache>,
     pub pts_state: Mutex<pts::PtsState>,
     /// Buffer for updates received during a possible-gap window.
     pub possible_gap: Mutex<pts::PossibleGapBuffer>,
+    /// Bounded ring-buffer dedup cache  safety net beneath the pts machinery.
+    pub(crate) dedupe_cache: std::sync::Mutex<persist::BoundedDedupeCache>,
     api_id: i32,
     api_hash: String,
     device_model: String,
@@ -883,12 +1119,19 @@ struct ClientInner {
     allow_ipv6: bool,
     transport: TransportKind,
     session_backend: Arc<dyn crate::session_backend::SessionBackend>,
-    dc_pool: TokioMutex<dc_pool::DcPool>,
+    dc_pool: Mutex<dc_pool::DcPool>,
+    /// Dedicated pool for file transfer connections (upload/download).
+    /// Isolated from the main session to prevent crypto state contamination.
+    transfer_pool: Mutex<dc_pool::DcPool>,
     update_tx: mpsc::Sender<update::Update>,
     /// Whether this client is signed in as a bot (set in `bot_sign_in`).
     /// Used by `get_channel_difference` to pick the correct diff limit:
     /// bots get 100_000 (BOT_CHANNEL_DIFF_LIMIT), users get 100 (USER_CHANNEL_DIFF_LIMIT).
     pub is_bot: std::sync::atomic::AtomicBool,
+    /// Global MTProto sender semaphore  - limits total concurrent transfer workers
+    /// across all uploads and downloads to [`crate::media::MAX_GLOBAL_SENDERS`] (12).
+    /// Each concurrent worker acquires one permit; it is released on drop.
+    pub(crate) worker_semaphore: Arc<tokio::sync::Semaphore>,
     /// Guards against calling `stream_updates()` more than once.
     stream_active: std::sync::atomic::AtomicBool,
     /// Prevents spawning more than one proactive GetFutureSalts at a time.
@@ -899,13 +1142,50 @@ struct ClientInner {
     /// A double-DH results in one key being unregistered on Telegram's servers,
     /// causing AUTH_KEY_UNREGISTERED immediately after reconnect.
     dh_in_progress: std::sync::atomic::AtomicBool,
+
+    /// Guards sync_state_after_dh: the function is a no-op while false so that
+    /// reconnect-triggered DH completions don't fire GetState before the client
+    /// is actually authorised.
+    pub signed_in: std::sync::atomic::AtomicBool,
+
+    /// Persistent seen-msg_id dedup ring shared with the reader task.
+    /// Outlives individual EncryptedSession objects so replayed frames
+    /// from prior connections are still rejected after reconnect.
+    seen_msg_ids: ferogram_mtproto::SeenMsgIds,
+
+    /// Tracks which foreign DC IDs have had `auth.importAuthorization` called
+    /// successfully in the current process session (in-memory only, not persisted).
+    ///
+    /// Tracks which foreign DCs have had `auth.importAuthorization` called
+    /// successfully in this session.  The account authorization binding is
+    /// session-scoped and must be re-established each process run.
+    pub(crate) auth_imported: std::sync::Mutex<std::collections::HashSet<i32>>,
+
+    /// Per-DC connect gate for transfer pool initialisation.
+    ///
+    /// When multiple tasks race to open the first connection to the same foreign
+    /// DC, each would independently do DH + export/import, creating redundant
+    /// sockets and triggering AUTH_KEY_UNREGISTERED (only one key survives per
+    /// DC slot).  This map stores one `Arc<Mutex<()>>` per DC ID; a task holds
+    /// the mutex for the entire setup phase.  Subsequent tasks wait on the same
+    /// mutex, then find the connection already present via the double-check
+    /// inside `rpc_transfer_on_dc`.
+    dc_connect_gates:
+        std::sync::Mutex<std::collections::HashMap<i32, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+    /// Per-DC gate that serialises auth.exportAuthorization / importAuthorization.
+    ///
+    /// Per-DC gate that serialises auth.exportAuthorization / importAuthorization.
+    /// exportAuthorization tokens are single-use; this ensures only one caller
+    /// does the export/import per DC per session.
+    auth_import_gates:
+        std::sync::Mutex<std::collections::HashMap<i32, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 }
 
 /// The main Telegram client. Cheap to clone: internally Arc-wrapped.
 #[derive(Clone)]
 pub struct Client {
     pub(crate) inner: Arc<ClientInner>,
-    _update_rx: Arc<TokioMutex<mpsc::Receiver<update::Update>>>,
+    _update_rx: Arc<Mutex<mpsc::Receiver<update::Update>>>,
 }
 
 impl Client {
@@ -950,6 +1230,8 @@ impl Client {
         let socks5 = config.socks5.clone();
         let mtproxy = config.mtproxy.clone();
         let transport = config.transport.clone();
+        let probe_transport = config.probe_transport;
+        let resilient_connect = config.resilient_connect;
 
         let (conn, home_dc_id, dc_opts, media_dc_opts, loaded_session) =
             match config.session_backend.load().map_err(InvocationError::Io)? {
@@ -1011,27 +1293,53 @@ impl Client {
                                 }
                             }
                         } else {
-                            let (c, dc, opts) =
-                                Self::fresh_connect(socks5.as_ref(), mtproxy.as_ref(), &transport)
-                                    .await?;
+                            let (c, dc, opts) = Self::fresh_connect_resilient(
+                                socks5.as_ref(),
+                                mtproxy.as_ref(),
+                                &transport,
+                                probe_transport,
+                                resilient_connect,
+                            )
+                            .await?;
                             (c, dc, opts, HashMap::new(), None)
                         }
                     } else {
-                        let (c, dc, opts) =
-                            Self::fresh_connect(socks5.as_ref(), mtproxy.as_ref(), &transport)
-                                .await?;
+                        let (c, dc, opts) = Self::fresh_connect_resilient(
+                            socks5.as_ref(),
+                            mtproxy.as_ref(),
+                            &transport,
+                            probe_transport,
+                            resilient_connect,
+                        )
+                        .await?;
                         (c, dc, opts, HashMap::new(), None)
                     }
                 }
                 None => {
-                    let (c, dc, opts) =
-                        Self::fresh_connect(socks5.as_ref(), mtproxy.as_ref(), &transport).await?;
+                    let (c, dc, opts) = Self::fresh_connect_resilient(
+                        socks5.as_ref(),
+                        mtproxy.as_ref(),
+                        &transport,
+                        probe_transport,
+                        resilient_connect,
+                    )
+                    .await?;
                     (c, dc, opts, HashMap::new(), None)
                 }
             };
 
-        // Build DC pool
-        let pool = dc_pool::DcPool::new(home_dc_id, &dc_opts.values().cloned().collect::<Vec<_>>());
+        // Build DC pool (used for API/federation calls)
+        let pool = dc_pool::DcPool::new(
+            home_dc_id,
+            &dc_opts.values().cloned().collect::<Vec<_>>(),
+            config.socks5.clone(),
+        );
+        // Dedicated transfer pool  - separate connections for file upload/download.
+        let transfer_pool = dc_pool::DcPool::new(
+            home_dc_id,
+            &dc_opts.values().cloned().collect::<Vec<_>>(),
+            config.socks5.clone(),
+        );
 
         // Split the TCP stream immediately.
         // The writer (write half + EncryptedSession) stays in ClientInner.
@@ -1042,8 +1350,9 @@ impl Client {
         let session_id = writer.enc.session_id();
 
         #[allow(clippy::type_complexity)]
-        let pending: Arc<DashMap<i64, oneshot::Sender<Result<Vec<u8>, InvocationError>>>> =
-            Arc::new(DashMap::new());
+        let pending: Arc<
+            Mutex<HashMap<i64, oneshot::Sender<Result<Vec<u8>, InvocationError>>>>,
+        > = Arc::new(Mutex::new(HashMap::new()));
 
         // Channel the reconnect logic uses to hand a new read half to the reader task.
         let (reconnect_tx, reconnect_rx) =
@@ -1059,8 +1368,8 @@ impl Client {
         let restart_policy = config.restart_policy;
 
         let inner = Arc::new(ClientInner {
-            writer: TokioMutex::new(writer),
-            write_half: TokioMutex::new(write_half),
+            writer: Mutex::new(writer),
+            write_half: Mutex::new(write_half),
             pending: pending.clone(),
             reconnect_tx,
             network_hint_tx,
@@ -1070,9 +1379,10 @@ impl Client {
             home_dc_id: Mutex::new(home_dc_id),
             dc_options: Mutex::new(dc_opts),
             media_dc_options: Mutex::new(media_dc_opts),
-            peer_cache: PeerCache::default(),
+            peer_cache: RwLock::new(PeerCache::new(config.experimental_features.clone())),
             pts_state: Mutex::new(pts::PtsState::default()),
             possible_gap: Mutex::new(pts::PossibleGapBuffer::new()),
+            dedupe_cache: std::sync::Mutex::new(persist::BoundedDedupeCache::default()),
             api_id: config.api_id,
             api_hash: config.api_hash,
             device_model: config.device_model,
@@ -1087,17 +1397,27 @@ impl Client {
             allow_ipv6: config.allow_ipv6,
             transport: config.transport,
             session_backend: config.session_backend,
-            dc_pool: TokioMutex::new(pool),
+            dc_pool: Mutex::new(pool),
+            transfer_pool: Mutex::new(transfer_pool),
             update_tx,
             is_bot: std::sync::atomic::AtomicBool::new(false),
+            worker_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                crate::media::MAX_GLOBAL_SENDERS,
+            )),
             stream_active: std::sync::atomic::AtomicBool::new(false),
             salt_request_in_flight: std::sync::atomic::AtomicBool::new(false),
             dh_in_progress: std::sync::atomic::AtomicBool::new(false),
+            signed_in: std::sync::atomic::AtomicBool::new(false),
+            dc_connect_gates: std::sync::Mutex::new(std::collections::HashMap::new()),
+            auth_import_gates: std::sync::Mutex::new(std::collections::HashMap::new()),
+            auth_imported: std::sync::Mutex::new(std::collections::HashSet::new()),
+            // Persistent dedup ring for the main connection reader task.
+            seen_msg_ids: ferogram_mtproto::new_seen_msg_ids(),
         });
 
         let client = Self {
             inner,
-            _update_rx: Arc::new(TokioMutex::new(update_rx)),
+            _update_rx: Arc::new(Mutex::new(update_rx)),
         };
 
         // Spawn the reader task immediately so that RPC calls during
@@ -1120,7 +1440,111 @@ impl Client {
             });
         }
 
-        // Only -404 means Telegram rejected the key. EOF/RST are plain TCP drops.
+        // Periodic state saver: writes pts/qts/seq/date to the session backend
+        // every 5 seconds if anything has changed. Uses the targeted Primary and
+        // Secondary variants so only the update counters are touched, not the
+        // full session blob. Runs a final save on shutdown.
+        {
+            use crate::session_backend::UpdateStateChange;
+            let client_ps = client.clone();
+            let shutdown_ps = shutdown_token.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(5));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                interval.tick().await; // skip the first immediate tick
+                let mut last_pts = -1i32;
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = shutdown_ps.cancelled() => {
+                            // Final shutdown: read pts/qts/date/seq directly from
+                            // the in-memory state and persist via apply_update_state.
+                            // Using save_session() here is unsafe: it builds a snapshot
+                            // from potentially stale in-memory fields and would silently
+                            // overwrite the fresher pts that apply_update_state may have
+                            // already committed (e.g. pts=366 clobbered back to pts=364).
+                            let (pts, qts, date, seq) = {
+                                let s = client_ps.inner.pts_state.lock().await;
+                                (s.pts, s.qts, s.date, s.seq)
+                            };
+                            if pts > 0 {
+                                let b = &client_ps.inner.session_backend;
+                                let _ = b.apply_update_state(
+                                    UpdateStateChange::Primary { pts, date, seq },
+                                );
+                                let _ = b.apply_update_state(
+                                    UpdateStateChange::Secondary { qts },
+                                );
+                            }
+                            break;
+                        }
+                        _ = interval.tick() => {
+                            let (pts, qts, date, seq) = {
+                                let s = client_ps.inner.pts_state.lock().await;
+                                (s.pts, s.qts, s.date, s.seq)
+                            };
+                            if pts > last_pts {
+                                let backend = &client_ps.inner.session_backend;
+                                let _ = backend.apply_update_state(
+                                    UpdateStateChange::Primary { pts, date, seq },
+                                );
+                                let _ = backend.apply_update_state(
+                                    UpdateStateChange::Secondary { qts },
+                                );
+                                last_pts = pts;
+                                tracing::debug!(
+                                    "[ferogram/persist] periodic save: pts={pts} qts={qts}"
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // +: Background ack flush task  - drains pending_ack every 500 ms so that
+        // content-message acks are never held indefinitely waiting for an outgoing
+        // RPC.  Without this, a bot that receives update bursts without sending any
+        // RPCs will eventually exhaust Telegram's un-acked-message threshold (~512)
+        // causing the server to close the connection.
+        {
+            let client_ack = client.clone();
+            let shutdown_ack = shutdown_token.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_millis(500));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tokio::select! {
+                        _ = shutdown_ack.cancelled() => break,
+                        _ = interval.tick() => {}
+                    }
+                    // Drain under writer lock; skip the send entirely if empty.
+                    let acks: Vec<i64> = {
+                        let mut w = client_ack.inner.writer.lock().await;
+                        if w.pending_ack.is_empty() {
+                            continue;
+                        }
+                        w.pending_ack.drain(..).collect()
+                    };
+                    // Pack a standalone msgs_ack frame (non-content-related, no
+                    // sent_bodies entry needed  - the server never acks an ack).
+                    let (wire, fk) = {
+                        let mut w = client_ack.inner.writer.lock().await;
+                        let ack_body = build_msgs_ack_body(&acks);
+                        let (wire, _msg_id) = w.enc.pack_body_with_msg_id(&ack_body, false);
+                        (wire, w.frame_kind.clone())
+                    };
+                    send_frame_write(&mut *client_ack.inner.write_half.lock().await, &wire, &fk)
+                        .await
+                        .ok(); // TCP error here will surface on the next real send
+                }
+            });
+        }
+
+        // Only clear the auth key on definitive bad-key signals from Telegram.
+        // Network errors (EOF mid-session, ConnectionReset, Rpc(-404)) mean the
+        // server rejected our key. Any other error (I/O, etc.) is left intact
+        // no RPC timeout exists anymore, so there is no "timed out = stale key" case.
         if let Err(e) = client.init_connection().await {
             let key_is_stale = matches!(&e, InvocationError::Rpc(r) if r.code == -404);
 
@@ -1142,8 +1566,8 @@ impl Client {
             if dh_allowed {
                 tracing::warn!("[ferogram] init_connection: definitive bad-key ({e}), fresh DH …");
                 {
-                    let home_dc_id = *client.inner.home_dc_id.lock();
-                    let mut opts = client.inner.dc_options.lock();
+                    let home_dc_id = *client.inner.home_dc_id.lock().await;
+                    let mut opts = client.inner.dc_options.lock().await;
                     if let Some(entry) = opts.get_mut(&home_dc_id)
                         && entry.auth_key.is_some()
                     {
@@ -1154,7 +1578,7 @@ impl Client {
                     }
                 }
                 client.save_session().await.ok();
-                client.inner.pending.clear();
+                client.inner.pending.lock().await.clear();
 
                 let socks5_r = client.inner.socks5.clone();
                 let mtproxy_r = client.inner.mtproxy.clone();
@@ -1163,9 +1587,9 @@ impl Client {
                 // reconnect to the HOME DC with fresh DH, not DC2.
                 // fresh_connect() was hardcoded to DC2 and wiped all learned DC state,
                 // which is why sessions on DC3/DC4/DC5 were corrupted on every -404.
-                let home_dc_id_r = *client.inner.home_dc_id.lock();
+                let home_dc_id_r = *client.inner.home_dc_id.lock().await;
                 let addr_r = {
-                    let opts = client.inner.dc_options.lock();
+                    let opts = client.inner.dc_options.lock().await;
                     opts.get(&home_dc_id_r)
                         .map(|e| e.addr.clone())
                         .unwrap_or_else(|| {
@@ -1185,7 +1609,7 @@ impl Client {
                 let (new_writer, new_wh, new_read, new_fk) = new_conn.into_writer();
                 // Update ONLY the home DC entry: all other DC keys are preserved.
                 {
-                    let mut opts_guard = client.inner.dc_options.lock();
+                    let mut opts_guard = client.inner.dc_options.lock().await;
                     if let Some(entry) = opts_guard.get_mut(&home_dc_id_r) {
                         entry.auth_key = Some(new_writer.auth_key_bytes());
                         entry.first_salt = new_writer.first_salt();
@@ -1225,36 +1649,45 @@ impl Client {
             }
         }
 
-        // After a fresh-DH startup (no saved session), the new auth key may not
-        // have propagated to all of Telegram's app servers yet.  A short pause
-        // here prevents the first user RPC from hitting a server that doesn't
-        // know the key yet and returning AUTH_KEY_UNREGISTERED (401).
-        // The same guard already exists in the supervisor after mid-session
-        // reconnects; this covers the initial connect path.
-        if loaded_session.is_none() {
-            tracing::debug!(
-                "[ferogram] Fresh DH startup: waiting 2 s for key propagation \u{2026}"
-            );
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        }
+        // After connect() returns, the caller must call bot_sign_in() or sign_in().
+        // sync_pts_state() is called there, after authentication succeeds.
+        // Calling GetState here (before auth) always returns AUTH_KEY_UNREGISTERED.
 
         // Restore peer access-hash cache from session
         if let Some(ref s) = loaded_session
             && !s.peers.is_empty()
         {
+            let mut cache = client.inner.peer_cache.write().await;
             for p in &s.peers {
-                if p.is_channel {
-                    if client.inner.peer_cache.channels.get(&p.id).is_none() {
-                        client.inner.peer_cache.channels.insert(p.id, p.access_hash);
+                if p.is_chat {
+                    cache.chats.insert(p.id);
+                } else if p.is_channel {
+                    if p.access_hash != 0 {
+                        cache.channels.entry(p.id).or_insert(p.access_hash);
+                    } else {
+                        // Min channel: access_hash was 0 at save time.
+                        // Only restore to channels_min if no full hash yet.
+                        if !cache.channels.contains_key(&p.id) {
+                            cache.channels_min.insert(p.id);
+                        }
                     }
-                } else if client.inner.peer_cache.users.get(&p.id).is_none() {
-                    client.inner.peer_cache.users.insert(p.id, p.access_hash);
+                } else {
+                    cache.users.entry(p.id).or_insert(p.access_hash);
+                }
+            }
+            for m in &s.min_peers {
+                // Only restore if not already upgraded to a full user entry.
+                if !cache.users.contains_key(&m.user_id) {
+                    cache.min_contexts.insert(m.user_id, (m.peer_id, m.msg_id));
                 }
             }
             tracing::debug!(
-                "[ferogram] Peer cache restored: {} users, {} channels",
-                client.inner.peer_cache.users.entry_count(),
-                client.inner.peer_cache.channels.entry_count()
+                "[ferogram] Peer cache restored: {} users, {} channels, {} chats, {} channels_min, {} min-contexts",
+                cache.users.len(),
+                cache.channels.len(),
+                cache.chats.len(),
+                cache.channels_min.len(),
+                cache.min_contexts.len(),
             );
         }
 
@@ -1272,8 +1705,13 @@ impl Client {
             .is_some_and(|s| s.updates_state.is_initialised());
 
         if catch_up && has_saved_state {
+            // Session file has a valid auth key → client is already authorised.
+            client
+                .inner
+                .signed_in
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             let snap = &loaded_session.as_ref().unwrap().updates_state;
-            let mut state = client.inner.pts_state.lock();
+            let mut state = client.inner.pts_state.lock().await;
             state.pts = snap.pts;
             state.qts = snap.qts;
             state.date = snap.date;
@@ -1288,6 +1726,7 @@ impl Client {
                 state.seq,
                 state.channel_pts.len()
             );
+            state.state_ready = true;
             drop(state);
 
             // Capture channel list before spawn: get_difference() resets
@@ -1359,74 +1798,262 @@ impl Client {
                 }
             });
         } else {
-            // No saved state or catch_up disabled: sync from server.
-            let _ = client.sync_pts_state().await;
-
-            // Drain any updates that arrived during the connection handshake.
-            // Mirrors tDesktop's new_session_created → getDifference path.
-            // If this is a first-boot bot session, bot_sign_in() will call
-            // its own get_difference() after auth; this call is a no-op there
-            // because pts==0 triggers an inner sync_pts_state and returns [].
-            let c = client.clone();
-            let utx = client.inner.update_tx.clone();
-            tokio::spawn(async move {
-                match c.get_difference().await {
-                    Ok(missed) => {
-                        if !missed.is_empty() {
-                            tracing::info!(
-                                "[ferogram] connect: {} updates replayed from handshake gap",
-                                missed.len()
-                            );
-                        }
-                        for u in missed {
-                            let u = attach_client_to_update(u, &c);
-                            if utx.try_send(u).is_err() {
-                                tracing::warn!(
-                                    "[ferogram] update channel full: dropping handshake gap update"
-                                );
-                                break;
-                            }
-                        }
-                    }
-                    Err(e) => tracing::warn!("[ferogram] connect: handshake getDifference: {e}"),
-                }
-            });
+            // If there is a loaded session the client is already authorised.
+            // Mark signed_in so sync_state_after_dh can run after reconnects,
+            // then sync pts from the server.
+            // Fresh sessions (no loaded_session) skip sync here entirely:
+            // sync_pts_state is already called inside bot_sign_in / sign_in
+            // after auth completes, so calling it now would produce a guaranteed
+            // AUTH_KEY_UNREGISTERED 401 before the credential is exchanged.
+            if loaded_session.is_some() {
+                client
+                    .inner
+                    .signed_in
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                let _ = client.sync_pts_state().await;
+            }
         }
 
         Ok((client, shutdown_token))
     }
 
-    async fn fresh_connect(
+    /// Race Obfuscated / Abridged / Http transports using `Connection::connect_raw`.
+    /// The winner is returned directly - no second DH handshake.
+    /// Logs per-transport start, result, and elapsed time in ms.
+    async fn probe_transports_race(
+        addr: &str,
+        socks5: Option<&crate::socks5::Socks5Config>,
+        dc_id: i16,
+    ) -> Result<Connection, InvocationError> {
+        use tokio::task::JoinSet;
+        let mut set: JoinSet<Result<(Connection, &'static str, u64), InvocationError>> =
+            JoinSet::new();
+
+        // Obfuscated - starts immediately (best for DPI-heavy networks)
+        {
+            let a = addr.to_owned();
+            let s = socks5.cloned();
+            set.spawn(async move {
+                tracing::debug!("[ferogram] probe_transport: Obfuscated starting (t=0 ms)");
+                let t0 = tokio::time::Instant::now();
+                match Connection::connect_raw(
+                    &a,
+                    s.as_ref(),
+                    None,
+                    &TransportKind::Obfuscated { secret: None },
+                    dc_id,
+                )
+                .await
+                {
+                    Ok(c) => {
+                        let ms = t0.elapsed().as_millis() as u64;
+                        tracing::debug!(
+                            "[ferogram] probe_transport: Obfuscated DH done in {ms} ms"
+                        );
+                        Ok((c, "Obfuscated", ms))
+                    }
+                    Err(e) => {
+                        let ms = t0.elapsed().as_millis() as u64;
+                        tracing::debug!(
+                            "[ferogram] probe_transport: Obfuscated failed after {ms} ms: {e}"
+                        );
+                        Err(e)
+                    }
+                }
+            });
+        }
+
+        // Abridged - 200 ms stagger
+        {
+            let a = addr.to_owned();
+            let s = socks5.cloned();
+            set.spawn(async move {
+                tracing::debug!("[ferogram] probe_transport: Abridged starting (t=200 ms)");
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                let t0 = tokio::time::Instant::now();
+                match Connection::connect_raw(&a, s.as_ref(), None, &TransportKind::Abridged, dc_id)
+                    .await
+                {
+                    Ok(c) => {
+                        let ms = t0.elapsed().as_millis() as u64;
+                        tracing::debug!("[ferogram] probe_transport: Abridged DH done in {ms} ms");
+                        Ok((c, "Abridged", ms))
+                    }
+                    Err(e) => {
+                        let ms = t0.elapsed().as_millis() as u64;
+                        tracing::debug!(
+                            "[ferogram] probe_transport: Abridged failed after {ms} ms: {e}"
+                        );
+                        Err(e)
+                    }
+                }
+            });
+        }
+
+        // Http - 800 ms stagger (last resort, no socks5)
+        {
+            let a = addr.to_owned();
+            set.spawn(async move {
+                tracing::debug!("[ferogram] probe_transport: Http starting (t=800 ms)");
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                let t0 = tokio::time::Instant::now();
+                match Connection::connect_raw(&a, None, None, &TransportKind::Http, dc_id).await {
+                    Ok(c) => {
+                        let ms = t0.elapsed().as_millis() as u64;
+                        tracing::debug!("[ferogram] probe_transport: Http DH done in {ms} ms");
+                        Ok((c, "Http", ms))
+                    }
+                    Err(e) => {
+                        let ms = t0.elapsed().as_millis() as u64;
+                        tracing::debug!(
+                            "[ferogram] probe_transport: Http failed after {ms} ms: {e}"
+                        );
+                        Err(e)
+                    }
+                }
+            });
+        }
+
+        let mut last_err =
+            InvocationError::Deserialize("probe_transports_race: all transports failed".into());
+        while let Some(outcome) = set.join_next().await {
+            match outcome {
+                Ok(Ok((conn, label, ms))) => {
+                    set.abort_all();
+                    tracing::info!(
+                        "[ferogram] probe_transport winner: {label} ({ms} ms) - reusing connection, no second DH"
+                    );
+                    // drain cancelled tasks
+                    while let Some(r) = set.join_next().await {
+                        if let Err(e) = r
+                            && e.is_cancelled()
+                        {
+                            tracing::debug!("[ferogram] probe_transport: slower transport aborted");
+                        }
+                    }
+                    return Ok(conn);
+                }
+                Ok(Err(e)) => {
+                    last_err = e;
+                }
+                Err(e) if e.is_cancelled() => {}
+                Err(_) => {}
+            }
+        }
+        Err(last_err)
+    }
+
+    /// Fresh connect with optional transport probing and resilient fallback.
+    async fn fresh_connect_resilient(
         socks5: Option<&crate::socks5::Socks5Config>,
         mtproxy: Option<&crate::proxy::MtProxyConfig>,
         transport: &TransportKind,
+        probe_transport: bool,
+        resilient_connect: bool,
     ) -> Result<(Connection, i32, HashMap<i32, DcEntry>), InvocationError> {
-        tracing::debug!("[ferogram] Fresh connect to DC2 …");
-        let conn = Connection::connect_raw(
-            crate::dc_migration::fallback_dc_addr(2),
-            socks5,
-            mtproxy,
-            transport,
-            2i16,
-        )
-        .await?;
-        let opts = session::default_dc_addresses()
-            .into_iter()
-            .map(|(id, addr)| {
-                (
-                    id,
-                    DcEntry {
-                        dc_id: id,
-                        addr,
-                        auth_key: None,
-                        first_salt: 0,
-                        time_offset: 0,
-                        flags: DcFlags::NONE,
-                    },
-                )
-            })
-            .collect();
-        Ok((conn, 2, opts))
+        let dc_id: i16 = 2;
+        let default_addr = crate::dc_migration::fallback_dc_addr(dc_id as i32).to_owned();
+
+        let build_opts = || -> HashMap<i32, DcEntry> {
+            session::default_dc_addresses()
+                .into_iter()
+                .map(|(id, addr)| {
+                    (
+                        id,
+                        DcEntry {
+                            dc_id: id,
+                            addr,
+                            auth_key: None,
+                            first_salt: 0,
+                            time_offset: 0,
+                            flags: DcFlags::NONE,
+                        },
+                    )
+                })
+                .collect()
+        };
+
+        // Transport probing: race transports; winner becomes the final connection.
+        if probe_transport && mtproxy.is_none() {
+            tracing::info!("[ferogram] probe_transport: racing transports for DC{dc_id} …");
+            match Self::probe_transports_race(&default_addr, socks5, dc_id).await {
+                Ok(conn) => return Ok((conn, dc_id as i32, build_opts())),
+                Err(e) => {
+                    tracing::warn!(
+                        "[ferogram] probe_transport: all transports failed ({e}); \
+                         falling through to resilient path"
+                    );
+                }
+            }
+        }
+
+        // Normal direct connect.
+        tracing::debug!("[ferogram] Fresh connect to DC{dc_id} …");
+        let direct_result =
+            Connection::connect_raw(&default_addr, socks5, mtproxy, transport, dc_id).await;
+
+        if let Ok(conn) = direct_result {
+            return Ok((conn, dc_id as i32, build_opts()));
+        }
+        let direct_err = direct_result.err().unwrap();
+
+        if !resilient_connect {
+            return Err(direct_err);
+        }
+
+        // DNS-over-HTTPS fallback.
+        tracing::warn!(
+            "[ferogram] Direct connect failed ({direct_err}); \
+             trying DNS-over-HTTPS fallback …"
+        );
+        let resolver = crate::dns_resolver::DnsResolver::new();
+        let doh_ips = resolver.resolve("venus.web.telegram.org").await;
+        let port = default_addr.split(':').next_back().unwrap_or("443");
+        for ip in &doh_ips {
+            let addr = format!("{ip}:{port}");
+            tracing::info!("[ferogram] DoH resolved DC{dc_id} -> {addr}; connecting …");
+            match Connection::connect_raw(&addr, socks5, mtproxy, transport, dc_id).await {
+                Ok(conn) => {
+                    tracing::info!("[ferogram] DoH fallback connect to DC{dc_id} ✓ ({addr})");
+                    return Ok((conn, dc_id as i32, build_opts()));
+                }
+                Err(e) => tracing::debug!("[ferogram] DoH addr {addr} failed: {e}"),
+            }
+        }
+
+        // Firebase / Google special-config fallback.
+        tracing::warn!(
+            "[ferogram] DoH fallback failed ({} candidates); \
+             trying Firebase special-config …",
+            doh_ips.len()
+        );
+        let special = crate::special_config::SpecialConfig::new();
+        match special.fetch().await {
+            Some(dc_options) => {
+                for opt in dc_options.iter().filter(|o| o.dc_id == dc_id as i32) {
+                    let addr = format!("{}:{}", opt.ip, opt.port);
+                    tracing::info!(
+                        "[ferogram] Firebase DC{} -> {addr}; connecting …",
+                        opt.dc_id
+                    );
+                    match Connection::connect_raw(&addr, socks5, mtproxy, transport, dc_id).await {
+                        Ok(conn) => {
+                            tracing::info!("[ferogram] Firebase connect to DC{dc_id} ✓ ({addr})");
+                            return Ok((conn, dc_id as i32, build_opts()));
+                        }
+                        Err(e) => tracing::debug!("[ferogram] Firebase addr {addr} failed: {e}"),
+                    }
+                }
+                Err(InvocationError::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "all resilient connect strategies exhausted",
+                )))
+            }
+            None => Err(InvocationError::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "all resilient connect strategies exhausted (Firebase unavailable)",
+            ))),
+        }
     }
 
     // Session
@@ -1440,46 +2067,48 @@ impl Client {
         use session::{CachedPeer, UpdatesStateSnap};
 
         let writer_guard = self.inner.writer.lock().await;
-        let home_dc_id = *self.inner.home_dc_id.lock();
+        let home_dc_id = *self.inner.home_dc_id.lock().await;
+        let dc_options = self.inner.dc_options.lock().await;
 
-        // Collect into an owned Vec before any await so no parking_lot::MutexGuard
-        // (!Send) is held across dc_pool.lock().await.
-        let mut dcs: Vec<DcEntry> = {
-            let dc_options = self.inner.dc_options.lock();
-            let mut v: Vec<DcEntry> = dc_options
-                .values()
-                .map(|e| DcEntry {
-                    dc_id: e.dc_id,
-                    addr: e.addr.clone(),
-                    auth_key: if e.dc_id == home_dc_id {
-                        Some(writer_guard.auth_key_bytes())
-                    } else {
-                        e.auth_key
-                    },
-                    first_salt: if e.dc_id == home_dc_id {
-                        writer_guard.first_salt()
-                    } else {
-                        e.first_salt
-                    },
-                    time_offset: if e.dc_id == home_dc_id {
-                        writer_guard.time_offset()
-                    } else {
-                        e.time_offset
-                    },
-                    flags: e.flags,
-                })
-                .collect();
-            let media_opts = self.inner.media_dc_options.lock();
+        let mut dcs: Vec<DcEntry> = dc_options
+            .values()
+            .map(|e| DcEntry {
+                dc_id: e.dc_id,
+                addr: e.addr.clone(),
+                auth_key: if e.dc_id == home_dc_id {
+                    Some(writer_guard.auth_key_bytes())
+                } else {
+                    e.auth_key
+                },
+                first_salt: if e.dc_id == home_dc_id {
+                    writer_guard.first_salt()
+                } else {
+                    e.first_salt
+                },
+                time_offset: if e.dc_id == home_dc_id {
+                    writer_guard.time_offset()
+                } else {
+                    e.time_offset
+                },
+                flags: e.flags,
+            })
+            .collect();
+        // Also persist media DCs so they survive restart.
+        {
+            let media_opts = self.inner.media_dc_options.lock().await;
             for e in media_opts.values() {
-                v.push(e.clone());
+                dcs.push(e.clone());
             }
-            v
-        }; // dc_options and media_opts dropped here, before any await
-
+        }
         self.inner.dc_pool.lock().await.collect_keys(&mut dcs);
+        // Also collect auth keys from the transfer pool so that after restart
+        // foreign-DC transfer workers can be re-authenticated without a full
+        // DH round-trip.  Without this, every restart seeds transfer connections
+        // from stale dc_options and triggers AUTH_KEY_UNREGISTERED on the first use.
+        self.inner.transfer_pool.lock().await.collect_keys(&mut dcs);
 
         let pts_snap = {
-            let s = self.inner.pts_state.lock();
+            let s = self.inner.pts_state.lock().await;
             UpdatesStateSnap {
                 pts: s.pts,
                 qts: s.qts,
@@ -1490,24 +2119,61 @@ impl Client {
         };
 
         let peers: Vec<CachedPeer> = {
-            let pc = &self.inner.peer_cache;
-            let mut v =
-                Vec::with_capacity((pc.users.entry_count() + pc.channels.entry_count()) as usize);
-            for (id, hash) in pc.users.iter() {
+            let cache = self.inner.peer_cache.read().await;
+            let mut v = Vec::with_capacity(
+                cache.users.len()
+                    + cache.channels.len()
+                    + cache.chats.len()
+                    + cache.channels_min.len(),
+            );
+            for (&id, &hash) in &cache.users {
                 v.push(CachedPeer {
-                    id: *id,
+                    id,
                     access_hash: hash,
                     is_channel: false,
+                    is_chat: false,
                 });
             }
-            for (id, hash) in pc.channels.iter() {
+            for (&id, &hash) in &cache.channels {
                 v.push(CachedPeer {
-                    id: *id,
+                    id,
                     access_hash: hash,
                     is_channel: true,
+                    is_chat: false,
+                });
+            }
+            for &id in &cache.chats {
+                v.push(CachedPeer {
+                    id,
+                    access_hash: 0,
+                    is_channel: false,
+                    is_chat: true,
+                });
+            }
+            // channels_min: type byte 3. No access_hash; just existence tracking.
+            // Re-populated quickly on reconnect, but persisting avoids false "unknown peer" logs.
+            for &id in &cache.channels_min {
+                v.push(CachedPeer {
+                    id,
+                    access_hash: 0,
+                    is_channel: true,
+                    is_chat: false,
                 });
             }
             v
+        };
+
+        let min_peers: Vec<session::CachedMinPeer> = {
+            let cache = self.inner.peer_cache.read().await;
+            cache
+                .min_contexts
+                .iter()
+                .map(|(&user_id, &(peer_id, msg_id))| session::CachedMinPeer {
+                    user_id,
+                    peer_id,
+                    msg_id,
+                })
+                .collect()
         };
 
         PersistedSession {
@@ -1515,16 +2181,61 @@ impl Client {
             dcs,
             updates_state: pts_snap,
             peers,
+            min_peers,
         }
     }
 
     /// Persist the current session to the configured [`SessionBackend`].
     pub async fn save_session(&self) -> Result<(), InvocationError> {
-        let session = self.build_persisted_session().await;
+        // build_persisted_session() is the source of truth for structural
+        // session data: auth key, salts, DC table, peer cache.
+        // It must NOT be trusted for update counters: there is a window
+        // between when it snapshots pts_state and when save() commits to
+        // storage where apply_update_state() may have advanced pts further.
+        //
+        // Architecture:
+        //   runtime pts_state mutex  = authoritative source for pts/qts/date/seq
+        //   build_persisted_session  = authoritative source for everything else
+        //
+        // We build the structural snapshot, then unconditionally overwrite its
+        // updates_state from the live mutex. The snapshot's own copy is discarded.
+        let mut session = self.build_persisted_session().await;
+
+        // Overwrite update counters from live mutex  the only correct source.
+        // Channel pts were already collected inside build_persisted_session from
+        // the same pts_state, so only the scalar fields need refreshing here.
+        {
+            let s = self.inner.pts_state.lock().await;
+            session.updates_state.pts = s.pts;
+            session.updates_state.qts = s.qts;
+            session.updates_state.date = s.date;
+            session.updates_state.seq = s.seq;
+        }
+
         self.inner
             .session_backend
             .save(&session)
             .map_err(InvocationError::Io)?;
+
+        // Secondary monotonic guard (defence-in-depth):
+        //   SQL backends   MAX() in write_session absorbs any residual race; no-op.
+        //   BinaryFile     re-applies the same fresh values written above.
+        //   InMemory       same; low risk but keeps the invariant unbreakable.
+        {
+            use crate::session_backend::UpdateStateChange;
+            let (pts, qts, date, seq) = (
+                session.updates_state.pts,
+                session.updates_state.qts,
+                session.updates_state.date,
+                session.updates_state.seq,
+            );
+            if pts > 0 {
+                let b = &self.inner.session_backend;
+                let _ = b.apply_update_state(UpdateStateChange::Primary { pts, date, seq });
+                let _ = b.apply_update_state(UpdateStateChange::Secondary { qts });
+            }
+        }
+
         tracing::debug!("[ferogram] Session saved ✓");
         Ok(())
     }
@@ -1548,6 +2259,7 @@ impl Client {
         self.inner
             .media_dc_options
             .lock()
+            .await
             .get(&dc_id)
             .map(|e| e.addr.clone())
     }
@@ -1555,8 +2267,8 @@ impl Client {
     /// Return the best media DC address for the current home DC (falls back to
     /// any known media DC if no home-DC media entry exists).
     pub async fn best_media_dc_addr(&self) -> Option<(i32, String)> {
-        let home = *self.inner.home_dc_id.lock();
-        let media = self.inner.media_dc_options.lock();
+        let home = *self.inner.home_dc_id.lock().await;
+        let media = self.inner.media_dc_options.lock().await;
         media
             .get(&home)
             .map(|e| (home, e.addr.clone()))
@@ -1603,53 +2315,10 @@ impl Client {
         self.inner
             .is_bot
             .store(true, std::sync::atomic::Ordering::Relaxed);
-
-        // Sync pts/qts/seq from the server so the very first incoming update
-        // is not treated as a gap (pts=0 → expected=1, got=real_pts → gap →
-        // 1-second buffer → first message never replied to).
-        //
-        // tDesktop sends MTPupdates_GetState immediately at session init.
-        // We do it here, after sign-in, so pts is valid before the update
-        // stream opens.  Failure is non-fatal: the next gap_tick will recover.
-        if let Err(e) = self.sync_pts_state().await {
-            tracing::warn!("[ferogram] bot_sign_in: sync_pts_state failed (non-fatal): {e}");
-        }
-
-        // Resolve any gaps that accumulated during the auth handshake.
-        //
-        // The MTProto handshake + importBotAuthorization RPC can take several
-        // seconds.  Updates that arrived at the server in that window are
-        // queued but not yet pushed; getDifference drains them before the
-        // update stream starts delivering live pushes.  This mirrors the
-        // tDesktop new_session_created → getDifference path.
-        //
-        // If pts == 0 (sync_pts_state failed), get_difference's early-return
-        // guard calls sync_pts_state itself and returns Ok([]); harmless.
-        let c = self.clone();
-        let utx = self.inner.update_tx.clone();
-        tokio::spawn(async move {
-            match c.get_difference().await {
-                Ok(missed) => {
-                    if !missed.is_empty() {
-                        tracing::info!(
-                            "[ferogram] bot_sign_in: {} updates replayed from auth-window gap",
-                            missed.len()
-                        );
-                    }
-                    for u in missed {
-                        let u = attach_client_to_update(u, &c);
-                        if utx.try_send(u).is_err() {
-                            tracing::warn!(
-                                "[ferogram] update channel full: dropping auth-window update"
-                            );
-                            break;
-                        }
-                    }
-                }
-                Err(e) => tracing::warn!("[ferogram] bot_sign_in: auth-window getDifference: {e}"),
-            }
-        });
-
+        self.inner
+            .signed_in
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = self.sync_pts_state().await;
         Ok(name)
     }
 
@@ -1706,6 +2375,10 @@ impl Client {
                 self.cache_user(&a.user).await;
                 let name = Self::extract_user_name(&a.user);
                 tracing::info!("[ferogram] Signed in ✓  Welcome, {name}!");
+                self.inner
+                    .signed_in
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                let _ = self.sync_pts_state().await;
                 Ok(name)
             }
             tl::enums::auth::Authorization::SignUpRequired(_) => Err(SignInError::SignUpRequired),
@@ -1750,6 +2423,10 @@ impl Client {
                 self.cache_user(&a.user).await;
                 let name = Self::extract_user_name(&a.user);
                 tracing::info!("[ferogram] 2FA ✓  Welcome, {name}!");
+                self.inner
+                    .signed_in
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                let _ = self.sync_pts_state().await;
                 Ok(name)
             }
             tl::enums::auth::Authorization::SignUpRequired(_) => Err(InvocationError::Deserialize(
@@ -1764,6 +2441,19 @@ impl Client {
         match self.rpc_call_raw(&req).await {
             Ok(_) => {
                 tracing::info!("[ferogram] Signed out ✓");
+                // Clear all pooled connections and cached auth keys so that
+                // stale sockets cannot survive logout/reset (gap 3 fix).
+                self.inner.dc_pool.lock().await.conns.clear();
+                self.inner.transfer_pool.lock().await.conns.clear();
+                {
+                    let mut opts = self.inner.dc_options.lock().await;
+                    for entry in opts.values_mut() {
+                        entry.auth_key = None;
+                        entry.first_salt = 0;
+                    }
+                }
+                // Clear per-DC connect gates so fresh connections can be made after re-login.
+                self.inner.dc_connect_gates.lock().unwrap().clear();
                 Ok(true)
             }
             Err(e) if e.is("AUTH_KEY_UNREGISTERED") => Ok(false),
@@ -1782,13 +2472,14 @@ impl Client {
         &self,
         ids: &[i64],
     ) -> Result<Vec<Option<crate::types::User>>, InvocationError> {
+        let cache = self.inner.peer_cache.read().await;
         let input_ids: Vec<tl::enums::InputUser> = ids
             .iter()
             .map(|&id| {
                 if id == 0 {
                     tl::enums::InputUser::UserSelf
                 } else {
-                    let hash = self.inner.peer_cache.users.get(&id).unwrap_or(0);
+                    let hash = cache.users.get(&id).copied().unwrap_or(0);
                     tl::enums::InputUser::InputUser(tl::types::InputUser {
                         user_id: id,
                         access_hash: hash,
@@ -1796,6 +2487,7 @@ impl Client {
                 }
             })
             .collect();
+        drop(cache);
         let req = tl::functions::users::GetUsers { id: input_ids };
         let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
@@ -1895,8 +2587,6 @@ impl Client {
     // restart loop so that if reader_loop ever exits for any reason other than
     // a clean shutdown request, it is automatically reconnected and restarted.
     //
-    // This mirrors what Telegram Desktop does: the network thread is considered
-    // infrastructure and is never allowed to die permanently.
     //
     // On unexpected exit: drain pending RPCs with ConnectionReset, backoff-reconnect
     // (500ms to 5s cap), spawn init_connection as a background task (same pattern
@@ -1926,13 +2616,9 @@ impl Client {
                 // Clean shutdown
                 _ = shutdown_token.cancelled() => {
                     tracing::info!("[ferogram] Reader task: shutdown requested, exiting cleanly.");
-                    {
-                        let _pending_keys: Vec<i64> = self.inner.pending.iter().map(|_e| *_e.key()).collect();
-                        for _pk in _pending_keys {
-                            if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
-                                let _ = tx.send(Err(InvocationError::Dropped));
-                            }
-                        }
+                    let mut pending = self.inner.pending.lock().await;
+                    for (_, tx) in pending.drain() {
+                        let _ = tx.send(Err(InvocationError::Dropped));
                     }
                     return;
                 }
@@ -1958,21 +2644,20 @@ impl Client {
             );
 
             {
-                {
-                    let _pending_keys: Vec<i64> =
-                        self.inner.pending.iter().map(|_e| *_e.key()).collect();
-                    for _pk in _pending_keys {
-                        if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
-                            let _ = tx.send(Err(InvocationError::Io(std::io::Error::new(
-                                std::io::ErrorKind::ConnectionReset,
-                                "reader task restarted",
-                            ))));
-                        }
-                    }
+                let mut pending = self.inner.pending.lock().await;
+                for (_, tx) in pending.drain() {
+                    let _ = tx.send(Err(InvocationError::Io(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionReset,
+                        "reader task restarted",
+                    ))));
                 }
             }
             // drain sent_bodies alongside pending to prevent unbounded growth.
-            self.inner.writer.lock().await.sent_bodies.clear();
+            {
+                let mut w = self.inner.writer.lock().await;
+                w.sent_bodies.clear();
+                w.container_map.clear();
+            }
 
             let mut delay_ms = RECONNECT_BASE_MS;
             let new_conn = loop {
@@ -2027,26 +2712,15 @@ impl Client {
                     }
                 };
                 if result.is_ok() {
-                    // After fresh DH, wait 2 s for key propagation before getDifference.
+                    // After fresh DH, retry GetState with backoff instead of a fixed 2 s sleep.
                     if c.inner
                         .dh_in_progress
                         .load(std::sync::atomic::Ordering::SeqCst)
                     {
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        c.sync_state_after_dh().await;
                     }
                     let missed = match c.get_difference().await {
                         Ok(updates) => updates,
-                        Err(ref e)
-                            if matches!(e,
-                            InvocationError::Rpc(r) if r.code == 401) =>
-                        {
-                            tracing::warn!(
-                                "[ferogram] getDifference AUTH_KEY_UNREGISTERED after \
-                                 fresh DH: falling back to sync_pts_state"
-                            );
-                            let _ = c.sync_pts_state().await;
-                            vec![]
-                        }
                         Err(e) => {
                             tracing::warn!("[ferogram] getDifference failed after reconnect: {e}");
                             vec![]
@@ -2096,7 +2770,7 @@ impl Client {
         // This prevents a transient 30 s timeout from nuking a valid session.
         let mut init_fail_count: u32 = 0;
 
-        let mut gap_tick = tokio::time::interval(std::time::Duration::from_millis(200));
+        let mut gap_tick = tokio::time::interval(std::time::Duration::from_millis(1500));
         gap_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut restart_interval = self.inner.restart_policy.restart_interval().map(|d| {
@@ -2118,8 +2792,8 @@ impl Client {
                     // lock acquisition), so there is no need to guard against a
                     // concurrent in-flight call here : get_difference() will bail
                     // safely on its own.  Just check has_global() + deadline.
-                    if self.inner.possible_gap.lock().has_global() {
-                        let gap_expired = self.inner.possible_gap.lock().global_deadline_elapsed();
+                    if self.inner.possible_gap.lock().await.has_global() {
+                        let gap_expired = self.inner.possible_gap.lock().await.global_deadline_elapsed();
                         if gap_expired {
                             let c = self.clone();
                             tokio::spawn(async move {
@@ -2127,46 +2801,6 @@ impl Client {
                                     tracing::warn!("[ferogram] gap tick getDifference: {e}");
                                 }
                             });
-                        }
-                    }
-                    // evict containers older than 600 s and fail their inner RPCs.
-                    // Mirrors tDesktop clearOldContainers(): inner requests that the server
-                    // silently dropped will never get acked, so fail them now so the caller
-                    // can retry rather than hanging until the 30 s RPC timeout.
-                    {
-                        const CONTAINER_MAX_AGE: std::time::Duration =
-                            std::time::Duration::from_secs(600);
-                        let stale: Vec<(i64, i64)> = {
-                            let w = self.inner.writer.lock().await;
-                            w.container_ages.iter()
-                                .filter(|(_, t)| t.elapsed() >= CONTAINER_MAX_AGE)
-                                .filter_map(|(&cid, _)| {
-                                    w.container_map.get(&cid).map(|&iid| (cid, iid))
-                                })
-                                .collect()
-                        };
-                        if !stale.is_empty() {
-                            let mut w = self.inner.writer.lock().await;
-                            for (cid, inner_id) in &stale {
-                                w.container_map.remove(cid);
-                                w.container_ages.remove(cid);
-                                w.sent_bodies.remove(inner_id);
-                                tracing::warn!(
-                                    "[ferogram] container cid={cid} age > 600 s, \
-                                     failing inner request msg_id={inner_id}"
-                                );
-                            }
-                            drop(w);
-                            for (_, inner_id) in stale {
-                                if let Some((_, tx)) = self.inner.pending.remove(&inner_id) {
-                                    let _ = tx.send(Err(InvocationError::Io(
-                                        std::io::Error::new(
-                                            std::io::ErrorKind::TimedOut,
-                                            "container unacked for >600 s",
-                                        ),
-                                    )));
-                                }
-                            }
                         }
                     }
                 }
@@ -2182,32 +2816,32 @@ impl Client {
                 outcome = recv_frame_with_keepalive(&mut rh, &fk, self, &ak) => {
                     match outcome {
                         FrameOutcome::Frame(mut raw) => {
-                            let msg = match EncryptedSession::decrypt_frame(&ak, sid, &mut raw) {
+                            let msg = match EncryptedSession::decrypt_frame_dedup(&ak, sid, &mut raw, &self.inner.seen_msg_ids) {
                                 Ok(m)  => m,
                                 Err(e) => {
                                     // A decrypt failure (e.g. Crypto(InvalidBuffer) from a
                                     // 4-byte transport error that slipped through) means our
                                     // auth key is stale or the framing is broken. Treat it as
-                                    // fatal: same path as FrameOutcome::Error: so pending RPCs
-                                    // unblock immediately instead of hanging for 30 s.
+                                    // Fatal: unblock pending RPCs immediately.
                                     tracing::warn!("[ferogram] Decrypt error: {e:?}: failing pending waiters and reconnecting");
                                     drop(init_rx.take());
-                                    { let msg = format!("decrypt error: {e}");
-                                        {
-                                            let _pending_keys: Vec<i64> = self.inner.pending.iter().map(|_e| *_e.key()).collect();
-                                            for _pk in _pending_keys {
-                                                if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
-                                                    let _ = tx.send(Err(InvocationError::Io(
+                                    {
+                                        let mut pending = self.inner.pending.lock().await;
+                                        let msg = format!("decrypt error: {e}");
+                                        for (_, tx) in pending.drain() {
+                                            let _ = tx.send(Err(InvocationError::Io(
                                                 std::io::Error::new(
                                                     std::io::ErrorKind::InvalidData,
                                                     msg.clone(),
                                                 )
                                             )));
-                                                }
-                                            }
                                         }
                                     }
-                                    self.inner.writer.lock().await.sent_bodies.clear();
+                                    {
+                                        let mut w = self.inner.writer.lock().await;
+                                        w.sent_bodies.clear();
+                                        w.container_map.clear();
+                                    }
                                     match self.do_reconnect_loop(
                                         RECONNECT_BASE_MS, &mut rh, &mut fk, &mut ak, &mut sid,
                                         network_hint_rx,
@@ -2222,45 +2856,6 @@ impl Client {
                             // (it's not the "server salt" we should use: that only comes
                             // from new_session_created, bad_server_salt, or future_salts).
                             // Overwriting enc.salt here would clobber the managed salt pool.
-
-                            // validate msg_id lower 2 bits.
-                            // Server messages must have bits 0-1 == 0b01 or 0b11
-                            // (i.e. odd lower bit set, as per MTProto spec §4.1.3).
-                            // Bits 0b00 or 0b10 indicate a malformed/replayed frame -
-                            // tDesktop restarts the session on this violation.
-                            let lower2 = (msg.msg_id & 0x03) as u8;
-                            if lower2 != 1 && lower2 != 3 {
-                                tracing::warn!(
-                                    "[ferogram] msg_id lower bits invalid (0b{lower2:02b}): \
-                                     expected 0b01 or 0b11: reconnecting"
-                                );
-                                drop(init_rx.take());
-                                { let msg_str = format!("msg_id bits invalid: 0b{lower2:02b}");
-                                    {
-                                        let _pending_keys: Vec<i64> = self.inner.pending.iter().map(|_e| *_e.key()).collect();
-                                        for _pk in _pending_keys {
-                                            if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
-                                                let _ = tx.send(Err(InvocationError::Io(
-                                            std::io::Error::new(
-                                                std::io::ErrorKind::InvalidData,
-                                                msg_str.clone(),
-                                            )
-                                        )));
-                                            }
-                                        }
-                                    }
-                                }
-                                self.inner.writer.lock().await.sent_bodies.clear();
-                                match self.do_reconnect_loop(
-                                    RECONNECT_BASE_MS, &mut rh, &mut fk, &mut ak, &mut sid,
-                                    network_hint_rx,
-                                ).await {
-                                    Some(rx) => { init_rx = Some(rx); }
-                                    None      => return,
-                                }
-                                continue;
-                            }
-
                             self.route_frame(msg.body, msg.msg_id).await;
 
                             //: Acks are NOT flushed here standalone.
@@ -2273,7 +2868,16 @@ impl Client {
                             tracing::warn!("[ferogram] Reader: connection error: {e}");
                             drop(init_rx.take()); // discard any in-flight init
 
-                            // Only -404 = Telegram rejected the key. EOF/RST = TCP drop.
+                            // Detect definitive auth-key rejection.  Telegram signals
+                            // this with a -404 transport error (now surfaced as Rpc(-404)
+                            // by recv_frame_read).  ONLY in that case do we clear the saved
+                            // key so do_reconnect_loop falls through to connect_raw (fresh DH).
+                            //
+                            // DO NOT treat UnexpectedEof or ConnectionReset as stale-key:
+                            // those are normal TCP disconnects (server-side timeout, network
+                            // blip, download finishing on a transfer conn, etc.).  Auth keys
+                            // live for months  - clearing them on every TCP drop destroys the
+                            // session and produces AUTH_KEY_UNREGISTERED on the next connect.
                             let key_is_stale = matches!(&e, InvocationError::Rpc(r) if r.code == -404);
                             // Only clear the key if no DH is already in progress.
                             // The startup init_connection path may have already claimed
@@ -2285,8 +2889,8 @@ impl Client {
                                         std::sync::atomic::Ordering::SeqCst)
                                     .is_ok();
                             if clear_key {
-                                let home_dc_id = *self.inner.home_dc_id.lock();
-                                let mut opts = self.inner.dc_options.lock();
+                                let home_dc_id = *self.inner.home_dc_id.lock().await;
+                                let mut opts = self.inner.dc_options.lock().await;
                                 if let Some(entry) = opts.get_mut(&home_dc_id) {
                                     tracing::warn!(
                                         "[ferogram] Stale auth key on DC{home_dc_id} ({e}) \
@@ -2298,20 +2902,21 @@ impl Client {
 
                             // Fail all in-flight RPCs immediately so AutoSleep
                             // retries them as soon as we reconnect.
-                            { let msg = e.to_string();
-                                        {
-                                    let _pending_keys: Vec<i64> = self.inner.pending.iter().map(|_e| *_e.key()).collect();
-                                    for _pk in _pending_keys {
-                                        if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
-                                            let _ = tx.send(Err(InvocationError::Io(
+                            {
+                                let mut pending = self.inner.pending.lock().await;
+                                let msg = e.to_string();
+                                for (_, tx) in pending.drain() {
+                                    let _ = tx.send(Err(InvocationError::Io(
                                         std::io::Error::new(
                                             std::io::ErrorKind::ConnectionReset, msg.clone()))));
-                                        }
-                                    }
-                                        }
+                                }
                             }
                             // drain sent_bodies so it doesn't grow unbounded under loss.
-                            self.inner.writer.lock().await.sent_bodies.clear();
+                            {
+                                let mut w = self.inner.writer.lock().await;
+                                w.sent_bodies.clear();
+                                w.container_map.clear();
+                            }
 
                             // Skip backoff when the key is stale: no point waiting before
                             // fresh DH: the server told us directly to renegotiate.
@@ -2378,7 +2983,9 @@ impl Client {
                         }
 
                         Ok(Err(e)) => {
-                            // Only -404 = key rejected. EOF/RST = TCP drop, key still valid.
+                            // TCP connected but init RPC failed.
+                            // Only clear auth key on definitive bad-key signals from Telegram.
+                            // -429 = TRANSPORT_FLOOD: key is valid, just throttled: do NOT clear.
                             let key_is_stale = matches!(&e, InvocationError::Rpc(r) if r.code == -404);
                             // Use compare_exchange so we don't stomp on another in-progress DH.
                             let dh_claimed = key_is_stale
@@ -2394,8 +3001,8 @@ impl Client {
                                     : clearing auth key for fresh DH …"
                                 );
                                 init_fail_count = 0;
-                                let home_dc_id = *self.inner.home_dc_id.lock();
-                                let mut opts = self.inner.dc_options.lock();
+                                let home_dc_id = *self.inner.home_dc_id.lock().await;
+                                let mut opts = self.inner.dc_options.lock().await;
                                 if let Some(entry) = opts.get_mut(&home_dc_id) {
                                     entry.auth_key = None;
                                 }
@@ -2407,17 +3014,14 @@ impl Client {
                                     : retrying with same key …"
                                 );
                             }
-                            { let msg = e.to_string();
-                                        {
-                                    let _pending_keys: Vec<i64> = self.inner.pending.iter().map(|_e| *_e.key()).collect();
-                                    for _pk in _pending_keys {
-                                        if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
-                                            let _ = tx.send(Err(InvocationError::Io(
+                            {
+                                let mut pending = self.inner.pending.lock().await;
+                                let msg = e.to_string();
+                                for (_, tx) in pending.drain() {
+                                    let _ = tx.send(Err(InvocationError::Io(
                                         std::io::Error::new(
                                             std::io::ErrorKind::ConnectionReset, msg.clone()))));
-                                        }
-                                    }
-                                        }
+                                }
                             }
                             match self.do_reconnect_loop(
                                 0, &mut rh, &mut fk, &mut ak, &mut sid, network_hint_rx,
@@ -2461,7 +3065,7 @@ impl Client {
                 // ack the rpc_result container message
                 self.inner.writer.lock().await.pending_ack.push(msg_id);
                 let result = unwrap_envelope(inner);
-                if let Some((_, tx)) = self.inner.pending.remove(&req_msg_id) {
+                if let Some(tx) = self.inner.pending.lock().await.remove(&req_msg_id) {
                     // request resolved: remove from sent_bodies and container_map
                     self.inner
                         .writer
@@ -2527,7 +3131,10 @@ impl Client {
                 if body.len() < 8 {
                     return;
                 }
-                let count = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+                // MTProto spec max: 1020 items per container.
+                const MAX_CONTAINER_ITEMS: usize = 1020;
+                let count = (u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize)
+                    .min(MAX_CONTAINER_ITEMS);
                 let mut pos = 8usize;
                 for _ in 0..count {
                     if pos + 16 > body.len() {
@@ -2537,36 +3144,22 @@ impl Client {
                     let inner_msg_id = i64::from_le_bytes(body[pos..pos + 8].try_into().unwrap());
                     let inner_len =
                         u32::from_le_bytes(body[pos + 12..pos + 16].try_into().unwrap()) as usize;
-                    // Reject unaligned or too-short inner frames (tDesktop validates this).
-                    // Note: inner_msg_id may legitimately be less than the container msg_id
-                    // because the server prepares inner messages before assembling the container.
-                    if inner_len & 3 != 0 || inner_len < 4 {
-                        tracing::warn!(
-                            "[ferogram] msg_container: inner_len {inner_len} bad alignment or < 4: dropping container"
-                        );
-                        break;
-                    }
-                    // inner msg_id lower 2 bits must be 1 or 3 (tDesktop: RestartConnection).
-                    {
-                        let bits = (inner_msg_id & 0x03) as u8;
-                        if bits != 1 && bits != 3 {
-                            tracing::warn!(
-                                "[ferogram] msg_container: inner_msg_id bits 0b{bits:02b} invalid: skipping message"
-                            );
-                            pos += 16;
-                            if pos + inner_len > body.len() {
-                                break;
-                            }
-                            pos += inner_len;
-                            continue;
-                        }
-                    }
                     pos += 16;
                     if pos + inner_len > body.len() {
                         break;
                     }
                     let inner = body[pos..pos + inner_len].to_vec();
                     pos += inner_len;
+                    // MTProto spec forbids nested containers; drop silently.
+                    if inner.len() >= 4 {
+                        let inner_cid = u32::from_le_bytes(inner[..4].try_into().unwrap());
+                        if inner_cid == ID_MSG_CONTAINER {
+                            tracing::warn!(
+                                "[ferogram] dropping nested msg_container (proto violation)"
+                            );
+                            continue;
+                        }
+                    }
                     Box::pin(self.route_frame(inner, inner_msg_id)).await;
                 }
             }
@@ -2600,61 +3193,72 @@ impl Client {
                         });
                         w.enc.salt = new_salt;
                     }
+                    // Propagate to dc_options snapshot so future worker opens see
+                    // the fresh salt immediately (not just after the next reconnect).
+                    {
+                        let home_id = *self.inner.home_dc_id.lock().await;
+                        let mut opts = self.inner.dc_options.lock().await;
+                        if let Some(e) = opts.get_mut(&home_id) {
+                            e.first_salt = new_salt;
+                        }
+                    }
                     tracing::debug!(
                         "[ferogram] bad_server_salt: bad_msg_id={bad_msg_id} new_salt={new_salt:#x}"
                     );
 
-                    // Re-transmit ALL in-flight requests under the new salt.
-                    // tDesktop calls resendAll() here: every pending request sent under
-                    // the stale salt is replayed immediately so none time out or produce
-                    // spurious errors at the caller layer.
+                    // Re-transmit the original request under the new salt.
+                    // if bad_msg_id is not in sent_bodies directly, check
+                    // container_map: the server may have sent the notification for
+                    // the outer container msg_id rather than the inner request msg_id.
                     {
                         let mut w = self.inner.writer.lock().await;
-                        let fk = w.frame_kind.clone();
 
-                        // Collect and re-pack every in-flight body under the new salt.
-                        // Do NOT re-insert into sent_bodies: a second bad_server_salt on
-                        // re-sent messages finds nothing → stops infinite correction chains.
-                        let all_ids: Vec<i64> = w.sent_bodies.keys().copied().collect();
-                        let mut repacked: Vec<(i64, i64, Vec<u8>)> = Vec::new();
-                        for old_id in all_ids {
-                            if let Some(orig_body) = w.sent_bodies.remove(&old_id) {
-                                let (wire, new_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
-                                repacked.push((old_id, new_id, wire));
+                        // Resolve: if bad_msg_id points to a container, get the inner id.
+                        let resolved_id = if w.sent_bodies.contains_key(&bad_msg_id) {
+                            bad_msg_id
+                        } else if let Some(&inner_id) = w.container_map.get(&bad_msg_id) {
+                            w.container_map.remove(&bad_msg_id);
+                            inner_id
+                        } else {
+                            bad_msg_id // will fall through to else-branch below
+                        };
+
+                        if let Some(orig_body) = w.sent_bodies.remove(&resolved_id) {
+                            let (wire, new_msg_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
+                            let fk = w.frame_kind.clone();
+                            // Intentionally NOT re-inserting into sent_bodies: a second
+                            // bad_server_salt for new_msg_id finds nothing -> stops chain.
+                            drop(w);
+                            let mut pending = self.inner.pending.lock().await;
+                            if let Some(tx) = pending.remove(&resolved_id) {
+                                pending.insert(new_msg_id, tx);
+                                drop(pending);
+                                if let Err(e) = send_frame_write(
+                                    &mut *self.inner.write_half.lock().await,
+                                    &wire,
+                                    &fk,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(
+                                        "[ferogram] bad_server_salt re-send failed: {e}"
+                                    );
+                                } else {
+                                    tracing::debug!(
+                                        "[ferogram] bad_server_salt re-sent \
+                                         {resolved_id}→{new_msg_id}"
+                                    );
+                                }
                             }
-                        }
-                        drop(w);
-
-                        if repacked.is_empty() {
-                            // Nothing in flight: fail original waiter so it doesn't hang.
-                            if let Some((_, tx)) = self.inner.pending.remove(&bad_msg_id) {
+                        } else {
+                            // Not in sent_bodies (re-sent message rejected again, or unknown).
+                            // Fail the pending caller so it doesn't hang.
+                            drop(w);
+                            if let Some(tx) = self.inner.pending.lock().await.remove(&bad_msg_id) {
                                 let _ = tx.send(Err(InvocationError::Io(std::io::Error::new(
                                     std::io::ErrorKind::InvalidData,
                                     "bad_server_salt on re-sent message; caller should retry",
                                 ))));
-                            }
-                        } else {
-                            // Re-key all pending waiters then send all re-packed frames.
-                            let mut to_send: Vec<(Vec<u8>, i64)> = Vec::new();
-                            {
-                                for (old_id, new_id, wire) in repacked {
-                                    if let Some((_, tx)) = self.inner.pending.remove(&old_id) {
-                                        self.inner.pending.insert(new_id, tx);
-                                        to_send.push((wire, new_id));
-                                    }
-                                }
-                            }
-                            let mut wh = self.inner.write_half.lock().await;
-                            for (wire, new_id) in to_send {
-                                if let Err(e) = send_frame_write(&mut wh, &wire, &fk).await {
-                                    tracing::warn!(
-                                        "[ferogram] bad_server_salt resendAll:                                          send failed →{new_id}: {e}"
-                                    );
-                                } else {
-                                    tracing::debug!(
-                                        "[ferogram] bad_server_salt resendAll: re-sent →{new_id}"
-                                    );
-                                }
                             }
                         }
                     }
@@ -2673,19 +3277,10 @@ impl Client {
                     let ping_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
                     // Ack the pong frame itself (outer msg_id, not the ping msg_id).
                     self.inner.writer.lock().await.pending_ack.push(msg_id);
-                    if let Some((_, tx)) = self.inner.pending.remove(&ping_msg_id) {
+                    if let Some(tx) = self.inner.pending.lock().await.remove(&ping_msg_id) {
                         let mut w = self.inner.writer.lock().await;
                         w.sent_bodies.remove(&ping_msg_id);
-                        let stale_cids: Vec<i64> = w
-                            .container_map
-                            .iter()
-                            .filter(|(_, inner)| **inner == ping_msg_id)
-                            .map(|(cid, _)| *cid)
-                            .collect();
-                        for cid in stale_cids {
-                            w.container_map.remove(&cid);
-                            w.container_ages.remove(&cid);
-                        }
+                        w.container_map.retain(|_, inner| *inner != ping_msg_id);
                         drop(w);
                         let _ = tx.send(Ok(body));
                     }
@@ -2721,19 +3316,21 @@ impl Client {
                         if base + 16 > body.len() {
                             break;
                         }
-                        // Wire format: valid_since(4) | salt(8) | valid_until(4)
-                        // NOTE: The TL schema lists valid_until before salt, but the actual
-                        // wire encoding puts salt first. Confirmed empirically: reading
-                        // valid_until at [+4..+8] produces Oct-2019 timestamps impossible
-                        // for future salts; at [+12..+16] produces correct future dates.
+                        // Wire format per TL schema (bare FutureSalt, no constructor):
+                        // [+0..+4]   valid_since (int)
+                        // [+4..+8]   valid_until (int)
+                        // [+8..+16]  salt        (long)
+                        // This matches the official TL definition:
+                        //   futureSalt#0949d9dc valid_since:int valid_until:int salt:long
+                        // futureSalt layout: valid_since, valid_until, salt
                         new_salts.push(FutureSalt {
                             valid_since: i32::from_le_bytes(
                                 body[base..base + 4].try_into().unwrap(),
                             ),
-                            salt: i64::from_le_bytes(body[base + 4..base + 12].try_into().unwrap()),
                             valid_until: i32::from_le_bytes(
-                                body[base + 12..base + 16].try_into().unwrap(),
+                                body[base + 4..base + 8].try_into().unwrap(),
                             ),
+                            salt: i64::from_le_bytes(body[base + 8..base + 16].try_into().unwrap()),
                         });
                     }
 
@@ -2741,44 +3338,66 @@ impl Client {
                         // Sort newest-last (mirrors  sort_by_key(|s| -s.valid_since)
                         // which in ascending order puts highest valid_since at the end).
                         new_salts.sort_by_key(|s| s.valid_since);
-                        let mut w = self.inner.writer.lock().await;
-                        w.salts = new_salts;
-                        w.start_salt_time = Some((server_now, std::time::Instant::now()));
+                        let active_salt;
+                        {
+                            let mut w = self.inner.writer.lock().await;
+                            w.salts = new_salts;
+                            w.start_salt_time = Some((server_now, std::time::Instant::now()));
 
-                        // Pick the best currently-usable salt.
-                        // A salt is usable after valid_since + SALT_USE_DELAY (60 s).
-                        // Walk newest-to-oldest (end of vec to start) and pick the
-                        // first one whose use-delay window has already opened.
-                        let use_salt = w
-                            .salts
-                            .iter()
-                            .rev()
-                            .find(|s| s.valid_since + SALT_USE_DELAY <= server_now)
-                            .or_else(|| w.salts.first())
-                            .map(|s| s.salt);
-                        if let Some(salt) = use_salt {
-                            w.enc.salt = salt;
-                            tracing::debug!(
-                                "[ferogram] FutureSalts: stored {} salts, \
-                                 active salt={salt:#x}",
-                                w.salts.len()
-                            );
+                            // Pick the best currently-usable salt.
+                            // A salt is usable after valid_since + SALT_USE_DELAY (60 s)
+                            // AND must not yet be expired (valid_until > server_now).
+                            //
+                            // CRITICAL: do NOT fall back to an expired salt via
+                            // `.or_else(|| w.salts.first())`.  When the server returns
+                            // an all-expired pool (e.g. stale DC handoff), enc.salt
+                            // already holds the server-canonical value from
+                            // new_session_created or bad_server_salt and must be kept.
+                            // Overwriting it with an expired salt causes every subsequent
+                            // message to be rejected → bad_server_salt → GetFutureSalts
+                            // → same expired pool → infinite loop.
+                            let use_salt = w
+                                .salts
+                                .iter()
+                                .rev()
+                                .find(|s| {
+                                    s.valid_since + SALT_USE_DELAY <= server_now
+                                        && s.valid_until > server_now
+                                })
+                                .map(|s| s.salt);
+                            if let Some(salt) = use_salt {
+                                w.enc.salt = salt;
+                                tracing::debug!(
+                                    "[ferogram] FutureSalts: stored {} salts, \
+                                     active salt={salt:#x}",
+                                    w.salts.len()
+                                );
+                            } else {
+                                tracing::debug!(
+                                    "[ferogram] FutureSalts: stored {} salts but all \
+                                     expired  - keeping current enc.salt={:#x}",
+                                    w.salts.len(),
+                                    w.enc.salt
+                                );
+                            }
+                            active_salt = use_salt;
+                        }
+                        // Propagate the newly-active salt to dc_options so that any
+                        // worker conn opened after this FutureSalts rotation starts
+                        // with the correct salt rather than the pre-rotation snapshot.
+                        if let Some(salt) = active_salt {
+                            let home_id = *self.inner.home_dc_id.lock().await;
+                            let mut opts = self.inner.dc_options.lock().await;
+                            if let Some(e) = opts.get_mut(&home_id) {
+                                e.first_salt = salt;
+                            }
                         }
                     }
 
-                    if let Some((_, tx)) = self.inner.pending.remove(&req_msg_id) {
+                    if let Some(tx) = self.inner.pending.lock().await.remove(&req_msg_id) {
                         let mut w = self.inner.writer.lock().await;
                         w.sent_bodies.remove(&req_msg_id);
-                        let stale_cids: Vec<i64> = w
-                            .container_map
-                            .iter()
-                            .filter(|(_, inner)| **inner == req_msg_id)
-                            .map(|(cid, _)| *cid)
-                            .collect();
-                        for cid in stale_cids {
-                            w.container_map.remove(&cid);
-                            w.container_ages.remove(&cid);
-                        }
+                        w.container_map.retain(|_, inner| *inner != req_msg_id);
                         drop(w);
                         let _ = tx.send(Ok(body));
                     }
@@ -2791,21 +3410,42 @@ impl Client {
                 // body[20..28] = server_salt
                 if body.len() >= 28 {
                     let server_salt = i64::from_le_bytes(body[20..28].try_into().unwrap());
-                    let mut w = self.inner.writer.lock().await;
-                    // new_session_created has odd seq_no -> must ack.
-                    w.pending_ack.push(msg_id);
-                    //  clears the salt pool and inserts the fresh
-                    // server_salt with valid_until=i32::MAX (permanently valid).
-                    w.salts.clear();
-                    w.salts.push(FutureSalt {
-                        valid_since: 0,
-                        valid_until: i32::MAX,
-                        salt: server_salt,
+                    {
+                        let mut w = self.inner.writer.lock().await;
+                        // new_session_created has odd seq_no -> must ack.
+                        w.pending_ack.push(msg_id);
+                        //  clears the salt pool and inserts the fresh
+                        // server_salt with valid_until=i32::MAX (permanently valid).
+                        w.salts.clear();
+                        w.salts.push(FutureSalt {
+                            valid_since: 0,
+                            valid_until: i32::MAX,
+                            salt: server_salt,
+                        });
+                        w.enc.salt = server_salt;
+                        tracing::debug!(
+                            "[ferogram] new_session_created: salt pool reset to {server_salt:#x}"
+                        );
+                    }
+                    // Propagate to dc_options snapshot so future worker opens use
+                    // this session's salt, not the stale pre-session value.
+                    {
+                        let home_id = *self.inner.home_dc_id.lock().await;
+                        let mut opts = self.inner.dc_options.lock().await;
+                        if let Some(e) = opts.get_mut(&home_id) {
+                            e.first_salt = server_salt;
+                        }
+                    }
+                    // Reset pts state only after the salt update succeeds.
+                    {
+                        let mut s = self.inner.pts_state.lock().await;
+                        s.state_ready = false;
+                        s.seq = 0;
+                    }
+                    let c = self.clone();
+                    let _handle = tokio::spawn(async move {
+                        c.sync_state_after_dh().await;
                     });
-                    w.enc.salt = server_salt;
-                    tracing::debug!(
-                        "[ferogram] new_session_created: salt pool reset to {server_salt:#x}"
-                    );
                 }
             }
             // +: bad_msg_notification
@@ -2833,11 +3473,9 @@ impl Client {
                     _ => "unknown bad_msg code",
                 };
 
-                // codes 16/17/48 are retryable; 32/33 → session reset (tDesktop ResetSession);
-                // rest are fatal.
+                // codes 16/17/48 are retryable; 32/33 are non-fatal seq corrections; rest are fatal.
                 let retryable = matches!(error_code, 16 | 17 | 48);
-                let seq_desync = matches!(error_code, 32 | 33);
-                let fatal = !retryable && !seq_desync;
+                let fatal = !retryable && !matches!(error_code, 32 | 33);
 
                 if fatal {
                     tracing::error!(
@@ -2851,122 +3489,103 @@ impl Client {
                     );
                 }
 
-                // AE fix: codes 32/33 (seq_no desync) → tDesktop ResetSession.
-                // correct_seq_no() can loop forever on persistent desync; creating a
-                // fresh session_id is the correct MTProto behaviour.
-                if seq_desync {
-                    {
-                        let mut w = self.inner.writer.lock().await;
-                        w.enc.reset_session();
-                        w.sent_bodies.clear();
-                        w.container_map.clear();
+                // Phase 1: hold writer only for enc-state mutations + packing.
+                // The lock is dropped BEFORE we touch `pending`, eliminating the
+                // writer→pending lock-order deadlock that existed before this fix.
+                let resend: Option<(Vec<u8>, i64, i64, FrameKind)> = {
+                    let mut w = self.inner.writer.lock().await;
+
+                    // correct clock skew on codes 16/17.
+                    if error_code == 16 || error_code == 17 {
+                        w.enc.correct_time_offset(msg_id);
                     }
-                    // Drain all pending waiters so callers get a clean retry error.
-                    {
-                        let _pending_keys: Vec<i64> =
-                            self.inner.pending.iter().map(|_e| *_e.key()).collect();
-                        for _pk in _pending_keys {
-                            if let Some((_, tx)) = self.inner.pending.remove(&_pk) {
-                                let _ = tx.send(Err(InvocationError::Deserialize(format!(
-                            "bad_msg_notification code={error_code} ({description}):                              session reset: please retry your request"
-                        ))));
-                            }
-                        }
+                    // correct seq_no on codes 32/33
+                    if error_code == 32 || error_code == 33 {
+                        w.enc.correct_seq_no(error_code);
                     }
-                    // Do not fall through to resend logic.
-                } else {
-                    // Phase 1: hold writer only for enc-state mutations + packing.
-                    // The lock is dropped BEFORE we touch `pending`, eliminating the
-                    // writer→pending lock-order deadlock that existed before this fix.
-                    let resend: Option<(Vec<u8>, i64, i64, FrameKind)> = {
-                        let mut w = self.inner.writer.lock().await;
 
-                        // correct clock skew on codes 16/17.
-                        if error_code == 16 || error_code == 17 {
-                            w.enc.correct_time_offset(msg_id);
-                        }
-
-                        if retryable {
-                            let resolved_id = if w.sent_bodies.contains_key(&bad_msg_id) {
-                                bad_msg_id
-                            } else if let Some(&inner_id) = w.container_map.get(&bad_msg_id) {
-                                w.container_map.remove(&bad_msg_id);
-                                w.container_ages.remove(&bad_msg_id);
-                                inner_id
-                            } else {
-                                bad_msg_id
-                            };
-
-                            if let Some(orig_body) = w.sent_bodies.remove(&resolved_id) {
-                                let (wire, new_msg_id) =
-                                    w.enc.pack_body_with_msg_id(&orig_body, true);
-                                let fk = w.frame_kind.clone();
-                                w.sent_bodies.insert(new_msg_id, orig_body);
-                                Some((wire, resolved_id, new_msg_id, fk))
-                            } else {
-                                None
-                            }
+                    if retryable {
+                        // if bad_msg_id is not in sent_bodies directly, check
+                        // container_map: the server sends the notification for the
+                        // outer container msg_id when a whole container was bad.
+                        let resolved_id = if w.sent_bodies.contains_key(&bad_msg_id) {
+                            bad_msg_id
+                        } else if let Some(&inner_id) = w.container_map.get(&bad_msg_id) {
+                            w.container_map.remove(&bad_msg_id);
+                            inner_id
                         } else {
-                            // Non-retryable: clean up so maps don't grow unbounded.
-                            w.sent_bodies.remove(&bad_msg_id);
-                            if let Some(&inner_id) = w.container_map.get(&bad_msg_id) {
-                                w.sent_bodies.remove(&inner_id);
-                                w.container_map.remove(&bad_msg_id);
-                                w.container_ages.remove(&bad_msg_id);
-                            }
+                            bad_msg_id
+                        };
+
+                        if let Some(orig_body) = w.sent_bodies.remove(&resolved_id) {
+                            let (wire, new_msg_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
+                            let fk = w.frame_kind.clone();
+                            w.sent_bodies.insert(new_msg_id, orig_body);
+                            // resolved_id is the inner msg_id we move in pending
+                            Some((wire, resolved_id, new_msg_id, fk))
+                        } else {
                             None
                         }
-                    }; // ← writer lock released here
+                    } else {
+                        // Non-retryable: clean up so maps don't grow unbounded.
+                        w.sent_bodies.remove(&bad_msg_id);
+                        if let Some(&inner_id) = w.container_map.get(&bad_msg_id) {
+                            w.sent_bodies.remove(&inner_id);
+                            w.container_map.remove(&bad_msg_id);
+                        }
+                        None
+                    }
+                }; // ← writer lock released here
 
-                    match resend {
-                        Some((wire, old_msg_id, new_msg_id, fk)) => {
-                            // Phase 2: re-key pending (no writer lock held).
-                            let has_waiter = {
-                                if let Some((_, tx)) = self.inner.pending.remove(&old_msg_id) {
-                                    self.inner.pending.insert(new_msg_id, tx);
-                                    true
-                                } else {
-                                    false
-                                }
-                            };
-                            if has_waiter {
-                                // Phase 3: TCP send : no writer lock needed.
-                                if let Err(e) = send_frame_write(
-                                    &mut *self.inner.write_half.lock().await,
-                                    &wire,
-                                    &fk,
-                                )
-                                .await
-                                {
-                                    tracing::warn!("[ferogram] re-send failed: {e}");
-                                    self.inner
-                                        .writer
-                                        .lock()
-                                        .await
-                                        .sent_bodies
-                                        .remove(&new_msg_id);
-                                } else {
-                                    tracing::debug!("[ferogram] re-sent {old_msg_id}→{new_msg_id}");
-                                }
+                match resend {
+                    Some((wire, old_msg_id, new_msg_id, fk)) => {
+                        // Phase 2: re-key pending (no writer lock held).
+                        let has_waiter = {
+                            let mut pending = self.inner.pending.lock().await;
+                            if let Some(tx) = pending.remove(&old_msg_id) {
+                                pending.insert(new_msg_id, tx);
+                                true
                             } else {
+                                false
+                            }
+                        };
+                        if has_waiter {
+                            // Phase 3: TCP send : no writer lock needed.
+                            if let Err(e) = send_frame_write(
+                                &mut *self.inner.write_half.lock().await,
+                                &wire,
+                                &fk,
+                            )
+                            .await
+                            {
+                                tracing::warn!("[ferogram] re-send failed: {e}");
                                 self.inner
                                     .writer
                                     .lock()
                                     .await
                                     .sent_bodies
                                     .remove(&new_msg_id);
+                            } else {
+                                tracing::debug!("[ferogram] re-sent {old_msg_id}→{new_msg_id}");
                             }
-                        }
-                        None => {
-                            // Not re-sending: surface error to the waiter so caller can retry.
-                            if let Some((_, tx)) = self.inner.pending.remove(&bad_msg_id) {
-                                let _ = tx.send(Err(InvocationError::Deserialize(format!(
-                                    "bad_msg_notification code={error_code} ({description})"
-                                ))));
-                            }
+                        } else {
+                            self.inner
+                                .writer
+                                .lock()
+                                .await
+                                .sent_bodies
+                                .remove(&new_msg_id);
                         }
                     }
-                } // end else (non-seq_desync path)
+                    None => {
+                        // Not re-sending: surface error to the waiter so caller can retry.
+                        if let Some(tx) = self.inner.pending.lock().await.remove(&bad_msg_id) {
+                            let _ = tx.send(Err(InvocationError::Deserialize(format!(
+                                "bad_msg_notification code={error_code} ({description})"
+                            ))));
+                        }
+                    }
+                }
             }
             // MsgDetailedInfo -> ack the answer_msg_id
             ID_MSG_DETAILED_INFO => {
@@ -3023,9 +3642,11 @@ impl Client {
                                 i64::from_le_bytes(body[off..off + 8].try_into().unwrap());
                             if let Some(orig_body) = w.sent_bodies.remove(&resend_id) {
                                 let (wire, new_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
-                                if let Some((_, tx)) = self.inner.pending.remove(&resend_id) {
-                                    self.inner.pending.insert(new_id, tx);
+                                let mut pending = self.inner.pending.lock().await;
+                                if let Some(tx) = pending.remove(&resend_id) {
+                                    pending.insert(new_id, tx);
                                 }
+                                drop(pending);
                                 w.sent_bodies.insert(new_id, orig_body);
                                 resends.push((wire, resend_id, new_id));
                             }
@@ -3035,10 +3656,23 @@ impl Client {
                     // TCP sends outside writer lock
                     let fk = self.inner.writer.lock().await.frame_kind.clone();
                     for (wire, resend_id, new_id) in resends {
-                        send_frame_write(&mut *self.inner.write_half.lock().await, &wire, &fk)
-                            .await
-                            .ok();
-                        tracing::debug!("[ferogram] MsgResendReq: resent {resend_id} -> {new_id}");
+                        // On TCP send failure, remove the orphaned sent_bodies entry.
+                        if let Err(e) =
+                            send_frame_write(&mut *self.inner.write_half.lock().await, &wire, &fk)
+                                .await
+                        {
+                            self.inner.writer.lock().await.sent_bodies.remove(&new_id);
+                            if let Some(tx) = self.inner.pending.lock().await.remove(&new_id) {
+                                let _ = tx.send(Err(e)); // e is already InvocationError from send_frame_write
+                            }
+                            tracing::warn!(
+                                "[ferogram] MsgResendReq: TCP send failed for {resend_id} -> {new_id}"
+                            );
+                        } else {
+                            tracing::debug!(
+                                "[ferogram] MsgResendReq: resent {resend_id} -> {new_id}"
+                            );
+                        }
                     }
                 }
             }
@@ -3062,7 +3696,7 @@ impl Client {
             | ID_UPDATES_TOO_LONG => {
                 // ack update frames too
                 self.inner.writer.lock().await.pending_ack.push(msg_id);
-                // route through pts/qts/seq gap-checkers
+                // Route through pts/qts/seq gap-checkers.
                 self.dispatch_updates(&body).await;
             }
             _ => {}
@@ -3093,8 +3727,6 @@ impl Client {
         }
     }
 
-    // pts-aware update dispatch
-
     /// Parse an incoming update container and route each update through the
     /// pts/qts/seq gap-checkers before forwarding to `update_tx`.
     async fn dispatch_updates(&self, body: &[u8]) {
@@ -3124,16 +3756,8 @@ impl Client {
             return;
         }
 
-        // updateShortMessage (0x313bc7f8) and updateShortChatMessage (0x4d6deea5)
-        // carry pts/pts_count but the old code forwarded them directly to update_tx WITHOUT
-        // calling check_and_fill_gap. That left the internal pts counter frozen, so the
-        // next updateNewMessage (e.g. the bot's own reply) triggered a false gap ->
-        // getDifference -> re-delivery of already-processed messages -> duplicate replies.
-        //
-        // PERF: With parking_lot::Mutex the pts check is now a sync operation (~50ns).
-        // We no longer spawn a task for the common ok-path; pts is checked and advanced
-        // inline, the update is sent directly to update_tx.
-        // Only the gap path spawns a task (getDifference is a real network round-trip).
+        // updateShortMessage / updateShortChatMessage carry pts/pts_count;
+        // deserialize and route through check_and_fill_gap like all other pts updates.
         if cid == 0x313bc7f8 {
             // updateShortMessage
             let mut cur = Cursor::from_slice(&body[4..]);
@@ -3144,59 +3768,56 @@ impl Client {
                     return;
                 }
             };
+            // If sender is not cached at all, getDifference returns full users with
+            // real access_hashes  - use that path instead of forwarding a bare update
+            // that would fail with USER_ID_INVALID.
+            {
+                let cache = self.inner.peer_cache.read().await;
+                let known = cache.users.contains_key(&m.user_id)
+                    || cache.min_contexts.contains_key(&m.user_id);
+                drop(cache);
+                if !known {
+                    tracing::debug!(
+                        "[ferogram] updateShortMessage: sender {} not cached, falling back to getDifference",
+                        m.user_id
+                    );
+                    let c2 = self.clone();
+                    let utx2 = self.inner.update_tx.clone();
+                    tokio::spawn(async move {
+                        match c2.get_difference().await {
+                            Ok(updates) => {
+                                for u in updates {
+                                    let _ = utx2.try_send(u);
+                                }
+                            }
+                            Err(e) => tracing::warn!(
+                                "[ferogram] updateShortMessage getDifference for unknown sender: {e}"
+                            ),
+                        }
+                    });
+                    return;
+                }
+            }
             let pts = m.pts;
             let pts_count = m.pts_count;
             let upd = update::Update::NewMessage(update::make_short_dm(m));
+            let c = self.clone();
             let utx = self.inner.update_tx.clone();
-            // Inline pts check: sync, no task allocation on the hot path.
-            use crate::pts::PtsCheckResult;
-            let result = {
-                let s = self.inner.pts_state.lock();
-                if s.getting_global_diff {
-                    drop(s);
-                    let _ = utx.try_send(attach_client_to_update(upd, self));
-                    return;
-                }
-                s.check_pts(pts, pts_count)
-            };
-            match result {
-                PtsCheckResult::Ok => {
-                    self.inner.pts_state.lock().advance(pts);
-                    let _ = utx.try_send(attach_client_to_update(upd, self));
-                }
-                PtsCheckResult::Gap { expected, got } => {
-                    tracing::debug!(
-                        "[ferogram] updateShortMessage pts gap: expected {expected}, got {got}"
-                    );
-                    let deadline = {
-                        let mut gap = self.inner.possible_gap.lock();
-                        gap.push_global(attach_client_to_update(upd, self));
-                        gap.global_deadline_elapsed()
-                    };
-                    if deadline {
-                        let c = self.clone();
-                        tokio::spawn(async move {
-                            match c.get_difference().await {
-                                Ok(updates) => {
-                                    for u in updates {
-                                        if c.inner.update_tx.try_send(u).is_err() {
-                                            tracing::warn!(
-                                                "[ferogram] update channel full: dropping update"
-                                            );
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!("[ferogram] updateShortMessage gap fill: {e}")
-                                }
+            tokio::spawn(async move {
+                match c
+                    .check_and_fill_gap(pts, pts_count, Some(attach_client_to_update(upd, &c)))
+                    .await
+                {
+                    Ok(updates) => {
+                        for u in updates {
+                            if utx.try_send(u).is_err() {
+                                tracing::warn!("[ferogram] update channel full: dropping update");
                             }
-                        });
+                        }
                     }
+                    Err(e) => tracing::warn!("[ferogram] updateShortMessage gap fill: {e}"),
                 }
-                PtsCheckResult::Duplicate => {
-                    tracing::debug!("[ferogram] updateShortMessage duplicate, discarding");
-                }
-            }
+            });
             return;
         }
         if cid == 0x4d6deea5 {
@@ -3209,64 +3830,63 @@ impl Client {
                     return;
                 }
             };
+            // Same as updateShortMessage: if sender is unknown fall back to getDifference.
+            {
+                // Always register the group chat ID so it's known for future lookups.
+                self.inner.peer_cache.write().await.chats.insert(m.chat_id);
+
+                let cache = self.inner.peer_cache.read().await;
+                let known = cache.users.contains_key(&m.from_id)
+                    || cache.min_contexts.contains_key(&m.from_id);
+                drop(cache);
+                if !known {
+                    tracing::debug!(
+                        "[ferogram] updateShortChatMessage: sender {} not cached, falling back to getDifference",
+                        m.from_id
+                    );
+                    let c2 = self.clone();
+                    let utx2 = self.inner.update_tx.clone();
+                    tokio::spawn(async move {
+                        match c2.get_difference().await {
+                            Ok(updates) => {
+                                for u in updates {
+                                    let _ = utx2.try_send(u);
+                                }
+                            }
+                            Err(e) => tracing::warn!(
+                                "[ferogram] updateShortChatMessage getDifference for unknown sender: {e}"
+                            ),
+                        }
+                    });
+                    return;
+                }
+            }
             let pts = m.pts;
             let pts_count = m.pts_count;
             let upd = update::Update::NewMessage(update::make_short_chat(m));
+            let c = self.clone();
             let utx = self.inner.update_tx.clone();
-            use crate::pts::PtsCheckResult;
-            let result = {
-                let s = self.inner.pts_state.lock();
-                if s.getting_global_diff {
-                    drop(s);
-                    let _ = utx.try_send(attach_client_to_update(upd, self));
-                    return;
-                }
-                s.check_pts(pts, pts_count)
-            };
-            match result {
-                PtsCheckResult::Ok => {
-                    self.inner.pts_state.lock().advance(pts);
-                    let _ = utx.try_send(attach_client_to_update(upd, self));
-                }
-                PtsCheckResult::Gap { expected, got } => {
-                    tracing::debug!(
-                        "[ferogram] updateShortChatMessage pts gap: expected {expected}, got {got}"
-                    );
-                    let deadline = {
-                        let mut gap = self.inner.possible_gap.lock();
-                        gap.push_global(attach_client_to_update(upd, self));
-                        gap.global_deadline_elapsed()
-                    };
-                    if deadline {
-                        let c = self.clone();
-                        tokio::spawn(async move {
-                            match c.get_difference().await {
-                                Ok(updates) => {
-                                    for u in updates {
-                                        if c.inner.update_tx.try_send(u).is_err() {
-                                            tracing::warn!(
-                                                "[ferogram] update channel full: dropping update"
-                                            );
-                                        }
-                                    }
-                                }
-                                Err(e) => tracing::warn!(
-                                    "[ferogram] updateShortChatMessage gap fill: {e}"
-                                ),
+            tokio::spawn(async move {
+                match c
+                    .check_and_fill_gap(pts, pts_count, Some(attach_client_to_update(upd, &c)))
+                    .await
+                {
+                    Ok(updates) => {
+                        for u in updates {
+                            if utx.try_send(u).is_err() {
+                                tracing::warn!("[ferogram] update channel full: dropping update");
                             }
-                        });
+                        }
                     }
+                    Err(e) => tracing::warn!("[ferogram] updateShortChatMessage gap fill: {e}"),
                 }
-                PtsCheckResult::Duplicate => {
-                    tracing::debug!("[ferogram] updateShortChatMessage duplicate, discarding");
-                }
-            }
+            });
             return;
         }
 
         // updateShortSentMessage push: advance pts without emitting an Update.
         // Telegram can also PUSH updateShortSentMessage (not just in RPC responses).
-        // PERF: inline pts check, only spawn on gap path.
+        // Extract pts and route through check_and_fill_gap.
         if cid == ID_UPDATE_SHORT_SENT_MSG {
             let mut cur = Cursor::from_slice(&body[4..]);
             match tl::types::UpdateShortSentMessage::deserialize(&mut cur) {
@@ -3276,49 +3896,24 @@ impl Client {
                     tracing::debug!(
                         "[ferogram] updateShortSentMessage (push): pts={pts} pts_count={pts_count}: advancing pts"
                     );
-                    use crate::pts::PtsCheckResult;
-                    let result = {
-                        let s = self.inner.pts_state.lock();
-                        if s.getting_global_diff {
-                            return; // getDiff will cover this pts range
-                        }
-                        s.check_pts(pts, pts_count)
-                    };
-                    match result {
-                        PtsCheckResult::Ok => {
-                            self.inner.pts_state.lock().advance(pts);
-                        }
-                        PtsCheckResult::Gap { expected, got } => {
-                            tracing::debug!(
-                                "[ferogram] updateShortSentMessage pts gap: expected {expected}, got {got}"
-                            );
-                            let deadline = {
-                                let mut gap = self.inner.possible_gap.lock();
-                                gap.touch_global_timer();
-                                gap.global_deadline_elapsed()
-                            };
-                            if deadline {
-                                let c = self.clone();
-                                tokio::spawn(async move {
-                                    match c.get_difference().await {
-                                        Ok(replayed) => {
-                                            for u in replayed {
-                                                if c.inner.update_tx.try_send(u).is_err() {
-                                                    tracing::warn!(
-                                                        "[ferogram] update channel full: dropping update"
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        Err(e) => tracing::warn!(
-                                            "[ferogram] updateShortSentMessage push pts advance: {e}"
-                                        ),
+                    let c = self.clone();
+                    let utx = self.inner.update_tx.clone();
+                    tokio::spawn(async move {
+                        match c.check_and_fill_gap(pts, pts_count, None).await {
+                            Ok(replayed) => {
+                                for u in replayed {
+                                    if utx.try_send(u).is_err() {
+                                        tracing::warn!(
+                                            "[ferogram] update channel full: dropping update"
+                                        );
                                     }
-                                });
+                                }
                             }
+                            Err(e) => tracing::warn!(
+                                "[ferogram] updateShortSentMessage push pts advance: {e}"
+                            ),
                         }
-                        PtsCheckResult::Duplicate => {}
-                    }
+                    });
                 }
                 Err(e) => {
                     tracing::debug!("[ferogram] updateShortSentMessage push deserialize error: {e}")
@@ -3336,11 +3931,7 @@ impl Client {
         use crate::pts::PtsCheckResult;
         use ferogram_tl_types::{Cursor, Deserializable};
 
-        // Parse the container ONCE and capture seq_info, users, chats, and the
-        // bare update list together.  The old code parsed twice (once for seq_info,
-        // once for raw updates) and both times discarded users/chats, so the
-        // PeerCache was never populated from incoming update containers: hence
-        // the "no access_hash for user X, using 0" warnings.
+        // Parse the container once, capturing seq_info, users, chats, and updates.
         struct ParsedContainer {
             seq_info: Option<(i32, i32)>,
             users: Vec<tl::enums::User>,
@@ -3410,16 +4001,160 @@ impl Client {
         };
 
         // Feed users/chats into the PeerCache so access_hash lookups work.
+        //
+        // Build a per-user context map so each min user gets the context of the
+        // specific message they appeared in. Wrong context → CHANNEL_INVALID.
+        //
+        // Also extract fwd_from.from_id, via_bot_id, reply_to peer, and
+        // MessageService action user IDs.
         if !parsed.users.is_empty() || !parsed.chats.is_empty() {
-            self.cache_users_and_chats(&parsed.users, &parsed.chats)
-                .await;
+            // user_id → (peer_id, msg_id): built from every message in the batch.
+            let mut user_ctx: HashMap<i64, (i64, i32)> = HashMap::new();
+            // Channel IDs from saved_from_peer: register as min-channels (no hash yet).
+            let mut channel_seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
+
+            // Helper: extract the inner tl::enums::Message from any message-bearing update.
+            // NewMessage and EditMessage hold different struct types, so we can't use |
+            // in a single arm  - extract via separate match arms returning &tl::enums::Message.
+            // Named fn instead of closure so lifetime elision ties output to input correctly.
+            fn get_message(upd: &tl::enums::Update) -> Option<&tl::enums::Message> {
+                match upd {
+                    tl::enums::Update::NewMessage(m) => Some(&m.message),
+                    tl::enums::Update::EditMessage(m) => Some(&m.message),
+                    tl::enums::Update::NewChannelMessage(m) => Some(&m.message),
+                    tl::enums::Update::EditChannelMessage(m) => Some(&m.message),
+                    _ => None,
+                }
+            }
+
+            let extract_peer_id = |peer: &tl::enums::Peer| -> i64 {
+                match peer {
+                    tl::enums::Peer::Channel(c) => c.channel_id,
+                    tl::enums::Peer::Chat(c) => c.chat_id,
+                    tl::enums::Peer::User(u) => u.user_id,
+                }
+            };
+
+            for upd in &parsed.updates {
+                if let Some(envelope) = get_message(upd) {
+                    // --- normal messages ---
+                    if let tl::enums::Message::Message(msg) = envelope {
+                        let ctx_peer = extract_peer_id(&msg.peer_id);
+                        let ctx = (ctx_peer, msg.id);
+
+                        // Primary sender.
+                        if let Some(tl::enums::Peer::User(u)) = &msg.from_id {
+                            user_ctx.insert(u.user_id, ctx);
+                        }
+                        // fwd_from  - destructure MessageFwdHeader before extracting user.
+                        if let Some(tl::enums::MessageFwdHeader::MessageFwdHeader(fwd)) =
+                            &msg.fwd_from
+                        {
+                            if let Some(tl::enums::Peer::User(u)) = &fwd.from_id {
+                                user_ctx.entry(u.user_id).or_insert(ctx);
+                            }
+                            if let Some(tl::enums::Peer::User(u)) = &fwd.saved_from_peer {
+                                user_ctx.entry(u.user_id).or_insert(ctx);
+                            }
+                            // saved_from_peer channel may not appear in chats[]; register as min.
+                            if let Some(tl::enums::Peer::Channel(c)) = &fwd.saved_from_peer {
+                                channel_seen.insert(c.channel_id);
+                            }
+                        }
+                        // Inline bot.
+                        if let Some(bot_id) = msg.via_bot_id {
+                            user_ctx.entry(bot_id).or_insert(ctx);
+                        }
+                        // reply_to: extract user peer from reply header.
+                        if let Some(tl::enums::MessageReplyHeader::MessageReplyHeader(h)) =
+                            &msg.reply_to
+                            && let Some(tl::enums::Peer::User(u)) = &h.reply_to_peer_id
+                        {
+                            user_ctx.entry(u.user_id).or_insert(ctx);
+                        }
+                    }
+
+                    // Service message: extract sender and action user IDs.
+                    if let tl::enums::Message::Service(svc) = envelope {
+                        let ctx_peer = extract_peer_id(&svc.peer_id);
+                        let ctx = (ctx_peer, svc.id);
+
+                        // Service message sender (admin performing the action).
+                        if let Some(tl::enums::Peer::User(u)) = &svc.from_id {
+                            user_ctx.entry(u.user_id).or_insert(ctx);
+                        }
+                        // Action-specific user IDs. These users appear in batch users[]
+                        // with full data; we register ctx so cache_user_with_context
+                        // assigns the correct message context for any min users.
+                        match &svc.action {
+                            tl::enums::MessageAction::ChatAddUser(a) => {
+                                for &uid in &a.users {
+                                    user_ctx.entry(uid).or_insert(ctx);
+                                }
+                            }
+                            tl::enums::MessageAction::ChatCreate(a) => {
+                                for &uid in &a.users {
+                                    user_ctx.entry(uid).or_insert(ctx);
+                                }
+                            }
+                            tl::enums::MessageAction::ChatDeleteUser(a) => {
+                                user_ctx.entry(a.user_id).or_insert(ctx);
+                            }
+                            tl::enums::MessageAction::ChatJoinedByLink(a) => {
+                                user_ctx.entry(a.inviter_id).or_insert(ctx);
+                            }
+                            tl::enums::MessageAction::InviteToGroupCall(a) => {
+                                for &uid in &a.users {
+                                    user_ctx.entry(uid).or_insert(ctx);
+                                }
+                            }
+                            tl::enums::MessageAction::GeoProximityReached(a) => {
+                                if let tl::enums::Peer::User(u) = &a.from_id {
+                                    user_ctx.entry(u.user_id).or_insert(ctx);
+                                }
+                                if let tl::enums::Peer::User(u) = &a.to_id {
+                                    user_ctx.entry(u.user_id).or_insert(ctx);
+                                }
+                            }
+                            tl::enums::MessageAction::RequestedPeer(a) => {
+                                for peer in &a.peers {
+                                    if let tl::enums::Peer::User(u) = peer {
+                                        user_ctx.entry(u.user_id).or_insert(ctx);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            let mut cache = self.inner.peer_cache.write().await;
+            for u in &parsed.users {
+                if let tl::enums::User::User(uu) = u {
+                    if let Some(&(peer_id, msg_id)) = user_ctx.get(&uu.id) {
+                        cache.cache_user_with_context(u, peer_id, msg_id);
+                    } else {
+                        cache.cache_user(u);
+                    }
+                }
+            }
+            for c in &parsed.chats {
+                cache.cache_chat(c);
+            }
+            // Register channel IDs seen in saved_from_peer that were not in chats[].
+            for ch_id in channel_seen {
+                if !cache.channels.contains_key(&ch_id) && !cache.channels_min.contains(&ch_id) {
+                    cache.channels_min.insert(ch_id);
+                }
+            }
         }
 
         // synchronous seq gate: check before processing any updates.
         if let Some((seq, seq_start)) = parsed.seq_info
             && seq != 0
         {
-            let result = self.inner.pts_state.lock().check_seq(seq, seq_start);
+            let result = self.inner.pts_state.lock().await.check_seq(seq, seq_start);
             match result {
                 PtsCheckResult::Ok => {
                     // Good: will advance seq after the batch below.
@@ -3479,7 +4214,7 @@ impl Client {
         if let Some((seq, _)) = parsed.seq_info
             && seq != 0
         {
-            self.inner.pts_state.lock().advance_seq(seq);
+            self.inner.pts_state.lock().await.advance_seq(seq);
         }
     }
 
@@ -3575,9 +4310,8 @@ impl Client {
                 carry,
             } => {
                 let first = if carry { high.into_iter().next() } else { None };
-                // DEADLOCK FIX: never await an RPC inside the reader task.
-                // Spawn gap-fill as a separate task; it can receive the RPC
-                // response because the reader loop continues running.
+                // Never await an RPC inside the reader task: spawn gap-fill so
+                // the reader loop keeps running while the RPC is in flight.
                 let c = self.clone();
                 let utx = self.inner.update_tx.clone();
                 tokio::spawn(async move {
@@ -3606,7 +4340,7 @@ impl Client {
             } => {
                 let first = if carry { high.into_iter().next() } else { None };
                 if channel_id != 0 {
-                    // DEADLOCK FIX: spawn; same reasoning as GlobalPts above.
+                    // Spawn to avoid awaiting inside the reader loop.
                     let c = self.clone();
                     let utx = self.inner.update_tx.clone();
                     tokio::spawn(async move {
@@ -3634,7 +4368,7 @@ impl Client {
                 }
             }
             Kind::Qts { qts } => {
-                // DEADLOCK FIX: spawn; same reasoning as above.
+                // Spawn to avoid awaiting inside the reader loop.
                 let c = self.clone();
                 tokio::spawn(async move {
                     if let Err(e) = c.check_and_fill_qts_gap(qts, 1).await {
@@ -3714,83 +4448,42 @@ impl Client {
                     let c = self.clone();
                     let utx = self.inner.update_tx.clone();
                     tokio::spawn(async move {
-                        // Retry on FLOOD_WAIT; 401 can happen if key hasn't propagated yet.
-                        let result = {
-                            let mut attempt = 0u32;
-                            const MAX_ATTEMPTS: u32 = 5;
-                            loop {
-                                match c.init_connection().await {
-                                    Ok(()) => break Ok(()),
-                                    Err(InvocationError::Rpc(ref r))
-                                        if r.flood_wait_seconds().is_some() =>
-                                    {
-                                        let secs = r.flood_wait_seconds().unwrap();
-                                        tracing::warn!(
-                                            "[ferogram] init_connection FLOOD_WAIT_{secs}: \
-                                             waiting before retry"
-                                        );
-                                        sleep(Duration::from_secs(secs + 1)).await;
-                                    }
-                                    Err(InvocationError::Rpc(ref r))
-                                        if r.code == 401 && attempt < MAX_ATTEMPTS =>
-                                    {
-                                        let delay = Duration::from_millis(500 * (1u64 << attempt));
-                                        tracing::warn!(
-                                            "[ferogram] init_connection AUTH_KEY_UNREGISTERED \
-                                             (attempt {}/{MAX_ATTEMPTS}): retrying in {delay:?}",
-                                            attempt + 1,
-                                        );
-                                        sleep(delay).await;
-                                        attempt += 1;
-                                    }
-                                    Err(e) => break Err(e),
+                        // Respect FLOOD_WAIT before sending the result back.
+                        // Without this, a FLOOD_WAIT from Telegram during init
+                        // would immediately re-trigger another reconnect attempt,
+                        // which would itself hit FLOOD_WAIT: a ban spiral.
+                        let result = loop {
+                            match c.init_connection().await {
+                                Ok(()) => break Ok(()),
+                                Err(InvocationError::Rpc(ref r))
+                                    if r.flood_wait_seconds().is_some() =>
+                                {
+                                    let secs = r.flood_wait_seconds().unwrap();
+                                    tracing::warn!(
+                                        "[ferogram] init_connection FLOOD_WAIT_{secs}:                                          waiting before retry"
+                                    );
+                                    sleep(Duration::from_secs(secs + 1)).await;
+                                    // loop and retry init_connection
                                 }
+                                Err(e) => break Err(e),
                             }
                         };
                         if result.is_ok() {
-                            // Retry getDifference on 401: key may not have propagated yet.
-                            let missed = {
-                                let mut attempt = 0u32;
-                                const MAX_ATTEMPTS: u32 = 5;
-                                loop {
-                                    match c.get_difference().await {
-                                        Ok(updates) => break updates,
-                                        Err(ref e)
-                                            if matches!(e,
-                                                InvocationError::Rpc(r) if r.code == 401)
-                                                && attempt < MAX_ATTEMPTS =>
-                                        {
-                                            let delay =
-                                                Duration::from_millis(500 * (1u64 << attempt));
-                                            tracing::warn!(
-                                                "[ferogram] getDifference AUTH_KEY_UNREGISTERED \
-                                                 (attempt {}/{MAX_ATTEMPTS}): retrying in \
-                                                 {delay:?}",
-                                                attempt + 1,
-                                            );
-                                            sleep(delay).await;
-                                            attempt += 1;
-                                        }
-                                        Err(ref e)
-                                            if matches!(e,
-                                                InvocationError::Rpc(r) if r.code == 401) =>
-                                        {
-                                            tracing::warn!(
-                                                "[ferogram] getDifference AUTH_KEY_UNREGISTERED \
-                                                 after {MAX_ATTEMPTS} retries: falling back \
-                                                 to sync_pts_state"
-                                            );
-                                            let _ = c.sync_pts_state().await;
-                                            break vec![];
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "[ferogram] getDifference failed after reconnect: \
-                                                 {e}"
-                                            );
-                                            break vec![];
-                                        }
-                                    }
+                            // Replay any updates missed during the outage.
+                            // After fresh DH, retry GetState with backoff instead of a fixed 2 s sleep.
+                            if c.inner
+                                .dh_in_progress
+                                .load(std::sync::atomic::Ordering::SeqCst)
+                            {
+                                c.sync_state_after_dh().await;
+                            }
+                            let missed = match c.get_difference().await {
+                                Ok(updates) => updates,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "[ferogram] getDifference failed after reconnect: {e}"
+                                    );
+                                    vec![]
                                 }
                             };
                             for u in missed {
@@ -3826,9 +4519,9 @@ impl Client {
         _old_auth_key: &[u8; 256],
         _old_frame_kind: &FrameKind,
     ) -> Result<(OwnedReadHalf, FrameKind, [u8; 256], i64), InvocationError> {
-        let home_dc_id = *self.inner.home_dc_id.lock();
+        let home_dc_id = *self.inner.home_dc_id.lock().await;
         let (addr, saved_key, first_salt, time_offset) = {
-            let opts = self.inner.dc_options.lock();
+            let opts = self.inner.dc_options.lock().await;
             match opts.get(&home_dc_id) {
                 Some(e) => (e.addr.clone(), e.auth_key, e.first_salt, e.time_offset),
                 None => (
@@ -3894,7 +4587,7 @@ impl Client {
         // key not saved -> next disconnect clears nothing -> but dc_options still
         // None -> DH again -> AUTH_KEY_UNREGISTERED on getDifference forever.)
         {
-            let mut opts = self.inner.dc_options.lock();
+            let mut opts = self.inner.dc_options.lock().await;
             if let Some(entry) = opts.get_mut(&home_dc_id) {
                 entry.auth_key = Some(new_ak);
             }
@@ -3949,7 +4642,7 @@ impl Client {
         msg: &InputMessage,
     ) -> Result<update::IncomingMessage, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let schedule = if msg.schedule_once_online {
             Some(0x7FFF_FFFEi32)
         } else {
@@ -4324,7 +5017,7 @@ impl Client {
         new_text: &str,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::EditMessage {
             no_webpage: false,
             invert_media: false,
@@ -4350,8 +5043,10 @@ impl Client {
     ) -> Result<(), InvocationError> {
         let dest = destination.into().resolve(self).await?;
         let src = source.into().resolve(self).await?;
-        let to_peer = self.inner.peer_cache.peer_to_input(&dest);
-        let from_peer = self.inner.peer_cache.peer_to_input(&src);
+        let cache = self.inner.peer_cache.read().await;
+        let to_peer = cache.peer_to_input(&dest)?;
+        let from_peer = cache.peer_to_input(&src)?;
+        drop(cache);
 
         let req = tl::functions::messages::ForwardMessages {
             silent: false,
@@ -4391,8 +5086,10 @@ impl Client {
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
         let dest = destination.into().resolve(self).await?;
         let src = source.into().resolve(self).await?;
-        let to_peer = self.inner.peer_cache.peer_to_input(&dest);
-        let from_peer = self.inner.peer_cache.peer_to_input(&src);
+        let cache = self.inner.peer_cache.read().await;
+        let to_peer = cache.peer_to_input(&dest)?;
+        let from_peer = cache.peer_to_input(&src)?;
+        drop(cache);
 
         let req = tl::functions::messages::ForwardMessages {
             silent: false,
@@ -4472,7 +5169,7 @@ impl Client {
         ids: &[i32],
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let id_list: Vec<tl::enums::InputMessage> = ids
             .iter()
             .map(|&id| tl::enums::InputMessage::Id(tl::types::InputMessageId { id }))
@@ -4529,7 +5226,7 @@ impl Client {
         peer: impl Into<PeerRef>,
     ) -> Result<Option<update::IncomingMessage>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::Search {
             peer: input_peer,
             q: String::new(),
@@ -4571,7 +5268,7 @@ impl Client {
         pm_oneside: bool,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::UpdatePinnedMessage {
             silent,
             unpin,
@@ -4617,7 +5314,7 @@ impl Client {
             Some(p) => p.clone(),
             None => return Ok(None),
         };
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let id = vec![tl::enums::InputMessage::Id(tl::types::InputMessageId {
             id: reply_id,
         })];
@@ -4658,7 +5355,7 @@ impl Client {
         peer: impl Into<PeerRef>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::UnpinAllMessages {
             peer: input_peer,
             top_msg_id: None,
@@ -4723,7 +5420,7 @@ impl Client {
         peer: impl Into<PeerRef>,
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetScheduledHistory {
             peer: input_peer,
             hash: 0,
@@ -4749,7 +5446,7 @@ impl Client {
         ids: Vec<i32>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::DeleteScheduledMessages {
             peer: input_peer,
             id: ids,
@@ -5203,14 +5900,28 @@ impl Client {
         location: tl::enums::InputFileLocation,
         path: impl AsRef<std::path::Path>,
     ) -> Result<(), InvocationError> {
-        let bytes = self.download_media(location).await?;
-        std::fs::write(path, &bytes).map_err(InvocationError::Io)?;
+        self.download_media_to_file_on_dc(location, 0, path).await
+    }
+
+    /// Like [`download_media_to_file`] but routes `GetFile` to `dc_id`.
+    /// Use this when you know the file's home DC (from `Document::dc_id()` etc.)
+    /// to avoid AuthKeyMismatch from cross-DC routing confusion.
+    pub async fn download_media_to_file_on_dc(
+        &self,
+        location: tl::enums::InputFileLocation,
+        dc_id: i32,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<(), InvocationError> {
+        let bytes = self.download_media_on_dc(location, dc_id).await?;
+        tokio::fs::write(path, &bytes)
+            .await
+            .map_err(InvocationError::Io)?;
         Ok(())
     }
 
     pub async fn delete_dialog(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::DeleteHistory {
             just_clear: false,
             revoke: false,
@@ -5225,7 +5936,7 @@ impl Client {
     /// Mark all messages in a chat as read.
     pub async fn mark_as_read(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         match &input_peer {
             tl::enums::InputPeer::Channel(c) => {
                 let req = tl::functions::channels::ReadHistory {
@@ -5251,7 +5962,7 @@ impl Client {
     /// Clear unread mention markers.
     pub async fn clear_mentions(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::ReadMentions {
             peer: input_peer,
             top_msg_id: None,
@@ -5280,7 +5991,7 @@ impl Client {
     /// Join a public chat or channel by username/peer.
     pub async fn join_chat(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         match input_peer {
             tl::enums::InputPeer::Channel(c) => {
                 let req = tl::functions::channels::JoinChannel {
@@ -5438,14 +6149,14 @@ impl Client {
                 (wire, fk, id)
             };
             let (tx, rx) = tokio::sync::oneshot::channel();
-            inner.pending.insert(fs_msg_id, tx);
+            inner.pending.lock().await.insert(fs_msg_id, tx);
             let send_ok = {
                 send_frame_write(&mut *inner.write_half.lock().await, &wire, &fk)
                     .await
                     .is_ok()
             };
             if !send_ok {
-                inner.pending.remove(&fs_msg_id);
+                inner.pending.lock().await.remove(&fs_msg_id);
                 inner.writer.lock().await.sent_bodies.remove(&fs_msg_id);
                 inner
                     .salt_request_in_flight
@@ -5525,8 +6236,8 @@ impl Client {
             if acks.is_empty() {
                 // Simple path: standalone request
                 let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
-                w.sent_bodies.insert(msg_id, body);
-                self.inner.pending.insert(msg_id, tx);
+                w.sent_bodies.insert(msg_id, body); //
+                self.inner.pending.lock().await.insert(msg_id, tx);
                 (wire, fk)
             } else {
                 // container path: [MsgsAck, request]
@@ -5541,11 +6252,9 @@ impl Client {
 
                 let (wire, container_msg_id) = w.enc.pack_container(&container_payload);
 
-                w.sent_bodies.insert(req_msg_id, body);
-                w.container_map.insert(container_msg_id, req_msg_id);
-                w.container_ages
-                    .insert(container_msg_id, std::time::Instant::now());
-                self.inner.pending.insert(req_msg_id, tx);
+                w.sent_bodies.insert(req_msg_id, body); //
+                w.container_map.insert(container_msg_id, req_msg_id); // 
+                self.inner.pending.lock().await.insert(req_msg_id, tx);
                 tracing::debug!(
                     "[ferogram] container: bundled {} acks + request (cid={container_msg_id})",
                     acks.len()
@@ -5606,8 +6315,8 @@ impl Client {
 
             if acks.is_empty() {
                 let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
-                w.sent_bodies.insert(msg_id, body);
-                self.inner.pending.insert(msg_id, tx);
+                w.sent_bodies.insert(msg_id, body); //
+                self.inner.pending.lock().await.insert(msg_id, tx);
                 (wire, fk)
             } else {
                 let ack_body = build_msgs_ack_body(&acks);
@@ -5618,11 +6327,9 @@ impl Client {
                     (req_msg_id, req_seqno, body.as_slice()),
                 ]);
                 let (wire, container_msg_id) = w.enc.pack_container(&container_payload);
-                w.sent_bodies.insert(req_msg_id, body);
-                w.container_map.insert(container_msg_id, req_msg_id);
-                w.container_ages
-                    .insert(container_msg_id, std::time::Instant::now());
-                self.inner.pending.insert(req_msg_id, tx);
+                w.sent_bodies.insert(req_msg_id, body); //
+                w.container_map.insert(container_msg_id, req_msg_id); // 
+                self.inner.pending.lock().await.insert(req_msg_id, tx);
                 tracing::debug!(
                     "[ferogram] write container: bundled {} acks + write (cid={container_msg_id})",
                     acks.len()
@@ -5663,8 +6370,8 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         if let Ok(tl::enums::Config::Config(cfg)) = tl::enums::Config::deserialize(&mut cur) {
             let allow_ipv6 = self.inner.allow_ipv6;
-            let mut opts = self.inner.dc_options.lock();
-            let mut media_opts = self.inner.media_dc_options.lock();
+            let mut opts = self.inner.dc_options.lock().await;
+            let mut media_opts = self.inner.media_dc_options.lock().await;
             for opt in &cfg.dc_options {
                 let tl::enums::DcOption::DcOption(o) = opt;
                 if o.ipv6 && !allow_ipv6 {
@@ -5723,7 +6430,7 @@ impl Client {
 
     async fn migrate_to(&self, new_dc_id: i32) -> Result<(), InvocationError> {
         let addr = {
-            let opts = self.inner.dc_options.lock();
+            let opts = self.inner.dc_options.lock().await;
             opts.get(&new_dc_id)
                 .map(|e| e.addr.clone())
                 .unwrap_or_else(|| crate::dc_migration::fallback_dc_addr(new_dc_id).to_string())
@@ -5731,7 +6438,7 @@ impl Client {
         tracing::info!("[ferogram] Migrating to DC{new_dc_id} ({addr}) …");
 
         let saved_key = {
-            let opts = self.inner.dc_options.lock();
+            let opts = self.inner.dc_options.lock().await;
             opts.get(&new_dc_id).and_then(|e| e.auth_key)
         };
 
@@ -5762,7 +6469,7 @@ impl Client {
 
         let new_key = conn.auth_key_bytes();
         {
-            let mut opts = self.inner.dc_options.lock();
+            let mut opts = self.inner.dc_options.lock().await;
             let entry = opts.entry(new_dc_id).or_insert_with(|| DcEntry {
                 dc_id: new_dc_id,
                 addr: addr.clone(),
@@ -5780,7 +6487,7 @@ impl Client {
         let new_sid = new_writer.enc.session_id();
         *self.inner.writer.lock().await = new_writer;
         *self.inner.write_half.lock().await = new_wh;
-        *self.inner.home_dc_id.lock() = new_dc_id;
+        *self.inner.home_dc_id.lock().await = new_dc_id;
 
         // Hand the new read half to the reader task FIRST so it can route
         // the upcoming init_connection RPC response.
@@ -5838,21 +6545,24 @@ impl Client {
     }
 
     async fn cache_user(&self, user: &tl::enums::User) {
-        self.inner.peer_cache.cache_user(user);
+        self.inner.peer_cache.write().await.cache_user(user);
     }
 
     async fn cache_users_slice(&self, users: &[tl::enums::User]) {
-        self.inner.peer_cache.cache_users(users);
+        let mut cache = self.inner.peer_cache.write().await;
+        cache.cache_users(users);
     }
 
     async fn cache_chats_slice(&self, chats: &[tl::enums::Chat]) {
-        self.inner.peer_cache.cache_chats(chats);
+        let mut cache = self.inner.peer_cache.write().await;
+        cache.cache_chats(chats);
     }
 
     /// Cache users and chats in a single write-lock acquisition.
     async fn cache_users_and_chats(&self, users: &[tl::enums::User], chats: &[tl::enums::Chat]) {
-        self.inner.peer_cache.cache_users(users);
-        self.inner.peer_cache.cache_chats(chats);
+        let mut cache = self.inner.peer_cache.write().await;
+        cache.cache_users(users);
+        cache.cache_chats(chats);
     }
 
     #[doc(hidden)]
@@ -5867,11 +6577,611 @@ impl Client {
 
     /// Public RPC call for use by sub-modules.
     #[doc(hidden)]
+    pub async fn rpc_on_dc_raw_pub<R: ferogram_tl_types::RemoteCall>(
+        &self,
+        dc_id: i32,
+        req: &R,
+    ) -> Result<Vec<u8>, InvocationError> {
+        let home = *self.inner.home_dc_id.lock().await;
+        if dc_id == 0 || dc_id == home {
+            // Same DC as home  - use main connection to avoid double-encrypt.
+            return self.rpc_call_raw_pub(req).await;
+        }
+        self.rpc_on_dc_raw(dc_id, req).await
+    }
+
+    #[doc(hidden)]
     pub async fn rpc_call_raw_pub<R: ferogram_tl_types::RemoteCall>(
         &self,
         req: &R,
     ) -> Result<Vec<u8>, InvocationError> {
         self.rpc_call_raw(req).await
+    }
+
+    /// Route a file transfer RPC call through the dedicated transfer pool.
+    ///
+    /// Pass `dc_id = 0` for the home DC (uploads always go here).
+    /// Pass the file's actual `dc_id` for downloads.
+    ///
+    /// The transfer pool is completely isolated from the main MTProto session:
+    /// separate auth key, seq_no, msg_id stream, salt, and pending map.
+    /// This prevents `Crypto(InvalidBuffer)` caused by mixing file traffic with
+    /// the update/dialog stream on the main connection.
+    #[doc(hidden)]
+    pub async fn rpc_transfer_on_dc_pub<R: ferogram_tl_types::RemoteCall>(
+        &self,
+        dc_id: i32,
+        req: &R,
+    ) -> Result<Vec<u8>, InvocationError> {
+        self.rpc_transfer_on_dc(dc_id, req).await
+    }
+
+    /// Internal: route req through the transfer pool for `dc_id`.
+    async fn rpc_transfer_on_dc<R: RemoteCall>(
+        &self,
+        dc_id: i32,
+        req: &R,
+    ) -> Result<Vec<u8>, InvocationError> {
+        let home = *self.inner.home_dc_id.lock().await;
+        let target_dc = if dc_id == 0 { home } else { dc_id };
+
+        // --- Gap 6: per-DC connect gate ---
+        // Acquire (or create) a per-DC mutex that serialises the first-use
+        // setup for each DC.  Tasks that arrive while another task is already
+        // setting up the same DC will block here, then find the connection
+        // ready in the pool (double-check below) and skip setup entirely.
+        // This prevents redundant sockets and AUTH_KEY_UNREGISTERED caused by
+        // two concurrent DH handshakes for the same DC slot.
+        let gate: std::sync::Arc<tokio::sync::Mutex<()>> = {
+            let mut gates = self.inner.dc_connect_gates.lock().unwrap();
+            gates
+                .entry(target_dc)
+                .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _gate_guard = gate.lock().await;
+
+        // Double-check: another task may have set up the connection while we
+        // waited for the gate.
+        let needs_new = {
+            let pool = self.inner.transfer_pool.lock().await;
+            !pool.has_connection(target_dc)
+        };
+
+        if needs_new {
+            let addr = {
+                let opts = self.inner.dc_options.lock().await;
+                opts.get(&target_dc)
+                    .map(|e| e.addr.clone())
+                    .unwrap_or_else(|| crate::dc_migration::fallback_dc_addr(target_dc).to_string())
+            };
+            let socks5 = self.inner.socks5.clone();
+
+            // IMPORTANT: transfer connections always use Abridged transport (0xEF init byte)
+            // regardless of the main connection transport.  Every read/write in DcConnection
+            // uses send_abridged/recv_abridged, so the server MUST receive the 0xEF marker
+            // first.  Using TransportKind::Full (no init byte) causes the server to fail
+            // parsing the DH handshake and close the socket immediately → early EOF.
+
+            if target_dc == home {
+                // HOME DC: reuse the existing auth key  - no fresh DH, no export/import.
+                tracing::debug!(
+                    "[ferogram] Transfer: home auth key reuse for DC{target_dc} (home={home})"
+                );
+                // Read salt and time_offset from the live writer (FutureSalts may have
+                // rotated since dc_options was last written).
+                let key = {
+                    let opts = self.inner.dc_options.lock().await;
+                    let e = opts.get(&target_dc);
+                    e.and_then(|e| e.auth_key)
+                };
+                let (salt, time_offset) = {
+                    let w = self.inner.writer.lock().await;
+                    (w.first_salt(), w.time_offset())
+                };
+                let conn = if let Some(key) = key {
+                    dc_pool::DcConnection::connect_with_key(
+                        &addr,
+                        key,
+                        salt,
+                        time_offset,
+                        socks5.as_ref(),
+                        &TransportKind::Abridged,
+                        target_dc as i16,
+                    )
+                    .await?
+                } else {
+                    dc_pool::DcConnection::connect_raw(
+                        &addr,
+                        socks5.as_ref(),
+                        &TransportKind::Abridged,
+                        target_dc as i16,
+                    )
+                    .await?
+                };
+                // --- Gap 2 fix: insert THEN init; remove on failure ---
+                self.inner
+                    .transfer_pool
+                    .lock()
+                    .await
+                    .insert(target_dc, conn);
+                if let Err(e) = self.init_transfer_session(target_dc).await {
+                    tracing::warn!(
+                        "[ferogram] Transfer initConnection for DC{target_dc} failed: {e}  - evicting"
+                    );
+                    self.inner
+                        .transfer_pool
+                        .lock()
+                        .await
+                        .conns
+                        .remove(&target_dc);
+                    return Err(e);
+                }
+            } else {
+                // FOREIGN DC: check for a cached auth key first (Gap 1 fix).
+                // If we already have the foreign DC's auth key (from a prior
+                // export/import), skip DH + re-export and go straight to initConnection.
+                let saved = {
+                    let opts = self.inner.dc_options.lock().await;
+                    opts.get(&target_dc)
+                        .and_then(|e| e.auth_key.map(|k| (k, e.first_salt, e.time_offset)))
+                };
+
+                if let Some((key, salt, time_offset)) = saved {
+                    tracing::debug!(
+                        "[ferogram] Transfer: cached key for foreign DC{target_dc}  - still need importAuth"
+                    );
+                    let conn = dc_pool::DcConnection::connect_with_key(
+                        &addr,
+                        key,
+                        salt,
+                        time_offset,
+                        socks5.as_ref(),
+                        &TransportKind::Abridged,
+                        target_dc as i16,
+                    )
+                    .await?;
+                    // Cached key skips DH but importAuthorization is still required
+                    // to activate the account on this session.
+                    self.inner
+                        .transfer_pool
+                        .lock()
+                        .await
+                        .insert(target_dc, conn);
+                    if let Err(e) = self.export_import_auth_transfer(target_dc).await {
+                        tracing::warn!(
+                            "[ferogram] Transfer importAuth (cached key) DC{target_dc} failed: {e}  - evicting"
+                        );
+                        self.inner
+                            .transfer_pool
+                            .lock()
+                            .await
+                            .conns
+                            .remove(&target_dc);
+                        return Err(e);
+                    }
+                } else {
+                    // No cached key: full DH + export/import.
+                    tracing::debug!(
+                        "[ferogram] Transfer: fresh DH for DC{target_dc} (home={home})"
+                    );
+                    let conn = dc_pool::DcConnection::connect_raw(
+                        &addr,
+                        socks5.as_ref(),
+                        &TransportKind::Abridged,
+                        target_dc as i16,
+                    )
+                    .await?;
+                    // --- Gap 2 fix: insert then import; evict on failure ---
+                    self.inner
+                        .transfer_pool
+                        .lock()
+                        .await
+                        .insert(target_dc, conn);
+                    if let Err(e) = self.export_import_auth_transfer(target_dc).await {
+                        tracing::warn!(
+                            "[ferogram] Transfer auth export/import DC{target_dc} failed: {e}  - evicting"
+                        );
+                        self.inner
+                            .transfer_pool
+                            .lock()
+                            .await
+                            .conns
+                            .remove(&target_dc);
+                        return Err(e);
+                    }
+                    // Save the newly obtained foreign-DC auth key so the NEXT
+                    // transfer connection (and open_worker_conn) can skip DH.
+                    {
+                        let pool = self.inner.transfer_pool.lock().await;
+                        if let Some(conn) = pool.conns.get(&target_dc) {
+                            let mut opts = self.inner.dc_options.lock().await;
+                            let entry =
+                                opts.entry(target_dc)
+                                    .or_insert_with(|| crate::session::DcEntry {
+                                        dc_id: target_dc,
+                                        addr: addr.clone(),
+                                        auth_key: None,
+                                        first_salt: 0,
+                                        time_offset: 0,
+                                        flags: crate::session::DcFlags::NONE,
+                                    });
+                            entry.auth_key = Some(conn.auth_key_bytes());
+                            entry.first_salt = conn.first_salt();
+                            entry.time_offset = conn.time_offset();
+                        }
+                    }
+                }
+            }
+        }
+
+        let dc_entries: Vec<DcEntry> = self
+            .inner
+            .dc_options
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect();
+        let result = self
+            .inner
+            .transfer_pool
+            .lock()
+            .await
+            .invoke_on_dc(target_dc, &dc_entries, req)
+            .await;
+        // Evict dead connections on IO error or fatal RPC errors.
+        match &result {
+            Err(InvocationError::Io(_)) => {
+                tracing::debug!(
+                    "[ferogram] Transfer DC{target_dc} IO error  - evicting broken connection from pool"
+                );
+                self.inner
+                    .transfer_pool
+                    .lock()
+                    .await
+                    .conns
+                    .remove(&target_dc);
+            }
+            Err(InvocationError::Rpc(rpc))
+                if matches!(
+                    rpc.name.as_str(),
+                    "AUTH_KEY_UNREGISTERED"
+                        | "SESSION_EXPIRED"
+                        | "AUTH_KEY_INVALID"
+                        | "AUTH_KEY_PERM_EMPTY"
+                ) =>
+            {
+                tracing::warn!(
+                    "[ferogram] Transfer DC{target_dc} auth error ({})  - evicting and clearing cached key",
+                    rpc.name
+                );
+                self.inner
+                    .transfer_pool
+                    .lock()
+                    .await
+                    .conns
+                    .remove(&target_dc);
+                let mut opts = self.inner.dc_options.lock().await;
+                if let Some(e) = opts.get_mut(&target_dc) {
+                    e.auth_key = None;
+                }
+            }
+            _ => {}
+        }
+        result
+    }
+
+    /// Initialize a home-DC transfer pool session by sending
+    /// `invokeWithLayer(initConnection(..., help.getConfig))`.
+    ///
+    /// After `connect_with_key` the auth key is valid but Telegram doesn't know
+    /// the client's layer yet; it will close the TCP connection on the first
+    /// real RPC.  Sending `initConnection` here registers the session so that
+    /// subsequent `upload.getFile` calls work correctly.
+    async fn init_transfer_session(&self, dc_id: i32) -> Result<(), InvocationError> {
+        use tl::functions::{InitConnection, InvokeWithLayer};
+        let wrapped = InvokeWithLayer {
+            layer: tl::LAYER,
+            query: InitConnection {
+                api_id: self.inner.api_id,
+                device_model: self.inner.device_model.clone(),
+                system_version: self.inner.system_version.clone(),
+                app_version: self.inner.app_version.clone(),
+                system_lang_code: self.inner.system_lang_code.clone(),
+                lang_pack: self.inner.lang_pack.clone(),
+                lang_code: self.inner.lang_code.clone(),
+                proxy: None,
+                params: None,
+                query: tl::functions::help::GetConfig {},
+            },
+        };
+        self.inner
+            .transfer_pool
+            .lock()
+            .await
+            .invoke_on_dc_serializable(dc_id, &wrapped)
+            .await?;
+        tracing::debug!("[ferogram] Transfer initConnection for DC{dc_id} ✓");
+        Ok(())
+    }
+
+    /// Export auth from the home DC (main connection) and import it into the
+    /// transfer pool connection for `dc_id`.
+    async fn export_import_auth_transfer(&self, dc_id: i32) -> Result<(), InvocationError> {
+        // Export from the home (main) session  - works for home DC and foreign DCs.
+        let export_req = tl::functions::auth::ExportAuthorization { dc_id };
+        let body = self.rpc_call_raw(&export_req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::auth::ExportedAuthorization::ExportedAuthorization(exported) =
+            tl::enums::auth::ExportedAuthorization::deserialize(&mut cur)?;
+
+        // Wrap ImportAuthorization in invokeWithLayer(initConnection(...)) so Telegram
+        // registers this as a fully-initialised session.  Without the wrapper Telegram
+        // closes the connection on the next RPC with early-EOF or InvalidBuffer.
+        use tl::functions::{InitConnection, InvokeWithLayer};
+        let wrapped = InvokeWithLayer {
+            layer: tl::LAYER,
+            query: InitConnection {
+                api_id: self.inner.api_id,
+                device_model: self.inner.device_model.clone(),
+                system_version: self.inner.system_version.clone(),
+                app_version: self.inner.app_version.clone(),
+                system_lang_code: self.inner.system_lang_code.clone(),
+                lang_pack: self.inner.lang_pack.clone(),
+                lang_code: self.inner.lang_code.clone(),
+                proxy: None,
+                params: None,
+                query: tl::functions::auth::ImportAuthorization {
+                    id: exported.id,
+                    bytes: exported.bytes,
+                },
+            },
+        };
+        self.inner
+            .transfer_pool
+            .lock()
+            .await
+            .invoke_on_dc_serializable(dc_id, &wrapped)
+            .await?;
+        tracing::debug!("[ferogram] Transfer initConnection+importAuth to DC{dc_id} ✓");
+        Ok(())
+    }
+
+    /// Open a fresh, fully-initialised transfer connection for a single file worker.
+    ///
+    /// Each upload/download worker gets its **own** `DcConnection` so workers run
+    /// truly in parallel without fighting over a shared mutex.
+    ///
+    /// * Home DC (`dc_id == 0`) -> reuses existing auth key, sends `initConnection`.
+    /// * Foreign DC             -> fresh DH + `initConnection(importAuthorization)`.
+    pub(crate) async fn open_worker_conn(
+        &self,
+        dc_id: i32,
+    ) -> Result<dc_pool::DcConnection, InvocationError> {
+        let home = *self.inner.home_dc_id.lock().await;
+        let target_dc = if dc_id == 0 { home } else { dc_id };
+
+        let addr = {
+            let opts = self.inner.dc_options.lock().await;
+            opts.get(&target_dc)
+                .map(|e| e.addr.clone())
+                .unwrap_or_else(|| crate::dc_migration::fallback_dc_addr(target_dc).to_string())
+        };
+        let socks5 = self.inner.socks5.clone();
+
+        use tl::functions::{InitConnection, InvokeWithLayer};
+
+        if target_dc == home {
+            // auth_key comes from the session snapshot (persistent, never stale).
+            // salt and time_offset come from the LIVE writer  - dc_options.first_salt
+            // is only refreshed on reconnect, so it lags behind FutureSalts rotations
+            // and new_session_created events.  Using a stale salt causes the worker's
+            // first encrypted request to hit bad_server_salt, triggering an unnecessary
+            // resend and often an early-eof on large-file transfers.
+            let key = {
+                let opts = self.inner.dc_options.lock().await;
+                opts.get(&target_dc).and_then(|e| e.auth_key)
+            };
+            let (salt, time_offset) = {
+                let w = self.inner.writer.lock().await;
+                (w.first_salt(), w.time_offset())
+            };
+            let mut conn = if let Some(key) = key {
+                dc_pool::DcConnection::connect_with_key(
+                    &addr,
+                    key,
+                    salt,
+                    time_offset,
+                    socks5.as_ref(),
+                    &TransportKind::Abridged,
+                    target_dc as i16,
+                )
+                .await?
+            } else {
+                dc_pool::DcConnection::connect_raw(
+                    &addr,
+                    socks5.as_ref(),
+                    &TransportKind::Abridged,
+                    target_dc as i16,
+                )
+                .await?
+            };
+            conn.rpc_call_serializable(&InvokeWithLayer {
+                layer: tl::LAYER,
+                query: InitConnection {
+                    api_id: self.inner.api_id,
+                    device_model: self.inner.device_model.clone(),
+                    system_version: self.inner.system_version.clone(),
+                    app_version: self.inner.app_version.clone(),
+                    system_lang_code: self.inner.system_lang_code.clone(),
+                    lang_pack: self.inner.lang_pack.clone(),
+                    lang_code: self.inner.lang_code.clone(),
+                    proxy: None,
+                    params: None,
+                    query: tl::functions::help::GetConfig {},
+                },
+            })
+            .await?;
+            tracing::debug!("[ferogram] worker conn to DC{target_dc} (home key) ready");
+            Ok(conn)
+        } else {
+            // Serialise export/import per DC: exportAuthorization tokens are single-use.
+            let import_gate: std::sync::Arc<tokio::sync::Mutex<()>> = {
+                let mut gates = self.inner.auth_import_gates.lock().unwrap();
+                gates
+                    .entry(target_dc)
+                    .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+                    .clone()
+            };
+            let _import_guard = import_gate.lock().await;
+
+            // Check for a cached auth key before opening a fresh connection.
+            let saved = {
+                let opts = self.inner.dc_options.lock().await;
+                opts.get(&target_dc)
+                    .and_then(|e| e.auth_key.map(|k| (k, e.first_salt, e.time_offset)))
+            };
+
+            if let Some((key, salt, time_offset)) = saved {
+                tracing::debug!(
+                    "[ferogram] worker conn DC{target_dc} (foreign, cached key)  - skipping DH+export"
+                );
+                let mut conn = dc_pool::DcConnection::connect_with_key(
+                    &addr,
+                    key,
+                    salt,
+                    time_offset,
+                    socks5.as_ref(),
+                    &TransportKind::Abridged,
+                    target_dc as i16,
+                )
+                .await?;
+
+                // Re-check after acquiring gate: another worker may have already imported.
+                let already_imported = self
+                    .inner
+                    .auth_imported
+                    .lock()
+                    .unwrap()
+                    .contains(&target_dc);
+
+                if already_imported {
+                    // This process has already done importAuthorization for this DC.
+                    // Just send initConnection(GetConfig) to register the session layer.
+                    conn.rpc_call_serializable(&InvokeWithLayer {
+                        layer: tl::LAYER,
+                        query: InitConnection {
+                            api_id: self.inner.api_id,
+                            device_model: self.inner.device_model.clone(),
+                            system_version: self.inner.system_version.clone(),
+                            app_version: self.inner.app_version.clone(),
+                            system_lang_code: self.inner.system_lang_code.clone(),
+                            lang_pack: self.inner.lang_pack.clone(),
+                            lang_code: self.inner.lang_code.clone(),
+                            proxy: None,
+                            params: None,
+                            query: tl::functions::help::GetConfig {},
+                        },
+                    })
+                    .await?;
+                    tracing::debug!(
+                        "[ferogram] worker conn to DC{target_dc} (foreign, cached key, auth already imported) ready"
+                    );
+                } else {
+                    // Must re-import even though the key is cached: the account
+                    // authorization binding is not live on this new process session.
+                    let export_req = tl::functions::auth::ExportAuthorization { dc_id: target_dc };
+                    let body = self.rpc_call_raw(&export_req).await?;
+                    let mut cur = Cursor::from_slice(&body);
+                    let tl::enums::auth::ExportedAuthorization::ExportedAuthorization(exported) =
+                        tl::enums::auth::ExportedAuthorization::deserialize(&mut cur)?;
+                    conn.rpc_call_serializable(&InvokeWithLayer {
+                        layer: tl::LAYER,
+                        query: InitConnection {
+                            api_id: self.inner.api_id,
+                            device_model: self.inner.device_model.clone(),
+                            system_version: self.inner.system_version.clone(),
+                            app_version: self.inner.app_version.clone(),
+                            system_lang_code: self.inner.system_lang_code.clone(),
+                            lang_pack: self.inner.lang_pack.clone(),
+                            lang_code: self.inner.lang_code.clone(),
+                            proxy: None,
+                            params: None,
+                            query: tl::functions::auth::ImportAuthorization {
+                                id: exported.id,
+                                bytes: exported.bytes,
+                            },
+                        },
+                    })
+                    .await?;
+                    // Mark this DC as auth-imported for the rest of this process session.
+                    self.inner.auth_imported.lock().unwrap().insert(target_dc);
+                    tracing::debug!(
+                        "[ferogram] worker conn to DC{target_dc} (foreign, cached key, auth re-imported) ready"
+                    );
+                }
+                Ok(conn)
+            } else {
+                // No cached key: full DH + export/import.
+                let mut conn = dc_pool::DcConnection::connect_raw(
+                    &addr,
+                    socks5.as_ref(),
+                    &TransportKind::Abridged,
+                    target_dc as i16,
+                )
+                .await?;
+                let export_req = tl::functions::auth::ExportAuthorization { dc_id: target_dc };
+                let body = self.rpc_call_raw(&export_req).await?;
+                let mut cur = Cursor::from_slice(&body);
+                let tl::enums::auth::ExportedAuthorization::ExportedAuthorization(exported) =
+                    tl::enums::auth::ExportedAuthorization::deserialize(&mut cur)?;
+                conn.rpc_call_serializable(&InvokeWithLayer {
+                    layer: tl::LAYER,
+                    query: InitConnection {
+                        api_id: self.inner.api_id,
+                        device_model: self.inner.device_model.clone(),
+                        system_version: self.inner.system_version.clone(),
+                        app_version: self.inner.app_version.clone(),
+                        system_lang_code: self.inner.system_lang_code.clone(),
+                        lang_pack: self.inner.lang_pack.clone(),
+                        lang_code: self.inner.lang_code.clone(),
+                        proxy: None,
+                        params: None,
+                        query: tl::functions::auth::ImportAuthorization {
+                            id: exported.id,
+                            bytes: exported.bytes,
+                        },
+                    },
+                })
+                .await?;
+                // Save the newly established auth key so future worker connections
+                // (and rpc_transfer_on_dc) can skip DH + export/import entirely.
+                {
+                    let mut opts = self.inner.dc_options.lock().await;
+                    let entry = opts
+                        .entry(target_dc)
+                        .or_insert_with(|| crate::session::DcEntry {
+                            dc_id: target_dc,
+                            addr: addr.clone(),
+                            auth_key: None,
+                            first_salt: 0,
+                            time_offset: 0,
+                            flags: crate::session::DcFlags::NONE,
+                        });
+                    entry.auth_key = Some(conn.auth_key_bytes());
+                    entry.first_salt = conn.first_salt();
+                    entry.time_offset = conn.time_offset();
+                }
+                // Mark as auth-imported for this process session so subsequent
+                // open_worker_conn calls on this DC can skip re-import.
+                self.inner.auth_imported.lock().unwrap().insert(target_dc);
+                tracing::debug!(
+                    "[ferogram] worker conn to DC{target_dc} (foreign, fresh DH) ready"
+                );
+                Ok(conn)
+            }
+        }
     }
 
     /// Like rpc_call_raw but takes a Serializable (for InvokeWithLayer wrappers).
@@ -5910,14 +7220,14 @@ impl Client {
         let (tx, rx) = oneshot::channel();
         let wire = {
             let raw_body = req.to_bytes();
-            let body = maybe_gz_pack(&raw_body);
+            let body = maybe_gz_pack(&raw_body); //
             let mut w = self.inner.writer.lock().await;
             let fk = w.frame_kind.clone();
-            let acks: Vec<i64> = w.pending_ack.drain(..).collect();
+            let acks: Vec<i64> = w.pending_ack.drain(..).collect(); // 
             if acks.is_empty() {
                 let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
-                w.sent_bodies.insert(msg_id, body);
-                self.inner.pending.insert(msg_id, tx);
+                w.sent_bodies.insert(msg_id, body); //
+                self.inner.pending.lock().await.insert(msg_id, tx);
                 (wire, fk)
             } else {
                 let ack_body = build_msgs_ack_body(&acks);
@@ -5928,11 +7238,9 @@ impl Client {
                     (req_msg_id, req_seqno, body.as_slice()),
                 ]);
                 let (wire, container_msg_id) = w.enc.pack_container(&container_payload);
-                w.sent_bodies.insert(req_msg_id, body);
-                w.container_map.insert(container_msg_id, req_msg_id);
-                w.container_ages
-                    .insert(container_msg_id, std::time::Instant::now());
-                self.inner.pending.insert(req_msg_id, tx);
+                w.sent_bodies.insert(req_msg_id, body); //
+                w.container_map.insert(container_msg_id, req_msg_id); // 
+                self.inner.pending.lock().await.insert(req_msg_id, tx);
                 (wire, fk)
             }
         };
@@ -6008,14 +7316,14 @@ impl Client {
         &self,
         peer: &tl::enums::Peer,
     ) -> Result<tl::enums::InputPeer, InvocationError> {
-        let pc = &self.inner.peer_cache;
+        let cache = self.inner.peer_cache.read().await;
         match peer {
             tl::enums::Peer::User(u) => {
                 if u.user_id == 0 {
                     return Ok(tl::enums::InputPeer::PeerSelf);
                 }
-                match pc.users.get(&u.user_id) {
-                    Some(hash) => Ok(tl::enums::InputPeer::User(tl::types::InputPeerUser {
+                match cache.users.get(&u.user_id) {
+                    Some(&hash) => Ok(tl::enums::InputPeer::User(tl::types::InputPeerUser {
                         user_id: u.user_id,
                         access_hash: hash,
                     })),
@@ -6028,8 +7336,8 @@ impl Client {
             tl::enums::Peer::Chat(c) => Ok(tl::enums::InputPeer::Chat(tl::types::InputPeerChat {
                 chat_id: c.chat_id,
             })),
-            tl::enums::Peer::Channel(c) => match pc.channels.get(&c.channel_id) {
-                Some(hash) => Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+            tl::enums::Peer::Channel(c) => match cache.channels.get(&c.channel_id) {
+                Some(&hash) => Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
                     channel_id: c.channel_id,
                     access_hash: hash,
                 })),
@@ -6070,7 +7378,7 @@ impl Client {
 
         if needs_new {
             let addr = {
-                let opts = self.inner.dc_options.lock();
+                let opts = self.inner.dc_options.lock().await;
                 opts.get(&dc_id)
                     .map(|e| e.addr.clone())
                     .unwrap_or_else(|| crate::dc_migration::fallback_dc_addr(dc_id).to_string())
@@ -6079,7 +7387,7 @@ impl Client {
             let socks5 = self.inner.socks5.clone();
             let transport = self.inner.transport.clone();
             let saved_key = {
-                let opts = self.inner.dc_options.lock();
+                let opts = self.inner.dc_options.lock().await;
                 opts.get(&dc_id).and_then(|e| e.auth_key)
             };
 
@@ -6103,7 +7411,7 @@ impl Client {
                 )
                 .await?;
                 // Export auth from home DC and import into worker DC
-                let home_dc_id = *self.inner.home_dc_id.lock();
+                let home_dc_id = *self.inner.home_dc_id.lock().await;
                 if dc_id != home_dc_id
                     && let Err(e) = self.export_import_auth(dc_id, &conn).await
                 {
@@ -6114,7 +7422,7 @@ impl Client {
 
             let key = dc_conn.auth_key_bytes();
             {
-                let mut opts = self.inner.dc_options.lock();
+                let mut opts = self.inner.dc_options.lock().await;
                 if let Some(e) = opts.get_mut(&dc_id) {
                     e.auth_key = Some(key);
                 }
@@ -6122,7 +7430,14 @@ impl Client {
             self.inner.dc_pool.lock().await.insert(dc_id, dc_conn);
         }
 
-        let dc_entries: Vec<DcEntry> = self.inner.dc_options.lock().values().cloned().collect();
+        let dc_entries: Vec<DcEntry> = self
+            .inner
+            .dc_options
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect();
         self.inner
             .dc_pool
             .lock()
@@ -6149,7 +7464,14 @@ impl Client {
             id: exported.id,
             bytes: exported.bytes,
         };
-        let dc_entries: Vec<DcEntry> = self.inner.dc_options.lock().values().cloned().collect();
+        let dc_entries: Vec<DcEntry> = self
+            .inner
+            .dc_options
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect();
         self.inner
             .dc_pool
             .lock()
@@ -6160,7 +7482,62 @@ impl Client {
         Ok(())
     }
 
-    // Chat lifecycle
+    async fn get_password_info(&self) -> Result<PasswordToken, InvocationError> {
+        let body = self
+            .rpc_call_raw(&tl::functions::account::GetPassword {})
+            .await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::account::Password::Password(pw) =
+            tl::enums::account::Password::deserialize(&mut cur)?;
+        Ok(PasswordToken { password: pw })
+    }
+
+    fn make_send_code_req(&self, phone: &str) -> tl::functions::auth::SendCode {
+        tl::functions::auth::SendCode {
+            phone_number: phone.to_string(),
+            api_id: self.inner.api_id,
+            api_hash: self.inner.api_hash.clone(),
+            settings: tl::enums::CodeSettings::CodeSettings(tl::types::CodeSettings {
+                allow_flashcall: false,
+                current_number: false,
+                allow_app_hash: false,
+                allow_missed_call: false,
+                allow_firebase: false,
+                unknown_number: false,
+                logout_tokens: None,
+                token: None,
+                app_sandbox: None,
+            }),
+        }
+    }
+
+    fn extract_user_name(user: &tl::enums::User) -> String {
+        match user {
+            tl::enums::User::User(u) => format!(
+                "{} {}",
+                u.first_name.as_deref().unwrap_or(""),
+                u.last_name.as_deref().unwrap_or("")
+            )
+            .trim()
+            .to_string(),
+            tl::enums::User::Empty(_) => "(unknown)".into(),
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn extract_password_params(
+        algo: &tl::enums::PasswordKdfAlgo,
+    ) -> Result<(&[u8], &[u8], &[u8], i32), InvocationError> {
+        match algo {
+            tl::enums::PasswordKdfAlgo::Sha256Sha256Pbkdf2Hmacsha512iter100000Sha256ModPow(a) => {
+                Ok((&a.salt1, &a.salt2, &a.p, a.g))
+            }
+            _ => Err(InvocationError::Deserialize(
+                "unsupported password KDF algo".into(),
+            )),
+        }
+    }
+
     /// Create a new legacy group chat and return its `Chat` object.
     ///
     /// `user_ids` is the list of user IDs to add on creation (at least one required).
@@ -6170,10 +7547,11 @@ impl Client {
         title: impl Into<String>,
         user_ids: Vec<i64>,
     ) -> Result<tl::enums::Chat, InvocationError> {
+        let cache = self.inner.peer_cache.read().await;
         let users: Vec<tl::enums::InputUser> = user_ids
             .into_iter()
             .map(|id| {
-                let hash = self.inner.peer_cache.users.get(&id).unwrap_or(0);
+                let hash = cache.users.get(&id).copied().unwrap_or(0);
                 tl::enums::InputUser::InputUser(tl::types::InputUser {
                     user_id: id,
                     access_hash: hash,
@@ -6239,7 +7617,7 @@ impl Client {
     /// Only the creator can delete a channel. This action is irreversible.
     pub async fn delete_channel(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let channel = match &input_peer {
             tl::enums::InputPeer::Channel(c) => {
                 tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
@@ -6271,7 +7649,7 @@ impl Client {
     /// [`delete_dialog`] to just hide it.
     pub async fn leave_chat(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let channel = match &input_peer {
             tl::enums::InputPeer::Channel(c) => {
                 tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
@@ -6299,7 +7677,7 @@ impl Client {
         title: impl Into<String>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let title = title.into();
         match &input_peer {
             tl::enums::InputPeer::Channel(c) => {
@@ -6332,7 +7710,7 @@ impl Client {
         about: impl Into<String>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::EditChatAbout {
             peer: input_peer,
             about: about.into(),
@@ -6349,7 +7727,7 @@ impl Client {
         photo: tl::enums::InputChatPhoto,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         match &input_peer {
             tl::enums::InputPeer::Channel(c) => {
                 let req = tl::functions::channels::EditPhoto {
@@ -6394,7 +7772,7 @@ impl Client {
         build: impl FnOnce(participants::BannedRightsBuilder) -> participants::BannedRightsBuilder,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let rights = build(participants::BannedRightsBuilder::new()).into_tl();
         let req = tl::functions::messages::EditChatDefaultBannedRights {
             peer: input_peer,
@@ -6412,7 +7790,7 @@ impl Client {
         peer: impl Into<PeerRef>,
     ) -> Result<tl::enums::messages::ChatFull, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let body = match &input_peer {
             tl::enums::InputPeer::Channel(c) => {
                 let req = tl::functions::channels::GetFullChannel {
@@ -6478,14 +7856,15 @@ impl Client {
             return Ok(());
         }
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
 
         match &input_peer {
             tl::enums::InputPeer::Channel(c) => {
+                let cache = self.inner.peer_cache.read().await;
                 let users: Vec<tl::enums::InputUser> = user_ids
                     .into_iter()
                     .map(|id| {
-                        let hash = self.inner.peer_cache.users.get(&id).unwrap_or(0);
+                        let hash = cache.users.get(&id).copied().unwrap_or(0);
                         tl::enums::InputUser::InputUser(tl::types::InputUser {
                             user_id: id,
                             access_hash: hash,
@@ -6504,7 +7883,15 @@ impl Client {
             tl::enums::InputPeer::Chat(c) => {
                 // Legacy groups: add one at a time
                 for id in user_ids {
-                    let hash = self.inner.peer_cache.users.get(&id).unwrap_or(0);
+                    let hash = self
+                        .inner
+                        .peer_cache
+                        .read()
+                        .await
+                        .users
+                        .get(&id)
+                        .copied()
+                        .unwrap_or(0);
                     let req = tl::functions::messages::AddChatUser {
                         chat_id: c.chat_id,
                         user_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
@@ -6533,7 +7920,7 @@ impl Client {
         period: i32,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::SetHistoryTtl {
             peer: input_peer,
             period,
@@ -6551,7 +7938,15 @@ impl Client {
         max_id: i64,
         limit: i32,
     ) -> Result<Vec<tl::enums::Chat>, InvocationError> {
-        let hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let hash = self
+            .inner
+            .peer_cache
+            .read()
+            .await
+            .users
+            .get(&user_id)
+            .copied()
+            .unwrap_or(0);
         let req = tl::functions::messages::GetCommonChats {
             user_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
                 user_id,
@@ -6569,7 +7964,6 @@ impl Client {
         })
     }
 
-    // Invite links
     /// Create or regenerate the primary invite link for a chat, group, channel,
     /// or supergroup and return the link string.
     ///
@@ -6585,7 +7979,7 @@ impl Client {
         title: Option<String>,
     ) -> Result<tl::enums::ExportedChatInvite, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::ExportChatInvite {
             legacy_revoke_permanent: false,
             request_needed,
@@ -6610,7 +8004,7 @@ impl Client {
         link: impl Into<String>,
     ) -> Result<tl::enums::ExportedChatInvite, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::EditExportedChatInvite {
             revoked: true,
             peer: input_peer,
@@ -6649,7 +8043,7 @@ impl Client {
         title: Option<String>,
     ) -> Result<tl::enums::ExportedChatInvite, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::EditExportedChatInvite {
             revoked: false,
             peer: input_peer,
@@ -6688,8 +8082,16 @@ impl Client {
         offset_link: Option<String>,
     ) -> Result<Vec<tl::enums::ExportedChatInvite>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
-        let admin_hash = self.inner.peer_cache.users.get(&admin_id).unwrap_or(0);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let admin_hash = self
+            .inner
+            .peer_cache
+            .read()
+            .await
+            .users
+            .get(&admin_id)
+            .copied()
+            .unwrap_or(0);
         let req = tl::functions::messages::GetExportedChatInvites {
             revoked,
             peer: input_peer,
@@ -6719,7 +8121,7 @@ impl Client {
         link: impl Into<String>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::DeleteExportedChatInvite {
             peer: input_peer,
             link: link.into(),
@@ -6736,8 +8138,16 @@ impl Client {
         admin_id: i64,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
-        let admin_hash = self.inner.peer_cache.users.get(&admin_id).unwrap_or(0);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let admin_hash = self
+            .inner
+            .peer_cache
+            .read()
+            .await
+            .users
+            .get(&admin_id)
+            .copied()
+            .unwrap_or(0);
         let req = tl::functions::messages::DeleteRevokedExportedChatInvites {
             peer: input_peer,
             admin_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
@@ -6758,8 +8168,16 @@ impl Client {
         user_id: i64,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
-        let user_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let user_hash = self
+            .inner
+            .peer_cache
+            .read()
+            .await
+            .users
+            .get(&user_id)
+            .copied()
+            .unwrap_or(0);
         let req = tl::functions::messages::HideChatJoinRequest {
             approved: true,
             peer: input_peer,
@@ -6781,8 +8199,16 @@ impl Client {
         user_id: i64,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
-        let user_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let user_hash = self
+            .inner
+            .peer_cache
+            .read()
+            .await
+            .users
+            .get(&user_id)
+            .copied()
+            .unwrap_or(0);
         let req = tl::functions::messages::HideChatJoinRequest {
             approved: false,
             peer: input_peer,
@@ -6804,7 +8230,7 @@ impl Client {
         link: Option<String>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::HideAllChatJoinRequests {
             approved: true,
             peer: input_peer,
@@ -6821,7 +8247,7 @@ impl Client {
         link: Option<String>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::HideAllChatJoinRequests {
             approved: false,
             peer: input_peer,
@@ -6844,12 +8270,15 @@ impl Client {
         offset_user_id: i64,
     ) -> Result<Vec<tl::types::ChatInviteImporter>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let offset_hash = self
             .inner
             .peer_cache
+            .read()
+            .await
             .users
             .get(&offset_user_id)
+            .copied()
             .unwrap_or(0);
         let req = tl::functions::messages::GetChatInviteImporters {
             requested,
@@ -6886,7 +8315,7 @@ impl Client {
         peer: impl Into<PeerRef>,
     ) -> Result<tl::types::messages::ChatAdminsWithInvites, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetAdminsWithInvites { peer: input_peer };
         let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
@@ -6896,7 +8325,6 @@ impl Client {
         Ok(result)
     }
 
-    // Contacts
     /// Fetch the full contact list of the current user.
     ///
     /// Returns `None` when the server indicates the list hasn't changed since
@@ -6926,7 +8354,15 @@ impl Client {
         phone: impl Into<String>,
         add_phone_privacy_exception: bool,
     ) -> Result<(), InvocationError> {
-        let hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let hash = self
+            .inner
+            .peer_cache
+            .read()
+            .await
+            .users
+            .get(&user_id)
+            .copied()
+            .unwrap_or(0);
         let req = tl::functions::contacts::AddContact {
             add_phone_privacy_exception,
             id: tl::enums::InputUser::InputUser(tl::types::InputUser {
@@ -6946,10 +8382,11 @@ impl Client {
         if user_ids.is_empty() {
             return Ok(());
         }
+        let cache = self.inner.peer_cache.read().await;
         let users: Vec<tl::enums::InputUser> = user_ids
             .into_iter()
             .map(|id| {
-                let hash = self.inner.peer_cache.users.get(&id).unwrap_or(0);
+                let hash = cache.users.get(&id).copied().unwrap_or(0);
                 tl::enums::InputUser::InputUser(tl::types::InputUser {
                     user_id: id,
                     access_hash: hash,
@@ -6963,7 +8400,7 @@ impl Client {
     /// Block a user or peer so they can no longer send you messages.
     pub async fn block_user(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::contacts::Block {
             my_stories_from: false,
             id: input_peer,
@@ -6974,7 +8411,7 @@ impl Client {
     /// Unblock a previously blocked user or peer.
     pub async fn unblock_user(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::contacts::Unblock {
             my_stories_from: false,
             id: input_peer,
@@ -7039,7 +8476,6 @@ impl Client {
         Ok(peers)
     }
 
-    // Profile & account
     /// Upload a new profile photo from an already-uploaded file.
     ///
     /// Call `client.upload_file(path).await` first to get an [`UploadedFile`],
@@ -7164,7 +8600,6 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    // Messages (missing pieces)
     /// Delete a chat's message history.
     ///
     /// For channels/supergroups, set `for_everyone = true` to delete history
@@ -7180,7 +8615,7 @@ impl Client {
         revoke: bool,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         match &input_peer {
             tl::enums::InputPeer::Channel(c) => {
                 let req = tl::functions::channels::DeleteHistory {
@@ -7227,7 +8662,7 @@ impl Client {
         ids: Vec<i32>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::SendScheduledMessages {
             peer: input_peer,
             id: ids,
@@ -7245,7 +8680,7 @@ impl Client {
         msg_id: i32,
     ) -> Result<Vec<tl::types::ReadParticipantDate>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetMessageReadParticipants {
             peer: input_peer,
             msg_id,
@@ -7274,7 +8709,7 @@ impl Client {
         offset_id: i32,
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetReplies {
             peer: input_peer,
             msg_id,
@@ -7310,7 +8745,7 @@ impl Client {
         msg_id: i32,
     ) -> Result<tl::types::messages::DiscussionMessage, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetDiscussionMessage {
             peer: input_peer,
             msg_id,
@@ -7335,7 +8770,7 @@ impl Client {
         read_max_id: i32,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::ReadDiscussion {
             peer: input_peer,
             msg_id,
@@ -7373,7 +8808,7 @@ impl Client {
         media: tl::enums::InputMedia,
     ) -> Result<tl::enums::MessageMedia, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::UploadMedia {
             business_connection_id: None,
             peer: input_peer,
@@ -7392,7 +8827,15 @@ impl Client {
         &self,
         user_id: i64,
     ) -> Result<tl::types::UserFull, InvocationError> {
-        let hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let hash = self
+            .inner
+            .peer_cache
+            .read()
+            .await
+            .users
+            .get(&user_id)
+            .copied()
+            .unwrap_or(0);
         let req = tl::functions::users::GetFullUser {
             id: tl::enums::InputUser::InputUser(tl::types::InputUser {
                 user_id,
@@ -7409,7 +8852,6 @@ impl Client {
         Ok(full_user)
     }
 
-    // Reactions
     /// Fetch the reaction counters for a list of messages.
     ///
     /// The server pushes an `updateMessageReactions` update; this call
@@ -7420,7 +8862,7 @@ impl Client {
         msg_ids: Vec<i32>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetMessagesReactions {
             peer: input_peer,
             id: msg_ids,
@@ -7441,7 +8883,7 @@ impl Client {
         offset: Option<String>,
     ) -> Result<tl::types::messages::MessageReactionsList, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetMessageReactionsList {
             peer: input_peer,
             id: msg_id,
@@ -7468,7 +8910,7 @@ impl Client {
         count: i32,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::SendPaidReaction {
             peer: input_peer,
             msg_id,
@@ -7482,7 +8924,7 @@ impl Client {
     /// Mark all unread reactions in a chat as read.
     pub async fn read_reactions(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::ReadReactions {
             peer: input_peer,
             top_msg_id: None,
@@ -7497,7 +8939,6 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    // Translation & transcription
     /// Translate one or more messages to `to_lang` (e.g. `"en"`, `"ru"`).
     ///
     /// Returns the translated text for each message ID in the same order.
@@ -7508,7 +8949,7 @@ impl Client {
         to_lang: impl Into<String>,
     ) -> Result<Vec<tl::types::TextWithEntities>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::TranslateText {
             peer: Some(input_peer),
             id: Some(msg_ids),
@@ -7540,7 +8981,7 @@ impl Client {
         msg_id: i32,
     ) -> Result<tl::types::messages::TranscribedAudio, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::TranscribeAudio {
             peer: input_peer,
             msg_id,
@@ -7561,7 +9002,7 @@ impl Client {
         disabled: bool,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::TogglePeerTranslations {
             disabled,
             peer: input_peer,
@@ -7569,7 +9010,6 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    // Channel admin tools
     /// Fetch the admin action log for a channel or supergroup.
     ///
     /// `query` filters by keyword; pass `""` for all events.
@@ -7583,7 +9023,7 @@ impl Client {
         min_id: i64,
     ) -> Result<Vec<tl::types::ChannelAdminLogEvent>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let channel = match &input_peer {
             tl::enums::InputPeer::Channel(c) => {
                 tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
@@ -7624,7 +9064,7 @@ impl Client {
     /// Get the approximate number of online members in a group or channel.
     pub async fn get_online_count(&self, peer: impl Into<PeerRef>) -> Result<i32, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetOnlines { peer: input_peer };
         let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
@@ -7642,7 +9082,7 @@ impl Client {
         enabled: bool,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::ToggleNoForwards {
             peer: input_peer,
             enabled,
@@ -7660,7 +9100,7 @@ impl Client {
         emoticon: impl Into<String>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::SetChatTheme {
             peer: input_peer,
             theme: tl::enums::InputChatTheme::InputChatTheme(tl::types::InputChatTheme {
@@ -7681,7 +9121,7 @@ impl Client {
         reactions: tl::enums::ChatReactions,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::SetChatAvailableReactions {
             peer: input_peer,
             available_reactions: reactions,
@@ -7702,7 +9142,7 @@ impl Client {
         thread: bool,
     ) -> Result<String, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let channel = match &input_peer {
             tl::enums::InputPeer::Channel(c) => {
                 tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
@@ -7737,7 +9177,7 @@ impl Client {
         peer: impl Into<PeerRef>,
     ) -> Result<Vec<tl::enums::Peer>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::channels::GetSendAs {
             for_paid_reactions: false,
             for_live_stories: false,
@@ -7767,9 +9207,9 @@ impl Client {
         send_as_peer: impl Into<PeerRef>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let send_as = send_as_peer.into().resolve(self).await?;
-        let send_as_input = self.inner.peer_cache.peer_to_input(&send_as);
+        let send_as_input = self.inner.peer_cache.read().await.peer_to_input(&send_as)?;
         let req = tl::functions::messages::SaveDefaultSendAs {
             peer: input_peer,
             send_as: send_as_input,
@@ -7777,7 +9217,6 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    // Drafts
     /// Save a message draft for a chat.
     ///
     /// Pass an empty string to clear the draft.
@@ -7787,7 +9226,7 @@ impl Client {
         text: impl Into<String>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::SaveDraft {
             no_webpage: false,
             invert_media: false,
@@ -7817,11 +9256,10 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    // Dialog management
     /// Pin a dialog to the top of the dialog list.
     pub async fn pin_dialog(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::ToggleDialogPin {
             pinned: true,
             peer: tl::enums::InputDialogPeer::InputDialogPeer(tl::types::InputDialogPeer {
@@ -7834,7 +9272,7 @@ impl Client {
     /// Unpin a previously pinned dialog.
     pub async fn unpin_dialog(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::ToggleDialogPin {
             pinned: false,
             peer: tl::enums::InputDialogPeer::InputDialogPeer(tl::types::InputDialogPeer {
@@ -7870,7 +9308,7 @@ impl Client {
         unread: bool,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::MarkDialogUnread {
             unread,
             parent_peer: None,
@@ -7881,7 +9319,6 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    // Polls
     /// Vote in a poll.
     ///
     /// `options` is a list of raw option bytes from the `Poll` object.
@@ -7893,7 +9330,7 @@ impl Client {
         options: Vec<Vec<u8>>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::SendVote {
             peer: input_peer,
             msg_id,
@@ -7912,7 +9349,7 @@ impl Client {
         poll_hash: i64,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetPollResults {
             peer: input_peer,
             msg_id,
@@ -7934,7 +9371,7 @@ impl Client {
         offset: Option<String>,
     ) -> Result<tl::types::messages::VotesList, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetPollVotes {
             peer: input_peer,
             id: msg_id,
@@ -7951,7 +9388,6 @@ impl Client {
         Ok(result)
     }
 
-    // Forum topics
     /// Get the list of forum topics (threads) in a forum supergroup.
     ///
     /// `limit` is max 100. Use `offset_date`, `offset_id`, `offset_topic`
@@ -7966,7 +9402,7 @@ impl Client {
         offset_topic: i32,
     ) -> Result<Vec<tl::enums::ForumTopic>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetForumTopics {
             peer: input_peer,
             q: query,
@@ -7991,7 +9427,7 @@ impl Client {
         topic_ids: Vec<i32>,
     ) -> Result<Vec<tl::enums::ForumTopic>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetForumTopicsById {
             peer: input_peer,
             topics: topic_ids,
@@ -8016,7 +9452,7 @@ impl Client {
         icon_emoji_id: Option<i64>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::CreateForumTopic {
             title_missing: false,
             peer: input_peer,
@@ -8042,7 +9478,7 @@ impl Client {
         hidden: Option<bool>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::EditForumTopic {
             peer: input_peer,
             topic_id,
@@ -8063,7 +9499,7 @@ impl Client {
         top_msg_id: i32,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         loop {
             let req = tl::functions::messages::DeleteTopicHistory {
                 peer: input_peer.clone(),
@@ -8087,7 +9523,7 @@ impl Client {
         enabled: bool,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let channel = match &input_peer {
             tl::enums::InputPeer::Channel(c) => {
                 tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
@@ -8109,7 +9545,6 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    // Bot-specific
     /// Start a bot conversation by sending `/start start_param` as if the user
     /// pressed a deep-link button.
     pub async fn start_bot(
@@ -8118,9 +9553,17 @@ impl Client {
         peer: impl Into<PeerRef>,
         start_param: impl Into<String>,
     ) -> Result<(), InvocationError> {
-        let bot_hash = self.inner.peer_cache.users.get(&bot_user_id).unwrap_or(0);
+        let bot_hash = self
+            .inner
+            .peer_cache
+            .read()
+            .await
+            .users
+            .get(&bot_user_id)
+            .copied()
+            .unwrap_or(0);
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::StartBot {
             bot: tl::enums::InputUser::InputUser(tl::types::InputUser {
                 user_id: bot_user_id,
@@ -8147,8 +9590,16 @@ impl Client {
         edit_message: bool,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
-        let user_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let user_hash = self
+            .inner
+            .peer_cache
+            .read()
+            .await
+            .users
+            .get(&user_id)
+            .copied()
+            .unwrap_or(0);
         let req = tl::functions::messages::SetGameScore {
             edit_message,
             force,
@@ -8171,8 +9622,16 @@ impl Client {
         user_id: i64,
     ) -> Result<Vec<tl::types::HighScore>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
-        let user_hash = self.inner.peer_cache.users.get(&user_id).unwrap_or(0);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let user_hash = self
+            .inner
+            .peer_cache
+            .read()
+            .await
+            .users
+            .get(&user_id)
+            .copied()
+            .unwrap_or(0);
         let req = tl::functions::messages::GetGameHighScores {
             peer: input_peer,
             id: msg_id,
@@ -8230,7 +9689,6 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    // Stickers
     /// Get a sticker set by its `InputStickerSet` (short name, ID, or emoji).
     pub async fn get_sticker_set(
         &self,
@@ -8320,7 +9778,6 @@ impl Client {
         Ok(Vec::<tl::enums::Document>::deserialize(&mut cur)?)
     }
 
-    // Privacy & notifications
     /// Get the privacy rules for a specific key (e.g. phone number, last seen).
     pub async fn get_privacy(
         &self,
@@ -8361,7 +9818,7 @@ impl Client {
         peer: impl Into<PeerRef>,
     ) -> Result<tl::enums::PeerNotifySettings, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::account::GetNotifySettings {
             peer: tl::enums::InputNotifyPeer::InputNotifyPeer(tl::types::InputNotifyPeer {
                 peer: input_peer,
@@ -8382,7 +9839,7 @@ impl Client {
         settings: tl::enums::InputPeerNotifySettings,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::account::UpdateNotifySettings {
             peer: tl::enums::InputNotifyPeer::InputNotifyPeer(tl::types::InputNotifyPeer {
                 peer: input_peer,
@@ -8390,62 +9847,6 @@ impl Client {
             settings,
         };
         self.rpc_write(&req).await
-    }
-
-    async fn get_password_info(&self) -> Result<PasswordToken, InvocationError> {
-        let body = self
-            .rpc_call_raw(&tl::functions::account::GetPassword {})
-            .await?;
-        let mut cur = Cursor::from_slice(&body);
-        let tl::enums::account::Password::Password(pw) =
-            tl::enums::account::Password::deserialize(&mut cur)?;
-        Ok(PasswordToken { password: pw })
-    }
-
-    fn make_send_code_req(&self, phone: &str) -> tl::functions::auth::SendCode {
-        tl::functions::auth::SendCode {
-            phone_number: phone.to_string(),
-            api_id: self.inner.api_id,
-            api_hash: self.inner.api_hash.clone(),
-            settings: tl::enums::CodeSettings::CodeSettings(tl::types::CodeSettings {
-                allow_flashcall: false,
-                current_number: false,
-                allow_app_hash: false,
-                allow_missed_call: false,
-                allow_firebase: false,
-                unknown_number: false,
-                logout_tokens: None,
-                token: None,
-                app_sandbox: None,
-            }),
-        }
-    }
-
-    fn extract_user_name(user: &tl::enums::User) -> String {
-        match user {
-            tl::enums::User::User(u) => format!(
-                "{} {}",
-                u.first_name.as_deref().unwrap_or(""),
-                u.last_name.as_deref().unwrap_or("")
-            )
-            .trim()
-            .to_string(),
-            tl::enums::User::Empty(_) => "(unknown)".into(),
-        }
-    }
-
-    #[allow(clippy::type_complexity)]
-    fn extract_password_params(
-        algo: &tl::enums::PasswordKdfAlgo,
-    ) -> Result<(&[u8], &[u8], &[u8], i32), InvocationError> {
-        match algo {
-            tl::enums::PasswordKdfAlgo::Sha256Sha256Pbkdf2Hmacsha512iter100000Sha256ModPow(a) => {
-                Ok((&a.salt1, &a.salt2, &a.p, a.g))
-            }
-            _ => Err(InvocationError::Deserialize(
-                "unsupported password KDF algo".into(),
-            )),
-        }
     }
 }
 
@@ -8528,7 +9929,7 @@ impl DialogIter {
                 .unwrap_or(0);
             self.offset_id = last.top_message();
             if let Some(peer) = last.peer() {
-                self.offset_peer = client.inner.peer_cache.peer_to_input(peer);
+                self.offset_peer = client.inner.peer_cache.read().await.peer_to_input(peer)?;
             }
         }
 
@@ -8583,7 +9984,7 @@ impl MessageIter {
             p
         };
 
-        let input_peer = client.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = client.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let (page, count) = client
             .get_messages_with_count(input_peer, Self::PAGE_SIZE, self.offset_id)
             .await?;
@@ -8643,11 +10044,8 @@ enum FrameKind {
         cipher: std::sync::Arc<tokio::sync::Mutex<ferogram_crypto::ObfuscatedCipher>>,
     },
     /// FakeTLS framing (`0xEE` MTProxy).
-    /// Data flows as raw TLS Application Data records: no additional cipher.
-    /// `first_send` starts `true`; the CCS prefix `\x14\x03\x03\x00\x01\x01`
-    /// is written once before the first AppData frame, then set to `false`.
     FakeTls {
-        first_send: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        cipher: std::sync::Arc<tokio::sync::Mutex<ferogram_crypto::ObfuscatedCipher>>,
     },
 }
 
@@ -8670,17 +10068,28 @@ struct ConnectionWriter {
     enc: EncryptedSession,
     frame_kind: FrameKind,
     /// msg_ids of received content messages waiting to be acked.
+    /// Drained into a MsgsAck on every outgoing frame (bundled into container
+    /// when sending an RPC, or sent standalone after route_frame).
     pending_ack: Vec<i64>,
     /// raw TL body bytes of every sent request, keyed by msg_id.
+    /// On bad_msg_notification the matching body is re-encrypted with a fresh
+    /// msg_id and re-sent transparently.
     sent_bodies: std::collections::HashMap<i64, Vec<u8>>,
     /// maps container_msg_id -> inner request msg_id.
+    /// When bad_msg_notification / bad_server_salt arrives for a container
+    /// rather than the individual inner message, we look here to find the
+    /// inner request to retry.
+    ///
     container_map: std::collections::HashMap<i64, i64>,
-    /// tracks when each container was sent so inner messages can be
-    /// resent after 600 s if no ack arrives (tDesktop: clearOldContainers).
-    container_ages: std::collections::HashMap<i64, std::time::Instant>,
     /// -style future salt pool.
+    /// Sorted by valid_since ascending so the newest salt is LAST
+    /// (.valid_since), which puts
+    /// the highest valid_since at the end in ascending-key order).
     salts: Vec<FutureSalt>,
     /// Server-time anchor received with the last GetFutureSalts response.
+    /// (server_now, local_instant) lets us approximate server time at any
+    /// moment so we can check whether a salt's valid_since window has opened.
+    ///
     start_salt_time: Option<(i32, std::time::Instant)>,
 }
 
@@ -8724,13 +10133,17 @@ impl ConnectionWriter {
             );
         }
 
-        // Advance to the freshest salt whose use-delay has opened.
+        // Advance to the freshest salt whose use-delay has opened AND
+        // which has not yet expired.  The `valid_until > now` guard is the
+        // critical safety: without it we can advance enc.salt to an already-
+        // expired entry from a stale FutureSalts pool, triggering immediate
+        // bad_server_salt rejection and re-entering the fetch loop.
         if self.salts.len() > 1 {
             let best = self
                 .salts
                 .iter()
                 .rev()
-                .find(|s| s.valid_since + SALT_USE_DELAY <= now)
+                .find(|s| s.valid_since + SALT_USE_DELAY <= now && s.valid_until > now)
                 .map(|s| s.salt);
             if let Some(salt) = best
                 && salt != self.enc.salt
@@ -8741,8 +10154,8 @@ impl ConnectionWriter {
                     salt
                 );
                 self.enc.salt = salt;
-                // Drop all entries older than the newly active salt.
-                self.salts.retain(|s| s.valid_since >= now - SALT_USE_DELAY);
+                // Prune salts whose valid_until has passed.
+                self.salts.retain(|s| s.valid_until > now);
                 if self.salts.is_empty() {
                     // Safety net: keep a sentinel so we never go saltless.
                     self.salts.push(FutureSalt {
@@ -8833,9 +10246,8 @@ impl Connection {
                 use sha2::Digest;
 
                 // Random 64-byte nonce: retry until it passes the reserved-pattern
-                // check (mirrors tDesktop isGoodStartNonce). Without this, the nonce
-                // could look like a plain HTTP request or another MTProto framing
-                // tag to a proxy or DPI filter, causing the connection to be reset.
+                // Reject reserved nonce patterns that could be misidentified as HTTP
+                // or another MTProto framing tag by a proxy or DPI filter.
                 let mut nonce = [0u8; 64];
                 loop {
                     getrandom::getrandom(&mut nonce)
@@ -8859,7 +10271,7 @@ impl Connection {
                 //   TX: key=nonce[8..40]  iv=nonce[40..56]
                 //   RX: key=rev[0..32]    iv=rev[32..48]   (rev = nonce[8..56] reversed)
                 // When an MTProxy secret is present, each 32-byte key becomes
-                // SHA-256(raw_key_slice || secret) tDesktop Version1::prepareKey.
+                // SHA-256(raw_key_slice || secret) for MTProxy key derivation.
                 let tx_raw: [u8; 32] = nonce[8..40].try_into().unwrap();
                 let tx_iv: [u8; 16] = nonce[40..56].try_into().unwrap();
                 let mut rev48 = nonce[8..56].to_vec();
@@ -8895,12 +10307,9 @@ impl Connection {
                 // Encrypt nonce[56..64] in-place using the TX cipher advanced
                 // past the first 56 bytes (which are sent as plaintext).
                 //
-                // IMPORTANT: we must use the *same* cipher instance for both the
-                // nonce tail encryption AND all subsequent TX data.  tDesktop uses a
-                // single continuous AES-CTR stream after encrypting the full 64-byte
-                // nonce the TX position is at byte 64.  Using a separate instance here
-                // and storing a fresh-at-0 cipher was the dual-instance bug: the stored
-                // cipher would re-encrypt from byte 0 instead of continuing from 64.
+                // The same cipher instance must be used for both the nonce tail
+                // encryption and all subsequent TX data: AES-CTR is a single continuous
+                // stream; the TX position after encrypting the full 64-byte nonce is 64.
                 let mut cipher =
                     ferogram_crypto::ObfuscatedCipher::from_keys(&tx_key, &tx_iv, &rx_key, &rx_iv);
                 // Advance TX past nonce[0..56] (sent as plaintext, not encrypted).
@@ -8971,233 +10380,66 @@ impl Connection {
                 Ok((stream, FrameKind::PaddedIntermediate { cipher: cipher_arc }))
             }
             TransportKind::FakeTls { secret, domain } => {
-                // FakeTLS (0xEE MTProxy)
-                //
-                // Protocol (matches tDesktop mtproto_tls_socket.cpp exactly):
-                //
-                // 1. Build a realistic TLS 1.3 ClientHello.
-                //    The 32-byte "random" field is all zeros; HMAC-SHA256(secret, record)
-                //    is computed over the whole record and written into that field.
-                //    The last 4 bytes of the digest are XOR'd with the current unix
-                //    timestamp so the server can detect replays (tDesktop: injectTimestamp).
-                //
-                // 2. Server sends:  [ServerHello] [CCS+Finished AppData]
-                //    We read the exact tDesktop byte patterns kServerHelloPart1/Part3,
-                //    verify the server's HMAC, then enter data mode.
-                //
-                // 3. Data mode: send/recv raw TLS Application Data records (0x17 0x03 0x03).
-                //    NO additional cipher: the MTProxy server terminates FakeTLS itself.
-                //    The client sends a ChangeCipherSpec prefix (\x14\x03\x03\x00\x01\x01)
-                //    exactly ONCE before the first data AppData record.
-
-                // GREASE helpers
-                // GREASE = random nibble-aligned byte pairs, no two adjacent equal.
-                let mut gs = [0u8; 8];
-                getrandom::getrandom(&mut gs).unwrap_or(());
-                let grease_byte = |b: u8| (b & 0xF0) | 0x0A;
-                let g = [
-                    grease_byte(gs[0]),
-                    grease_byte(gs[2]),
-                    grease_byte(gs[4]),
-                    grease_byte(gs[6]),
-                ];
-                // ensure g[0] != g[2] and g[1] != g[3] (adjacent-pair rule)
-                let g0 = g[0];
-                let g1 = if g[1] == g0 { g0 ^ 0x10 } else { g[1] };
-                let g2 = g[2];
-                let g3 = if g[3] == g2 { g2 ^ 0x10 } else { g[3] };
-
-                // Ephemeral x25519 public key (32 random bytes)
-                let mut x25519_pub = [0u8; 32];
-                getrandom::getrandom(&mut x25519_pub).unwrap_or(());
-
-                // Random session ID
-                let mut session_id = [0u8; 32];
-                getrandom::getrandom(&mut session_id).unwrap_or(());
-
+                // Fake TLS 1.3 ClientHello with HMAC-SHA256 random field.
+                // After the handshake, data flows as TLS Application Data records
+                // over a shared Obfuscated2 cipher seeded from the secret+HMAC.
                 let domain_bytes = domain.as_bytes();
+                let mut session_id = [0u8; 32];
+                getrandom::getrandom(&mut session_id)
+                    .map_err(|_| InvocationError::Deserialize("getrandom".into()))?;
 
-                // Extensions
-                // Helper: TLS extension = [type_u16_be][data_len_u16_be][data]
-                let ext = |typ: u16, data: &[u8]| -> Vec<u8> {
-                    let mut v = Vec::with_capacity(4 + data.len());
-                    v.extend_from_slice(&typ.to_be_bytes());
-                    v.extend_from_slice(&(data.len() as u16).to_be_bytes());
-                    v.extend_from_slice(data);
-                    v
-                };
-                // Helper: length-prefixed list
-                let with_u16_len = |data: &[u8]| -> Vec<u8> {
-                    let mut v = Vec::with_capacity(2 + data.len());
-                    v.extend_from_slice(&(data.len() as u16).to_be_bytes());
-                    v.extend_from_slice(data);
-                    v
-                };
-
-                // SNI (0x0000)
+                // Build ClientHello body (random placeholder = zeros)
+                let cipher_suites: &[u8] = &[0x00, 0x04, 0x13, 0x01, 0x13, 0x02];
+                let compression: &[u8] = &[0x01, 0x00];
                 let sni_name_len = domain_bytes.len() as u16;
-                let mut sni_body = Vec::new();
-                sni_body.push(0x00); // host_name type
-                sni_body.extend_from_slice(&sni_name_len.to_be_bytes());
-                sni_body.extend_from_slice(domain_bytes);
-                let ext_sni = ext(0x0000, &with_u16_len(&sni_body));
+                let sni_list_len = sni_name_len + 3;
+                let sni_ext_len = sni_list_len + 2;
+                let mut sni_ext = Vec::new();
+                sni_ext.extend_from_slice(&[0x00, 0x00]);
+                sni_ext.extend_from_slice(&sni_ext_len.to_be_bytes());
+                sni_ext.extend_from_slice(&sni_list_len.to_be_bytes());
+                sni_ext.push(0x00);
+                sni_ext.extend_from_slice(&sni_name_len.to_be_bytes());
+                sni_ext.extend_from_slice(domain_bytes);
+                let sup_ver: &[u8] = &[0x00, 0x2b, 0x00, 0x03, 0x02, 0x03, 0x04];
+                let sup_grp: &[u8] = &[0x00, 0x0a, 0x00, 0x04, 0x00, 0x02, 0x00, 0x1d];
+                let sess_tick: &[u8] = &[0x00, 0x23, 0x00, 0x00];
+                let ext_body_len = sni_ext.len() + sup_ver.len() + sup_grp.len() + sess_tick.len();
+                let mut extensions = Vec::new();
+                extensions.extend_from_slice(&(ext_body_len as u16).to_be_bytes());
+                extensions.extend_from_slice(&sni_ext);
+                extensions.extend_from_slice(sup_ver);
+                extensions.extend_from_slice(sup_grp);
+                extensions.extend_from_slice(sess_tick);
 
-                // status_request (0x0005): \x01\x00\x00\x00\x00
-                let ext_status = ext(0x0005, &[0x01, 0x00, 0x00, 0x00, 0x00]);
-
-                // supported_groups (0x000a): GREASE, x25519kyber768(0x11ec), x25519, p256, p384
-                let mut grp_list = Vec::new();
-                grp_list.extend_from_slice(&[g2, g2]);
-                grp_list.extend_from_slice(&[0x11, 0xec]);
-                grp_list.extend_from_slice(&[0x00, 0x1d]);
-                grp_list.extend_from_slice(&[0x00, 0x17]);
-                grp_list.extend_from_slice(&[0x00, 0x18]);
-                let ext_groups = ext(0x000a, &with_u16_len(&grp_list));
-
-                // ec_point_formats (0x000b): uncompressed only
-                let ext_ec_pts = ext(0x000b, &[0x01, 0x00]);
-
-                // signature_algorithms (0x000d)
-                let sig_algs: &[u8] = &[
-                    0x04, 0x03, 0x08, 0x04, 0x04, 0x01, 0x05, 0x03, 0x08, 0x05, 0x05, 0x01, 0x08,
-                    0x06, 0x06, 0x01,
-                ];
-                let ext_sig = ext(0x000d, &with_u16_len(sig_algs));
-
-                // ALPN (0x0010): h2, http/1.1
-                let alpn_body: &[u8] = &[
-                    0x00, 0x0c, // protocol list length = 12
-                    0x02, 0x68, 0x32, // "h2"
-                    0x08, 0x68, 0x74, 0x74, 0x70, 0x2f, 0x31, 0x2e, 0x31, // "http/1.1"
-                ];
-                let ext_alpn = ext(0x0010, alpn_body);
-
-                // signed_certificate_timestamp (0x0012): empty
-                let ext_sct = ext(0x0012, &[]);
-
-                // extended_master_secret (0x0017): empty
-                let ext_ems = ext(0x0017, &[]);
-
-                // compress_certificate (0x001b)
-                let ext_compress = ext(0x001b, &[0x02, 0x00, 0x02]);
-
-                // session_ticket (0x0023): empty
-                let ext_sess_tick = ext(0x0023, &[]);
-
-                // supported_versions (0x002b): GREASE, TLS 1.3, TLS 1.2
-                let mut sup_ver = Vec::new();
-                sup_ver.push(0x06); // 3 versions × 2 bytes = 6
-                sup_ver.extend_from_slice(&[g3, g3]);
-                sup_ver.extend_from_slice(&[0x03, 0x04]); // TLS 1.3
-                sup_ver.extend_from_slice(&[0x03, 0x03]); // TLS 1.2
-                let ext_sup_ver = ext(0x002b, &sup_ver);
-
-                // psk_key_exchange_modes (0x002d): psk_dhe_ke only
-                let ext_psk_modes = ext(0x002d, &[0x01, 0x01]);
-
-                // key_share (0x0033): GREASE share + x25519 share
-                let mut ks_list = Vec::new();
-                // GREASE entry (group=g2,g2, key_exchange=1 byte)
-                ks_list.extend_from_slice(&[g2, g2]);
-                ks_list.extend_from_slice(&[0x00, 0x01]); // key len = 1
-                ks_list.push(0x00);
-                // x25519 entry (group=0x001d, key_exchange=32 bytes)
-                ks_list.extend_from_slice(&[0x00, 0x1d]);
-                ks_list.extend_from_slice(&[0x00, 0x20]); // key len = 32
-                ks_list.extend_from_slice(&x25519_pub);
-                let ext_ks = ext(0x0033, &with_u16_len(&ks_list));
-
-                // application_layer_protocol_settings (0x4469 / ALPS): h2
-                let alps_body: &[u8] = &[0x00, 0x03, 0x02, 0x68, 0x32];
-                let ext_alps = ext(0x4469, alps_body);
-
-                // renegotiation_info (0xff01): empty RI
-                let ext_reneg = ext(0xff01, &[0x00]);
-
-                // Collect extensions in tDesktop-matching order (permuted subset):
-                // GREASE(0) | SNI | status | groups | ec_pts | sig_algs | alpn | sct |
-                // ems | compress | session_ticket | sup_ver | psk_modes | ks | alps |
-                // GREASE(1) | reneg
-                let mut ext_block = Vec::new();
-                // GREASE extension type g0,g0 with empty data
-                ext_block.extend_from_slice(&[g0, g0, 0x00, 0x00]);
-                ext_block.extend_from_slice(&ext_sni);
-                ext_block.extend_from_slice(&ext_status);
-                ext_block.extend_from_slice(&ext_groups);
-                ext_block.extend_from_slice(&ext_ec_pts);
-                ext_block.extend_from_slice(&ext_sig);
-                ext_block.extend_from_slice(&ext_alpn);
-                ext_block.extend_from_slice(&ext_sct);
-                ext_block.extend_from_slice(&ext_ems);
-                ext_block.extend_from_slice(&ext_compress);
-                ext_block.extend_from_slice(&ext_sess_tick);
-                ext_block.extend_from_slice(&ext_sup_ver);
-                ext_block.extend_from_slice(&ext_psk_modes);
-                ext_block.extend_from_slice(&ext_ks);
-                ext_block.extend_from_slice(&ext_alps);
-                // GREASE extension type g1,g1 with 1-byte data \x00
-                ext_block.extend_from_slice(&[g1, g1, 0x00, 0x01, 0x00]);
-                // renegotiation_info (0xff01)
-                ext_block.extend_from_slice(&ext_reneg);
-
-                // Padding (0x0015): pad total ClientHello body to >= 513 bytes.
-                // ClientHello body = 2(ver) + 32(random) + 1(sess_len) + 32(sess)
-                //                  + 2(cs_len) + 32(cs) + 2(comp) + 2(ext_len) + ext_block
-                let body_before_pad = 2 + 32 + 1 + 32 + 2 + 32 + 2 + 2 + ext_block.len();
-                if body_before_pad < 513 {
-                    let need = 513 - body_before_pad;
-                    // padding ext = 4 header bytes + need bytes of zeros
-                    let pad_data = vec![0u8; need];
-                    ext_block.extend_from_slice(&ext(0x0015, &pad_data));
-                }
-
-                // Cipher suites
-                // GREASE + 15 real suites = 16 × 2 = 32 bytes
-                let mut cipher_suites = Vec::new();
-                cipher_suites.extend_from_slice(&[g0, g0]);
-                cipher_suites.extend_from_slice(&[
-                    0x13, 0x01, 0x13, 0x02, 0x13, 0x03, 0xc0, 0x2b, 0xc0, 0x2f, 0xc0, 0x2c, 0xc0,
-                    0x30, 0xcc, 0xa9, 0xcc, 0xa8, 0xc0, 0x13, 0xc0, 0x14, 0x00, 0x9c, 0x00, 0x9d,
-                    0x00, 0x2f, 0x00, 0x35,
-                ]);
-
-                // Assemble ClientHello body
-                // [version(2)][random(32)][sess_id_len(1)][sess_id(32)]
-                // [cs_len(2)][cs][comp_len(1)][comp(1)][ext_len(2)][exts]
                 let mut hello_body = Vec::new();
-                hello_body.extend_from_slice(&[0x03, 0x03]); // TLS 1.2 version
-                let _digest_offset_in_body = hello_body.len();
-                hello_body.extend_from_slice(&[0u8; 32]); // random = zeros (HMAC goes here)
-                hello_body.push(0x20); // session_id length = 32
+                hello_body.extend_from_slice(&[0x03, 0x03]);
+                hello_body.extend_from_slice(&[0u8; 32]); // random placeholder
+                hello_body.push(session_id.len() as u8);
                 hello_body.extend_from_slice(&session_id);
-                hello_body.extend_from_slice(&(cipher_suites.len() as u16).to_be_bytes());
-                hello_body.extend_from_slice(&cipher_suites);
-                hello_body.extend_from_slice(&[0x01, 0x00]); // compression: 1 method, null
-                hello_body.extend_from_slice(&(ext_block.len() as u16).to_be_bytes());
-                hello_body.extend_from_slice(&ext_block);
+                hello_body.extend_from_slice(cipher_suites);
+                hello_body.extend_from_slice(compression);
+                hello_body.extend_from_slice(&extensions);
 
-                // Wrap in Handshake header (type=ClientHello=0x01, 3-byte length)
-                let body_len = hello_body.len() as u32;
+                let hs_len = hello_body.len() as u32;
                 let mut handshake = vec![
-                    0x01u8, // ClientHello
-                    ((body_len >> 16) & 0xff) as u8,
-                    ((body_len >> 8) & 0xff) as u8,
-                    (body_len & 0xff) as u8,
+                    0x01,
+                    ((hs_len >> 16) & 0xff) as u8,
+                    ((hs_len >> 8) & 0xff) as u8,
+                    (hs_len & 0xff) as u8,
                 ];
                 handshake.extend_from_slice(&hello_body);
 
-                // Wrap in TLS record (type=Handshake=0x16, version=0x03 0x01)
-                let hs_len = handshake.len() as u16;
+                let rec_len = handshake.len() as u16;
                 let mut record = Vec::new();
-                record.push(0x16); // Handshake
-                record.extend_from_slice(&[0x03, 0x01]); // TLS 1.0 (standard for ClientHello)
-                record.extend_from_slice(&hs_len.to_be_bytes());
+                record.push(0x16);
+                record.extend_from_slice(&[0x03, 0x01]);
+                record.extend_from_slice(&rec_len.to_be_bytes());
                 record.extend_from_slice(&handshake);
 
-                // HMAC-SHA256(secret, record) → inject into random field
-                // random field is at: 5 (rec header) + 4 (hs header) + 2 (version)
-                //                   = record[11..43]
-                let random_in_record = 5 + 4 + 2; // = 11
+                // HMAC-SHA256(secret, record) -> fill random field at offset 11
+                use sha2::Digest;
+                let random_offset = 5 + 4 + 2; // TLS-rec(5) + HS-hdr(4) + version(2)
                 let hmac_result: [u8; 32] = {
                     use hmac::{Hmac, Mac};
                     type HmacSha256 = Hmac<sha2::Sha256>;
@@ -9206,122 +10448,24 @@ impl Connection {
                     mac.update(&record);
                     mac.finalize().into_bytes().into()
                 };
-                record[random_in_record..random_in_record + 32].copy_from_slice(&hmac_result);
-
-                // Timestamp injection (tDesktop: injectTimestamp)
-                // XOR the last 4 bytes of the HMAC digest with the current unix time LE.
-                // This lets the server reject replayed ClientHellos (timestamp too old).
-                let unix_now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as u32;
-                let ts_bytes = unix_now.to_le_bytes();
-                let ts_pos = random_in_record + 32 - 4; // last 4 bytes of random field
-                for i in 0..4 {
-                    record[ts_pos + i] ^= ts_bytes[i];
-                }
-
+                record[random_offset..random_offset + 32].copy_from_slice(&hmac_result);
                 stream.write_all(&record).await?;
 
-                // Read and verify server TLS handshake
-                // tDesktop reads exactly: kServerHelloPart1(3) + len1(2) + ServerHello(len1)
-                //                      + kServerHelloPart3(9) + len2(2) + Finished(len2)
-                // kServerHelloPart1 = "\x16\x03\x03"
-                // kServerHelloPart3 = "\x14\x03\x03\x00\x01\x01\x17\x03\x03"
-                //   (= ChangeCipherSpec record + start of AppData record header)
-                // Server HMAC is at kServerHelloDigestPosition=11 within the server stream,
-                // which = server_stream[11..43] (the server's "random" field in ServerHello).
-                //
-                // Verification: build full_data = [client_hmac_32][server_stream],
-                // zero positions 32+11..32+43, compute HMAC-SHA256(secret, full_data),
-                // compare with saved[0..32].
-
-                // Part 1: "\x16\x03\x03" + 2-byte length
-                let mut part1 = [0u8; 5];
-                stream
-                    .read_exact(&mut part1)
-                    .await
-                    .map_err(InvocationError::Io)?;
-                if &part1[0..3] != b"\x16\x03\x03" {
-                    return Err(InvocationError::Deserialize(format!(
-                        "FakeTLS: bad ServerHello record header: {:02x?}",
-                        &part1[0..3]
-                    )));
-                }
-                let len1 = u16::from_be_bytes([part1[3], part1[4]]) as usize;
-
-                // Part 2: ServerHello body (len1 bytes)
-                let mut server_hello_body = vec![0u8; len1];
-                stream
-                    .read_exact(&mut server_hello_body)
-                    .await
-                    .map_err(InvocationError::Io)?;
-
-                // Part 3: kServerHelloPart3 = CCS + AppData start (9 bytes)
-                const PART3: &[u8] = b"\x14\x03\x03\x00\x01\x01\x17\x03\x03";
-                let mut part3 = [0u8; 9];
-                stream
-                    .read_exact(&mut part3)
-                    .await
-                    .map_err(InvocationError::Io)?;
-                if part3 != *PART3 {
-                    return Err(InvocationError::Deserialize(format!(
-                        "FakeTLS: bad CCS+AppData header: {:02x?}",
-                        part3
-                    )));
-                }
-
-                // Part 4: 2-byte AppData length + Finished body
-                let mut len2_buf = [0u8; 2];
-                stream
-                    .read_exact(&mut len2_buf)
-                    .await
-                    .map_err(InvocationError::Io)?;
-                let len2 = u16::from_be_bytes(len2_buf) as usize;
-                let mut finished_body = vec![0u8; len2];
-                stream
-                    .read_exact(&mut finished_body)
-                    .await
-                    .map_err(InvocationError::Io)?;
-
-                // Server HMAC verification
-                // full_data = [client_hmac_32] [part1(5)] [sh_body(len1)] [part3(9)] [len2(2)] [fin(len2)]
-                // server digest at full_data[32+11 .. 32+43] = full_data[43..75]
-                let mut full_data = Vec::new();
-                full_data.extend_from_slice(&hmac_result); // client HMAC (32 bytes)
-                full_data.extend_from_slice(&part1);
-                full_data.extend_from_slice(&server_hello_body);
-                full_data.extend_from_slice(&part3);
-                full_data.extend_from_slice(&len2_buf);
-                full_data.extend_from_slice(&finished_body);
-
-                const SERVER_DIGEST_POS: usize = 32 + 11; // = 43
-                if full_data.len() >= SERVER_DIGEST_POS + 32 {
-                    let saved_digest: [u8; 32] = full_data
-                        [SERVER_DIGEST_POS..SERVER_DIGEST_POS + 32]
-                        .try_into()
-                        .unwrap();
-                    // Zero the digest position, recompute HMAC, compare
-                    full_data[SERVER_DIGEST_POS..SERVER_DIGEST_POS + 32].fill(0);
-                    let expected: [u8; 32] = {
-                        use hmac::{Hmac, Mac};
-                        type HmacSha256 = Hmac<sha2::Sha256>;
-                        let mut mac = HmacSha256::new_from_slice(secret)
-                            .map_err(|_| InvocationError::Deserialize("HMAC key error".into()))?;
-                        mac.update(&full_data);
-                        mac.finalize().into_bytes().into()
-                    };
-                    if expected != saved_digest {
-                        return Err(InvocationError::Deserialize(
-                            "FakeTLS: server Hello HMAC mismatch: possible MITM".into(),
-                        ));
-                    }
-                }
-
-                // Handshake done.  Data now flows as raw TLS AppData records.
-                // CCS prefix is sent once before the first AppData frame.
-                let first_send = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-                Ok((stream, FrameKind::FakeTls { first_send }))
+                // Derive Obfuscated2 key from secret + HMAC
+                let mut h = sha2::Sha256::new();
+                h.update(secret.as_ref());
+                h.update(hmac_result);
+                let derived: [u8; 32] = h.finalize().into();
+                let iv = [0u8; 16];
+                let cipher =
+                    ferogram_crypto::ObfuscatedCipher::from_keys(&derived, &iv, &derived, &iv);
+                let cipher_arc = std::sync::Arc::new(tokio::sync::Mutex::new(cipher));
+                Ok((stream, FrameKind::FakeTls { cipher: cipher_arc }))
+            }
+            TransportKind::Http => {
+                // HTTP transport is handled in dc_pool - fall back to Abridged framing.
+                stream.write_all(&[0xef]).await?;
+                Ok((stream, FrameKind::Abridged))
             }
         }
     }
@@ -9333,7 +10477,16 @@ impl Connection {
         transport: &TransportKind,
         dc_id: i16,
     ) -> Result<Self, InvocationError> {
-        tracing::debug!("[ferogram] Connecting to {addr} (DH) …");
+        let t_label = match transport {
+            TransportKind::Abridged => "Abridged",
+            TransportKind::Obfuscated { .. } => "Obfuscated",
+            TransportKind::PaddedIntermediate { .. } => "PaddedIntermediate",
+            TransportKind::Http => "Http",
+            TransportKind::Intermediate => "Intermediate",
+            TransportKind::Full => "Full",
+            TransportKind::FakeTls { .. } => "FakeTls",
+        };
+        tracing::debug!("[ferogram] Connecting to {addr} ({t_label}) DH …");
 
         let addr2 = addr.to_string();
         let socks5_c = socks5.cloned();
@@ -9380,7 +10533,7 @@ impl Connection {
             let ans: tl::enums::SetClientDhParamsAnswer =
                 recv_frame_plain(&mut stream, &frame_kind).await?;
 
-            // Retry loop for dh_gen_retry (up to 5 attempts, mirroring tDesktop).
+            // Retry loop for dh_gen_retry (up to 5 attempts).
             let done = {
                 let mut result = auth::finish(s3, ans)
                     .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
@@ -9486,7 +10639,6 @@ impl Connection {
             pending_ack: Vec::new(),
             sent_bodies: std::collections::HashMap::new(),
             container_map: std::collections::HashMap::new(),
-            container_ages: std::collections::HashMap::new(),
             salts: Vec::new(),
             start_salt_time: None,
         };
@@ -9546,7 +10698,7 @@ async fn send_frame(
             Ok(())
         }
         FrameKind::PaddedIntermediate { cipher } => {
-            // Intermediate framing + 0–15 random padding bytes, encrypted.
+            // Intermediate framing + 0-15 random padding bytes, encrypted.
             let mut pad_len_buf = [0u8; 1];
             getrandom::getrandom(&mut pad_len_buf).ok();
             let pad_len = (pad_len_buf[0] & 0x0f) as usize;
@@ -9561,35 +10713,25 @@ async fn send_frame(
             stream.write_all(&frame).await?;
             Ok(())
         }
-        FrameKind::FakeTls { first_send } => {
-            // raw plaintext AppData, CCS prefix once on first send.
-            const CCS: &[u8] = b"\x14\x03\x03\x00\x01\x01";
+        FrameKind::FakeTls { cipher } => {
+            // Wrap each MTProto message as a TLS Application Data record (type 0x17).
+            // Telegram's FakeTLS sends one MTProto frame per TLS record, encrypted
+            // with the Obfuscated2 cipher (no real TLS encryption).
+            const TLS_APP_DATA: u8 = 0x17;
+            const TLS_VER: [u8; 2] = [0x03, 0x03];
+            // Split into 2878-byte chunks per TLS record framing.
             const CHUNK: usize = 2878;
-            let is_first = first_send
-                .compare_exchange(
-                    true,
-                    false,
-                    std::sync::atomic::Ordering::SeqCst,
-                    std::sync::atomic::Ordering::SeqCst,
-                )
-                .is_ok();
-            let mut first_chunk = true;
+            let mut locked = cipher.lock().await;
             for chunk in data.chunks(CHUNK) {
-                let clen = chunk.len() as u16;
-                let mut rec = Vec::with_capacity(5 + chunk.len());
-                rec.push(0x17u8);
-                rec.extend_from_slice(&[0x03, 0x03]);
-                rec.extend_from_slice(&clen.to_be_bytes());
-                rec.extend_from_slice(chunk);
-                if is_first && first_chunk {
-                    let mut full = Vec::with_capacity(CCS.len() + rec.len());
-                    full.extend_from_slice(CCS);
-                    full.extend_from_slice(&rec);
-                    stream.write_all(&full).await?;
-                } else {
-                    stream.write_all(&rec).await?;
-                }
-                first_chunk = false;
+                let chunk_len = chunk.len() as u16;
+                let mut record = Vec::with_capacity(5 + chunk.len());
+                record.push(TLS_APP_DATA);
+                record.extend_from_slice(&TLS_VER);
+                record.extend_from_slice(&chunk_len.to_be_bytes());
+                record.extend_from_slice(chunk);
+                // Encrypt only the payload portion (after the 5-byte header).
+                locked.encrypt(&mut record[5..]);
+                stream.write_all(&record).await?;
             }
             Ok(())
         }
@@ -9736,35 +10878,20 @@ async fn send_frame_write(
             stream.write_all(&frame).await?;
             Ok(())
         }
-        FrameKind::FakeTls { first_send } => {
-            // raw plaintext AppData, CCS prefix once on first send.
-            const CCS: &[u8] = b"\x14\x03\x03\x00\x01\x01";
+        FrameKind::FakeTls { cipher } => {
+            const TLS_APP_DATA: u8 = 0x17;
+            const TLS_VER: [u8; 2] = [0x03, 0x03];
             const CHUNK: usize = 2878;
-            let is_first = first_send
-                .compare_exchange(
-                    true,
-                    false,
-                    std::sync::atomic::Ordering::SeqCst,
-                    std::sync::atomic::Ordering::SeqCst,
-                )
-                .is_ok();
-            let mut first_chunk = true;
+            let mut locked = cipher.lock().await;
             for chunk in data.chunks(CHUNK) {
-                let clen = chunk.len() as u16;
-                let mut rec = Vec::with_capacity(5 + chunk.len());
-                rec.push(0x17u8);
-                rec.extend_from_slice(&[0x03, 0x03]);
-                rec.extend_from_slice(&clen.to_be_bytes());
-                rec.extend_from_slice(chunk);
-                if is_first && first_chunk {
-                    let mut full = Vec::with_capacity(CCS.len() + rec.len());
-                    full.extend_from_slice(CCS);
-                    full.extend_from_slice(&rec);
-                    stream.write_all(&full).await?;
-                } else {
-                    stream.write_all(&rec).await?;
-                }
-                first_chunk = false;
+                let chunk_len = chunk.len() as u16;
+                let mut record = Vec::with_capacity(5 + chunk.len());
+                record.push(TLS_APP_DATA);
+                record.extend_from_slice(&TLS_VER);
+                record.extend_from_slice(&chunk_len.to_be_bytes());
+                record.extend_from_slice(chunk);
+                locked.encrypt(&mut record[5..]);
+                stream.write_all(&record).await?;
             }
             Ok(())
         }
@@ -9778,31 +10905,40 @@ async fn recv_frame_read(
 ) -> Result<Vec<u8>, InvocationError> {
     match kind {
         FrameKind::Abridged => {
+            // h[0] ranges: 0x00-0x7e = word count, 0x7f = extended, 0x80-0xFF = transport error
             let mut h = [0u8; 1];
             stream.read_exact(&mut h).await?;
             let words = if h[0] < 0x7f {
                 h[0] as usize
-            } else {
+            } else if h[0] == 0x7f {
                 let mut b = [0u8; 3];
                 stream.read_exact(&mut b).await?;
-                b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16
+                let w = b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16;
+                if w > 4 * 1024 * 1024 {
+                    return Err(InvocationError::Deserialize(format!(
+                        "abridged: implausible word count {w}"
+                    )));
+                }
+                w
+            } else {
+                let mut rest = [0u8; 3];
+                stream.read_exact(&mut rest).await?;
+                let code = i32::from_le_bytes([h[0], rest[0], rest[1], rest[2]]);
+                return Err(InvocationError::Rpc(RpcError::from_telegram(
+                    code,
+                    "transport error",
+                )));
             };
-            let len = words * 4;
-            let mut buf = vec![0u8; len];
+            if words == 0 {
+                return Err(InvocationError::Deserialize(
+                    "abridged: zero-length frame".into(),
+                ));
+            }
+            let mut buf = vec![0u8; words * 4];
             stream.read_exact(&mut buf).await?;
-            if buf.len() == 4 {
+            if words == 1 {
                 let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
                 if code < 0 {
-                    // AK/AL: log specific transport-level flood/bad-dc codes explicitly.
-                    if code == -429 {
-                        tracing::warn!(
-                            "[ferogram] Transport -429: server-level flood limit hit;                              reconnecting (distinct from application-layer FLOOD_WAIT)"
-                        );
-                    } else if code == -444 {
-                        tracing::warn!(
-                            "[ferogram] Transport -444: bad DC configuration;                              reconnecting: consider refreshing DcOptions via help.getConfig"
-                        );
-                    }
                     return Err(InvocationError::Rpc(RpcError::from_telegram(
                         code,
                         "transport error",
@@ -9816,16 +10952,6 @@ async fn recv_frame_read(
             stream.read_exact(&mut len_buf).await?;
             let len_i32 = i32::from_le_bytes(len_buf);
             if len_i32 < 0 {
-                // AK/AL: log specific transport-level codes.
-                if len_i32 == -429 {
-                    tracing::warn!(
-                        "[ferogram] Transport -429: server-level flood limit hit;                          reconnecting (distinct from application-layer FLOOD_WAIT)"
-                    );
-                } else if len_i32 == -444 {
-                    tracing::warn!(
-                        "[ferogram] Transport -444: bad DC configuration;                          reconnecting: consider refreshing DcOptions via help.getConfig"
-                    );
-                }
                 return Err(InvocationError::Rpc(RpcError::from_telegram(
                     len_i32,
                     "transport error",
@@ -9835,15 +10961,6 @@ async fn recv_frame_read(
                 let mut code_buf = [0u8; 4];
                 stream.read_exact(&mut code_buf).await?;
                 let code = i32::from_le_bytes(code_buf);
-                if code == -429 {
-                    tracing::warn!(
-                        "[ferogram] Transport -429: server-level flood limit hit;                          reconnecting (distinct from application-layer FLOOD_WAIT)"
-                    );
-                } else if code == -444 {
-                    tracing::warn!(
-                        "[ferogram] Transport -444: bad DC configuration;                          reconnecting: consider refreshing DcOptions via help.getConfig"
-                    );
-                }
                 return Err(InvocationError::Rpc(RpcError::from_telegram(
                     code,
                     "transport error",
@@ -9859,15 +10976,6 @@ async fn recv_frame_read(
             stream.read_exact(&mut len_buf).await?;
             let total_len_i32 = i32::from_le_bytes(len_buf);
             if total_len_i32 < 0 {
-                if total_len_i32 == -429 {
-                    tracing::warn!(
-                        "[ferogram] Transport -429: server-level flood limit hit;                          reconnecting (distinct from application-layer FLOOD_WAIT)"
-                    );
-                } else if total_len_i32 == -444 {
-                    tracing::warn!(
-                        "[ferogram] Transport -444: bad DC configuration;                          reconnecting: consider refreshing DcOptions via help.getConfig"
-                    );
-                }
                 return Err(InvocationError::Rpc(RpcError::from_telegram(
                     total_len_i32,
                     "transport error",
@@ -9907,28 +11015,38 @@ async fn recv_frame_read(
             cipher.lock().await.decrypt(&mut h);
             let words = if h[0] < 0x7f {
                 h[0] as usize
-            } else {
+            } else if h[0] == 0x7f {
                 let mut b = [0u8; 3];
                 stream.read_exact(&mut b).await?;
                 cipher.lock().await.decrypt(&mut b);
-                b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16
+                let w = b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16;
+                if w > 4 * 1024 * 1024 {
+                    return Err(InvocationError::Deserialize(format!(
+                        "obfuscated: implausible word count {w}"
+                    )));
+                }
+                w
+            } else {
+                let mut rest = [0u8; 3];
+                stream.read_exact(&mut rest).await?;
+                cipher.lock().await.decrypt(&mut rest);
+                let code = i32::from_le_bytes([h[0], rest[0], rest[1], rest[2]]);
+                return Err(InvocationError::Rpc(RpcError::from_telegram(
+                    code,
+                    "transport error",
+                )));
             };
+            if words == 0 {
+                return Err(InvocationError::Deserialize(
+                    "obfuscated: zero-length frame".into(),
+                ));
+            }
             let mut buf = vec![0u8; words * 4];
             stream.read_exact(&mut buf).await?;
             cipher.lock().await.decrypt(&mut buf);
-            if buf.len() == 4 {
+            if words == 1 {
                 let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
                 if code < 0 {
-                    // AK/AL: log specific transport-level flood/bad-dc codes explicitly.
-                    if code == -429 {
-                        tracing::warn!(
-                            "[ferogram] Transport -429: server-level flood limit hit;                              reconnecting (distinct from application-layer FLOOD_WAIT)"
-                        );
-                    } else if code == -444 {
-                        tracing::warn!(
-                            "[ferogram] Transport -444: bad DC configuration;                              reconnecting: consider refreshing DcOptions via help.getConfig"
-                        );
-                    }
                     return Err(InvocationError::Rpc(RpcError::from_telegram(
                         code,
                         "transport error",
@@ -9944,15 +11062,6 @@ async fn recv_frame_read(
             cipher.lock().await.decrypt(&mut len_buf);
             let total_len = i32::from_le_bytes(len_buf);
             if total_len < 0 {
-                if total_len == -429 {
-                    tracing::warn!(
-                        "[ferogram] Transport -429: server-level flood limit hit;                          reconnecting (distinct from application-layer FLOOD_WAIT)"
-                    );
-                } else if total_len == -444 {
-                    tracing::warn!(
-                        "[ferogram] Transport -444: bad DC configuration;                          reconnecting: consider refreshing DcOptions via help.getConfig"
-                    );
-                }
                 return Err(InvocationError::Rpc(RpcError::from_telegram(
                     total_len,
                     "transport error",
@@ -9966,8 +11075,8 @@ async fn recv_frame_read(
             // uses body_len from the plaintext header, so padding is harmlessly ignored.
             Ok(buf)
         }
-        FrameKind::FakeTls { .. } => {
-            // raw plaintext: no cipher on recv.
+        FrameKind::FakeTls { cipher } => {
+            // Read TLS Application Data record: 5-byte header + payload.
             let mut hdr = [0u8; 5];
             stream.read_exact(&mut hdr).await?;
             if hdr[0] != 0x17 {
@@ -9979,6 +11088,7 @@ async fn recv_frame_read(
             let payload_len = u16::from_be_bytes([hdr[3], hdr[4]]) as usize;
             let mut buf = vec![0u8; payload_len];
             stream.read_exact(&mut buf).await?;
+            cipher.lock().await.decrypt(&mut buf);
             Ok(buf)
         }
     }
@@ -9987,7 +11097,7 @@ async fn recv_frame_read(
 /// Send using Abridged framing (used for DH plaintext during connect).
 async fn send_abridged(stream: &mut TcpStream, data: &[u8]) -> Result<(), InvocationError> {
     let words = data.len() / 4;
-    // Single combined write (header + payload): same fix #1 as send_frame_write.
+    // Single combined write: header and payload together to avoid partial-frame delivery.
     let mut frame = if words < 0x7f {
         let mut v = Vec::with_capacity(1 + data.len());
         v.push(words as u8);
@@ -10021,15 +11131,6 @@ async fn recv_abridged(stream: &mut TcpStream) -> Result<Vec<u8>, InvocationErro
             let mut code_buf = [0u8; 4];
             stream.read_exact(&mut code_buf).await?;
             let code = i32::from_le_bytes(code_buf);
-            if code == -429 {
-                tracing::warn!(
-                    "[ferogram] Transport -429: server-level flood limit hit;                      reconnecting (distinct from application-layer FLOOD_WAIT)"
-                );
-            } else if code == -444 {
-                tracing::warn!(
-                    "[ferogram] Transport -444: bad DC configuration;                      reconnecting: consider refreshing DcOptions via help.getConfig"
-                );
-            }
             return Err(InvocationError::Rpc(RpcError::from_telegram(
                 code,
                 "transport error",
@@ -10054,12 +11155,7 @@ async fn recv_frame_plain<T: Deserializable>(
     stream: &mut TcpStream,
     kind: &FrameKind,
 ) -> Result<T, InvocationError> {
-    // DH handshake frames use the same transport framing as all other frames.
-    // The old code hardcoded recv_abridged here, which worked only when transport
-    // was Abridged.  With Intermediate or Full, Telegram responds with a 4-byte
-    // LE length prefix but we tried to parse it as a 1-byte Abridged header
-    // mangling the length, reading garbage bytes, and corrupting the auth key.
-    // Every single subsequent decrypt then failed with AuthKeyMismatch.
+    // DH handshake uses the same transport framing as all other frames.
     let raw = match kind {
         FrameKind::Abridged => recv_abridged(stream).await?,
         FrameKind::Intermediate => {
@@ -10145,8 +11241,7 @@ async fn recv_frame_plain<T: Deserializable>(
             cipher.lock().await.decrypt(&mut buf);
             buf
         }
-        FrameKind::FakeTls { .. } => {
-            // raw plaintext: no cipher on recv.
+        FrameKind::FakeTls { cipher } => {
             let mut hdr = [0u8; 5];
             stream.read_exact(&mut hdr).await?;
             if hdr[0] != 0x17 {
@@ -10158,6 +11253,7 @@ async fn recv_frame_plain<T: Deserializable>(
             let payload_len = u16::from_be_bytes([hdr[3], hdr[4]]) as usize;
             let mut buf = vec![0u8; payload_len];
             stream.read_exact(&mut buf).await?;
+            cipher.lock().await.decrypt(&mut buf);
             buf
         }
     };
@@ -10224,16 +11320,7 @@ fn unwrap_envelope(body: Vec<u8>) -> Result<EnvelopeResult, InvocationError> {
 
             for _ in 0..count {
                 if pos + 16 > body.len() { break; }
-                let inner_msg_id = i64::from_le_bytes(body[pos..pos + 8].try_into().unwrap());
                 let inner_len = u32::from_le_bytes(body[pos + 12..pos + 16].try_into().unwrap()) as usize;
-                // reject unaligned or undersized inner frames (tDesktop validates this).
-                if inner_len & 3 != 0 || inner_len < 4 {
-                    tracing::warn!(
-                        "[ferogram] unwrap_envelope container: inner_len {inner_len} bad alignment or < 4: dropping"
-                    );
-                    break;
-                }
-                let _ = inner_msg_id; // available for future ordering checks
                 pos += 16;
                 if pos + inner_len > body.len() { break; }
                 let inner = body[pos..pos + inner_len].to_vec();
@@ -10287,12 +11374,8 @@ fn unwrap_envelope(body: Vec<u8>) -> Result<EnvelopeResult, InvocationError> {
         | ID_UPDATES_TOO_LONG => {
             Ok(EnvelopeResult::RawUpdates(vec![body]))
         }
-        // updateShortSentMessage is the RPC response to messages.sendMessage.
-        // It carries the ONLY pts record for the bot's own sent message.
-        // Bots do NOT receive a push updateNewMessage for their own messages,
-        // so if we absorb this silently, pts stays stale -> false gap -> getDifference
-        // -> re-delivery of already-processed messages -> duplicate replies.
-        // extract pts/pts_count and return Pts variant so route_frame advances the counter.
+        // updateShortSentMessage carries pts for the bot's own sent message;
+        // extract and advance the pts counter.
         ID_UPDATE_SHORT_SENT_MSG => {
             let mut cur = Cursor::from_slice(&body[4..]);
             match tl::types::UpdateShortSentMessage::deserialize(&mut cur) {
@@ -10325,11 +11408,11 @@ fn random_i64() -> i64 {
 /// Prevents thundering-herd when many clients reconnect simultaneously
 /// (e.g. after a server restart or a shared network outage).
 fn jitter_delay(base_ms: u64) -> Duration {
-    // Use two random bytes for the jitter factor (0..=65535 -> 0.80 ... 1.20).
+    // Use two random bytes for the jitter factor (0..=65535 -> 0.80 … 1.20).
     let mut b = [0u8; 2];
     getrandom::getrandom(&mut b).unwrap_or(());
-    let rand_frac = u16::from_le_bytes(b) as f64 / 65535.0; // 0.0 ... 1.0
-    let factor = 0.80 + rand_frac * 0.40; // 0.80 ... 1.20
+    let rand_frac = u16::from_le_bytes(b) as f64 / 65535.0; // 0.0 … 1.0
+    let factor = 0.80 + rand_frac * 0.40; // 0.80 … 1.20
     Duration::from_millis((base_ms as f64 * factor) as u64)
 }
 

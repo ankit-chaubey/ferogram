@@ -43,11 +43,13 @@ const LANG_CODE: &str = "en";
 const SYSTEM_LANG_CODE: &str = "en";
 
 static MSG_COUNT: AtomicU64 = AtomicU64::new(0);
+static MEDIA_COUNT: AtomicU64 = AtomicU64::new(0);
 static START_TS: AtomicU64 = AtomicU64::new(0);
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() {
     if std::env::var("RUST_LOG").is_err() {
+        // Safe: no other threads exist yet at this point in main.
         unsafe {
             std::env::set_var("RUST_LOG", "ferogram=warn");
         }
@@ -83,6 +85,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .system_lang_code(SYSTEM_LANG_CODE)
         .transport(TransportKind::Abridged)
         .proxy_link(PROXY)
+        .probe_transport(true)
+        .resilient_connect(true)
         .connect()
         .await?;
 
@@ -121,6 +125,32 @@ async fn dispatch(upd: Update, client: Arc<Client>, me: Arc<tl::types::User>, bo
                 return;
             }
             let text = msg.text().unwrap_or("").trim().to_string();
+
+            // ── Auto media echo ──────────────────────────────────────────────
+            // Fires on any photo or document that does NOT start with a command.
+            // Command messages that happen to carry media are handled normally
+            // by the text-command router below (e.g. a caption "/help").
+            let has_photo = msg.photo().is_some();
+            let has_doc = msg.document().is_some();
+            if (has_photo || has_doc) && !text.starts_with('/') {
+                let Some(peer) = msg.peer_id().cloned() else {
+                    return;
+                };
+                let msg_id = msg.id();
+                MEDIA_COUNT.fetch_add(1, Ordering::Relaxed);
+                MSG_COUNT.fetch_add(1, Ordering::Relaxed);
+                println!(
+                    "📎 [msg={msg_id}{}] media echo ({})",
+                    sender_uid(&msg)
+                        .map(|id| format!(" uid={id}"))
+                        .unwrap_or_default(),
+                    if has_photo { "photo" } else { "document" }
+                );
+                h_media_echo(&client, peer, msg_id, msg).await;
+                return;
+            }
+            // ────────────────────────────────────────────────────────────────
+
             if !text.starts_with('/') {
                 return;
             }
@@ -146,7 +176,7 @@ async fn dispatch(upd: Update, client: Arc<Client>, me: Arc<tl::types::User>, bo
                 Some("/info") => h_info(&client, peer, msg_id, &me).await,
                 Some("/time") => h_time(&client, peer, msg_id).await,
                 Some("/stats") => h_stats(&client, peer, msg_id).await,
-                Some("/ferogram") => h_ferogram(&client, peer, msg_id).await,
+                Some("/ferogram") | Some("/layer") => h_ferogram(&client, peer, msg_id).await,
                 Some("/about") => h_about(&client, peer, msg_id).await,
                 Some("/echo") => h_echo(&client, peer, msg_id, &arg).await,
                 Some("/upper") => h_tx(&client, peer, msg_id, &arg, |s| s.to_uppercase()).await,
@@ -288,7 +318,11 @@ async fn dispatch(upd: Update, client: Arc<Client>, me: Arc<tl::types::User>, bo
                     let _ = client
                         .answer_callback_query(
                             qid,
-                            Some(&format!("Layer {} · ferogram 0.2.0 🦀", tl::LAYER)),
+                            Some(&format!(
+                                "Layer {} · ferogram {} 🦀",
+                                tl::LAYER,
+                                env!("CARGO_PKG_VERSION")
+                            )),
                             false,
                         )
                         .await;
@@ -523,9 +557,10 @@ async fn h_time(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
 
 async fn h_stats(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
     let text = format!(
-        "📊 <b>Bot Stats</b>\n\n<b>Uptime:</b> {}\n<b>Messages:</b> <code>{}</code>\n<b>Layer:</b> <code>{}</code>",
+        "📊 <b>Bot Stats</b>\n\n<b>Uptime:</b> {}\n<b>Messages:</b> <code>{}</code>\n<b>Media echoed:</b> <code>{}</code>\n<b>Layer:</b> <code>{}</code>",
         uptime(),
         MSG_COUNT.load(Ordering::Relaxed),
+        MEDIA_COUNT.load(Ordering::Relaxed),
         tl::LAYER,
     );
     let kb = kb(vec![vec![bc("🔁 Refresh", "cb:stats")]]);
@@ -541,8 +576,9 @@ async fn h_stats(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
 
 async fn h_ferogram(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
     let text = format!(
-        "📡 <b>layer library</b>\n\n<b>MTProto Layer:</b> <code>{}</code>\n<b>Crate:</b> <code>ferogram 0.2.0</code>\n<b>Language:</b> Rust 🦀\nhttps://github.com/ankit-chaubey/ferogram",
-        tl::LAYER
+        "📡 <b>ferogram</b>\n\n<b>MTProto Layer:</b> <code>{}</code>\n<b>Crate:</b> <code>ferogram {}</code>\n<b>Language:</b> Rust 🦀\nhttps://github.com/ankit-chaubey/ferogram",
+        tl::LAYER,
+        env!("CARGO_PKG_VERSION")
     );
     let kb = kb(vec![vec![
         bu("⭐ GitHub", "https://github.com/ankit-chaubey/ferogram"),
@@ -563,7 +599,7 @@ async fn h_about(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
         "ℹ️ <b>About ferogram-bot</b>\n\nBuilt with <b>ferogram</b>: async Telegram MTProto in pure <b>Rust</b> 🦀\n\n\
         Commands · Inline keyboards · Callback queries · Inline mode · HTML entities · \
         Concurrent update handling · pts gap recovery\n\n\
-        <b>Layer:</b> <code>{}</code>  <b>Author:</b> Ankit Chaubey (vasu)",
+        <b>Layer:</b> <code>{}</code>  <b>Author:</b> Ankit Chaubey",
         tl::LAYER
     );
     let kb = kb(vec![
@@ -808,6 +844,203 @@ async fn h_fmt_html(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
         )
         .await;
 }
+
+// ── Media auto-echo ──────────────────────────────────────────────────────────
+
+/// Echo a photo or document back to the sender with download/upload speed stats.
+///
+/// Flow:
+///   1. Reply "📥 Downloading…" immediately so the user knows we're working.
+///   2. Download the file to a temp path, measuring wall-clock time.
+///   3. Re-upload with `upload_file_concurrent`, measuring wall-clock time.
+///   4. Send the file back (as photo or document) with a caption that shows
+///      file name, size, download speed, and upload speed.
+///   5. Clean up the temp file regardless of success or failure.
+async fn h_media_echo(
+    client: &Client,
+    peer: tl::enums::Peer,
+    msg_id: i32,
+    msg: ferogram::update::IncomingMessage,
+) {
+    let is_photo = msg.photo().is_some();
+
+    let tmp_dir = std::env::temp_dir();
+    let (tmp_path, file_name, mime, size_bytes) = if is_photo {
+        let path = tmp_dir
+            .join(format!("fgbot_photo_{msg_id}.jpg"))
+            .to_string_lossy()
+            .into_owned();
+        (
+            path,
+            format!("photo_{msg_id}.jpg"),
+            "image/jpeg".to_string(),
+            0usize,
+        )
+    } else {
+        let doc = msg.document().unwrap(); // guarded by is_photo check above
+        let name = doc
+            .file_name()
+            .map(|n| format!("fgbot_{n}"))
+            .unwrap_or_else(|| format!("fgbot_file_{msg_id}"));
+        let mime = doc.mime_type().to_string();
+        let size = doc.size() as usize;
+        let path = tmp_dir.join(&name).to_string_lossy().into_owned();
+        (path, name, mime, size)
+    };
+
+    let (dl_size_str, _mb) = human_size(size_bytes);
+
+    // ── Step 1: send "Downloading…" status ──────────────────────────────────
+    rh(
+        client,
+        peer.clone(),
+        msg_id,
+        &if is_photo {
+            "📥 <b>Downloading photo…</b>".to_string()
+        } else {
+            format!(
+                "📥 <b>Downloading…</b>\n📦 <code>{file_name}</code>  <code>{dl_size_str}</code>"
+            )
+        },
+    )
+    .await;
+
+    // ── Step 2: download ─────────────────────────────────────────────────────
+    let dl_start = Instant::now();
+    match msg.download_media_with(client, &tmp_path).await {
+        Err(e) => {
+            rh(
+                client,
+                peer,
+                msg_id,
+                &format!("❌ <b>Download error:</b> <code>{e}</code>"),
+            )
+            .await;
+            return;
+        }
+        Ok(false) => {
+            rh(
+                client,
+                peer,
+                msg_id,
+                "❌ No download location for this media.",
+            )
+            .await;
+            return;
+        }
+        Ok(true) => {}
+    }
+    let dl_secs = dl_start.elapsed().as_secs_f64().max(0.001);
+
+    // Re-derive actual file size from disk (photo size was unknown at start).
+    let actual_bytes = tokio::fs::metadata(&tmp_path)
+        .await
+        .map(|m| m.len() as usize)
+        .unwrap_or(size_bytes);
+    let actual_mb = actual_bytes as f64 / (1024.0 * 1024.0);
+    let dl_speed = actual_mb / dl_secs;
+    let (actual_size_str, _) = human_size(actual_bytes);
+
+    // ── Step 3: read file ────────────────────────────────────────────────────
+    let bytes = match tokio::fs::read(&tmp_path).await {
+        Ok(b) => b,
+        Err(e) => {
+            rh(
+                client,
+                peer,
+                msg_id,
+                &format!("❌ <b>Read error:</b> <code>{e}</code>"),
+            )
+            .await;
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return;
+        }
+    };
+    let _ = tokio::fs::remove_file(&tmp_path).await;
+
+    // ── Step 4: send "Uploading…" status ────────────────────────────────────
+    rh(
+        client,
+        peer.clone(),
+        msg_id,
+        &format!(
+            "📤 <b>Uploading…</b>  ⬇️ Downloaded in <code>{dl_secs:.2}s</code>  ({dl_speed:.2} MB/s)"
+        ),
+    )
+    .await;
+
+    // ── Step 5: upload ───────────────────────────────────────────────────────
+    let ul_start = Instant::now();
+    let uploaded = match client
+        .upload_file_concurrent(Arc::new(bytes), &file_name, &mime)
+        .await
+    {
+        Ok(u) => u,
+        Err(e) => {
+            rh(
+                client,
+                peer,
+                msg_id,
+                &format!("❌ <b>Upload error:</b> <code>{e}</code>"),
+            )
+            .await;
+            return;
+        }
+    };
+    let ul_secs = ul_start.elapsed().as_secs_f64().max(0.001);
+    let ul_speed = actual_mb / ul_secs;
+
+    // ── Step 6: send echoed file with stats caption ──────────────────────────
+    let caption = if is_photo {
+        format!(
+            "✅ <b>Echo</b>\n\
+             📦 <b>Size:</b> <code>{actual_size_str}</code>\n\
+             ⬇️ <b>Download:</b> <code>{dl_secs:.2}s</code>  ({dl_speed:.2} MB/s)\n\
+             ⬆️ <b>Upload:</b>   <code>{ul_secs:.2}s</code>  ({ul_speed:.2} MB/s)"
+        )
+    } else {
+        format!(
+            "✅ <b>Echo</b>\n\
+             📄 <b>File:</b> <code>{file_name}</code>\n\
+             📦 <b>Size:</b> <code>{actual_size_str}</code>\n\
+             ⬇️ <b>Download:</b> <code>{dl_secs:.2}s</code>  ({dl_speed:.2} MB/s)\n\
+             ⬆️ <b>Upload:</b>   <code>{ul_secs:.2}s</code>  ({ul_speed:.2} MB/s)"
+        )
+    };
+
+    let media = if is_photo {
+        uploaded.as_photo_media()
+    } else {
+        uploaded.as_document_media()
+    };
+
+    if let Err(e) = client.send_file(peer.clone(), media, &caption).await {
+        rh(
+            client,
+            peer,
+            msg_id,
+            &format!("❌ <b>Send error:</b> <code>{e}</code>"),
+        )
+        .await;
+    } else {
+        println!(
+            "✅ echo done  - dl={dl_secs:.2}s ({dl_speed:.2} MB/s) ul={ul_secs:.2}s ({ul_speed:.2} MB/s) [{actual_size_str}]"
+        );
+    }
+}
+
+/// Returns a human-readable size string and the size in megabytes.
+fn human_size(bytes: usize) -> (String, f64) {
+    let mb = bytes as f64 / (1024.0 * 1024.0);
+    if mb >= 1.0 {
+        (format!("{mb:.2} MB"), mb)
+    } else {
+        let kb = bytes as f64 / 1024.0;
+        (format!("{kb:.1} KB"), mb)
+    }
+}
+
+// ── Send helpers ─────────────────────────────────────────────────────────────
 
 async fn rp(client: &Client, peer: tl::enums::Peer, reply_to: i32, text: &str) {
     let _ = client

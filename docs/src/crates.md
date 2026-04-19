@@ -8,6 +8,8 @@
 ```
 Your App
  └ ferogram ← high-level Client, UpdateStream, InputMessage
+ ├ ferogram-session ← session persistence, DC table, backends
+ ├ ferogram-parsers ← Markdown and HTML entity parsing
  ├ ferogram-mtproto ← MTProto session, DH, message framing
  │ └ ferogram-crypto ← AES-IGE, RSA, SHA, factorize
  └ ferogram-tl-types ← all generated types + LAYER constant
@@ -148,3 +150,84 @@ Each type automatically gets:
 - `impl Deserializable`: binary TL decoding
 - `impl Identifiable`: `const CONSTRUCTOR_ID: u32`
 - Optional: `impl Debug`, `impl From`, `impl TryFrom`, `impl Serialize/Deserialize`
+
+---
+
+## ferogram-session
+
+
+**Session persistence types and pluggable storage backends.**
+
+### What it provides
+- `PersistedSession`: versioned binary format holding the full DC table, update state, and peer cache
+- `SessionBackend` trait: implement to add custom storage (Redis, Postgres, etc.)
+- `BinaryFileBackend`: stores session as a binary file on disk (default)
+- `InMemoryBackend`: in-memory only, useful for testing or short-lived bots
+- `StringSessionBackend`: base64 string, useful for environment-variable sessions
+- `SqliteBackend` (feature: `sqlite-session`): SQLite-backed persistent sessions
+- `LibSqlBackend` (feature: `libsql-session`): libSQL-backed persistent sessions
+- `DcEntry` / `DcFlags`: per-DC auth key, salt, and capability flag storage
+- `UpdatesStateSnap`: pts, qts, seq, date, and per-channel pts counters
+- `CachedPeer` / `CachedMinPeer`: peer access-hash cache for users, channels, groups
+
+### Feature flags
+
+| Flag | What it enables |
+|---|---|
+| `sqlite-session` | `SqliteBackend` via rusqlite |
+| `libsql-session` | `LibSqlBackend` via libsql |
+| `serde` | `Serialize`/`Deserialize` on session types |
+
+### Stack position
+
+```
+ferogram
+└ ferogram-session
+```
+
+---
+
+## ferogram-parsers
+
+
+**Telegram HTML and Markdown entity parsers.**
+
+### What it provides
+- `parse_markdown(src)` → `(String, Vec<MessageEntity>)`: Telegram-flavoured Markdown to plain text + entity list
+- `generate_markdown(text, entities)` → `String`: entity list back to Markdown
+- `parse_html(src)` → `(String, Vec<MessageEntity>)`: Telegram HTML to plain text + entity list
+- `generate_html(text, entities)` → `String`: entity list back to HTML
+
+Used by `ferogram` for `InputMessage::markdown()` and `InputMessage::html()`, and available standalone for any crate that works with Telegram formatted text.
+
+### Supported Markdown syntax
+
+| Syntax | Entity |
+|---|---|
+| `**bold**` or `*bold*` | Bold |
+| `__italic__` or `_italic_` | Italic |
+| `~~strike~~` | Strikethrough |
+| `\|\|spoiler\|\|` | Spoiler |
+| `` `code` `` | Code |
+| ` ```lang\npre\n``` ` | Pre (code block) |
+| `[text](url)` | TextUrl |
+| `[text](tg://user?id=123)` | MentionName |
+| `![text](tg://emoji?id=123)` | CustomEmoji |
+
+### Supported HTML tags
+
+`<b>`, `<strong>`, `<i>`, `<em>`, `<u>`, `<s>`, `<del>`, `<code>`, `<pre>`, `<tg-spoiler>`, `<a href="url">`, `<tg-emoji emoji-id="id">`
+
+### Feature flags
+
+| Flag | What it enables |
+|---|---|
+| `html5ever` | Replaces `parse_html` with a spec-compliant html5ever tokenizer |
+
+### Stack position
+
+```
+ferogram
+└ ferogram-parsers
+  └ ferogram-tl-types (tl-api feature)
+```

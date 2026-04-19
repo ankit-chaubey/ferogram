@@ -8,7 +8,7 @@ Auto-generated Rust types for all Telegram API Layer 224 constructors, functions
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![TL Layer](https://img.shields.io/badge/TL%20Layer-224-8b5cf6)](https://core.telegram.org/schema)
 
-2,329 TL definitions generated at build time. Includes binary TL serialization and deserialization via `Serializable` and `Deserializable` traits.
+2,329 TL definitions generated at build time from Layer 224. All constructors, functions, and abstract types are represented as Rust structs and enums with binary TL serialization and deserialization.
 
 ---
 
@@ -16,10 +16,10 @@ Auto-generated Rust types for all Telegram API Layer 224 constructors, functions
 
 ```toml
 [dependencies]
-ferogram-tl-types = "0.2.0"
+ferogram-tl-types = "0.3.0"
 
 # With MTProto low-level types (required by ferogram-mtproto):
-ferogram-tl-types = { version = "0.2.0", features = ["tl-mtproto"] }
+ferogram-tl-types = { version = "0.3.0", features = ["tl-mtproto"] }
 ```
 
 ---

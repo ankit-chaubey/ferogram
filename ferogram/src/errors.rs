@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -117,6 +115,21 @@ pub enum InvocationError {
     /// Not returned to callers; present only for internal routing.
     #[doc(hidden)]
     Migrate(i32),
+    /// No access hash is cached for this peer.
+    ///
+    /// The peer has been seen before but its `access_hash` was never stored
+    /// (e.g. it arrived as a *min* user with no message context, or as a
+    /// channel you have not yet opened).
+    ///
+    /// **Fix:** resolve the peer first via `client.resolve_peer(id)` or ensure
+    /// that at least one message from this peer flows through the update loop
+    /// before using it as a target.
+    ///
+    /// Alternatively, enable [`crate::ExperimentalFeatures::allow_zero_hash`]
+    /// to fall back to `access_hash = 0` (valid for bots only per the
+    /// Telegram spec; causes `USER_ID_INVALID` / `CHANNEL_INVALID` on user
+    /// accounts).
+    PeerNotCached(String),
 }
 
 impl fmt::Display for InvocationError {
@@ -127,6 +140,7 @@ impl fmt::Display for InvocationError {
             Self::Deserialize(s) => write!(f, "deserialize error: {s}"),
             Self::Dropped => write!(f, "request dropped"),
             Self::Migrate(dc) => write!(f, "DC migration to {dc}"),
+            Self::PeerNotCached(s) => write!(f, "peer not cached: {s}"),
         }
     }
 }

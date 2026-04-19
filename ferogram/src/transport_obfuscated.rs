@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -91,7 +89,7 @@ impl ObfuscatedStream {
 
         // Single continuous cipher: advance TX past plaintext nonce[0..56], then
         // encrypt nonce[56..64].  The same instance is stored for all later TX so
-        // the AES-CTR stream continues from position 64 matching tDesktop.
+        // the AES-CTR stream continues from position 64.
         let mut cipher = ObfuscatedCipher::from_keys(&tx_key, &tx_iv, &rx_key, &rx_iv);
         let mut skip = [0u8; 56];
         cipher.encrypt(&mut skip);
@@ -128,13 +126,24 @@ impl ObfuscatedStream {
         self.stream.read_exact(&mut h).await?;
         self.cipher.decrypt(&mut h);
 
+        // h[0] > 0x7f: first byte of a 4-byte transport error code (negative i32).
         let words = if h[0] < 0x7f {
             h[0] as usize
-        } else {
+        } else if h[0] == 0x7f {
             let mut b = [0u8; 3];
             self.stream.read_exact(&mut b).await?;
             self.cipher.decrypt(&mut b);
             b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16
+        } else {
+            // h[0] > 0x7f: first byte of a 4-byte transport error.
+            let mut rest = [0u8; 3];
+            self.stream.read_exact(&mut rest).await?;
+            self.cipher.decrypt(&mut rest);
+            let code = i32::from_le_bytes([h[0], rest[0], rest[1], rest[2]]);
+            return Err(InvocationError::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                format!("transport error from server: {code}"),
+            )));
         };
 
         let mut buf = vec![0u8; words * 4];

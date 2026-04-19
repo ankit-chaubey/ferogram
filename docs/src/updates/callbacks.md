@@ -67,6 +67,7 @@ cb.answer().send(&client).await?;
 | `.text(str)` | Toast message shown to the user |
 | `.alert(str)` | Modal popup shown to the user |
 | `.url(str)` | URL to open (with user confirmation) |
+| `.cache_time(Duration)` | How long Telegram caches this answer client-side (default: 0) |
 | `.send(&client)` | Execute: always call this |
 
 ---

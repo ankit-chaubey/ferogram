@@ -72,6 +72,8 @@ Most Telegram libraries are thin wrappers around generated code or ports from Py
 | `ferogram-tl-types` | All Layer 224 constructors, functions, enums | Raw API calls |
 | `ferogram-mtproto` | MTProto session, DH, framing, transport | Library authors |
 | `ferogram-crypto` | AES-IGE, RSA, SHA, auth key derivation | Internal |
+| `ferogram-session` | Session persistence types and pluggable storage backends | Custom session storage |
+| `ferogram-parsers` | Telegram HTML and Markdown entity parsers | Formatted text handling |
 | `ferogram-tl-gen` | Build-time Rust code generator | Build tool |
 | `ferogram-tl-parser` | `.tl` schema → AST parser | Build tool |
 
@@ -83,7 +85,7 @@ Most Telegram libraries are thin wrappers around generated code or ports from Py
 
 ```toml
 [dependencies]
-ferogram = "0.2.0"
+ferogram = "0.3.0"
 tokio        = { version = "1", features = ["full"] }
 ```
 
@@ -94,26 +96,9 @@ Then head to [Installation](./installation.md) for credentials setup, or jump st
 
 ---
 
-## Initial Release v0.1.0
+## Release history
 
-#### Proxy & Transport
-- **MTProxy support**: connect via `t.me/proxy` / `tg://proxy` links or manual host/port/secret config
-- **PaddedIntermediate transport** (`0xDD` secrets): randomized padding to mimic official Telegram traffic
-- **FakeTLS transport** (`0xEE` secrets): TLS-like framing to make MTProto traffic resemble HTTPS
-- **SOCKS5 proxy support** in `Config` with optional username/password authentication
-- **IPv6 connectivity** for Telegram DCs and proxy connections
-
-#### Session & Client
-- **Multiple session backend support** with new `Config` helpers and builder methods for MTProxy
-
-#### Protocol Fixes
-- **Auth key generation fixed**: now uses correct `PQInnerDataDc` constructor including the DC id: resolves auth failures on many DCs
-- **Incoming message validation**: rolling buffer of last 500 server `msg_id`s + ±300 s timestamp window to prevent replay attacks
-- **`dh_gen_retry` handling**: step 3 now retries with cached params, up to 5 attempts (matching Telegram Desktop)
-- **MTProxy routing bug fixed**: connections now correctly route through the proxy host instead of going directly to Telegram DCs
-- **Channel difference sync**: initial `getChannelDifference` starts at limit 100, subsequent calls increase to 1000
-
-See the full [CHANGELOG](https://github.com/ankit-chaubey/ferogram/blob/main/CHANGELOG.md).
+See [What's New](./whats-new.md) for a full version-by-version breakdown, or the [CHANGELOG](https://github.com/ankit-chaubey/ferogram/blob/main/CHANGELOG.md) for the raw diff summary.
 
 ---
 
@@ -128,6 +113,7 @@ Developed by [**Ankit Chaubey**](https://github.com/ankit-chaubey) out of curios
 [![License](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue?style=flat-square)](LICENSE-MIT)
 [![TL Layer](https://img.shields.io/badge/TL%20Layer-224-8b5cf6?style=flat-square)](https://core.telegram.org/schema)
 [![Telegram](https://img.shields.io/badge/chat-%40FerogramChat-2CA5E0?style=flat-square\&logo=telegram)](https://t.me/FerogramChat)
+[![Channel](https://img.shields.io/badge/channel-%40ferogram-2CA5E0?style=flat-square\&logo=telegram)](https://t.me/Ferogram)
 
 </div>
 

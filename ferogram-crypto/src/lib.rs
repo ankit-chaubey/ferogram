@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -38,8 +36,6 @@ pub use auth_key::AuthKey;
 pub use deque_buffer::DequeBuffer;
 pub use factorize::factorize;
 pub use obfuscated::ObfuscatedCipher;
-
-// MTProto 2.0 encrypt / decrypt
 
 /// Errors from [`decrypt_data_v2`].
 #[derive(Clone, Debug, PartialEq)]
@@ -176,7 +172,30 @@ pub fn generate_key_data_from_nonce(
     (key, iv)
 }
 
-// DH parameter validation
+/// Derive the AES key and IV for **MTProto v1** (old-style, SHA-1-based).
+///
+/// Used exclusively for `auth.bindTempAuthKey` encrypted_message, which must
+/// be encrypted with the permanent key using the legacy SHA-1 scheme - NOT the
+/// SHA-256 MTProto 2.0 scheme used for all normal messages.
+pub fn derive_aes_key_iv_v1(auth_key: &[u8; 256], msg_key: &[u8; 16]) -> ([u8; 32], [u8; 32]) {
+    let sha1_a = sha1!(msg_key, &auth_key[0..32]);
+    let sha1_b = sha1!(&auth_key[32..48], msg_key, &auth_key[48..64]);
+    let sha1_c = sha1!(&auth_key[64..96], msg_key);
+    let sha1_d = sha1!(msg_key, &auth_key[96..128]);
+
+    let mut key = [0u8; 32];
+    key[..8].copy_from_slice(&sha1_a[..8]);
+    key[8..20].copy_from_slice(&sha1_b[8..20]);
+    key[20..32].copy_from_slice(&sha1_c[4..16]);
+
+    let mut iv = [0u8; 32];
+    iv[..12].copy_from_slice(&sha1_a[8..20]);
+    iv[12..20].copy_from_slice(&sha1_b[..8]);
+    iv[20..24].copy_from_slice(&sha1_c[16..20]);
+    iv[24..32].copy_from_slice(&sha1_d[..8]);
+
+    (key, iv)
+}
 
 /// Telegram's published 2048-bit safe DH prime (big-endian, 256 bytes).
 ///

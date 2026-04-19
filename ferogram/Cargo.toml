@@ -13,9 +13,11 @@ keywords      = ["telegram", "mtproto", "client", "bot", "async"]
 categories    = ["api-bindings", "network-programming", "asynchronous"]
 
 [dependencies]
-ferogram-tl-types = { workspace = true, features = ["tl-api", "tl-mtproto"] }
-ferogram-mtproto  = { workspace = true }
-ferogram-crypto   = { workspace = true }
+ferogram-tl-types  = { workspace = true, features = ["tl-api", "tl-mtproto"] }
+ferogram-mtproto   = { workspace = true }
+ferogram-crypto    = { workspace = true }
+ferogram-session   = { workspace = true }
+ferogram-parsers   = { workspace = true }
 ferogram-tl-parser = { workspace = true, optional = true }
 ferogram-tl-gen    = { workspace = true, optional = true }
 tokio          = { version = "1",   features = ["net", "io-util", "sync", "time", "rt", "rt-multi-thread", "macros"] }
@@ -25,6 +27,7 @@ dashmap        = "6"
 moka           = { version = "0.12", features = ["sync"] }
 getrandom      = "0.2"
 flate2         = "1"
+md5            = "0.7"
 num-bigint     = "0.4"
 num-traits     = "0.2"
 sha2           = "0.10"
@@ -34,21 +37,19 @@ tracing        = { version = "0.1", features = ["log"] }
 serde          = { version = "1", features = ["derive"], optional = true }
 mime_guess     = "2"
 base64         = "0.22"
-pulldown-cmark = "0.11"
 chrono         = { version = "0.4", features = ["clock"] }
-rusqlite       = { version = "0.31", optional = true }
-libsql         = { version = "0.6", features = ["core"], optional = true }
-html5ever       = { version = "0.38", optional = true }
 tokio-socks    = "0.5"
 socket2        = { version = "0.5", features = ["all"] }
+reqwest        = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde_json     = "1"
 
 [features]
 default = []
-sqlite-session  = ["rusqlite"]
-libsql-session  = ["dep:libsql"]
-serde           = ["dep:serde"]
-html            = []
-html5ever        = ["dep:html5ever"]
+sqlite-session  = ["ferogram-session/sqlite-session"]
+libsql-session  = ["ferogram-session/libsql-session"]
+serde           = ["dep:serde", "ferogram-session/serde"]
+html            = ["ferogram-parsers/html"]
+html5ever       = ["ferogram-parsers/html5ever"]
 ## Re-export the TL parser for custom tooling.
 parser          = ["dep:ferogram-tl-parser"]
 ## Re-export the code generator for custom tooling.

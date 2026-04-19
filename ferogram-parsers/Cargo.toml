@@ -1,0 +1,27 @@
+[package]
+name        = "ferogram-parsers"
+description = "Telegram HTML and Markdown entity parsers for ferogram"
+readme      = "README.md"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+documentation = "https://docs.rs/ferogram-parsers"
+keywords      = ["telegram", "markdown", "html", "entities", "formatting"]
+categories    = ["api-bindings", "text-processing"]
+
+[dependencies]
+ferogram-tl-types = { workspace = true, features = ["tl-api"] }
+pulldown-cmark    = "0.11"
+html5ever        = { version = "0.38", optional = true }
+
+[features]
+default   = []
+html      = []
+html5ever = ["dep:html5ever"]
+
+[package.metadata.docs.rs]
+features     = ["html", "html5ever"]
+rustdoc-args = ["--cfg", "docsrs"]

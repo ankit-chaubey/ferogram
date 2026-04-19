@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -196,7 +194,7 @@ impl Client {
         action: tl::enums::SendMessageAction,
         topic_id: Option<i32>,
     ) -> Result<(), InvocationError> {
-        let input_peer = self.inner.peer_cache.peer_to_input(&peer);
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::SetTyping {
             peer: input_peer,
             top_msg_id: topic_id,

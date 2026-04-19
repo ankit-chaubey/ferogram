@@ -1,0 +1,31 @@
+[package]
+name        = "ferogram-session"
+description = "Session persistence types and storage backends for ferogram"
+readme      = "README.md"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+documentation = "https://docs.rs/ferogram-session"
+keywords      = ["telegram", "mtproto", "session", "storage", "async"]
+categories    = ["api-bindings", "data-structures"]
+
+[dependencies]
+base64   = "0.22"
+tracing  = { version = "0.1", features = ["log"] }
+serde    = { version = "1", features = ["derive"], optional = true }
+rusqlite = { version = "0.31", optional = true }
+libsql   = { version = "0.6", features = ["core"], optional = true }
+tokio    = { version = "1", features = ["sync"], optional = true }
+
+[features]
+default         = []
+serde           = ["dep:serde"]
+sqlite-session  = ["rusqlite"]
+libsql-session  = ["dep:libsql", "dep:tokio"]
+
+[package.metadata.docs.rs]
+features     = ["serde", "sqlite-session"]
+rustdoc-args = ["--cfg", "docsrs"]

@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -15,7 +13,7 @@
 //!
 //! # What this does
 //!
-//! 1. TCP connect to Telegram DC1 (test servers by default)
+//! 1. TCP connect to Telegram DC1 (production servers)
 //! 2. Send `req_pq_multi`
 //! 3. Receive `ResPQ`, factorize PQ, RSA-encrypt, send `req_DH_params`
 //! 4. Receive `ServerDhParams`, complete DH, send `set_client_DH_params`
@@ -113,7 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Connect
     println!("Connecting to {} …", DC1_PROD);
     let tcp = Tcp::connect(DC1_PROD)?;
-    let mut transport = ObfuscatedAbridged::new(tcp.0)?;
+    let mut transport = ObfuscatedAbridged::new(tcp.0, 1)?;
     let mut session = Session::new();
     println!("✓ TCP connected");
 

@@ -10,6 +10,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0]: 2026-04-19
+
+0.3.0 is a substantial release. The workspace grew by two new crates, the session and parser layers were extracted into their own packages, and the connection stack gained CDN support, DNS-over-HTTPS fallback, and transport probing. About 16.7k lines were added across 114 changed files.
+
+### New crates
+
+- **ferogram-session**: session persistence is now its own crate. It owns `PersistedSession`, `DcEntry`, `DcFlags`, `UpdatesStateSnap`, `CachedPeer`, `CachedMinPeer`, `default_dc_addresses`, and all storage backends (`BinaryFileBackend`, `InMemoryBackend`, `StringSessionBackend`, `SqliteBackend`, `LibSqlBackend`). The main `ferogram` crate re-exports everything from it so existing code is unaffected.
+- **ferogram-parsers**: Telegram Markdown and HTML entity parsing is now its own crate. It provides `parse_markdown`, `generate_markdown`, `parse_html`, and `generate_html`. An optional `html5ever` feature enables spec-compliant HTML5 tokenization. The main `ferogram::parsers` module re-exports these.
+
+### Session changes
+
+- Binary session format bumped to **v5**.
+- Session now stores home DC, full DC table, update state (pts/qts/date/seq), per-channel pts, peer cache, and min-user message contexts.
+- Legacy formats load without error.
+- Saves are atomic: written to a `.tmp` file first, then renamed into place.
+- DC flags are now persisted so media and CDN DC entries survive restarts.
+
+### Client and builder
+
+- `ClientBuilder` gained three new options:
+  - `.probe_transport(true)`: races Obfuscated, Abridged, and HTTP transports and picks the first to succeed. Has no effect when using MTProxy.
+  - `.resilient_connect(true)`: if direct TCP fails, falls back through DNS-over-HTTPS and then Telegram's Firebase/Google special-config.
+  - `.experimental_features(...)`: takes an `ExperimentalFeatures` struct.
+- New `ExperimentalFeatures` struct with fields: `allow_zero_hash`, `allow_missing_channel_hash`, `auto_resolve_peers` (reserved, not yet active).
+
+### New modules
+
+- `ferogram::cdn_download`: full CDN file download path. Handles `upload.getCdnFile`, `upload.reuploadCdnFile`, AES-256-CTR chunk decryption, and reassembly. Exports `CdnDownloader`, `CdnChunkResult`, and `CDN_CHUNK_SIZE`.
+- `ferogram::dns_resolver`: DNS-over-HTTPS with TTL caching. Queries Google DoH and Mozilla/Cloudflare DoH, merges IPv4 and IPv6 answers.
+- `ferogram::special_config`: Telegram's Firebase/Google fallback for DC configuration. Decodes the encrypted `help.configSimple` response and extracts DC options.
+
+### MTProto internals
+
+- `ferogram-mtproto` gained a new `bind_temp_key` module.
+- Now re-exports `encrypt_bind_inner`, `gen_msg_id`, `serialize_bind_temp_auth_key`, `EncryptedSession`, `SeenMsgIds`, and `new_seen_msg_ids`.
+
+### Docs
+
+New pages added:
+
+- Advanced: CDN Downloads, Transport Probing and Resilient Connect, Connection Restart Policy, Experimental Features
+- API reference: ClientBuilder, Types Reference, Chat Management, Contacts, Forum Topics, Games, Invite Links, Polls, Privacy, Profile, Stickers
+
+---
+
 ## [0.2.0]: 2026-04-13
 
 ### Changed
@@ -26,7 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- All known bugs yet
+- `getDifference` deserialization no longer fails hard on unknown server responses; unknown variants are discarded and buffered updates are preserved.
+- Container message parsing now validates inner message alignment and discards malformed frames instead of propagating a parse error.
+- Transport errors `-429` and `-444` are now surfaced as log warnings before reconnecting rather than being swallowed silently.
 
 
 ## [0.1.0]: 2026-04-11

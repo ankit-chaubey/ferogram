@@ -14,10 +14,11 @@ name = "ferogram-bot"
 path = "src/main.rs"
 
 [dependencies]
-ferogram          = { path = "../ferogram", version = "0.2.0", features = ["sqlite-session"] }
+ferogram          = { path = "../ferogram", version = "0.3.0", features = ["sqlite-session"] }
 tokio      = { version = "1", features = ["full"] }
 env_logger = "0.11"
 chrono     = { version = "0.4", features = ["clock"] }
 rand       = "0.8"
 sha2       = "0.10"
 base64     = "0.22"
+tracing     = { workspace = true }

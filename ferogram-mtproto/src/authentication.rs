@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -560,8 +558,6 @@ fn do_step3(
     generate_client_dh_params(&dh, nonce, server_nonce, new_nonce, retry_id, random, now)
 }
 
-// finish: create_key
-
 /// Finalise the handshake.
 ///
 /// Returns [`FinishResult::Done`] on success or [`FinishResult::Retry`] when
@@ -650,8 +646,6 @@ pub fn finish(
         _ => Err(Error::DhGenFail),
     }
 }
-
-// Helpers
 
 fn check_nonce(got: &[u8; 16], expected: &[u8; 16]) -> Result<(), Error> {
     if got == expected {

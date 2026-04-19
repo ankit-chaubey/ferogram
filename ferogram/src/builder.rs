@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -48,7 +46,7 @@
 use std::sync::Arc;
 
 use crate::{
-    Client, Config, InvocationError, ShutdownToken, TransportKind,
+    Client, Config, ExperimentalFeatures, InvocationError, ShutdownToken, TransportKind,
     restart::{ConnectionRestartPolicy, NeverRestart},
     retry::{AutoSleep, RetryPolicy},
     session_backend::{BinaryFileBackend, InMemoryBackend, SessionBackend, StringSessionBackend},
@@ -76,6 +74,9 @@ pub struct ClientBuilder {
     system_lang_code: String,
     lang_pack: String,
     lang_code: String,
+    probe_transport: bool,
+    resilient_connect: bool,
+    experimental_features: ExperimentalFeatures,
 }
 
 impl Default for ClientBuilder {
@@ -98,6 +99,9 @@ impl Default for ClientBuilder {
             system_lang_code: "en".to_string(),
             lang_pack: String::new(),
             lang_code: "en".to_string(),
+            probe_transport: false,
+            resilient_connect: false,
+            experimental_features: ExperimentalFeatures::default(),
         }
     }
 }
@@ -286,6 +290,48 @@ impl ClientBuilder {
         self
     }
 
+    /// Race Obfuscated / Abridged / HTTP transports in parallel and pick the
+    /// fastest.  Ideal when you don't know which transport your network allows.
+    /// Incompatible with MTProxy (proxy enforces a specific transport).
+    /// Default: `false`.
+    pub fn probe_transport(mut self, enabled: bool) -> Self {
+        self.probe_transport = enabled;
+        self
+    }
+
+    /// If direct TCP fails, retry via DNS-over-HTTPS (Mozilla + Google DoH),
+    /// then fall back to Firebase / Google special-config.
+    /// Default: `false`.
+    pub fn resilient_connect(mut self, enabled: bool) -> Self {
+        self.resilient_connect = enabled;
+        self
+    }
+
+    /// Opt in to experimental behaviours.
+    ///
+    /// All flags default to `false`.  Read [`ExperimentalFeatures`] docs before
+    /// enabling anything here.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use ferogram::{Client, ExperimentalFeatures};
+    ///
+    /// # #[tokio::main] async fn main() -> anyhow::Result<()> {
+    /// let (client, _sd) = Client::builder()
+    ///     .api_id(12345)
+    ///     .api_hash("abc")
+    ///     .experimental_features(ExperimentalFeatures {
+    ///         allow_zero_hash: true,  // bots only
+    ///         ..Default::default()
+    ///     })
+    ///     .connect().await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn experimental_features(mut self, features: ExperimentalFeatures) -> Self {
+        self.experimental_features = features;
+        self
+    }
+
     // Terminal
 
     /// Build the [`Config`] without connecting.
@@ -314,6 +360,9 @@ impl ClientBuilder {
             system_lang_code: self.system_lang_code,
             lang_pack: self.lang_pack,
             lang_code: self.lang_code,
+            probe_transport: self.probe_transport,
+            resilient_connect: self.resilient_connect,
+            experimental_features: self.experimental_features,
         })
     }
 

@@ -4,8 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
 //
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
@@ -158,10 +156,16 @@ impl RetryPolicy for AutoSleep {
                 }
             }
 
-            // Transient I/O errors: back off briefly and retry once.
-            InvocationError::Io(_) if ctx.fail_count.get() == 1 => {
+            // Transient I/O errors: back off briefly and retry up to 3 times.
+            // Bug 13: the old guard (fail_count == 1) allowed exactly one retry, then
+            // propagated the error permanently even if the connection could be re-
+            // established.  Allow up to 3 retries.
+            InvocationError::Io(_) if ctx.fail_count.get() <= 3 => {
                 if let Some(d) = self.io_errors_as_flood_of {
-                    tracing::info!("I/O error: sleeping {d:?} before retry");
+                    tracing::info!(
+                        "I/O error (attempt {}): sleeping {d:?} before retry",
+                        ctx.fail_count.get()
+                    );
                     ControlFlow::Continue(d)
                 } else {
                     ControlFlow::Break(())
@@ -304,15 +308,17 @@ mod tests {
     }
 
     #[test]
-    fn autosleep_no_second_flood_retry() {
+    fn autosleep_second_flood_retry_is_honoured() {
         let policy = AutoSleep::default();
-        // fail_count == 2 → already retried once, should give up
         let ctx = RetryContext {
             fail_count: NonZeroU32::new(2).unwrap(),
             slept_so_far: Duration::from_secs(30),
             error: flood(30),
         };
-        assert!(matches!(policy.should_retry(&ctx), ControlFlow::Break(())));
+        match policy.should_retry(&ctx) {
+            ControlFlow::Continue(d) => assert_eq!(d, Duration::from_secs(30)),
+            other => panic!("expected Continue(30s) on second FLOOD_WAIT, got {other:?}"),
+        }
     }
 
     #[test]
