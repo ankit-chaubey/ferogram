@@ -5915,7 +5915,7 @@ impl Client {
         let bytes = self.download_media_on_dc(location, dc_id).await?;
         tokio::fs::write(path, &bytes)
             .await
-            .map_err(InvocationError::Io)?;
+            .map_err(|e| InvocationError::Io(e))?;
         Ok(())
     }
 

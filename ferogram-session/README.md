@@ -9,7 +9,7 @@ Session persistence types and pluggable storage backends for ferogram.
 
 Session persistence for ferogram. Extracted in v0.3.0 so that session storage can be used, extended, or replaced without pulling in the full client.
 
-`ferogram` re-exports everything from here — existing code needs no changes.
+`ferogram` re-exports everything from here  existing code needs no changes.
 
 ---
 

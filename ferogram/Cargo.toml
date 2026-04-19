@@ -20,7 +20,7 @@ ferogram-session   = { workspace = true }
 ferogram-parsers   = { workspace = true }
 ferogram-tl-parser = { workspace = true, optional = true }
 ferogram-tl-gen    = { workspace = true, optional = true }
-tokio          = { version = "1",   features = ["net", "io-util", "sync", "time", "rt", "rt-multi-thread", "macros"] }
+tokio          = { version = "1",   features = ["net", "io-util", "sync", "time", "rt", "rt-multi-thread", "macros", "fs"] }
 tokio-util     = { version = "0.7", features = ["rt"] }
 parking_lot    = "0.12"
 dashmap        = "6"
