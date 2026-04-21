@@ -297,7 +297,7 @@ impl DcConnection {
                         || first == 0x44414548
                         || first == 0x54534F50
                         || first == 0x20544547
-                        || first == 0x4954504f  // OPTIONS
+                        || first == 0x4954504f
                         || first == 0xEEEEEEEE
                         || first == 0xDDDDDDDD
                         || first == 0x02010316
@@ -599,8 +599,10 @@ impl DcConnection {
                          first_msg_id={first_msg_id} salt={server_salt}"
                     );
                     *salt = server_salt;
-                    // new_session_created always resets seq_no state.
-                    *need_session_reset = true;
+                    // Only reset if the pending request predates the server's new session.
+                    if sent_msg_id.is_some_and(|id| id < first_msg_id) {
+                        *need_session_reset = true;
+                    }
                 }
                 Ok(None)
             }
@@ -909,9 +911,10 @@ impl DcConnection {
             c.decrypt(&mut buf);
         }
 
-        // Transport errors are negative signed LE i32 in the payload.
-        // Can't catch them from the header byte alone (e.g. -404 starts with 0x6C).
-        if buf.len() >= 4 {
+        // Transport errors are exactly 4 bytes (negative LE i32).
+        // Encrypted frames are always 68+ bytes; checking only when buf.len() == 4
+        // avoids false positives from auth_key_id bytes that happen to be negative.
+        if buf.len() == 4 {
             let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
             if code < 0 {
                 return Err(InvocationError::Io(std::io::Error::new(

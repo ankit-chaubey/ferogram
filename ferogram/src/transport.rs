@@ -71,7 +71,8 @@ impl AsyncAbridged {
 
         // Transport errors arrive as a negative signed LE i32 in the payload.
         // Can't detect from the header byte alone (e.g. -404 starts with 0x6C).
-        if buf.len() >= 4 {
+        // Transport errors are exactly 4 bytes; encrypted frames are 68+ bytes.
+        if buf.len() == 4 {
             let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
             if code < 0 {
                 return Err(io::Error::new(

@@ -143,7 +143,8 @@ impl ObfuscatedStream {
 
         // Transport errors: negative signed LE i32 in the payload.
         // Must check here — can't infer from the header byte (e.g. -404 starts 0x6C).
-        if buf.len() >= 4 {
+        // Transport errors are exactly 4 bytes; encrypted frames are 68+ bytes.
+        if buf.len() == 4 {
             let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
             if code < 0 {
                 return Err(InvocationError::Io(std::io::Error::new(
