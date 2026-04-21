@@ -10258,6 +10258,7 @@ impl Connection {
                         || first == 0x44414548 // HEAD
                         || first == 0x54534F50 // POST
                         || first == 0x20544547 // GET
+                        || first == 0x4954504f // OPTIONS
                         || first == 0xEEEEEEEE
                         || first == 0xDDDDDDDD
                         || first == 0x02010316
@@ -10335,6 +10336,7 @@ impl Connection {
                         || first == 0x44414548
                         || first == 0x54534F50
                         || first == 0x20544547
+                        || first == 0x4954504f
                         || first == 0xEEEEEEEE
                         || first == 0xDDDDDDDD
                         || first == 0x02010316
@@ -11070,9 +11072,10 @@ async fn recv_frame_read(
             let mut buf = vec![0u8; total_len as usize];
             stream.read_exact(&mut buf).await?;
             cipher.lock().await.decrypt(&mut buf);
-            // The actual MTProto payload starts at byte 0; padding is at the tail.
-            // We don't know the inner length here the caller (EncryptedSession::unpack)
-            // uses body_len from the plaintext header, so padding is harmlessly ignored.
+            if buf.len() >= 24 {
+                let pad = (buf.len() - 24) % 16;
+                buf.truncate(buf.len() - pad);
+            }
             Ok(buf)
         }
         FrameKind::FakeTls { cipher } => {

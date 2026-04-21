@@ -49,6 +49,7 @@ impl ObfuscatedStream {
                 || first == 0x44414548
                 || first == 0x54534F50
                 || first == 0x20544547
+                || first == 0x4954504f
                 || first == 0xEEEEEEEE
                 || first == 0xDDDDDDDD
                 || first == 0x02010316
