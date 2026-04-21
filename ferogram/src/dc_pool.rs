@@ -196,17 +196,27 @@ impl DcConnection {
     }
 
     /// Connect with an already-known auth key (no DH needed).
+    #[allow(clippy::too_many_arguments)]
     pub async fn connect_with_key(
         addr: &str,
         auth_key: [u8; 256],
         first_salt: i64,
         time_offset: i32,
         socks5: Option<&crate::socks5::Socks5Config>,
+        mtproxy: Option<&crate::proxy::MtProxyConfig>,
         transport: &TransportKind,
         dc_id: i16,
     ) -> Result<Self, InvocationError> {
-        let mut stream = Self::open_tcp(addr, socks5).await?;
-        Self::send_transport_init(&mut stream, transport, dc_id).await?;
+        let stream = if let Some(mp) = mtproxy {
+            let mut s = mp.connect().await?;
+            s.set_nodelay(true)?;
+            Self::send_transport_init(&mut s, &mp.transport, dc_id).await?;
+            s
+        } else {
+            let mut s = Self::open_tcp(addr, socks5).await?;
+            Self::send_transport_init(&mut s, transport, dc_id).await?;
+            s
+        };
         let seen = new_seen_msg_ids();
         Ok(Self {
             stream,

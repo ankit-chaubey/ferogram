@@ -1245,6 +1245,7 @@ impl Client {
                                 dc.first_salt,
                                 dc.time_offset,
                                 socks5.as_ref(),
+                                mtproxy.as_ref(),
                                 &transport,
                                 s.home_dc_id as i16,
                             )
@@ -4544,6 +4545,7 @@ impl Client {
                 first_salt,
                 time_offset,
                 socks5.as_ref(),
+                mtproxy.as_ref(),
                 &transport,
                 home_dc_id as i16,
             )
@@ -6452,6 +6454,7 @@ impl Client {
                 0,
                 0,
                 socks5.as_ref(),
+                mtproxy.as_ref(),
                 &transport,
                 new_dc_id as i16,
             )
@@ -6656,6 +6659,7 @@ impl Client {
                     .unwrap_or_else(|| crate::dc_migration::fallback_dc_addr(target_dc).to_string())
             };
             let socks5 = self.inner.socks5.clone();
+            let mtproxy = self.inner.mtproxy.clone();
 
             // IMPORTANT: transfer connections always use Abridged transport (0xEF init byte)
             // regardless of the main connection transport.  Every read/write in DcConnection
@@ -6686,6 +6690,7 @@ impl Client {
                         salt,
                         time_offset,
                         socks5.as_ref(),
+                        mtproxy.as_ref(),
                         &TransportKind::Abridged,
                         target_dc as i16,
                     )
@@ -6737,6 +6742,7 @@ impl Client {
                         salt,
                         time_offset,
                         socks5.as_ref(),
+                        mtproxy.as_ref(),
                         &TransportKind::Abridged,
                         target_dc as i16,
                     )
@@ -6969,6 +6975,7 @@ impl Client {
                 .unwrap_or_else(|| crate::dc_migration::fallback_dc_addr(target_dc).to_string())
         };
         let socks5 = self.inner.socks5.clone();
+        let mtproxy = self.inner.mtproxy.clone();
 
         use tl::functions::{InitConnection, InvokeWithLayer};
 
@@ -6994,6 +7001,7 @@ impl Client {
                     salt,
                     time_offset,
                     socks5.as_ref(),
+                    mtproxy.as_ref(),
                     &TransportKind::Abridged,
                     target_dc as i16,
                 )
@@ -7053,6 +7061,7 @@ impl Client {
                     salt,
                     time_offset,
                     socks5.as_ref(),
+                    mtproxy.as_ref(),
                     &TransportKind::Abridged,
                     target_dc as i16,
                 )
@@ -7385,6 +7394,7 @@ impl Client {
             };
 
             let socks5 = self.inner.socks5.clone();
+            let mtproxy = self.inner.mtproxy.clone();
             let transport = self.inner.transport.clone();
             let saved_key = {
                 let opts = self.inner.dc_options.lock().await;
@@ -7398,6 +7408,7 @@ impl Client {
                     0,
                     0,
                     socks5.as_ref(),
+                    mtproxy.as_ref(),
                     &transport,
                     dc_id as i16,
                 )
@@ -10596,22 +10607,28 @@ impl Connection {
             })?
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn connect_with_key(
         addr: &str,
         auth_key: [u8; 256],
         first_salt: i64,
         time_offset: i32,
         socks5: Option<&crate::socks5::Socks5Config>,
+        mtproxy: Option<&crate::proxy::MtProxyConfig>,
         transport: &TransportKind,
         dc_id: i16,
     ) -> Result<Self, InvocationError> {
         let addr2 = addr.to_string();
         let socks5_c = socks5.cloned();
+        let mtproxy_c = mtproxy.cloned();
         let transport_c = transport.clone();
 
         let fut = async move {
-            let (stream, frame_kind) =
-                Self::open_stream(&addr2, socks5_c.as_ref(), &transport_c, dc_id).await?;
+            let (stream, frame_kind) = if let Some(ref mp) = mtproxy_c {
+                Self::open_stream_mtproxy(mp, dc_id).await?
+            } else {
+                Self::open_stream(&addr2, socks5_c.as_ref(), &transport_c, dc_id).await?
+            };
             Ok::<Self, InvocationError>(Self {
                 stream,
                 enc: EncryptedSession::new(auth_key, first_salt, time_offset),
