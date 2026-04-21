@@ -142,7 +142,7 @@ impl ObfuscatedStream {
         self.cipher.decrypt(&mut buf);
 
         // Transport errors: negative signed LE i32 in the payload.
-        // Must check here — can't infer from the header byte (e.g. -404 starts 0x6C).
+        // Must check here; can't infer from the header byte (e.g. -404 starts 0x6C).
         // Transport errors are exactly 4 bytes; encrypted frames are 68+ bytes.
         if buf.len() == 4 {
             let code = i32::from_le_bytes(buf[..4].try_into().unwrap());

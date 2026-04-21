@@ -315,12 +315,19 @@ impl PersistedSession {
 
     /// Atomically save the session to `path`.
     ///
-    /// Writes to `<path>.tmp` first, then renames into place so a crash
-    /// mid-write never corrupts the existing session file.
+    /// Writes to `<path>.<seq>.tmp` (unique per call) then renames into place.
+    /// A fixed `.tmp` extension causes OS error 2 (ERROR_FILE_NOT_FOUND) on
+    /// Windows when two concurrent persist_state calls race: thread A renames
+    /// `.tmp` away while thread B's rename finds the source gone.
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        let tmp = path.with_extension("tmp");
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = path.with_extension(format!("{n}.tmp"));
         std::fs::write(&tmp, self.to_bytes())?;
-        std::fs::rename(&tmp, path)
+        std::fs::rename(&tmp, path).inspect_err(|_e| {
+            let _ = std::fs::remove_file(&tmp);
+        })
     }
 
     /// Decode a session from raw bytes (v1 or v2 binary format).
@@ -692,11 +699,19 @@ impl UpdateStateChange {
 /// Stores the session in a compact binary file (v2 format).
 pub struct BinaryFileBackend {
     path: PathBuf,
+    /// Serialises concurrent save() calls within the same process so they
+    /// don't interleave on the tmp file even if PersistedSession::save uses
+    /// unique names (belt-and-suspenders; also prevents torn reads of the
+    /// session file from a concurrent load + save).
+    write_lock: std::sync::Mutex<()>,
 }
 
 impl BinaryFileBackend {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            write_lock: std::sync::Mutex::new(()),
+        }
     }
 
     pub fn path(&self) -> &std::path::Path {
@@ -706,6 +721,7 @@ impl BinaryFileBackend {
 
 impl SessionBackend for BinaryFileBackend {
     fn save(&self, session: &PersistedSession) -> io::Result<()> {
+        let _guard = self.write_lock.lock().unwrap();
         session.save(&self.path)
     }
 

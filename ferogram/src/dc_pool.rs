@@ -297,7 +297,7 @@ impl DcConnection {
                         || first == 0x44414548
                         || first == 0x54534F50
                         || first == 0x20544547
-                        || first == 0x4954504f
+                        || first == 0x4954504f  // OPTIONS
                         || first == 0xEEEEEEEE
                         || first == 0xDDDDDDDD
                         || first == 0x02010316
@@ -340,8 +340,68 @@ impl DcConnection {
                 stream.write_all(&nonce).await?;
                 return Ok(Some(enc));
             }
-            TransportKind::PaddedIntermediate { .. } | TransportKind::FakeTls { .. } => {
-                stream.write_all(&[0xef]).await?;
+            TransportKind::PaddedIntermediate { secret } => {
+                use sha2::Digest;
+                let mut nonce = [0u8; 64];
+                loop {
+                    getrandom::getrandom(&mut nonce)
+                        .map_err(|_| InvocationError::Deserialize("getrandom".into()))?;
+                    let first = u32::from_le_bytes(nonce[0..4].try_into().unwrap());
+                    let second = u32::from_le_bytes(nonce[4..8].try_into().unwrap());
+                    let bad = nonce[0] == 0xEF
+                        || first == 0x44414548
+                        || first == 0x54534F50
+                        || first == 0x20544547
+                        || first == 0x4954504f
+                        || first == 0xEEEEEEEE
+                        || first == 0xDDDDDDDD
+                        || first == 0x02010316
+                        || second == 0x00000000;
+                    if !bad {
+                        break;
+                    }
+                }
+                let tx_raw: [u8; 32] = nonce[8..40].try_into().unwrap();
+                let tx_iv: [u8; 16] = nonce[40..56].try_into().unwrap();
+                let mut rev48 = nonce[8..56].to_vec();
+                rev48.reverse();
+                let rx_raw: [u8; 32] = rev48[0..32].try_into().unwrap();
+                let rx_iv: [u8; 16] = rev48[32..48].try_into().unwrap();
+                let (tx_key, rx_key): ([u8; 32], [u8; 32]) = if let Some(s) = secret {
+                    let mut h = sha2::Sha256::new();
+                    h.update(tx_raw);
+                    h.update(s.as_ref());
+                    let tx: [u8; 32] = h.finalize().into();
+                    let mut h = sha2::Sha256::new();
+                    h.update(rx_raw);
+                    h.update(s.as_ref());
+                    let rx: [u8; 32] = h.finalize().into();
+                    (tx, rx)
+                } else {
+                    (tx_raw, rx_raw)
+                };
+                nonce[56] = 0xdd;
+                nonce[57] = 0xdd;
+                nonce[58] = 0xdd;
+                nonce[59] = 0xdd;
+                let dc_bytes = dc_id.to_le_bytes();
+                nonce[60] = dc_bytes[0];
+                nonce[61] = dc_bytes[1];
+                let mut enc =
+                    ferogram_crypto::ObfuscatedCipher::from_keys(&tx_key, &tx_iv, &rx_key, &rx_iv);
+                let mut skip = [0u8; 56];
+                enc.encrypt(&mut skip);
+                enc.encrypt(&mut nonce[56..64]);
+                stream.write_all(&nonce).await?;
+                return Ok(Some(enc));
+            }
+            TransportKind::FakeTls { .. } => {
+                // FakeTls requires a full TLS 1.2 ClientHello handshake which is not yet
+                // implemented in DcPool worker connections. Use Obfuscated or
+                // PaddedIntermediate for proxy connections instead.
+                return Err(InvocationError::Deserialize(
+                    "FakeTls transport is not supported for DcPool connections".into(),
+                ));
             }
             TransportKind::Http => {}
         }
@@ -600,6 +660,10 @@ impl DcConnection {
                     );
                     *salt = server_salt;
                     // Only reset if the pending request predates the server's new session.
+                    // If sent_msg_id == first_msg_id (fresh worker conn on first send),
+                    // the server will reply with our current session_id. Unconditionally
+                    // calling reset_session() here changes the id, causing the response
+                    // decrypt to fail with session_id mismatch.
                     if sent_msg_id.is_some_and(|id| id < first_msg_id) {
                         *need_session_reset = true;
                     }
@@ -683,10 +747,12 @@ impl DcConnection {
                         }
                     } else {
                         // Result already captured; still process remaining items for
-                        // side-effect flags only (pass sent_msg_id=None to suppress
-                        // msg_id mismatch filtering on these trailing informational msgs).
+                        // side-effect flags (salt, session reset, bad_msg). Pass
+                        // sent_msg_id so the req_msg_id guard still filters stale
+                        // rpc_results. Passing None would bypass the guard and allow
+                        // a stale response to overwrite `found` on the next iteration.
                         let _ = Self::scan_body(inner, salt, need_resend, need_session_reset,
-                                                bad_msg_code, bad_msg_server_id, None)?;
+                                                bad_msg_code, bad_msg_server_id, sent_msg_id)?;
                     }
                 }
                 Ok(found)
@@ -949,6 +1015,16 @@ impl DcConnection {
         cipher: Option<&mut ferogram_crypto::ObfuscatedCipher>,
     ) -> Result<T, InvocationError> {
         let raw = Self::recv_abridged(stream, cipher).await?;
+        // A 4-byte negative payload is a transport error code from the server.
+        // Surface it directly rather than masking it with "plain frame too short".
+        if raw.len() == 4 {
+            let code = i32::from_le_bytes(raw[..4].try_into().unwrap());
+            if code < 0 {
+                return Err(InvocationError::Deserialize(format!(
+                    "server transport error during DH: code {code}"
+                )));
+            }
+        }
         if raw.len() < 20 {
             return Err(InvocationError::Deserialize("plain frame too short".into()));
         }
@@ -958,6 +1034,13 @@ impl DcConnection {
             ));
         }
         let body_len = u32::from_le_bytes(raw[16..20].try_into().unwrap()) as usize;
+        if raw.len() < 20 + body_len {
+            return Err(InvocationError::Deserialize(format!(
+                "plain frame truncated: have {} bytes, need {}",
+                raw.len(),
+                20 + body_len
+            )));
+        }
         let mut cur = Cursor::from_slice(&raw[20..20 + body_len]);
         T::deserialize(&mut cur).map_err(Into::into)
     }

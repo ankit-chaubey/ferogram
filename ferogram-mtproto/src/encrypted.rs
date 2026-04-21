@@ -15,7 +15,7 @@
 //! [`EncryptedSession`] and use it to serialize/deserialize all subsequent
 //! messages.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ferogram_crypto::{AuthKey, DequeBuffer, decrypt_data_v2, encrypt_data_v2};
@@ -71,14 +71,19 @@ pub struct DecryptedMessage {
 
 /// Shared, persistent dedup ring for server msg_ids.
 ///
+/// `VecDeque` provides O(1) push/pop for eviction order; `HashSet` provides
+/// O(1) membership checks, replacing the previous O(n) `VecDeque::contains`
+/// scan that became a serialisation bottleneck under 12 concurrent workers.
+///
 /// Outlives individual `EncryptedSession` objects so that replayed frames
 /// from a prior connection cycle are still rejected after reconnect.
-pub type SeenMsgIds = std::sync::Arc<std::sync::Mutex<VecDeque<i64>>>;
+pub type SeenMsgIds = std::sync::Arc<std::sync::Mutex<(VecDeque<i64>, HashSet<i64>)>>;
 
 /// Allocate a fresh seen-msg_id ring.
 pub fn new_seen_msg_ids() -> SeenMsgIds {
-    std::sync::Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(
-        SEEN_MSG_IDS_MAX,
+    std::sync::Arc::new(std::sync::Mutex::new((
+        VecDeque::with_capacity(SEEN_MSG_IDS_MAX),
+        HashSet::with_capacity(SEEN_MSG_IDS_MAX),
     )))
 }
 
@@ -414,12 +419,15 @@ impl EncryptedSession {
         // Rolling 500-entry dedup.
         {
             let mut seen = self.seen_msg_ids.lock().unwrap();
-            if seen.contains(&msg_id) {
+            if seen.1.contains(&msg_id) {
                 return Err(DecryptError::DuplicateMsgId);
             }
-            seen.push_back(msg_id);
-            if seen.len() > SEEN_MSG_IDS_MAX {
-                seen.pop_front();
+            seen.0.push_back(msg_id);
+            seen.1.insert(msg_id);
+            if seen.0.len() > SEEN_MSG_IDS_MAX
+                && let Some(old_id) = seen.0.pop_front()
+            {
+                seen.1.remove(&old_id);
             }
         }
 
@@ -494,12 +502,15 @@ impl EncryptedSession {
         let msg = Self::decrypt_frame_with_offset(auth_key, session_id, frame, 0)?;
         {
             let mut s = seen.lock().unwrap();
-            if s.contains(&msg.msg_id) {
+            if s.1.contains(&msg.msg_id) {
                 return Err(DecryptError::DuplicateMsgId);
             }
-            s.push_back(msg.msg_id);
-            if s.len() > SEEN_MSG_IDS_MAX {
-                s.pop_front();
+            s.0.push_back(msg.msg_id);
+            s.1.insert(msg.msg_id);
+            if s.0.len() > SEEN_MSG_IDS_MAX
+                && let Some(old_id) = s.0.pop_front()
+            {
+                s.1.remove(&old_id);
             }
         }
         Ok(msg)

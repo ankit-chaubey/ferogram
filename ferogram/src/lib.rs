@@ -7069,7 +7069,9 @@ impl Client {
                 )
                 .await?;
 
-                // Re-check after acquiring gate: another worker may have already imported.
+                // Re-check after acquiring gate: another worker may have already imported
+                // during the same process lifetime. auth_imported is in-memory only and is
+                // NOT cleared on reconnects. Authorization binding is per-session, not per-key.
                 let already_imported = self
                     .inner
                     .auth_imported
@@ -7077,31 +7079,8 @@ impl Client {
                     .unwrap()
                     .contains(&target_dc);
 
-                if already_imported {
-                    // This process has already done importAuthorization for this DC.
-                    // Just send initConnection(GetConfig) to register the session layer.
-                    conn.rpc_call_serializable(&InvokeWithLayer {
-                        layer: tl::LAYER,
-                        query: InitConnection {
-                            api_id: self.inner.api_id,
-                            device_model: self.inner.device_model.clone(),
-                            system_version: self.inner.system_version.clone(),
-                            app_version: self.inner.app_version.clone(),
-                            system_lang_code: self.inner.system_lang_code.clone(),
-                            lang_pack: self.inner.lang_pack.clone(),
-                            lang_code: self.inner.lang_code.clone(),
-                            proxy: None,
-                            params: None,
-                            query: tl::functions::help::GetConfig {},
-                        },
-                    })
-                    .await?;
-                    tracing::debug!(
-                        "[ferogram] worker conn to DC{target_dc} (foreign, cached key, auth already imported) ready"
-                    );
-                } else {
-                    // Must re-import even though the key is cached: the account
-                    // authorization binding is not live on this new process session.
+                if !already_imported {
+                    // Must import: account authorization binding is not live on this session.
                     let export_req = tl::functions::auth::ExportAuthorization { dc_id: target_dc };
                     let body = self.rpc_call_raw(&export_req).await?;
                     let mut cur = Cursor::from_slice(&body);
@@ -7126,10 +7105,30 @@ impl Client {
                         },
                     })
                     .await?;
-                    // Mark this DC as auth-imported for the rest of this process session.
                     self.inner.auth_imported.lock().unwrap().insert(target_dc);
                     tracing::debug!(
                         "[ferogram] worker conn to DC{target_dc} (foreign, cached key, auth re-imported) ready"
+                    );
+                } else {
+                    // Already imported this session; just register the layer.
+                    conn.rpc_call_serializable(&InvokeWithLayer {
+                        layer: tl::LAYER,
+                        query: InitConnection {
+                            api_id: self.inner.api_id,
+                            device_model: self.inner.device_model.clone(),
+                            system_version: self.inner.system_version.clone(),
+                            app_version: self.inner.app_version.clone(),
+                            system_lang_code: self.inner.system_lang_code.clone(),
+                            lang_pack: self.inner.lang_pack.clone(),
+                            lang_code: self.inner.lang_code.clone(),
+                            proxy: None,
+                            params: None,
+                            query: tl::functions::help::GetConfig {},
+                        },
+                    })
+                    .await?;
+                    tracing::debug!(
+                        "[ferogram] worker conn to DC{target_dc} (foreign, cached key, auth already imported) ready"
                     );
                 }
                 Ok(conn)
