@@ -273,7 +273,6 @@ impl std::fmt::Display for DhError {
 impl std::error::Error for DhError {}
 
 /// Compute `big_endian_bytes mod modulus` (all values < 2^64).
-#[allow(dead_code)]
 fn prime_residue(bytes: &[u8], modulus: u64) -> u64 {
     bytes
         .iter()
@@ -321,15 +320,23 @@ pub fn check_p_and_g(dh_prime: &[u8], g: u32) -> Result<(), DhError> {
         return Err(DhError::GeneratorOutOfRange);
     }
 
-    // 5. Residue condition: deterministic for the known Telegram prime, but
-    //  kept for clarity and future-proofing against prime rotation.
+    // 5. Residue condition per MTProto spec §4.5.
     let valid = match g {
-        2 => true, // p mod 8 = 7 is a fixed property of TELEGRAM_DH_PRIME
-        3 => true, // p mod 3 = 2
+        2 => prime_residue(dh_prime, 8) == 7,
+        3 => prime_residue(dh_prime, 3) == 2,
         4 => true,
-        5 => true, // p mod 5 ∈ {1,4}
-        6 => true, // p mod 24 ∈ {19,23}
-        7 => true, // p mod 7 ∈ {3,5,6}
+        5 => {
+            let r = prime_residue(dh_prime, 5);
+            r == 1 || r == 4
+        }
+        6 => {
+            let r = prime_residue(dh_prime, 24);
+            r == 19 || r == 23
+        }
+        7 => {
+            let r = prime_residue(dh_prime, 7);
+            r == 3 || r == 5 || r == 6
+        }
         _ => unreachable!(),
     };
     if !valid {

@@ -56,15 +56,31 @@ impl AsyncAbridged {
     pub async fn recv(&mut self) -> io::Result<Vec<u8>> {
         let mut h = [0u8; 1];
         self.stream.read_exact(&mut h).await?;
-        let words = if h[0] < 0x7f {
-            h[0] as usize
-        } else {
+
+        // 0x7f means extended length: next 3 bytes are LE word count.
+        let words = if h[0] == 0x7f {
             let mut b = [0u8; 3];
             self.stream.read_exact(&mut b).await?;
             b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16
+        } else {
+            h[0] as usize
         };
+
         let mut buf = vec![0u8; words * 4];
         self.stream.read_exact(&mut buf).await?;
+
+        // Transport errors arrive as a negative signed LE i32 in the payload.
+        // Can't detect from the header byte alone (e.g. -404 starts with 0x6C).
+        if buf.len() >= 4 {
+            let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
+            if code < 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionRefused,
+                    format!("transport error from server: {code}"),
+                ));
+            }
+        }
+
         Ok(buf)
     }
 

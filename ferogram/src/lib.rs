@@ -1334,12 +1334,14 @@ impl Client {
             home_dc_id,
             &dc_opts.values().cloned().collect::<Vec<_>>(),
             config.socks5.clone(),
+            config.transport.clone(),
         );
         // Dedicated transfer pool  - separate connections for file upload/download.
         let transfer_pool = dc_pool::DcPool::new(
             home_dc_id,
             &dc_opts.values().cloned().collect::<Vec<_>>(),
             config.socks5.clone(),
+            config.transport.clone(),
         );
 
         // Split the TCP stream immediately.

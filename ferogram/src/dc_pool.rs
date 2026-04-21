@@ -39,6 +39,8 @@ pub struct DcConnection {
     enc: EncryptedSession,
     pending_acks: Vec<i64>,
     call_count: u32,
+    /// AES-256-CTR cipher for obfuscated transport; None for plain transports.
+    cipher: Option<ferogram_crypto::ObfuscatedCipher>,
     /// Persistent dedup ring that outlives individual EncryptedSessions.
     #[allow(dead_code)]
     seen_msg_ids: SeenMsgIds,
@@ -123,23 +125,40 @@ impl DcConnection {
     ) -> Result<Self, InvocationError> {
         tracing::debug!("[dc_pool] Connecting to {addr} …");
         let mut stream = Self::open_tcp(addr, socks5).await?;
-        Self::send_transport_init(&mut stream, transport, dc_id).await?;
+        let mut cipher = Self::send_transport_init(&mut stream, transport, dc_id).await?;
 
         let mut plain = Session::new();
 
         let (req1, s1) = auth::step1().map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-        Self::send_plain_frame(&mut stream, &plain.pack(&req1).to_plaintext_bytes()).await?;
-        let res_pq: tl::enums::ResPq = Self::recv_plain_frame(&mut stream).await?;
+        Self::send_plain_frame(
+            &mut stream,
+            &plain.pack(&req1).to_plaintext_bytes(),
+            cipher.as_mut(),
+        )
+        .await?;
+        let res_pq: tl::enums::ResPq = Self::recv_plain_frame(&mut stream, cipher.as_mut()).await?;
 
         let (req2, s2) = auth::step2(s1, res_pq, dc_id as i32)
             .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-        Self::send_plain_frame(&mut stream, &plain.pack(&req2).to_plaintext_bytes()).await?;
-        let dh: tl::enums::ServerDhParams = Self::recv_plain_frame(&mut stream).await?;
+        Self::send_plain_frame(
+            &mut stream,
+            &plain.pack(&req2).to_plaintext_bytes(),
+            cipher.as_mut(),
+        )
+        .await?;
+        let dh: tl::enums::ServerDhParams =
+            Self::recv_plain_frame(&mut stream, cipher.as_mut()).await?;
 
         let (req3, s3) =
             auth::step3(s2, dh).map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-        Self::send_plain_frame(&mut stream, &plain.pack(&req3).to_plaintext_bytes()).await?;
-        let ans: tl::enums::SetClientDhParamsAnswer = Self::recv_plain_frame(&mut stream).await?;
+        Self::send_plain_frame(
+            &mut stream,
+            &plain.pack(&req3).to_plaintext_bytes(),
+            cipher.as_mut(),
+        )
+        .await?;
+        let ans: tl::enums::SetClientDhParamsAnswer =
+            Self::recv_plain_frame(&mut stream, cipher.as_mut()).await?;
 
         // Retry loop for dh_gen_retry (up to 5 attempts).
         let done = {
@@ -168,10 +187,11 @@ impl DcConnection {
                         Self::send_plain_frame(
                             &mut stream,
                             &plain.pack(&req_retry).to_plaintext_bytes(),
+                            cipher.as_mut(),
                         )
                         .await?;
                         let ans_retry: tl::enums::SetClientDhParamsAnswer =
-                            Self::recv_plain_frame(&mut stream).await?;
+                            Self::recv_plain_frame(&mut stream, cipher.as_mut()).await?;
                         result = auth::finish(s3_retry, ans_retry)
                             .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
                     }
@@ -183,6 +203,7 @@ impl DcConnection {
         let seen = new_seen_msg_ids();
         Ok(Self {
             stream,
+            cipher,
             enc: EncryptedSession::with_seen(
                 done.auth_key,
                 done.first_salt,
@@ -207,19 +228,20 @@ impl DcConnection {
         transport: &TransportKind,
         dc_id: i16,
     ) -> Result<Self, InvocationError> {
-        let stream = if let Some(mp) = mtproxy {
+        let (stream, cipher) = if let Some(mp) = mtproxy {
             let mut s = mp.connect().await?;
             s.set_nodelay(true)?;
-            Self::send_transport_init(&mut s, &mp.transport, dc_id).await?;
-            s
+            let c = Self::send_transport_init(&mut s, &mp.transport, dc_id).await?;
+            (s, c)
         } else {
             let mut s = Self::open_tcp(addr, socks5).await?;
-            Self::send_transport_init(&mut s, transport, dc_id).await?;
-            s
+            let c = Self::send_transport_init(&mut s, transport, dc_id).await?;
+            (s, c)
         };
         let seen = new_seen_msg_ids();
         Ok(Self {
             stream,
+            cipher,
             enc: EncryptedSession::with_seen(auth_key, first_salt, time_offset, seen.clone()),
             pending_acks: Vec::new(),
             call_count: 0,
@@ -254,7 +276,7 @@ impl DcConnection {
         stream: &mut TcpStream,
         transport: &TransportKind,
         dc_id: i16,
-    ) -> Result<(), InvocationError> {
+    ) -> Result<Option<ferogram_crypto::ObfuscatedCipher>, InvocationError> {
         match transport {
             TransportKind::Abridged => {
                 stream.write_all(&[0xef]).await?;
@@ -275,6 +297,7 @@ impl DcConnection {
                         || first == 0x44414548
                         || first == 0x54534F50
                         || first == 0x20544547
+                        || first == 0x4954504f  // OPTIONS
                         || first == 0xEEEEEEEE
                         || first == 0xDDDDDDDD
                         || first == 0x02010316
@@ -309,31 +332,20 @@ impl DcConnection {
                 let dc_bytes = dc_id.to_le_bytes();
                 nonce[60] = dc_bytes[0];
                 nonce[61] = dc_bytes[1];
-                {
-                    let mut enc = ferogram_crypto::ObfuscatedCipher::from_keys(
-                        &tx_key, &tx_iv, &rx_key, &rx_iv,
-                    );
-                    let mut skip = [0u8; 56];
-                    enc.encrypt(&mut skip);
-                    enc.encrypt(&mut nonce[56..64]);
-                }
+                let mut enc =
+                    ferogram_crypto::ObfuscatedCipher::from_keys(&tx_key, &tx_iv, &rx_key, &rx_iv);
+                let mut skip = [0u8; 56];
+                enc.encrypt(&mut skip);
+                enc.encrypt(&mut nonce[56..64]);
                 stream.write_all(&nonce).await?;
+                return Ok(Some(enc));
             }
-            // PaddedIntermediate and FakeTls are handled by the main Connection path
-            // (lib.rs apply_transport_init).  DcPool connections always use the
-            // transport supplied by the caller if a 0xDD/0xEE proxy is used,
-            // the caller should open the stream through Connection::open_stream_mtproxy
-            // and not use DcPool::connect_raw.  Treat these as Abridged fallback so
-            // dc_pool.rs compiles cleanly for non-proxy aux-DC connections.
             TransportKind::PaddedIntermediate { .. } | TransportKind::FakeTls { .. } => {
                 stream.write_all(&[0xef]).await?;
             }
-            TransportKind::Http => {
-                // HTTP transport: no binary init sequence; framing is done via
-                // HTTP POST headers at the application layer.
-            }
+            TransportKind::Http => {}
         }
-        Ok(())
+        Ok(None)
     }
 
     pub fn auth_key_bytes(&self) -> [u8; 256] {
@@ -357,24 +369,24 @@ impl DcConnection {
             let (ping_wire, _) = self.enc.pack_body_with_msg_id(&ping_body, true);
             // Fire-and-forget: ignore send errors (connection will fail on the next
             // recv if the socket is actually dead).
-            let _ = Self::send_abridged(&mut self.stream, &ping_wire).await;
+            let _ = Self::send_abridged(&mut self.stream, &ping_wire, self.cipher.as_mut()).await;
         }
 
         // Flush pending acks.
         if !self.pending_acks.is_empty() {
             let ack_body = build_msgs_ack_body(&self.pending_acks);
             let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-            let _ = Self::send_abridged(&mut self.stream, &ack_wire).await;
+            let _ = Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut()).await;
             self.pending_acks.clear();
         }
 
         // Track sent msg_id to verify rpc_result.req_msg_id and discard stale responses.
         let (wire, mut sent_msg_id) = self.enc.pack_with_msg_id(req);
-        Self::send_abridged(&mut self.stream, &wire).await?;
+        Self::send_abridged(&mut self.stream, &wire, self.cipher.as_mut()).await?;
         let mut salt_retries = 0u8;
         let mut session_resets = 0u8;
         loop {
-            let mut raw = Self::recv_abridged(&mut self.stream).await?;
+            let mut raw = Self::recv_abridged(&mut self.stream, self.cipher.as_mut()).await?;
             let msg = self
                 .enc
                 .unpack(&mut raw)
@@ -386,12 +398,11 @@ impl DcConnection {
                 // connection if we don't ack within its window.
                 let ack_body = build_msgs_ack_body(&self.pending_acks);
                 let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-                let _ = Self::send_abridged(&mut self.stream, &ack_wire).await;
+                let _ =
+                    Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut()).await;
                 self.pending_acks.clear();
             }
-            if msg.salt != 0 {
-                self.enc.salt = msg.salt;
-            }
+            // Salt is updated only on explicit bad_server_salt, not on every message.
             if msg.body.len() < 4 {
                 return Ok(msg.body);
             }
@@ -421,7 +432,8 @@ impl DcConnection {
                 if !self.pending_acks.is_empty() {
                     let ack_body = build_msgs_ack_body(&self.pending_acks);
                     let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-                    let _ = Self::send_abridged(&mut self.stream, &ack_wire).await;
+                    let _ = Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut())
+                        .await;
                     self.pending_acks.clear();
                 }
                 // Always reset session state so future requests use seq_no from 0.
@@ -433,7 +445,7 @@ impl DcConnection {
                     );
                     let (wire, new_id) = self.enc.pack_with_msg_id(req);
                     sent_msg_id = new_id;
-                    Self::send_abridged(&mut self.stream, &wire).await?;
+                    Self::send_abridged(&mut self.stream, &wire, self.cipher.as_mut()).await?;
                 }
                 // If scan_result.is_some(), the result arrived in the same container
                 // as new_session_created; session has been reset for future calls,
@@ -469,12 +481,13 @@ impl DcConnection {
                 if !self.pending_acks.is_empty() {
                     let ack_body = build_msgs_ack_body(&self.pending_acks);
                     let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-                    let _ = Self::send_abridged(&mut self.stream, &ack_wire).await;
+                    let _ = Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut())
+                        .await;
                     self.pending_acks.clear();
                 }
                 let (wire, new_id) = self.enc.pack_with_msg_id(req);
                 sent_msg_id = new_id;
-                Self::send_abridged(&mut self.stream, &wire).await?;
+                Self::send_abridged(&mut self.stream, &wire, self.cipher.as_mut()).await?;
             }
             if let Some(result) = scan_result {
                 return Ok(result);
@@ -532,9 +545,10 @@ impl DcConnection {
                     }
                     // Unwrap the gzip directly and return the decompressed bytes.
                     if let Some(compressed) = tl_read_bytes(&inner[4..]) {
-                        let mut dec = flate2::read::GzDecoder::new(compressed.as_slice());
+                        let dec = flate2::read::GzDecoder::new(compressed.as_slice());
+                        let mut limited = std::io::Read::take(dec, 16 * 1024 * 1024);
                         let mut out = Vec::new();
-                        if std::io::Read::read_to_end(&mut dec, &mut out).is_ok() {
+                        if std::io::Read::read_to_end(&mut limited, &mut out).is_ok() {
                             return Ok(Some(out));
                         }
                     }
@@ -585,9 +599,8 @@ impl DcConnection {
                          first_msg_id={first_msg_id} salt={server_salt}"
                     );
                     *salt = server_salt;
-                    if sent_msg_id.is_some_and(|id| id < first_msg_id) {
-                        *need_session_reset = true;
-                    }
+                    // new_session_created always resets seq_no state.
+                    *need_session_reset = true;
                 }
                 Ok(None)
             }
@@ -616,7 +629,10 @@ impl DcConnection {
                             // Incorrect server salt (same as bad_server_salt).
                             *need_resend = sent_msg_id.is_none_or(|id| id == bad_msg_id);
                         }
-                        _ => {}
+                        _ => {
+                            // Unknown code; resend to avoid the loop stalling.
+                            *need_resend = sent_msg_id.is_none_or(|id| id == bad_msg_id);
+                        }
                     }
                 }
                 Ok(None)
@@ -676,9 +692,10 @@ impl DcConnection {
             0x3072cfa1 /* gzip_packed */ => {
                 // Decompress and recurse: server wraps large responses in gzip_packed.
                 if let Some(compressed) = tl_read_bytes(&body[4..]) {
-                    let mut decoder = flate2::read::GzDecoder::new(compressed.as_slice());
+                    let decoder = flate2::read::GzDecoder::new(compressed.as_slice());
+                    let mut limited = std::io::Read::take(decoder, 16 * 1024 * 1024);
                     let mut decompressed = Vec::new();
-                    if std::io::Read::read_to_end(&mut decoder, &mut decompressed).is_ok()
+                    if std::io::Read::read_to_end(&mut limited, &mut decompressed).is_ok()
                         && !decompressed.is_empty()
                     {
                         return Self::scan_body(
@@ -703,15 +720,15 @@ impl DcConnection {
         if !self.pending_acks.is_empty() {
             let ack_body = build_msgs_ack_body(&self.pending_acks);
             let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-            let _ = Self::send_abridged(&mut self.stream, &ack_wire).await;
+            let _ = Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut()).await;
             self.pending_acks.clear();
         }
         let (wire, mut sent_msg_id) = self.enc.pack_serializable_with_msg_id(req);
-        Self::send_abridged(&mut self.stream, &wire).await?;
+        Self::send_abridged(&mut self.stream, &wire, self.cipher.as_mut()).await?;
         let mut salt_retries = 0u8;
         let mut session_resets = 0u8;
         loop {
-            let mut raw = Self::recv_abridged(&mut self.stream).await?;
+            let mut raw = Self::recv_abridged(&mut self.stream, self.cipher.as_mut()).await?;
             let msg = self
                 .enc
                 .unpack(&mut raw)
@@ -720,12 +737,11 @@ impl DcConnection {
             if self.pending_acks.len() >= PENDING_ACKS_THRESHOLD {
                 let ack_body = build_msgs_ack_body(&self.pending_acks);
                 let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-                let _ = Self::send_abridged(&mut self.stream, &ack_wire).await;
+                let _ =
+                    Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut()).await;
                 self.pending_acks.clear();
             }
-            if msg.salt != 0 {
-                self.enc.salt = msg.salt;
-            }
+            // Salt updated only on explicit bad_server_salt, not on every message.
             if msg.body.len() < 4 {
                 return Ok(msg.body);
             }
@@ -753,14 +769,15 @@ impl DcConnection {
                 if !self.pending_acks.is_empty() {
                     let ack_body = build_msgs_ack_body(&self.pending_acks);
                     let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-                    let _ = Self::send_abridged(&mut self.stream, &ack_wire).await;
+                    let _ = Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut())
+                        .await;
                     self.pending_acks.clear();
                 }
                 self.enc.reset_session();
                 if scan_result.is_none() {
                     let (wire, new_id) = self.enc.pack_serializable_with_msg_id(req);
                     sent_msg_id = new_id;
-                    Self::send_abridged(&mut self.stream, &wire).await?;
+                    Self::send_abridged(&mut self.stream, &wire, self.cipher.as_mut()).await?;
                 }
             } else if need_resend {
                 match bad_msg_code {
@@ -789,12 +806,13 @@ impl DcConnection {
                 if !self.pending_acks.is_empty() {
                     let ack_body = build_msgs_ack_body(&self.pending_acks);
                     let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-                    let _ = Self::send_abridged(&mut self.stream, &ack_wire).await;
+                    let _ = Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut())
+                        .await;
                     self.pending_acks.clear();
                 }
                 let (wire, new_id) = self.enc.pack_serializable_with_msg_id(req);
                 sent_msg_id = new_id;
-                Self::send_abridged(&mut self.stream, &wire).await?;
+                Self::send_abridged(&mut self.stream, &wire, self.cipher.as_mut()).await?;
             }
             if let Some(result) = scan_result {
                 return Ok(result);
@@ -805,11 +823,15 @@ impl DcConnection {
     /// Send pre-serialized raw bytes and receive the raw response.
     /// Used by CDN download connections (no MTProto encryption layer).
     pub async fn rpc_call_raw(&mut self, body: &[u8]) -> Result<Vec<u8>, InvocationError> {
-        Self::send_abridged(&mut self.stream, body).await?;
-        Self::recv_abridged(&mut self.stream).await
+        Self::send_abridged(&mut self.stream, body, self.cipher.as_mut()).await?;
+        Self::recv_abridged(&mut self.stream, self.cipher.as_mut()).await
     }
 
-    async fn send_abridged(stream: &mut TcpStream, data: &[u8]) -> Result<(), InvocationError> {
+    async fn send_abridged(
+        stream: &mut TcpStream,
+        data: &[u8],
+        cipher: Option<&mut ferogram_crypto::ObfuscatedCipher>,
+    ) -> Result<(), InvocationError> {
         // Single write_all: avoids Nagle stalls and partial-write corruption.
         let words = data.len() / 4;
         let mut frame = if words < 0x7f {
@@ -827,11 +849,17 @@ impl DcConnection {
             v
         };
         frame.extend_from_slice(data);
+        if let Some(c) = cipher {
+            c.encrypt(&mut frame);
+        }
         stream.write_all(&frame).await?;
         Ok(())
     }
 
-    async fn recv_abridged(stream: &mut TcpStream) -> Result<Vec<u8>, InvocationError> {
+    async fn recv_abridged(
+        stream: &mut TcpStream,
+        mut cipher: Option<&mut ferogram_crypto::ObfuscatedCipher>,
+    ) -> Result<Vec<u8>, InvocationError> {
         // 60-second recv timeout: prevents hung reads on silently closed connections.
         use tokio::time::{Duration, timeout};
         const RECV_TIMEOUT: Duration = Duration::from_secs(60);
@@ -845,12 +873,12 @@ impl DcConnection {
                     "transfer recv: header timeout (60 s)",
                 ))
             })??;
+        if let Some(ref mut c) = cipher.as_deref_mut() {
+            c.decrypt(&mut h);
+        }
 
-        // h[0] > 0x7f: server sent a 4-byte transport-level error code (negative i32).
-        let words = if h[0] < 0x7f {
-            h[0] as usize
-        } else if h[0] == 0x7f {
-            // Extended-length: next 3 bytes are the little-endian word count.
+        // 0x7f = extended length; next 3 bytes are the LE word count.
+        let words = if h[0] == 0x7f {
             let mut b = [0u8; 3];
             timeout(RECV_TIMEOUT, stream.read_exact(&mut b))
                 .await
@@ -860,24 +888,14 @@ impl DcConnection {
                         "transfer recv: length timeout (60 s)",
                     ))
                 })??;
+            if let Some(ref mut c) = cipher.as_deref_mut() {
+                c.decrypt(&mut b);
+            }
             b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16
         } else {
-            // h[0] > 0x7f: first byte of a 4-byte transport error i32.
-            let mut rest = [0u8; 3];
-            timeout(RECV_TIMEOUT, stream.read_exact(&mut rest))
-                .await
-                .map_err(|_| {
-                    InvocationError::Io(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "transfer recv: error-code timeout (60 s)",
-                    ))
-                })??;
-            let code = i32::from_le_bytes([h[0], rest[0], rest[1], rest[2]]);
-            return Err(InvocationError::Io(std::io::Error::new(
-                std::io::ErrorKind::ConnectionRefused,
-                format!("transport error from server: {code}"),
-            )));
+            h[0] as usize
         };
+
         let mut buf = vec![0u8; words * 4];
         timeout(RECV_TIMEOUT, stream.read_exact(&mut buf))
             .await
@@ -887,26 +905,47 @@ impl DcConnection {
                     "transfer recv: body timeout (60 s)",
                 ))
             })??;
+        if let Some(c) = cipher {
+            c.decrypt(&mut buf);
+        }
+
+        // Transport errors are negative signed LE i32 in the payload.
+        // Can't catch them from the header byte alone (e.g. -404 starts with 0x6C).
+        if buf.len() >= 4 {
+            let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
+            if code < 0 {
+                return Err(InvocationError::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    format!("transport error from server: {code}"),
+                )));
+            }
+        }
+
         Ok(buf)
     }
 
-    async fn send_plain_frame(stream: &mut TcpStream, data: &[u8]) -> Result<(), InvocationError> {
+    async fn send_plain_frame(
+        stream: &mut TcpStream,
+        data: &[u8],
+        cipher: Option<&mut ferogram_crypto::ObfuscatedCipher>,
+    ) -> Result<(), InvocationError> {
         // Abridged framing uses word-count (len/4): pad to 4-byte boundary.
         // TL parsers ignore trailing zero bytes.
         if !data.len().is_multiple_of(4) {
             let mut padded = data.to_vec();
             let pad = 4 - (data.len() % 4);
             padded.resize(data.len() + pad, 0);
-            Self::send_abridged(stream, &padded).await
+            Self::send_abridged(stream, &padded, cipher).await
         } else {
-            Self::send_abridged(stream, data).await
+            Self::send_abridged(stream, data, cipher).await
         }
     }
 
     async fn recv_plain_frame<T: Deserializable>(
         stream: &mut TcpStream,
+        cipher: Option<&mut ferogram_crypto::ObfuscatedCipher>,
     ) -> Result<T, InvocationError> {
-        let raw = Self::recv_abridged(stream).await?;
+        let raw = Self::recv_abridged(stream, cipher).await?;
         if raw.len() < 20 {
             return Err(InvocationError::Deserialize("plain frame too short".into()));
         }
@@ -953,6 +992,8 @@ pub struct DcPool {
     home_dc_id: i32,
     /// Proxy config forwarded to auto-reconnect in `invoke_on_dc`.
     socks5: Option<crate::socks5::Socks5Config>,
+    /// Transport kind used for the home DC; reused for all secondary DC connections.
+    transport: TransportKind,
 }
 
 impl DcPool {
@@ -960,6 +1001,7 @@ impl DcPool {
         home_dc_id: i32,
         dc_entries: &[DcEntry],
         socks5: Option<crate::socks5::Socks5Config>,
+        transport: TransportKind,
     ) -> Self {
         let addrs = dc_entries
             .iter()
@@ -970,6 +1012,7 @@ impl DcPool {
             addrs,
             home_dc_id,
             socks5,
+            transport,
         }
     }
 
@@ -1000,7 +1043,7 @@ impl DcPool {
             let conn = DcConnection::connect_raw(
                 &addr,
                 self.socks5.as_ref(),
-                &crate::TransportKind::Abridged,
+                &self.transport,
                 dc_id as i16,
             )
             .await?;
@@ -1016,7 +1059,7 @@ impl DcPool {
             let fresh = DcConnection::connect_raw(
                 &addr,
                 self.socks5.as_ref(),
-                &crate::TransportKind::Abridged,
+                &self.transport,
                 dc_id as i16,
             )
             .await?;
@@ -1052,7 +1095,7 @@ impl DcPool {
             let fresh = DcConnection::connect_raw(
                 &addr,
                 self.socks5.as_ref(),
-                &crate::TransportKind::Abridged,
+                &self.transport,
                 dc_id as i16,
             )
             .await?;

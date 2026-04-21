@@ -127,29 +127,32 @@ impl ObfuscatedStream {
         self.stream.read_exact(&mut h).await?;
         self.cipher.decrypt(&mut h);
 
-        // h[0] > 0x7f: first byte of a 4-byte transport error code (negative i32).
-        let words = if h[0] < 0x7f {
-            h[0] as usize
-        } else if h[0] == 0x7f {
+        // 0x7f = extended length; otherwise the byte itself is the word count.
+        let words = if h[0] == 0x7f {
             let mut b = [0u8; 3];
             self.stream.read_exact(&mut b).await?;
             self.cipher.decrypt(&mut b);
             b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16
         } else {
-            // h[0] > 0x7f: first byte of a 4-byte transport error.
-            let mut rest = [0u8; 3];
-            self.stream.read_exact(&mut rest).await?;
-            self.cipher.decrypt(&mut rest);
-            let code = i32::from_le_bytes([h[0], rest[0], rest[1], rest[2]]);
-            return Err(InvocationError::Io(std::io::Error::new(
-                std::io::ErrorKind::ConnectionRefused,
-                format!("transport error from server: {code}"),
-            )));
+            h[0] as usize
         };
 
         let mut buf = vec![0u8; words * 4];
         self.stream.read_exact(&mut buf).await?;
         self.cipher.decrypt(&mut buf);
+
+        // Transport errors: negative signed LE i32 in the payload.
+        // Must check here — can't infer from the header byte (e.g. -404 starts 0x6C).
+        if buf.len() >= 4 {
+            let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
+            if code < 0 {
+                return Err(InvocationError::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    format!("transport error from server: {code}"),
+                )));
+            }
+        }
+
         Ok(buf)
     }
 }

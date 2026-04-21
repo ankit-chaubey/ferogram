@@ -70,7 +70,14 @@ impl IntermediateTransport {
     pub async fn recv(&mut self) -> Result<Vec<u8>, InvocationError> {
         let mut len_buf = [0u8; 4];
         self.stream.read_exact(&mut len_buf).await?;
-        let len = u32::from_le_bytes(len_buf) as usize;
+        let raw = i32::from_le_bytes(len_buf);
+        if raw < 0 {
+            return Err(InvocationError::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                format!("transport error: {raw}"),
+            )));
+        }
+        let len = raw as usize;
         let mut buf = vec![0u8; len];
         self.stream.read_exact(&mut buf).await?;
         Ok(buf)
@@ -140,7 +147,15 @@ impl FullTransport {
     pub async fn recv(&mut self) -> Result<Vec<u8>, InvocationError> {
         let mut len_buf = [0u8; 4];
         self.stream.read_exact(&mut len_buf).await?;
-        let total_len = u32::from_le_bytes(len_buf) as usize;
+        // Negative value = transport-level error code from Telegram.
+        let raw = i32::from_le_bytes(len_buf);
+        if raw < 0 {
+            return Err(InvocationError::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                format!("transport error: {raw}"),
+            )));
+        }
+        let total_len = raw as usize;
         if total_len < 12 {
             return Err(InvocationError::Deserialize(
                 "Full transport: packet too short".into(),
@@ -162,7 +177,13 @@ impl FullTransport {
         }
 
         // seq_no is the first 4 bytes of `body`
-        let _recv_seq = u32::from_le_bytes(body[..4].try_into().unwrap());
+        let recv_seq = u32::from_le_bytes(body[..4].try_into().unwrap());
+        if recv_seq != self.recv_seqno {
+            return Err(InvocationError::Deserialize(format!(
+                "Full transport: seq_no mismatch (got {recv_seq}, expected {})",
+                self.recv_seqno
+            )));
+        }
         self.recv_seqno = self.recv_seqno.wrapping_add(1);
 
         Ok(body[4..].to_vec())

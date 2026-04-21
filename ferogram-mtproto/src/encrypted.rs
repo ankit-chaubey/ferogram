@@ -23,8 +23,6 @@ use ferogram_tl_types::RemoteCall;
 
 /// Rolling deduplication buffer for server msg_ids.
 const SEEN_MSG_IDS_MAX: usize = 500;
-/// Maximum clock skew between client and server before a message is rejected.
-const MSG_ID_TIME_WINDOW_SECS: i64 = 300;
 
 /// Errors that can occur when decrypting a server message.
 #[derive(Debug)]
@@ -35,10 +33,12 @@ pub enum DecryptError {
     FrameTooShort,
     /// Session-ID mismatch (possible replay or wrong connection).
     SessionMismatch,
-    /// Server msg_id is outside the ±300 s window of corrected local time.
+    /// Server msg_id is outside the allowed time window (-300s / +30s).
     MsgIdTimeWindow,
     /// This msg_id was already seen in the rolling 500-entry buffer.
     DuplicateMsgId,
+    /// Server msg_id has even parity; server messages must have odd msg_id.
+    InvalidMsgId,
 }
 
 impl std::fmt::Display for DecryptError {
@@ -47,8 +47,9 @@ impl std::fmt::Display for DecryptError {
             Self::Crypto(e) => write!(f, "crypto: {e}"),
             Self::FrameTooShort => write!(f, "inner plaintext too short"),
             Self::SessionMismatch => write!(f, "session_id mismatch"),
-            Self::MsgIdTimeWindow => write!(f, "server msg_id outside ±300 s time window"),
+            Self::MsgIdTimeWindow => write!(f, "server msg_id outside -300s/+30s time window"),
             Self::DuplicateMsgId => write!(f, "duplicate server msg_id (replay)"),
+            Self::InvalidMsgId => write!(f, "server msg_id has even parity (must be odd)"),
         }
     }
 }
@@ -393,21 +394,21 @@ impl EncryptedSession {
             return Err(DecryptError::SessionMismatch);
         }
 
-        // Check server time (upper 32 bits of msg_id) against ±300 s window.
-        // Warn and continue: clock self-corrects via bad_msg_notification or pong.
+        // MTProto: server msg_id must be odd.
+        if msg_id & 1 == 0 {
+            return Err(DecryptError::InvalidMsgId);
+        }
+
+        // Time window is intentionally asymmetric: -300s past, +30s future.
         let server_secs = (msg_id as u64 >> 32) as i64;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
         let corrected = now + self.time_offset as i64;
-        if (server_secs - corrected).abs() > MSG_ID_TIME_WINDOW_SECS {
-            log::warn!(
-                "[ferogram] msg_id time-window violation: server_secs={server_secs} \
-                 corrected_local={corrected} skew={}s: processing anyway, \
-                 clock will self-correct via bad_msg_notification/pong",
-                (server_secs - corrected).abs()
-            );
+        let skew = server_secs - corrected;
+        if !(-300..=30).contains(&skew) {
+            return Err(DecryptError::MsgIdTimeWindow);
         }
 
         // Rolling 500-entry dedup.
@@ -427,6 +428,10 @@ impl EncryptedSession {
             return Err(DecryptError::FrameTooShort);
         }
         if 32 + body_len > plaintext.len() {
+            return Err(DecryptError::FrameTooShort);
+        }
+        // TL payload must be 4-byte aligned.
+        if !body_len.is_multiple_of(4) {
             return Err(DecryptError::FrameTooShort);
         }
         // MTProto 2.0: minimum padding is 12 bytes; no upper bound.
@@ -532,25 +537,30 @@ impl EncryptedSession {
         if sid != session_id {
             return Err(DecryptError::SessionMismatch);
         }
-        // Warn but continue: clock self-corrects via bad_msg_notification or pong.
+        // MTProto: server msg_id must be odd.
+        if msg_id & 1 == 0 {
+            return Err(DecryptError::InvalidMsgId);
+        }
+        // Time window is intentionally asymmetric: -300s past, +30s future.
         let server_secs = (msg_id as u64 >> 32) as i64;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
         let corrected = now + time_offset as i64;
-        if (server_secs - corrected).abs() > MSG_ID_TIME_WINDOW_SECS {
-            log::warn!(
-                "[ferogram] msg_id time-window violation (split-reader): server_secs={server_secs} \
-                 corrected_local={corrected} skew={}s: processing anyway",
-                (server_secs - corrected).abs()
-            );
+        let skew = server_secs - corrected;
+        if !(-300..=30).contains(&skew) {
+            return Err(DecryptError::MsgIdTimeWindow);
         }
         // Maximum body length: 16 MB.
         if body_len > 16 * 1024 * 1024 {
             return Err(DecryptError::FrameTooShort);
         }
         if 32 + body_len > plaintext.len() {
+            return Err(DecryptError::FrameTooShort);
+        }
+        // TL payload must be 4-byte aligned.
+        if !body_len.is_multiple_of(4) {
             return Err(DecryptError::FrameTooShort);
         }
         // MTProto 2.0: minimum padding is 12 bytes; no upper bound.
