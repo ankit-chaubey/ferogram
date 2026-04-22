@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Session Backends - ferogram</title>
+        <title>Middleware &amp; Dispatcher - ferogram</title>
 
 
         <!-- Custom HTML head -->
@@ -147,7 +147,7 @@
                         <a href="https://github.com/ankit-chaubey/ferogram" title="Git repository" aria-label="Git repository">
                             <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
                         </a>
-                        <a href="https://github.com/ankit-chaubey/ferogram/edit/main/docs/src/authentication/session-backends.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                        <a href="https://github.com/ankit-chaubey/ferogram/edit/main/docs/src/bot/middleware.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
                             <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
                         </a>
 
@@ -181,286 +181,268 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="session-backends"><a class="header" href="#session-backends">Session Backends</a></h1>
-<p>ferogram ships five session backends out of the box. They all implement the <code>SessionBackend</code> trait and are <strong>hot-swappable</strong>: switch by changing one line.</p>
+                        <h1 id="middleware--dispatcher"><a class="header" href="#middleware--dispatcher">Middleware &amp; Dispatcher</a></h1>
+<p>ferogram ships a <code>Dispatcher</code> that routes incoming updates to typed handlers, and a middleware chain that intercepts every update before it reaches any handler.</p>
 <hr>
-<h2 id="built-in-backends"><a class="header" href="#built-in-backends">Built-in backends</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Backend</th><th>Feature flag</th><th>Best for</th></tr>
-</thead>
-<tbody>
-<tr><td><code>BinaryFileBackend</code></td><td><em>(default, no flag)</em></td><td>Single-process bots, local scripts</td></tr>
-<tr><td><code>InMemoryBackend</code></td><td><em>(default, no flag)</em></td><td>Tests, ephemeral tasks</td></tr>
-<tr><td><code>StringSessionBackend</code></td><td><em>(default, no flag)</em></td><td>Serverless, env-var storage, CI bots</td></tr>
-<tr><td><code>SqliteBackend</code></td><td><code>sqlite-session</code></td><td>Multi-session local apps</td></tr>
-<tr><td><code>LibSqlBackend</code></td><td><code>libsql-session</code></td><td>Distributed / Turso-backed storage</td></tr>
-</tbody>
-</table>
-</div>
-<hr>
-<h2 id="binaryfilebackend-default"><a class="header" href="#binaryfilebackend-default"><code>BinaryFileBackend</code> (default)</a></h2>
-<p>Saves the session as a binary file on disk. No feature flag needed.</p>
+<h2 id="dispatcher-basics"><a class="header" href="#dispatcher-basics">Dispatcher basics</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use ferogram::Client;
+</span>use ferogram::filters::{self, Dispatcher};
 
-let (client, _shutdown) = Client::builder()
-    .api_id(12345)
-    .api_hash("your_api_hash")
-    .session("my.session")  // BinaryFileBackend at this path
-    .connect()
-    .await?;
-<span class="boring">}</span></code></pre>
-<p>Or construct directly:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use ferogram::session_backend::BinaryFileBackend;
-use std::sync::Arc;
+let mut dp = Dispatcher::new();
 
-let backend = Arc::new(BinaryFileBackend::new("bot.session"));
-<span class="boring">}</span></code></pre>
-<hr>
-<h2 id="inmemorybackend"><a class="header" href="#inmemorybackend"><code>InMemoryBackend</code></a></h2>
-<p>Non-persistent: lost on process exit. Ideal for tests.</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let (client, _shutdown) = Client::builder()
-    .api_id(12345)
-    .api_hash("your_api_hash")
-    .in_memory()
-    .connect()
-    .await?;
-<span class="boring">}</span></code></pre>
-<p>Or construct directly:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use ferogram::session_backend::InMemoryBackend;
-use std::sync::Arc;
+// Handle /start command (bots)
+dp.on_message(filters::command("start"), |msg| async move {
+    msg.reply("Hello!").await.ok();
+});
 
-let backend = Arc::new(InMemoryBackend::new());
-<span class="boring">}</span></code></pre>
-<hr>
-<h2 id="stringsessionbackend-portable-auth"><a class="header" href="#stringsessionbackend-portable-auth"><code>StringSessionBackend</code>: portable auth</a></h2>
-<p>Encodes the entire session (auth key + DC + peer cache) as a single base64 string. Store it in an environment variable, a database column, or a secret manager.</p>
-<h3 id="export"><a class="header" href="#export">Export</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let session_string = client.export_session_string().await?;
-println!("{session_string}"); // store this somewhere safe
-<span class="boring">}</span></code></pre>
-<h3 id="restore"><a class="header" href="#restore">Restore</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Via builder
-let session = std::env::var("TG_SESSION").unwrap_or_default();
+// Handle any private text
+dp.on_message(filters::private() &amp; filters::text(), |msg| async move {
+    let echo = msg.text().unwrap_or_default().to_string();
+    msg.reply(echo).await.ok();
+});
 
-let (client, _shutdown) = Client::builder()
-    .api_id(12345)
-    .api_hash("your_api_hash")
-    .session_string(session)
-    .connect()
-    .await?;
-<span class="boring">}</span></code></pre>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Via Config shorthand
-let (client, _shutdown) = Client::connect(Config::with_string_session(session_string))
-    .await?;
-<span class="boring">}</span></code></pre>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Construct backend directly
-use ferogram::session_backend::StringSessionBackend;
-use std::sync::Arc;
-
-let backend = Arc::new(StringSessionBackend::new(session_string));
-<span class="boring">}</span></code></pre>
-<p>Pass an <strong>empty string</strong> to start a fresh session with no stored data.</p>
-<hr>
-<h2 id="sqlitebackend-local-database"><a class="header" href="#sqlitebackend-local-database"><code>SqliteBackend</code>: local database</a></h2>
-<p>Requires feature flag:</p>
-<pre><code class="language-toml">ferogram = { version = "0.2.0", features = ["sqlite-session"] }
-</code></pre>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use ferogram::SqliteBackend;
-use std::sync::Arc;
-
-let (client, _shutdown) = Client::builder()
-    .api_id(12345)
-    .api_hash("your_api_hash")
-    .session_backend(Arc::new(SqliteBackend::new("sessions.db")))
-    .connect()
-    .await?;
-<span class="boring">}</span></code></pre>
-<p>The file is created if it doesn’t exist.</p>
-<hr>
-<h2 id="libsqlbackend-libsql--turso"><a class="header" href="#libsqlbackend-libsql--turso"><code>LibSqlBackend</code>: libsql / Turso</a></h2>
-<p>Requires feature flag:</p>
-<pre><code class="language-toml">ferogram = { version = "0.2.0", features = ["libsql-session"] }
-</code></pre>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use ferogram::LibSqlBackend;
-use std::sync::Arc;
-
-// Local embedded database
-let backend = LibSqlBackend::new("local.db");
-
-// Remote Turso database
-let backend = LibSqlBackend::remote(
-    "libsql://your-db.turso.io",
-    "your-turso-auth-token",
-);
-
-let (client, _shutdown) = Client::builder()
-    .api_id(12345)
-    .api_hash("your_api_hash")
-    .session_backend(Arc::new(backend))
-    .connect()
-    .await?;
-<span class="boring">}</span></code></pre>
-<hr>
-<h2 id="custom-backend"><a class="header" href="#custom-backend">Custom backend</a></h2>
-<p>Implement <code>SessionBackend</code> to use any storage: Redis, Postgres, S3, or anything else:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use ferogram::session_backend::{SessionBackend, PersistedSession, DcEntry, UpdateStateChange};
-use std::io;
-
-struct MyBackend {
-    // your fields (e.g. a DB pool)
+// Drive the dispatcher from the update stream
+let mut stream = client.stream_updates();
+while let Some(upd) = stream.next().await {
+    dp.dispatch(upd).await;
 }
-
-impl SessionBackend for MyBackend {
-    fn save(&amp;self, session: &amp;PersistedSession) -&gt; io::Result&lt;()&gt; {
-        // Serialize and store session
-        let bytes = serde_json::to_vec(session)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        // e.g. write to Redis / Postgres
-        Ok(())
-    }
-
-    fn load(&amp;self) -&gt; io::Result&lt;Option&lt;PersistedSession&gt;&gt; {
-        // Load and deserialize
-        Ok(None)
-    }
-
-    fn delete(&amp;self) -&gt; io::Result&lt;()&gt; {
-        Ok(())
-    }
-
-    fn name(&amp;self) -&gt; &amp;str {
-        "my-custom-backend"
-    }
-
-    // Optional: override granular methods for better performance
-    // Default impls call load() → mutate → save()
-
-    fn update_dc(&amp;self, entry: &amp;DcEntry) -&gt; io::Result&lt;()&gt; {
-        // UPDATE single DC row (e.g. SQL UPDATE)
-        todo!()
-    }
-
-    fn set_home_dc(&amp;self, dc_id: i32) -&gt; io::Result&lt;()&gt; {
-        // UPDATE home_dc column only
-        todo!()
-    }
-}
-
-// Use it
-let (client, _shutdown) = Client::builder()
-    .api_id(12345)
-    .api_hash("your_api_hash")
-    .session_backend(Arc::new(MyBackend { /* ... */ }))
-    .connect()
-    .await?;
 <span class="boring">}</span></code></pre>
-<h3 id="granular-sessionbackend-methods"><a class="header" href="#granular-sessionbackend-methods">Granular <code>SessionBackend</code> methods</a></h3>
-<p>High-performance backends can override these to avoid full load/save round-trips:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Method</th><th>When called</th><th>Default behaviour</th></tr>
-</thead>
-<tbody>
-<tr><td><code>save(session)</code></td><td>Any state change</td><td>Required</td></tr>
-<tr><td><code>load()</code></td><td>On connect, and by default impls</td><td>Required</td></tr>
-<tr><td><code>delete()</code></td><td>Session wipe</td><td>Required</td></tr>
-<tr><td><code>name()</code></td><td>Logging/debug</td><td>Required</td></tr>
-<tr><td><code>update_dc(entry)</code></td><td>After DH handshake on a new DC</td><td><code>load → mutate → save</code></td></tr>
-<tr><td><code>set_home_dc(dc_id)</code></td><td>After a MIGRATE redirect</td><td><code>load → mutate → save</code></td></tr>
-<tr><td><code>apply_update_state(change)</code></td><td>After update-sequence change</td><td><code>load → mutate → save</code></td></tr>
-</tbody>
-</table>
-</div>
-<hr>
-<h2 id="using-clientbuilder-to-attach-a-backend"><a class="header" href="#using-clientbuilder-to-attach-a-backend">Using <code>ClientBuilder</code> to attach a backend</a></h2>
+<p><code>dispatch</code> is <code>async</code> and runs handlers serially per update. For concurrent handling, spawn each <code>dispatch</code> call:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use std::sync::Arc;
-use ferogram::{Client, session_backend::SessionBackend};
 
-async fn connect_with_backend(
-    backend: impl SessionBackend + 'static,
-    api_id: i32,
-    api_hash: &amp;str,
-) -&gt; anyhow::Result&lt;()&gt; {
-    let (client, _shutdown) = Client::builder()
-        .api_id(api_id)
-        .api_hash(api_hash)
-        .session_backend(Arc::new(backend))
-        .connect()
-        .await?;
-
-    // ...
-    Ok(())
+let dp = Arc::new(dp);
+let mut stream = client.stream_updates();
+while let Some(upd) = stream.next().await {
+    let dp = dp.clone();
+    tokio::spawn(async move { dp.dispatch(upd).await; });
 }
 <span class="boring">}</span></code></pre>
 <hr>
-<h2 id="additional-backend-methods"><a class="header" href="#additional-backend-methods">Additional backend methods</a></h2>
-<h3 id="stringsessionbackendcurrent"><a class="header" href="#stringsessionbackendcurrent"><code>StringSessionBackend::current()</code></a></h3>
-<p>Reads the current serialised session string at any time:</p>
+<h2 id="built-in-filters"><a class="header" href="#built-in-filters">Built-in filters</a></h2>
+<p>All filters return a <code>BoxFilter</code> which supports <code>&amp;</code> (AND), <code>|</code> (OR), and <code>!</code> (NOT).</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Filter</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>all()</code></td><td>Always matches</td></tr>
+<tr><td><code>none()</code></td><td>Never matches</td></tr>
+<tr><td><code>private()</code></td><td>Message is in a private chat (DM)</td></tr>
+<tr><td><code>group()</code></td><td>Message is in a basic group</td></tr>
+<tr><td><code>channel()</code></td><td>Message is in a channel</td></tr>
+<tr><td><code>text()</code></td><td>Message has non-empty text</td></tr>
+<tr><td><code>media()</code></td><td>Message has any media attachment</td></tr>
+<tr><td><code>photo()</code></td><td>Message contains a photo</td></tr>
+<tr><td><code>document()</code></td><td>Message contains a document / file</td></tr>
+<tr><td><code>forwarded()</code></td><td>Message was forwarded</td></tr>
+<tr><td><code>reply()</code></td><td>Message is a reply to another message</td></tr>
+<tr><td><code>album()</code></td><td>Message is part of a media album</td></tr>
+<tr><td><code>any_command()</code></td><td>Message starts with any <code>/command</code></td></tr>
+<tr><td><code>command("start")</code></td><td>Message is exactly the <code>/start</code> command</td></tr>
+<tr><td><code>text_contains("word")</code></td><td>Message text contains the substring</td></tr>
+<tr><td><code>text_starts_with("!")</code></td><td>Message text starts with the prefix</td></tr>
+<tr><td><code>from_user(user_id)</code></td><td>Message was sent by a specific user ID</td></tr>
+<tr><td><code>in_chat(chat_id)</code></td><td>Message is from a specific chat ID</td></tr>
+<tr><td>`custom(</td><td>msg</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="combining-filters"><a class="header" href="#combining-filters">Combining filters</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use ferogram::session_backend::StringSessionBackend;
+</span>// Both conditions must be true
+let f = filters::private() &amp; filters::text();
 
-let backend = StringSessionBackend::new("");
-// ... after connecting and authenticating ...
-let s = backend.current(); // base64 session string
+// Either condition must be true
+let f = filters::command("help") | filters::command("start");
+
+// Negate a filter
+let f = !filters::forwarded();
+
+// Complex expressions
+let f = (filters::group() | filters::channel()) &amp; !filters::forwarded();
 <span class="boring">}</span></code></pre>
-<h3 id="binaryfilebackendpath"><a class="header" href="#binaryfilebackendpath"><code>BinaryFileBackend::path()</code></a></h3>
+<hr>
+<h2 id="dispatcher-methods"><a class="header" href="#dispatcher-methods">Dispatcher methods</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>dp.on_message(filter, handler)</code></td><td>Register a handler for new messages</td></tr>
+<tr><td><code>dp.on_edit(filter, handler)</code></td><td>Register a handler for edited messages</td></tr>
+<tr><td><code>dp.on_message_fsm(filter, state, handler)</code></td><td>FSM-gated message handler (see <a href="./fsm.html">FSM</a>)</td></tr>
+<tr><td><code>dp.on_edit_fsm(filter, state, handler)</code></td><td>FSM-gated edit handler</td></tr>
+<tr><td><code>dp.middleware(mw)</code></td><td>Prepend middleware to the chain</td></tr>
+<tr><td><code>dp.with_state_storage(storage)</code></td><td>Set the FSM storage backend</td></tr>
+<tr><td><code>dp.with_key_strategy(strategy)</code></td><td>Set the FSM key strategy</td></tr>
+<tr><td><code>dp.include(router)</code></td><td>Mount a <code>Router</code> sub-tree</td></tr>
+<tr><td><code>dp.dispatch(update).await</code></td><td>Route an update through the chain</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="routers"><a class="header" href="#routers">Routers</a></h2>
+<p><code>Router</code> lets you split a large bot into feature modules with their own handlers and optional scoped filters.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use ferogram::session_backend::BinaryFileBackend;
+</span>use ferogram::filters::{Router, command, private};
 
-let backend = BinaryFileBackend::new("bot.session");
-println!("Saving to: {}", backend.path().display());
+pub fn admin_router() -&gt; Router {
+    let mut r = Router::new();
+    // Only handle /ban and /kick from private chats
+    r.scope(private());
+    r.on_message(command("ban"),  handle_ban);
+    r.on_message(command("kick"), handle_kick);
+    r
+}
+
+// In main:
+dp.include(admin_router());
 <span class="boring">}</span></code></pre>
-<h3 id="inmemorybackendsnapshot"><a class="header" href="#inmemorybackendsnapshot"><code>InMemoryBackend::snapshot()</code></a></h3>
-<p>Take a point-in-time snapshot of the in-memory session (useful in tests):</p>
+<p><code>scope(filter)</code> adds a guard that runs before any handler in the router. If the filter does not match, the router is skipped entirely.</p>
+<hr>
+<h2 id="middleware"><a class="header" href="#middleware">Middleware</a></h2>
+<p>Middleware intercepts every <code>Update</code> before it reaches a handler. Common use cases include logging, rate-limiting, authentication, and metrics.</p>
+<h3 id="implementing-middleware"><a class="header" href="#implementing-middleware">Implementing <code>Middleware</code></a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use ferogram::session_backend::InMemoryBackend;
+</span>use ferogram::middleware::{Middleware, Next, BoxFuture, DispatchResult};
+use ferogram::update::Update;
 
-let backend = InMemoryBackend::new();
-// ... after auth ...
-if let Some(session) = backend.snapshot() {
-    // inspect or serialize session data
+struct LoggingMiddleware;
+
+impl Middleware for LoggingMiddleware {
+    fn call(&amp;self, update: Update, next: Next) -&gt; BoxFuture {
+        Box::pin(async move {
+            println!("Update: {:?}", update);
+            let result = next.run(update).await;
+            if let Err(ref e) = result {
+                println!("Handler error: {e}");
+            }
+            result
+        })
+    }
 }
 <span class="boring">}</span></code></pre>
+<h3 id="registering-middleware"><a class="header" href="#registering-middleware">Registering middleware</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>dp.middleware(LoggingMiddleware);
+<span class="boring">}</span></code></pre>
+<p>Middleware runs in <strong>registration order</strong>: the first <code>middleware()</code> call wraps the outermost layer.</p>
+<h3 id="next"><a class="header" href="#next"><code>Next</code></a></h3>
+<p><code>Next</code> represents the remainder of the chain. Call <code>next.run(update).await</code> to pass control forward. If you do not call it, all remaining middleware and the handler are skipped.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>impl Middleware for AuthMiddleware {
+    fn call(&amp;self, update: Update, next: Next) -&gt; BoxFuture {
+        Box::pin(async move {
+            if let Update::NewMessage(ref msg) = update {
+                if !is_allowed(msg.sender_user_id()) {
+                    return Ok(()); // block: do not call next
+                }
+            }
+            next.run(update).await
+        })
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="closure-middleware"><a class="header" href="#closure-middleware">Closure middleware</a></h3>
+<p>For simple cases, pass a closure directly via the <code>middleware_fn</code> helper (if available) or wrap in a newtype:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>struct TimerMiddleware;
+
+impl Middleware for TimerMiddleware {
+    fn call(&amp;self, update: Update, next: Next) -&gt; BoxFuture {
+        Box::pin(async move {
+            let start = std::time::Instant::now();
+            let result = next.run(update).await;
+            println!("Handled in {:?}", start.elapsed());
+            result
+        })
+    }
+}
+
+dp.middleware(TimerMiddleware);
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="full-example-rate-limiter-middleware"><a class="header" href="#full-example-rate-limiter-middleware">Full example: rate-limiter middleware</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use dashmap::DashMap;
+use ferogram::middleware::{BoxFuture, DispatchResult, Middleware, Next};
+use ferogram::update::Update;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+struct RateLimiter {
+    last_seen: Arc&lt;DashMap&lt;i64, Instant&gt;&gt;,
+    period: Duration,
+}
+
+impl RateLimiter {
+    fn new(period: Duration) -&gt; Self {
+        Self { last_seen: Arc::new(DashMap::new()), period }
+    }
+}
+
+impl Middleware for RateLimiter {
+    fn call(&amp;self, update: Update, next: Next) -&gt; BoxFuture {
+        let last_seen = self.last_seen.clone();
+        let period = self.period;
+        Box::pin(async move {
+            if let Update::NewMessage(ref msg) = update {
+                if let Some(uid) = msg.sender_user_id() {
+                    let now = Instant::now();
+                    if let Some(t) = last_seen.get(&amp;uid) {
+                        if now.duration_since(*t) &lt; period {
+                            return Ok(()); // drop: too fast
+                        }
+                    }
+                    last_seen.insert(uid, now);
+                }
+            }
+            next.run(update).await
+        })
+    }
+}
+
+// Register: limit each user to one message per second
+dp.middleware(RateLimiter::new(Duration::from_secs(1)));
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="handler-signatures"><a class="header" href="#handler-signatures">Handler signatures</a></h2>
+<p>All handlers must be <code>async fn</code> or closures returning a <code>Future</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// No arguments (ignores the message)
+dp.on_message(filters::command("ping"), || async {
+    // nothing
+});
+
+// Message only
+dp.on_message(filters::text(), |msg| async move {
+    println!("{:?}", msg.text());
+});
+<span class="boring">}</span></code></pre>
+<p>The dispatcher calls handlers with <code>msg.clone()</code> so handlers can be registered multiple times. Handlers do not need to return a value; errors should be handled internally (e.g. <code>.ok()</code> on send results).</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../authentication/session.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../updates/inline-mode.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../messaging/sending.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../bot/fsm.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -470,11 +452,11 @@ if let Some(session) = backend.snapshot() {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../authentication/session.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../updates/inline-mode.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../messaging/sending.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../bot/fsm.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

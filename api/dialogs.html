@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-f77cdc82.js";
+            window.path_to_searchindex_js = "../searchindex-098e516c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-ba5e127b.js"></script>
+        <script src="../toc-fb96dff5.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -310,6 +310,25 @@ client.accept_invite_link("https://t.me/joinchat/AbCdEfG").await?;
 
 // Parse invite hash from any link format
 let hash = Client::parse_invite_hash("https://t.me/+AbCdEfG12345");
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="archive--unarchive"><a class="header" href="#archive--unarchive">Archive &amp; unarchive</a></h2>
+<p>Move a dialog into the Telegram archive (folder 1) or back to the main list (folder 0):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Move to archive - chat disappears from the main dialog list
+client.archive_chat("@somebot").await?;
+
+// Move back to main list
+client.unarchive_chat("@somebot").await?;
+<span class="boring">}</span></code></pre>
+<p>Archived chats still receive messages; they are simply hidden from the main list and muted by default until the user opens them.</p>
+<h3 id="low-level-folder-move"><a class="header" href="#low-level-folder-move">Low-level folder move</a></h3>
+<p>For finer control (e.g. custom folders), use <code>move_to_folder</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// folder_id 0 = main list, 1 = archive
+client.move_to_folder("@somebot", 0).await?;
 <span class="boring">}</span></code></pre>
 
                     </main>

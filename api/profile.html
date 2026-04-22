@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-f77cdc82.js";
+            window.path_to_searchindex_js = "../searchindex-098e516c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-ba5e127b.js"></script>
+        <script src="../toc-fb96dff5.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -439,6 +439,22 @@ client.set_profile_photo(f).await?;
 // Go offline
 client.update_status(true).await?;
 <span class="boring">}</span></code></pre>
+<hr>
+<h2 id="emoji-status"><a class="header" href="#emoji-status">Emoji status</a></h2>
+<p>Set or clear the animated emoji shown next to the logged-in user’s name (Telegram Premium feature):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Set an emoji status using a custom emoji document ID
+// (obtain IDs from sticker sets via client.get_sticker_set)
+client.set_emoji_status(Some(5260885697911948121), None).await?;
+
+// Set with an expiry (Unix timestamp)
+client.set_emoji_status(Some(5260885697911948121), Some(1_800_000_000)).await?;
+
+// Clear the current emoji status
+client.set_emoji_status(None, None).await?;
+<span class="boring">}</span></code></pre>
+<p><code>document_id</code> is the <code>id</code> field from a <code>tl::types::Document</code> belonging to a custom-emoji sticker. Pass <code>None</code> to remove the status. <code>until</code> is an optional Unix timestamp after which the status expires automatically; pass <code>None</code> for no expiry.</p>
 </parameter></div>
 
                     </main>

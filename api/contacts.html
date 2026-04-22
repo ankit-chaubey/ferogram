@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-f77cdc82.js";
+            window.path_to_searchindex_js = "../searchindex-098e516c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-ba5e127b.js"></script>
+        <script src="../toc-fb96dff5.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -255,6 +255,22 @@ Search for users, groups, and channels by name. Searches across contacts, dialog
 
 </div>
 
+<hr>
+<h2 id="import-contacts"><a class="header" href="#import-contacts">Import contacts</a></h2>
+<p>Import phone-number contacts in bulk. Each entry is <code>(phone, first_name, last_name)</code>. Returns the raw <code>ImportedContacts</code> result containing imported IDs and resolved user objects.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let result = client.import_contacts(&amp;[
+    ("+15550001234", "Alice", "Smith"),
+    ("+15550005678", "Bob",   "Jones"),
+]).await?;
+
+println!("Imported {} contacts", result.imported.len());
+for user in &amp;result.users {
+    println!("  resolved: {user:?}");
+}
+<span class="boring">}</span></code></pre>
+<p><code>result.retry_contacts</code> contains entries that could not be resolved (e.g. the number is not registered on Telegram).</p>
 <hr>
 <h2 id="blocking"><a class="header" href="#blocking">Blocking</a></h2>
 <div class="api-card">

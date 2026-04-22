@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-f77cdc82.js";
+            window.path_to_searchindex_js = "../searchindex-098e516c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-ba5e127b.js"></script>
+        <script src="../toc-fb96dff5.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -526,6 +526,34 @@ if let Some(loc) = download_location_from_media(&amp;msg.raw) {
 
 // Or via IncomingMessage convenience:
 msg.download_media("output.jpg").await?;
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="media-groups-albums"><a class="header" href="#media-groups-albums">Media groups (albums)</a></h2>
+<p>When Telegram delivers a grouped media send (album), each message in the group carries the same <code>grouped_id</code>. To fetch all messages belonging to the same album as a known message ID:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let msgs = client.get_media_group("@mychannel", 42).await?;
+println!("{} messages in this album", msgs.len());
+
+for m in &amp;msgs {
+    if let Some(photo) = m.photo() {
+        println!("  photo id={}", photo.id());
+    } else if let Some(doc) = m.document() {
+        println!("  document mime={}", doc.mime_type().unwrap_or("?"));
+    }
+}
+<span class="boring">}</span></code></pre>
+<p><code>get_media_group</code> accepts any peer and a message ID that is part of the album. It returns all messages in the group including the seed message. For non-channel chats the server returns only the single message.</p>
+<h3 id="detecting-albums-in-the-update-stream"><a class="header" href="#detecting-albums-in-the-update-stream">Detecting albums in the update stream</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if let Update::NewMessage(msg) = update {
+    if msg.grouped_id().is_some() {
+        // This message is part of an album; you can call
+        // client.get_media_group(msg.peer_id(), msg.id()).await
+        // to retrieve the full set.
+    }
+}
 <span class="boring">}</span></code></pre>
 
                     </main>

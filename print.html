@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f77cdc82.js";
+            window.path_to_searchindex_js = "searchindex-098e516c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-ba5e127b.js"></script>
+        <script src="toc-fb96dff5.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -316,6 +316,53 @@ Use it at your own risk. Its future and stability are not yet guaranteed.</p>
 <h1 id="release-history-1"><a class="header" href="#release-history-1">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
 <hr>
+<h2 id="v033"><a class="header" href="#v033">v0.3.3</a></h2>
+<p>Released 2026-04-22. Bot framework release: composable filters, finite state machine, middleware pipeline, conversation API, and a new proc-macro crate.</p>
+<h3 id="ferogram-derive"><a class="header" href="#ferogram-derive">ferogram-derive</a></h3>
+<p>A new <code>ferogram-derive</code> crate adds the <code>#[derive(FsmState)]</code> proc-macro. Applying it to a unit-variant enum generates <code>as_key</code> and <code>from_key</code> implementations automatically. The crate is gated behind a <code>derive</code> feature flag and <code>FsmState</code> is re-exported from the crate root, so the only import you need is <code>use ferogram::FsmState</code>.</p>
+<h3 id="filters"><a class="header" href="#filters">Filters</a></h3>
+<p><code>ferogram::filters</code> provides composable, synchronous predicates over <code>IncomingMessage</code>. Built-in constructors cover the common cases: <code>command</code>, <code>private</code>, <code>text</code>, <code>media</code>, and others. Predicates compose with <code>&amp;</code>, <code>|</code>, and <code>!</code> operators, so you can express things like <code>command("start") &amp; private()</code> directly in the handler registration. Filters also integrate with the FSM via <code>StateContext</code>, letting you gate handlers on the current conversation state.</p>
+<h3 id="fsm"><a class="header" href="#fsm">FSM</a></h3>
+<p><code>ferogram::fsm</code> provides the full finite state machine layer: the <code>FsmState</code> trait, <code>StateContext</code>, <code>StateKey</code>, <code>StateKeyStrategy</code>, and <code>StateStorage</code>. The default storage is an in-memory <code>DashMap</code>-backed store keyed by peer. Custom backends can be plugged in via an async-trait extension point, so SQLite or Redis-backed stores are straightforward to add. A new <code>examples/order_bot.rs</code> walks through a multi-step order flow driven by the FSM.</p>
+<h3 id="middleware"><a class="header" href="#middleware">Middleware</a></h3>
+<p><code>ferogram::middleware</code> adds a <code>Middleware</code> trait and a <code>Next</code> chain that wraps every handler dispatch. The crate ships a ready-to-use rate-limit middleware backed by <code>DashMap</code>. <code>DispatchError</code> and <code>DispatchResult</code> are exported for use in custom middleware.</p>
+<h3 id="conversation"><a class="header" href="#conversation">Conversation</a></h3>
+<p><code>ferogram::conversation</code> provides a <code>Conversation</code> type for sequential, stateful exchanges with a single peer. It wraps an <code>UpdateStream</code> scoped to the conversation lifetime and transparently buffers updates arriving from other peers during the exchange.</p>
+<h3 id="incomingmessage-helpers"><a class="header" href="#incomingmessage-helpers">IncomingMessage helpers</a></h3>
+<p><code>IncomingMessage</code> gained a full set of inspection methods: <code>chat_id</code>, <code>is_private</code>, <code>is_group</code>, <code>is_channel</code>, <code>is_any_group</code>, <code>from_id</code>, <code>is_bot_command</code>, <code>command</code>, <code>is_command_named</code>, <code>command_args</code>, <code>has_media</code>, <code>has_photo</code>, <code>has_document</code>, <code>is_forwarded</code>, <code>is_reply</code>, and <code>album_id</code>.</p>
+<h3 id="new-update-types"><a class="header" href="#new-update-types">New update types</a></h3>
+<p>Eight new update types are now exported from the crate root: <code>ParticipantUpdate</code>, <code>JoinRequestUpdate</code>, <code>MessageReactionUpdate</code>, <code>PollVoteUpdate</code>, <code>BotStoppedUpdate</code>, <code>ShippingQueryUpdate</code>, <code>PreCheckoutQueryUpdate</code>, and <code>ChatBoostUpdate</code>.</p>
+<h3 id="new-api-method"><a class="header" href="#new-api-method">New API method</a></h3>
+<p><code>Client::get_chat_administrators()</code> returns all admins and the creator for a channel or supergroup. For basic groups it returns all participants; use the <code>is_admin</code> field on the result to distinguish.</p>
+<h3 id="new-documentation-pages"><a class="header" href="#new-documentation-pages">New documentation pages</a></h3>
+<p>Bot Framework: Middleware &amp; Dispatcher, Finite State Machine (FSM), Conversation API. API reference: Bot Configuration, Stats &amp; Analytics.</p>
+<h3 id="upgrading-from-032"><a class="header" href="#upgrading-from-032">Upgrading from 0.3.2</a></h3>
+<pre><code class="language-toml">ferogram = "0.3.3"
+</code></pre>
+<p>To use <code>#[derive(FsmState)]</code>:</p>
+<pre><code class="language-toml">ferogram = { version = "0.3.3", features = ["derive"] }
+</code></pre>
+<hr>
+<h2 id="v032"><a class="header" href="#v032">v0.3.2</a></h2>
+<p>Released 2026-04-21. Correctness and session-save hardening.</p>
+<h3 id="seenmsgids"><a class="header" href="#seenmsgids">SeenMsgIds</a></h3>
+<p>The <code>SeenMsgIds</code> deque is now paired with a <code>HashSet</code> so duplicate checks under concurrent workers are O(1) instead of O(n). On busy connections receiving many server messages simultaneously this removes a hot path that was linear in the deque length.</p>
+<h3 id="session-save-race"><a class="header" href="#session-save-race">Session save race</a></h3>
+<p>Session temp files now get a unique name per write, and a <code>write_lock</code> serializes concurrent saves. Previously two concurrent saves could race on the rename step, which caused data loss on Windows. Both are now safe.</p>
+<h3 id="bug-fixes"><a class="header" href="#bug-fixes">Bug fixes</a></h3>
+<p>Five correctness bugs were patched:</p>
+<p>The <code>PaddedIntermediate</code> handshake was not being sent on DC pool worker connections. Without it the server would silently drop or misparse every frame from those connections.</p>
+<p><code>new_session_created</code> was resetting the session on fresh connections even when it should not, which caused a session ID mismatch on every subsequent decrypt.</p>
+<p><code>scan_body</code> was passing <code>None</code> as <code>sent_msg_id</code> during container iterations, letting stale cached results overwrite live responses from the server.</p>
+<p>The <code>importAuthorization</code> branch condition was inverted, so the import was skipped precisely in the cases where it was required and ran in cases where it was not.</p>
+<p>Server 4-byte transport error codes received during the DH handshake are now surfaced properly instead of being misclassified as “plain frame too short”.</p>
+<hr>
+<h2 id="v031"><a class="header" href="#v031">v0.3.1</a></h2>
+<p>Released 2026-04-20. Patch release fixing the docs.rs build. No functional changes from 0.3.0.</p>
+<h3 id="upgrading-from-030"><a class="header" href="#upgrading-from-030">Upgrading from 0.3.0</a></h3>
+<pre><code class="language-toml">ferogram = "0.3.1"
+</code></pre>
+<hr>
 <h2 id="v030"><a class="header" href="#v030">v0.3.0</a></h2>
 <p>Released 2026-04-19. The biggest release so far: two new crates, a redesigned connection stack, CDN file download support, and a much larger API reference.</p>
 <h3 id="two-new-crates"><a class="header" href="#two-new-crates">Two new crates</a></h3>
@@ -336,7 +383,7 @@ Use it at your own risk. Its future and stability are not yet guaranteed.</p>
 <p><code>ferogram::special_config</code> implements Telegram’s last-resort fallback: decodes the encrypted response from Telegram’s Firebase/Google endpoint and extracts DC addresses from <code>help.configSimple</code>.</p>
 <h3 id="mtproto-internals"><a class="header" href="#mtproto-internals">MTProto internals</a></h3>
 <p><code>ferogram-mtproto</code> gained a <code>bind_temp_key</code> module and now re-exports <code>encrypt_bind_inner</code>, <code>gen_msg_id</code>, <code>serialize_bind_temp_auth_key</code>, <code>EncryptedSession</code>, <code>SeenMsgIds</code>, and <code>new_seen_msg_ids</code>. Primarily useful for library authors working at the MTProto layer directly.</p>
-<h3 id="new-documentation-pages"><a class="header" href="#new-documentation-pages">New documentation pages</a></h3>
+<h3 id="new-documentation-pages-1"><a class="header" href="#new-documentation-pages-1">New documentation pages</a></h3>
 <p>Advanced: CDN Downloads, Transport Probing and Resilient Connect, Connection Restart Policy, Experimental Features.</p>
 <p>API reference: ClientBuilder, Types Reference, Chat Management, Contacts and Blocking, Forum Topics, Games and Payments, Invite Links, Polls and Votes, Privacy and Notifications, Profile and Account, Stickers.</p>
 <h3 id="upgrading-from-020"><a class="header" href="#upgrading-from-020">Upgrading from 0.2.0</a></h3>
@@ -2197,6 +2244,34 @@ if let Some(loc) = download_location_from_media(&amp;msg.raw) {
 // Or via IncomingMessage convenience:
 msg.download_media("output.jpg").await?;
 <span class="boring">}</span></code></pre>
+<hr>
+<h2 id="media-groups-albums"><a class="header" href="#media-groups-albums">Media groups (albums)</a></h2>
+<p>When Telegram delivers a grouped media send (album), each message in the group carries the same <code>grouped_id</code>. To fetch all messages belonging to the same album as a known message ID:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let msgs = client.get_media_group("@mychannel", 42).await?;
+println!("{} messages in this album", msgs.len());
+
+for m in &amp;msgs {
+    if let Some(photo) = m.photo() {
+        println!("  photo id={}", photo.id());
+    } else if let Some(doc) = m.document() {
+        println!("  document mime={}", doc.mime_type().unwrap_or("?"));
+    }
+}
+<span class="boring">}</span></code></pre>
+<p><code>get_media_group</code> accepts any peer and a message ID that is part of the album. It returns all messages in the group including the seed message. For non-channel chats the server returns only the single message.</p>
+<h3 id="detecting-albums-in-the-update-stream"><a class="header" href="#detecting-albums-in-the-update-stream">Detecting albums in the update stream</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if let Update::NewMessage(msg) = update {
+    if msg.grouped_id().is_some() {
+        // This message is part of an album; you can call
+        // client.get_media_group(msg.peer_id(), msg.id()).await
+        // to retrieve the full set.
+    }
+}
+<span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="message-formatting"><a class="header" href="#message-formatting">Message Formatting</a></h1>
 <p>Telegram supports rich text formatting through <strong>message entities</strong>: positional markers that indicate bold, italic, code, links, and more.</p>
@@ -3120,6 +3195,624 @@ while let Some(result) = iter.next().await? {
     false,      // is_personal: bool: different results per user?
     None,       // next_offset: Option&lt;String&gt;: for pagination
 ).await?;
+<span class="boring">}</span></code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="middleware--dispatcher"><a class="header" href="#middleware--dispatcher">Middleware &amp; Dispatcher</a></h1>
+<p>ferogram ships a <code>Dispatcher</code> that routes incoming updates to typed handlers, and a middleware chain that intercepts every update before it reaches any handler.</p>
+<hr>
+<h2 id="dispatcher-basics"><a class="header" href="#dispatcher-basics">Dispatcher basics</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::filters::{self, Dispatcher};
+
+let mut dp = Dispatcher::new();
+
+// Handle /start command (bots)
+dp.on_message(filters::command("start"), |msg| async move {
+    msg.reply("Hello!").await.ok();
+});
+
+// Handle any private text
+dp.on_message(filters::private() &amp; filters::text(), |msg| async move {
+    let echo = msg.text().unwrap_or_default().to_string();
+    msg.reply(echo).await.ok();
+});
+
+// Drive the dispatcher from the update stream
+let mut stream = client.stream_updates();
+while let Some(upd) = stream.next().await {
+    dp.dispatch(upd).await;
+}
+<span class="boring">}</span></code></pre>
+<p><code>dispatch</code> is <code>async</code> and runs handlers serially per update. For concurrent handling, spawn each <code>dispatch</code> call:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::sync::Arc;
+
+let dp = Arc::new(dp);
+let mut stream = client.stream_updates();
+while let Some(upd) = stream.next().await {
+    let dp = dp.clone();
+    tokio::spawn(async move { dp.dispatch(upd).await; });
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="built-in-filters"><a class="header" href="#built-in-filters">Built-in filters</a></h2>
+<p>All filters return a <code>BoxFilter</code> which supports <code>&amp;</code> (AND), <code>|</code> (OR), and <code>!</code> (NOT).</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Filter</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>all()</code></td><td>Always matches</td></tr>
+<tr><td><code>none()</code></td><td>Never matches</td></tr>
+<tr><td><code>private()</code></td><td>Message is in a private chat (DM)</td></tr>
+<tr><td><code>group()</code></td><td>Message is in a basic group</td></tr>
+<tr><td><code>channel()</code></td><td>Message is in a channel</td></tr>
+<tr><td><code>text()</code></td><td>Message has non-empty text</td></tr>
+<tr><td><code>media()</code></td><td>Message has any media attachment</td></tr>
+<tr><td><code>photo()</code></td><td>Message contains a photo</td></tr>
+<tr><td><code>document()</code></td><td>Message contains a document / file</td></tr>
+<tr><td><code>forwarded()</code></td><td>Message was forwarded</td></tr>
+<tr><td><code>reply()</code></td><td>Message is a reply to another message</td></tr>
+<tr><td><code>album()</code></td><td>Message is part of a media album</td></tr>
+<tr><td><code>any_command()</code></td><td>Message starts with any <code>/command</code></td></tr>
+<tr><td><code>command("start")</code></td><td>Message is exactly the <code>/start</code> command</td></tr>
+<tr><td><code>text_contains("word")</code></td><td>Message text contains the substring</td></tr>
+<tr><td><code>text_starts_with("!")</code></td><td>Message text starts with the prefix</td></tr>
+<tr><td><code>from_user(user_id)</code></td><td>Message was sent by a specific user ID</td></tr>
+<tr><td><code>in_chat(chat_id)</code></td><td>Message is from a specific chat ID</td></tr>
+<tr><td>`custom(</td><td>msg</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="combining-filters"><a class="header" href="#combining-filters">Combining filters</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Both conditions must be true
+let f = filters::private() &amp; filters::text();
+
+// Either condition must be true
+let f = filters::command("help") | filters::command("start");
+
+// Negate a filter
+let f = !filters::forwarded();
+
+// Complex expressions
+let f = (filters::group() | filters::channel()) &amp; !filters::forwarded();
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="dispatcher-methods"><a class="header" href="#dispatcher-methods">Dispatcher methods</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>dp.on_message(filter, handler)</code></td><td>Register a handler for new messages</td></tr>
+<tr><td><code>dp.on_edit(filter, handler)</code></td><td>Register a handler for edited messages</td></tr>
+<tr><td><code>dp.on_message_fsm(filter, state, handler)</code></td><td>FSM-gated message handler (see <a href="#finite-state-machine-fsm">FSM</a>)</td></tr>
+<tr><td><code>dp.on_edit_fsm(filter, state, handler)</code></td><td>FSM-gated edit handler</td></tr>
+<tr><td><code>dp.middleware(mw)</code></td><td>Prepend middleware to the chain</td></tr>
+<tr><td><code>dp.with_state_storage(storage)</code></td><td>Set the FSM storage backend</td></tr>
+<tr><td><code>dp.with_key_strategy(strategy)</code></td><td>Set the FSM key strategy</td></tr>
+<tr><td><code>dp.include(router)</code></td><td>Mount a <code>Router</code> sub-tree</td></tr>
+<tr><td><code>dp.dispatch(update).await</code></td><td>Route an update through the chain</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="routers"><a class="header" href="#routers">Routers</a></h2>
+<p><code>Router</code> lets you split a large bot into feature modules with their own handlers and optional scoped filters.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::filters::{Router, command, private};
+
+pub fn admin_router() -&gt; Router {
+    let mut r = Router::new();
+    // Only handle /ban and /kick from private chats
+    r.scope(private());
+    r.on_message(command("ban"),  handle_ban);
+    r.on_message(command("kick"), handle_kick);
+    r
+}
+
+// In main:
+dp.include(admin_router());
+<span class="boring">}</span></code></pre>
+<p><code>scope(filter)</code> adds a guard that runs before any handler in the router. If the filter does not match, the router is skipped entirely.</p>
+<hr>
+<h2 id="middleware-1"><a class="header" href="#middleware-1">Middleware</a></h2>
+<p>Middleware intercepts every <code>Update</code> before it reaches a handler. Common use cases include logging, rate-limiting, authentication, and metrics.</p>
+<h3 id="implementing-middleware"><a class="header" href="#implementing-middleware">Implementing <code>Middleware</code></a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::middleware::{Middleware, Next, BoxFuture, DispatchResult};
+use ferogram::update::Update;
+
+struct LoggingMiddleware;
+
+impl Middleware for LoggingMiddleware {
+    fn call(&amp;self, update: Update, next: Next) -&gt; BoxFuture {
+        Box::pin(async move {
+            println!("Update: {:?}", update);
+            let result = next.run(update).await;
+            if let Err(ref e) = result {
+                println!("Handler error: {e}");
+            }
+            result
+        })
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="registering-middleware"><a class="header" href="#registering-middleware">Registering middleware</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>dp.middleware(LoggingMiddleware);
+<span class="boring">}</span></code></pre>
+<p>Middleware runs in <strong>registration order</strong>: the first <code>middleware()</code> call wraps the outermost layer.</p>
+<h3 id="next"><a class="header" href="#next"><code>Next</code></a></h3>
+<p><code>Next</code> represents the remainder of the chain. Call <code>next.run(update).await</code> to pass control forward. If you do not call it, all remaining middleware and the handler are skipped.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>impl Middleware for AuthMiddleware {
+    fn call(&amp;self, update: Update, next: Next) -&gt; BoxFuture {
+        Box::pin(async move {
+            if let Update::NewMessage(ref msg) = update {
+                if !is_allowed(msg.sender_user_id()) {
+                    return Ok(()); // block: do not call next
+                }
+            }
+            next.run(update).await
+        })
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="closure-middleware"><a class="header" href="#closure-middleware">Closure middleware</a></h3>
+<p>For simple cases, pass a closure directly via the <code>middleware_fn</code> helper (if available) or wrap in a newtype:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>struct TimerMiddleware;
+
+impl Middleware for TimerMiddleware {
+    fn call(&amp;self, update: Update, next: Next) -&gt; BoxFuture {
+        Box::pin(async move {
+            let start = std::time::Instant::now();
+            let result = next.run(update).await;
+            println!("Handled in {:?}", start.elapsed());
+            result
+        })
+    }
+}
+
+dp.middleware(TimerMiddleware);
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="full-example-rate-limiter-middleware"><a class="header" href="#full-example-rate-limiter-middleware">Full example: rate-limiter middleware</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use dashmap::DashMap;
+use ferogram::middleware::{BoxFuture, DispatchResult, Middleware, Next};
+use ferogram::update::Update;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+struct RateLimiter {
+    last_seen: Arc&lt;DashMap&lt;i64, Instant&gt;&gt;,
+    period: Duration,
+}
+
+impl RateLimiter {
+    fn new(period: Duration) -&gt; Self {
+        Self { last_seen: Arc::new(DashMap::new()), period }
+    }
+}
+
+impl Middleware for RateLimiter {
+    fn call(&amp;self, update: Update, next: Next) -&gt; BoxFuture {
+        let last_seen = self.last_seen.clone();
+        let period = self.period;
+        Box::pin(async move {
+            if let Update::NewMessage(ref msg) = update {
+                if let Some(uid) = msg.sender_user_id() {
+                    let now = Instant::now();
+                    if let Some(t) = last_seen.get(&amp;uid) {
+                        if now.duration_since(*t) &lt; period {
+                            return Ok(()); // drop: too fast
+                        }
+                    }
+                    last_seen.insert(uid, now);
+                }
+            }
+            next.run(update).await
+        })
+    }
+}
+
+// Register: limit each user to one message per second
+dp.middleware(RateLimiter::new(Duration::from_secs(1)));
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="handler-signatures"><a class="header" href="#handler-signatures">Handler signatures</a></h2>
+<p>All handlers must be <code>async fn</code> or closures returning a <code>Future</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// No arguments (ignores the message)
+dp.on_message(filters::command("ping"), || async {
+    // nothing
+});
+
+// Message only
+dp.on_message(filters::text(), |msg| async move {
+    println!("{:?}", msg.text());
+});
+<span class="boring">}</span></code></pre>
+<p>The dispatcher calls handlers with <code>msg.clone()</code> so handlers can be registered multiple times. Handlers do not need to return a value; errors should be handled internally (e.g. <code>.ok()</code> on send results).</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="finite-state-machine-fsm"><a class="header" href="#finite-state-machine-fsm">Finite State Machine (FSM)</a></h1>
+<p>The FSM module lets bots track per-user conversation state across multiple messages without managing a global <code>HashMap</code> manually. State is stored in a pluggable <code>StateStorage</code> backend and keyed by user ID + chat ID.</p>
+<hr>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
+<p>Add the <code>derive</code> feature to your <code>Cargo.toml</code>:</p>
+<pre><code class="language-toml">ferogram = { version = "0.3", features = ["derive"] }
+</code></pre>
+<p>Define a state enum and derive <code>FsmState</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::FsmState;
+
+#[derive(FsmState, Clone, Debug, PartialEq)]
+enum OrderState {
+    AwaitingProduct,
+    AwaitingQuantity,
+    AwaitingConfirmation,
+}
+<span class="boring">}</span></code></pre>
+<p>Wire it into the dispatcher:</p>
+<pre class="playground"><code class="language-rust">use std::sync::Arc;
+use ferogram::{Client, filters, fsm::MemoryStorage};
+
+#[tokio::main]
+async fn main() -&gt; anyhow::Result&lt;()&gt; {
+    let (client, _sd) = Client::builder()
+        .api_id(12345)
+        .api_hash("your_hash")
+        .session("bot.session")
+        .connect()
+        .await?;
+
+    client.bot_sign_in("TOKEN").await?;
+    client.save_session().await?;
+
+    let mut dp = filters::Dispatcher::new();
+    dp.with_state_storage(Arc::new(MemoryStorage::new()));
+
+    // Entry point - no active state yet
+    dp.on_message(filters::command("order"), |msg| async move {
+        msg.reply("What product would you like?").await.ok();
+    });
+
+    // Triggered only when the user is in AwaitingProduct
+    dp.on_message_fsm(filters::text(), OrderState::AwaitingProduct, |msg, state| async move {
+        let product = msg.text().unwrap_or_default().to_string();
+        state.set_data("product", &amp;product).await.ok();
+        state.transition(OrderState::AwaitingQuantity).await.ok();
+        msg.reply("How many?").await.ok();
+    });
+
+    dp.on_message_fsm(filters::text(), OrderState::AwaitingQuantity, |msg, state| async move {
+        let qty = msg.text().unwrap_or_default().to_string();
+        let product: String = state.get_data("product").await.unwrap_or_default();
+        state.transition(OrderState::AwaitingConfirmation).await.ok();
+        msg.reply(format!("Order {} × {}. Confirm? (yes/no)", qty, product)).await.ok();
+    });
+
+    dp.on_message_fsm(filters::text(), OrderState::AwaitingConfirmation, |msg, state| async move {
+        match msg.text().unwrap_or("").trim() {
+            "yes" =&gt; {
+                state.finish().await.ok();
+                msg.reply("Order placed!").await.ok();
+            }
+            _ =&gt; {
+                state.finish().await.ok();
+                msg.reply("Order cancelled.").await.ok();
+            }
+        }
+    });
+
+    let mut stream = client.stream_updates();
+    while let Some(upd) = stream.next().await {
+        dp.dispatch(upd).await;
+    }
+    Ok(())
+}</code></pre>
+<hr>
+<h2 id="fsmstate-trait"><a class="header" href="#fsmstate-trait"><code>FsmState</code> trait</a></h2>
+<p>Any enum that derives <code>FsmState</code> can be used as a state discriminant:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::FsmState;
+
+#[derive(FsmState, Clone, Debug, PartialEq)]
+enum Form {
+    Name,
+    Email,
+    Done,
+}
+<span class="boring">}</span></code></pre>
+<p>You can also implement <code>FsmState</code> manually if you need custom serialization:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>impl ferogram::fsm::FsmState for Form {
+    fn as_key(&amp;self) -&gt; String {
+        format!("{:?}", self)
+    }
+    fn from_key(key: &amp;str) -&gt; Option&lt;Self&gt; {
+        match key {
+            "Name" =&gt; Some(Self::Name),
+            "Email" =&gt; Some(Self::Email),
+            "Done" =&gt; Some(Self::Done),
+            _ =&gt; None,
+        }
+    }
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="statecontext"><a class="header" href="#statecontext"><code>StateContext</code></a></h2>
+<p>Handler functions registered via <code>on_message_fsm</code> receive a <code>StateContext</code> as the second argument. It provides the following methods:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>state.transition(new_state).await</code></td><td>Move to a new FSM state</td></tr>
+<tr><td><code>state.finish().await</code></td><td>Clear all state for this key (end the flow)</td></tr>
+<tr><td><code>state.current_state::&lt;S&gt;().await</code></td><td>Read the current state variant</td></tr>
+<tr><td><code>state.set_data(key, value).await</code></td><td>Store a serializable value</td></tr>
+<tr><td><code>state.get_data::&lt;T&gt;(key).await</code></td><td>Retrieve a stored value</td></tr>
+<tr><td><code>state.clear_data(key).await</code></td><td>Remove a single stored key</td></tr>
+<tr><td><code>state.clear_all_data().await</code></td><td>Remove all stored data for this key</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>set_data</code> / <code>get_data</code> use <code>serde_json</code> internally, so any <code>Serialize + DeserializeOwned</code> type works.</p>
+<hr>
+<h2 id="state-key-strategies"><a class="header" href="#state-key-strategies">State key strategies</a></h2>
+<p>By default, state is tracked <strong>per user per chat</strong>. Change the strategy on the dispatcher:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::fsm::StateKeyStrategy;
+
+dp.with_key_strategy(StateKeyStrategy::PerUser);    // one session per user across all chats
+dp.with_key_strategy(StateKeyStrategy::PerChat);    // shared state per chat (e.g. group games)
+dp.with_key_strategy(StateKeyStrategy::PerUserPerChat); // default
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="storage-backends"><a class="header" href="#storage-backends">Storage backends</a></h2>
+<h3 id="memorystorage-default-for-testing"><a class="header" href="#memorystorage-default-for-testing"><code>MemoryStorage</code> (default for testing)</a></h3>
+<p>In-process <code>DashMap</code>-backed storage. State is lost on restart.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::fsm::MemoryStorage;
+use std::sync::Arc;
+
+dp.with_state_storage(Arc::new(MemoryStorage::new()));
+<span class="boring">}</span></code></pre>
+<h3 id="custom-backend-1"><a class="header" href="#custom-backend-1">Custom backend</a></h3>
+<p>Implement the <code>StateStorage</code> trait to persist state in Redis, a database, or any store:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::fsm::{StateStorage, StateKey, StorageError};
+use async_trait::async_trait;
+
+struct RedisStorage { /* ... */ }
+
+#[async_trait]
+impl StateStorage for RedisStorage {
+    async fn get_state(&amp;self, key: &amp;StateKey) -&gt; Result&lt;Option&lt;String&gt;, StorageError&gt; { todo!() }
+    async fn set_state(&amp;self, key: &amp;StateKey, state: &amp;str) -&gt; Result&lt;(), StorageError&gt; { todo!() }
+    async fn clear_state(&amp;self, key: &amp;StateKey) -&gt; Result&lt;(), StorageError&gt; { todo!() }
+    async fn get_data(&amp;self, key: &amp;StateKey, field: &amp;str) -&gt; Result&lt;Option&lt;String&gt;, StorageError&gt; { todo!() }
+    async fn set_data(&amp;self, key: &amp;StateKey, field: &amp;str, value: &amp;str) -&gt; Result&lt;(), StorageError&gt; { todo!() }
+    async fn clear_data(&amp;self, key: &amp;StateKey, field: &amp;str) -&gt; Result&lt;(), StorageError&gt; { todo!() }
+    async fn clear_all_data(&amp;self, key: &amp;StateKey) -&gt; Result&lt;(), StorageError&gt; { todo!() }
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="handler-signature"><a class="header" href="#handler-signature">Handler signature</a></h2>
+<p>FSM handlers take two arguments: the message and the state context:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>dp.on_message_fsm(filter, MyState::SomeVariant, |msg, state| async move {
+    // msg  : ferogram::update::IncomingMessage
+    // state: ferogram::fsm::StateContext
+});
+<span class="boring">}</span></code></pre>
+<p>For edited messages use <code>on_edit_fsm</code> with the same signature.</p>
+<hr>
+<h2 id="routers-with-fsm"><a class="header" href="#routers-with-fsm">Routers with FSM</a></h2>
+<p>Routers support FSM handlers too, which is useful for splitting a bot into feature modules:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::filters::Router;
+use std::sync::Arc;
+
+fn order_router() -&gt; Router {
+    let mut r = Router::new();
+    r.on_message_fsm(filters::text(), OrderState::AwaitingProduct, handle_product);
+    r.on_message_fsm(filters::text(), OrderState::AwaitingQuantity, handle_qty);
+    r
+}
+
+// Then include in the dispatcher:
+dp.include(order_router());
+<span class="boring">}</span></code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="conversation-api"><a class="header" href="#conversation-api">Conversation API</a></h1>
+<p>The <code>Conversation</code> type provides a high-level, blocking-style interface for multi-step bot flows: send a question, wait for the answer, send the next question, and so on - all within a single <code>async fn</code>, without manually tracking state.</p>
+<hr>
+<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
+<p><code>Conversation</code> wraps a mutable reference to an <code>UpdateStream</code> and filters updates to a single peer. Updates from other peers are buffered internally and can be retrieved with <code>drain_buffered()</code>.</p>
+<hr>
+<h2 id="quick-start-1"><a class="header" href="#quick-start-1">Quick start</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::time::Duration;
+use ferogram::conversation::Conversation;
+
+// In a handler or task that already owns the update stream:
+let mut conv = Conversation::new(&amp;client, &amp;mut stream, "@username").await?;
+
+conv.ask("What is your name?").await?;
+let name_msg = conv.get_response(Duration::from_secs(60)).await?;
+let name = name_msg.text().unwrap_or("unknown").to_string();
+
+conv.ask(format!("Nice to meet you, {}! How old are you?", name)).await?;
+let age_msg = conv.get_response(Duration::from_secs(60)).await?;
+let age = age_msg.text().unwrap_or("?").to_string();
+
+conv.respond(format!("Got it: {} is {} years old.", name, age)).await?;
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="creating-a-conversation"><a class="header" href="#creating-a-conversation">Creating a <code>Conversation</code></a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::conversation::Conversation;
+
+let mut conv = Conversation::new(&amp;client, &amp;mut stream, peer).await?;
+<span class="boring">}</span></code></pre>
+<p><code>peer</code> accepts anything that implements <code>Into&lt;PeerRef&gt;</code>: a <code>&amp;str</code> username, a numeric ID, or a resolved <code>tl::enums::Peer</code>.</p>
+<hr>
+<h2 id="sending-messages-1"><a class="header" href="#sending-messages-1">Sending messages</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>conv.ask(text).await</code></td><td>Send a message and return the sent <code>IncomingMessage</code></td></tr>
+<tr><td><code>conv.respond(text).await</code></td><td>Alias for <code>ask</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Both accept any <code>Into&lt;String&gt;</code>.</p>
+<hr>
+<h2 id="waiting-for-responses"><a class="header" href="#waiting-for-responses">Waiting for responses</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>conv.get_response(deadline).await</code></td><td>Wait for the next message from the peer</td></tr>
+<tr><td><code>conv.wait_click(deadline).await</code></td><td>Wait for the peer to press an inline button</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>deadline</code> is a <code>std::time::Duration</code>. If no response arrives within the deadline, the method returns <code>ConversationError::Timeout</code>.</p>
+<p>Non-matching updates (from other peers, or update types other than <code>NewMessage</code> / <code>CallbackQuery</code>) are buffered. Retrieve them with:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let leftover: Vec&lt;Update&gt; = conv.drain_buffered();
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="error-handling"><a class="header" href="#error-handling">Error handling</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::conversation::ConversationError;
+
+match conv.get_response(Duration::from_secs(30)).await {
+    Ok(msg) =&gt; { /* process msg */ }
+    Err(ConversationError::Timeout(d)) =&gt; {
+        conv.respond("You took too long! Please try again.").await.ok();
+    }
+    Err(ConversationError::StreamClosed) =&gt; { /* bot is shutting down */ }
+    Err(ConversationError::Invocation(e)) =&gt; { return Err(e.into()); }
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="button-interaction-example"><a class="header" href="#button-interaction-example">Button interaction example</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::time::Duration;
+use ferogram::{InputMessage, keyboard::{Button, InlineKeyboard}};
+use ferogram::conversation::Conversation;
+
+let mut conv = Conversation::new(&amp;client, &amp;mut stream, peer).await?;
+
+let kb = InlineKeyboard::new()
+    .row([
+        Button::callback("✅ Yes", b"yes"),
+        Button::callback("❌ No",  b"no"),
+    ]);
+
+conv.ask(InputMessage::text("Confirm your order?").keyboard(kb)).await?;
+
+let click = conv.wait_click(Duration::from_secs(120)).await?;
+match click.data().unwrap_or("") {
+    "yes" =&gt; conv.respond("Order confirmed!").await?,
+    _     =&gt; conv.respond("Order cancelled.").await?,
+};
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="integrating-with-the-dispatcher"><a class="header" href="#integrating-with-the-dispatcher">Integrating with the dispatcher</a></h2>
+<p>Because <code>Conversation</code> borrows <code>&amp;mut UpdateStream</code> exclusively, you typically use it in a handler that was given the stream, or spin up a dedicated task:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::sync::Arc;
+use tokio::sync::Mutex;
+
+// Give one user their own conversation task
+let stream = Arc::new(Mutex::new(client.stream_updates()));
+
+// … in a handler triggered by /start:
+let client2 = client.clone();
+let stream2 = stream.clone();
+let user_peer = msg.peer_id().cloned().unwrap();
+
+tokio::spawn(async move {
+    let mut locked = stream2.lock().await;
+    if let Ok(mut conv) = Conversation::new(&amp;client2, &amp;mut locked, user_peer).await {
+        run_onboarding(&amp;mut conv).await.ok();
+    }
+});
+<span class="boring">}</span></code></pre>
+<p>For multi-user bots, the FSM approach is usually a better fit - see <a href="#finite-state-machine-fsm">FSM</a>. Use <code>Conversation</code> when the flow is short and you need the simplicity of sequential <code>await</code> calls.</p>
+<hr>
+<h2 id="full-example-simple-registration-flow"><a class="header" href="#full-example-simple-registration-flow">Full example: simple registration flow</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::time::Duration;
+use ferogram::conversation::{Conversation, ConversationError};
+
+async fn registration_flow(
+    client: &amp;ferogram::Client,
+    stream: &amp;mut ferogram::UpdateStream,
+    peer: ferogram::tl::enums::Peer,
+) -&gt; Result&lt;(), ConversationError&gt; {
+    let mut conv = Conversation::new(client, stream, peer).await?;
+    let timeout = Duration::from_secs(120);
+
+    conv.ask("Welcome! Please enter your first name:").await?;
+    let first = conv.get_response(timeout).await?;
+    let first_name = first.text().unwrap_or("").trim().to_string();
+    if first_name.is_empty() {
+        conv.respond("Name cannot be empty. Please /start again.").await?;
+        return Ok(());
+    }
+
+    conv.ask("Great! Now your email address:").await?;
+    let email_msg = conv.get_response(timeout).await?;
+    let email = email_msg.text().unwrap_or("").trim().to_string();
+
+    conv.respond(format!(
+        "Registered: {} &lt;{}&gt;. Welcome aboard!", first_name, email
+    )).await?;
+
+    Ok(())
+}
 <span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="client-methods-full-reference"><a class="header" href="#client-methods-full-reference">Client Methods: Full Reference</a></h1>
@@ -6637,6 +7330,25 @@ client.accept_invite_link("https://t.me/joinchat/AbCdEfG").await?;
 // Parse invite hash from any link format
 let hash = Client::parse_invite_hash("https://t.me/+AbCdEfG12345");
 <span class="boring">}</span></code></pre>
+<hr>
+<h2 id="archive--unarchive"><a class="header" href="#archive--unarchive">Archive &amp; unarchive</a></h2>
+<p>Move a dialog into the Telegram archive (folder 1) or back to the main list (folder 0):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Move to archive - chat disappears from the main dialog list
+client.archive_chat("@somebot").await?;
+
+// Move back to main list
+client.unarchive_chat("@somebot").await?;
+<span class="boring">}</span></code></pre>
+<p>Archived chats still receive messages; they are simply hidden from the main list and muted by default until the user opens them.</p>
+<h3 id="low-level-folder-move"><a class="header" href="#low-level-folder-move">Low-level folder move</a></h3>
+<p>For finer control (e.g. custom folders), use <code>move_to_folder</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// folder_id 0 = main list, 1 = archive
+client.move_to_folder("@somebot", 0).await?;
+<span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="search-1"><a class="header" href="#search-1">Search</a></h1>
 <p><code>ferogram</code> provides two fluent search builders:</p>
@@ -7361,6 +8073,38 @@ println!("Invite: {}", match &amp;inv {
     _ =&gt; "",
 });
 <span class="boring">}</span></code></pre>
+<hr>
+<h2 id="transfer-ownership"><a class="header" href="#transfer-ownership">Transfer ownership</a></h2>
+<p>Transfer ownership of a basic group to another member. The calling user must be the current owner and must supply their 2FA SRP credential.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram_tl_types as tl;
+
+// For a no-password account, use InputCheckPasswordEmpty
+let password_check = tl::enums::InputCheckPasswordSrp::Empty(
+    tl::types::InputCheckPasswordEmpty {}
+);
+
+client.transfer_chat_ownership(
+    "@mygroup",
+    new_owner_user_id,
+    password_check,
+).await?;
+<span class="boring">}</span></code></pre>
+<p>Use <a href="#profile--account"><code>Client::compute_password_check</code></a> to build the SRP object when 2FA is enabled.</p>
+<blockquote>
+<p><strong>Note</strong>: For channels and supergroups, ownership transfer uses <code>channels.editCreator</code> on the Telegram layer, which is not yet wrapped by a dedicated helper. Use the <a href="#raw-api-access">raw API</a> for that case.</p>
+</blockquote>
+<hr>
+<h2 id="linked-channel"><a class="header" href="#linked-channel">Linked channel</a></h2>
+<p>A broadcast channel can have a linked discussion supergroup and vice-versa. Retrieve the linked chat’s ID:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if let Some(linked_id) = client.get_linked_channel("@mychannel").await? {
+    println!("Linked chat ID: {linked_id}");
+}
+<span class="boring">}</span></code></pre>
+<p>Returns <code>None</code> when no linked chat is configured. Works for both directions - pass a channel to get its discussion group, or pass a supergroup to get its linked broadcast channel.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="invite-links"><a class="header" href="#invite-links">Invite Links</a></h1>
 <p>Full API for creating, editing, revoking, and managing chat invite links, as well as handling join requests.</p>
@@ -7669,6 +8413,22 @@ Search for users, groups, and channels by name. Searches across contacts, dialog
 
 </div>
 
+<hr>
+<h2 id="import-contacts"><a class="header" href="#import-contacts">Import contacts</a></h2>
+<p>Import phone-number contacts in bulk. Each entry is <code>(phone, first_name, last_name)</code>. Returns the raw <code>ImportedContacts</code> result containing imported IDs and resolved user objects.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let result = client.import_contacts(&amp;[
+    ("+15550001234", "Alice", "Smith"),
+    ("+15550005678", "Bob",   "Jones"),
+]).await?;
+
+println!("Imported {} contacts", result.imported.len());
+for user in &amp;result.users {
+    println!("  resolved: {user:?}");
+}
+<span class="boring">}</span></code></pre>
+<p><code>result.retry_contacts</code> contains entries that could not be resolved (e.g. the number is not registered on Telegram).</p>
 <hr>
 <h2 id="blocking"><a class="header" href="#blocking">Blocking</a></h2>
 <div class="api-card">
@@ -7998,6 +8758,22 @@ client.set_profile_photo(f).await?;
 // Go offline
 client.update_status(true).await?;
 <span class="boring">}</span></code></pre>
+<hr>
+<h2 id="emoji-status"><a class="header" href="#emoji-status">Emoji status</a></h2>
+<p>Set or clear the animated emoji shown next to the logged-in user’s name (Telegram Premium feature):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Set an emoji status using a custom emoji document ID
+// (obtain IDs from sticker sets via client.get_sticker_set)
+client.set_emoji_status(Some(5260885697911948121), None).await?;
+
+// Set with an expiry (Unix timestamp)
+client.set_emoji_status(Some(5260885697911948121), Some(1_800_000_000)).await?;
+
+// Clear the current emoji status
+client.set_emoji_status(None, None).await?;
+<span class="boring">}</span></code></pre>
+<p><code>document_id</code> is the <code>id</code> field from a <code>tl::types::Document</code> belonging to a custom-emoji sticker. Pass <code>None</code> to remove the status. <code>until</code> is an optional Unix timestamp after which the status expires automatically; pass <code>None</code> for no expiry.</p>
 </parameter></div>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="forum-topics"><a class="header" href="#forum-topics">Forum Topics</a></h1>
@@ -8738,6 +9514,219 @@ Update::PreCheckoutQuery(q) =&gt; {
     // q.query_id, q.user_id, q.currency, q.total_amount, q.payload
     client.answer_precheckout_query(q.query_id, true, None).await?;
 }
+<span class="boring">}</span></code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="bot-configuration--special-features"><a class="header" href="#bot-configuration--special-features">Bot Configuration &amp; Special Features</a></h1>
+<p>This page covers bot-specific configuration: setting the command menu, editing bot profile info, QR-code login, sending dice, invoices, and starting bots programmatically.</p>
+<hr>
+<h2 id="command-menu"><a class="header" href="#command-menu">Command menu</a></h2>
+<p>The command menu appears in the Telegram UI when users tap the <code>/</code> button or the bot’s profile.</p>
+<h3 id="set-commands"><a class="header" href="#set-commands">Set commands</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>client.set_bot_commands(
+    &amp;[
+        ("start", "Start the bot"),
+        ("help",  "Show help"),
+        ("order", "Place an order"),
+    ],
+    None,   // scope: None = default (all users, all chats)
+    "",     // lang_code: "" = default language
+).await?;
+<span class="boring">}</span></code></pre>
+<p><strong>Scopes</strong> limit where the commands appear. Pass any <code>tl::enums::BotCommandScope</code> variant:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram_tl_types as tl;
+
+// Only show /admin_ban in group chats
+client.set_bot_commands(
+    &amp;[("admin_ban", "Ban a user")],
+    Some(tl::enums::BotCommandScope::Chats),
+    "",
+).await?;
+<span class="boring">}</span></code></pre>
+<h3 id="delete-commands"><a class="header" href="#delete-commands">Delete commands</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Remove the default command list
+client.delete_bot_commands(None, "").await?;
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="bot-profile-info"><a class="header" href="#bot-profile-info">Bot profile info</a></h2>
+<p>Set the bot’s display name, about text, and description for a given language:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>client.set_bot_info(
+    Some("My Awesome Bot"),         // name shown in chat header
+    Some("I help with orders"),     // about text (bio)
+    Some("Send /start to begin."),  // description shown before first message
+    "",                             // lang_code: "" = default locale
+).await?;
+<span class="boring">}</span></code></pre>
+<p>Pass <code>None</code> for any field you do not want to change.</p>
+<p>Retrieve the current values:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let info = client.get_bot_info("").await?;
+println!("Name: {}", info.name);
+println!("About: {}", info.about);
+println!("Description: {}", info.description);
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="start-a-bot-programmatically"><a class="header" href="#start-a-bot-programmatically">Start a bot programmatically</a></h2>
+<p>Send <code>/start start_param</code> as if a user pressed a deep-link button:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// bot_user_id: the bot's user ID
+// peer: the chat where /start is sent
+// start_param: the payload after the link (empty string for plain /start)
+client.start_bot(
+    bot_user_id,
+    "@somebot",
+    "ref_12345",
+).await?;
+<span class="boring">}</span></code></pre>
+<p>This is equivalent to the user clicking <code>https://t.me/somebot?start=ref_12345</code>.</p>
+<hr>
+<h2 id="send-a-dice--animated-emoji"><a class="header" href="#send-a-dice--animated-emoji">Send a dice / animated emoji</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Classic 🎲 dice (value 1-6)
+client.send_dice("@mychat", "🎲").await?;
+
+// Dart 🎯 (value 1-6)
+client.send_dice("@mychat", "🎯").await?;
+
+// Basketball 🏀 (value 1-5)
+client.send_dice("@mychat", "🏀").await?;
+
+// Slot machine 🎰 (value 1-64)
+client.send_dice("@mychat", "🎰").await?;
+<span class="boring">}</span></code></pre>
+<p>Supported emoticons: <code>🎲</code>, <code>🎯</code>, <code>🏀</code>, <code>⚽</code>, <code>🎳</code>, <code>🎰</code>.</p>
+<hr>
+<h2 id="qr-code-login-user-accounts"><a class="header" href="#qr-code-login-user-accounts">QR-code login (user accounts)</a></h2>
+<p>Generate a login token encoded as a QR code, then poll until the user scans it.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// 1. Generate a token
+let (token_bytes, expires_ts) = client.export_login_token().await?;
+
+// 2. Encode as tg://login?token=&lt;base64url&gt; and display as QR code
+let b64 = base64::encode_config(&amp;token_bytes, base64::URL_SAFE_NO_PAD);
+let url = format!("tg://login?token={}", b64);
+println!("Scan: {url}");
+
+// 3. Poll until the user scans it
+loop {
+    match client.check_qr_login(token_bytes.clone()).await? {
+        Some(username) =&gt; {
+            println!("Logged in as: {username}");
+            client.save_session().await?;
+            break;
+        }
+        None =&gt; {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+    }
+}
+<span class="boring">}</span></code></pre>
+<p><code>export_login_token</code> handles DC migration automatically. Returns <code>(vec![], 0)</code> if the user already scanned before you called it.</p>
+<hr>
+<h2 id="send-an-invoice-payments"><a class="header" href="#send-an-invoice-payments">Send an invoice (payments)</a></h2>
+<p>Send a payment invoice to a chat (bots only):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>client.send_invoice(
+    "@user",
+    "Premium subscription",          // title
+    "One month of premium access",   // description
+    "sub_monthly",                   // payload (your internal ID)
+    "USD",                           // currency
+    &amp;[
+        ("1 Month Premium", 999),    // (label, amount in cents)
+    ],
+    None,                            // photo_url
+    false,                           // need_name
+    false,                           // need_phone
+    false,                           // need_email
+    false,                           // need_shipping_address
+    false,                           // is_flexible (shipping address changes price)
+).await?;
+<span class="boring">}</span></code></pre>
+<p>Handle the resulting shipping and pre-checkout queries via <code>Update::ShippingQuery</code> and <code>Update::PreCheckoutQuery</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Update::ShippingQuery(sq) =&gt; {
+    // Approve with shipping options, or decline with an error
+    client.answer_shipping_query(
+        sq.query_id,
+        None,  // no error
+        Some(vec![/* ShippingOption... */]),
+    ).await?;
+}
+
+Update::PreCheckoutQuery(pcq) =&gt; {
+    // Confirm the payment
+    client.answer_precheckout_query(pcq.query_id, true, None).await?;
+    // Or decline:
+    // client.answer_precheckout_query(pcq.query_id, false, Some("Out of stock".into())).await?;
+}
+<span class="boring">}</span></code></pre>
+<p>See the <a href="https://core.telegram.org/bots/payments">Telegram Payments documentation</a> for the full payment flow.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="stats--analytics"><a class="header" href="#stats--analytics">Stats &amp; Analytics</a></h1>
+<p>ferogram exposes Telegram’s channel and supergroup statistics endpoints.</p>
+<blockquote>
+<p><strong>Note</strong>: Statistics are only available for channels with at least 500 subscribers and for supergroups that meet Telegram’s threshold. The statistics DC must be reachable.</p>
+</blockquote>
+<hr>
+<h2 id="broadcast-channel-statistics"><a class="header" href="#broadcast-channel-statistics">Broadcast channel statistics</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let stats = client.get_broadcast_stats("@mychannel", false).await?;
+// dark=true requests dark-themed graph images
+<span class="boring">}</span></code></pre>
+<p>Returns <code>tl::enums::stats::BroadcastStats</code>. Key fields:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let tl::enums::stats::BroadcastStats::BroadcastStats(s) = stats;
+
+// Follower count range
+println!("Followers: {} (prev {})", s.followers.current, s.followers.previous);
+
+// Views per post
+println!("Views/post: {} (prev {})", s.views_per_post.current, s.views_per_post.previous);
+
+// Shares per post
+println!("Shares/post: {} (prev {})", s.shares_per_post.current, s.shares_per_post.previous);
+<span class="boring">}</span></code></pre>
+<p><code>BroadcastStats</code> also contains graph references (<code>s.growth_graph</code>, <code>s.followers_graph</code>, <code>s.top_hours_graph</code>, <code>s.interactions_graph</code>, <code>s.iv_interactions_graph</code>, <code>s.views_by_source_graph</code>, <code>s.new_followers_by_source_graph</code>, <code>s.languages_graph</code>) that can be fetched via <code>stats.loadAsyncGraph</code> if they carry an async token.</p>
+<hr>
+<h2 id="supergroup-megagroup-statistics"><a class="header" href="#supergroup-megagroup-statistics">Supergroup (megagroup) statistics</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let stats = client.get_megagroup_stats("@mysupergroup", false).await?;
+<span class="boring">}</span></code></pre>
+<p>Returns <code>tl::enums::stats::MegagroupStats</code>. Key fields:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let tl::enums::stats::MegagroupStats::MegagroupStats(s) = stats;
+
+println!("Members: {} (prev {})", s.members.current, s.members.previous);
+println!("Messages: {} (prev {})", s.messages.current, s.messages.previous);
+println!("Viewers: {} (prev {})", s.viewers.current, s.viewers.previous);
+println!("Posters: {} (prev {})", s.posters.current, s.posters.previous);
+<span class="boring">}</span></code></pre>
+<p><code>MegagroupStats</code> also exposes <code>s.top_posters</code>, <code>s.top_admins</code>, <code>s.top_inviters</code> (lists of users with message/invite counts) and graph references for member growth, languages, messages by hour/weekday.</p>
+<hr>
+<h2 id="online-member-count"><a class="header" href="#online-member-count">Online member count</a></h2>
+<p>Get the current approximate number of online members in a group or channel:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let online = client.get_online_count("@mychannel").await?;
+println!("{online} members are online right now");
 <span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="privacy--notifications"><a class="header" href="#privacy--notifications">Privacy &amp; Notifications</a></h1>

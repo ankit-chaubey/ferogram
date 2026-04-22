@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f77cdc82.js";
+            window.path_to_searchindex_js = "searchindex-098e516c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-ba5e127b.js"></script>
+        <script src="toc-fb96dff5.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,6 +184,53 @@
                         <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
 <hr>
+<h2 id="v033"><a class="header" href="#v033">v0.3.3</a></h2>
+<p>Released 2026-04-22. Bot framework release: composable filters, finite state machine, middleware pipeline, conversation API, and a new proc-macro crate.</p>
+<h3 id="ferogram-derive"><a class="header" href="#ferogram-derive">ferogram-derive</a></h3>
+<p>A new <code>ferogram-derive</code> crate adds the <code>#[derive(FsmState)]</code> proc-macro. Applying it to a unit-variant enum generates <code>as_key</code> and <code>from_key</code> implementations automatically. The crate is gated behind a <code>derive</code> feature flag and <code>FsmState</code> is re-exported from the crate root, so the only import you need is <code>use ferogram::FsmState</code>.</p>
+<h3 id="filters"><a class="header" href="#filters">Filters</a></h3>
+<p><code>ferogram::filters</code> provides composable, synchronous predicates over <code>IncomingMessage</code>. Built-in constructors cover the common cases: <code>command</code>, <code>private</code>, <code>text</code>, <code>media</code>, and others. Predicates compose with <code>&amp;</code>, <code>|</code>, and <code>!</code> operators, so you can express things like <code>command("start") &amp; private()</code> directly in the handler registration. Filters also integrate with the FSM via <code>StateContext</code>, letting you gate handlers on the current conversation state.</p>
+<h3 id="fsm"><a class="header" href="#fsm">FSM</a></h3>
+<p><code>ferogram::fsm</code> provides the full finite state machine layer: the <code>FsmState</code> trait, <code>StateContext</code>, <code>StateKey</code>, <code>StateKeyStrategy</code>, and <code>StateStorage</code>. The default storage is an in-memory <code>DashMap</code>-backed store keyed by peer. Custom backends can be plugged in via an async-trait extension point, so SQLite or Redis-backed stores are straightforward to add. A new <code>examples/order_bot.rs</code> walks through a multi-step order flow driven by the FSM.</p>
+<h3 id="middleware"><a class="header" href="#middleware">Middleware</a></h3>
+<p><code>ferogram::middleware</code> adds a <code>Middleware</code> trait and a <code>Next</code> chain that wraps every handler dispatch. The crate ships a ready-to-use rate-limit middleware backed by <code>DashMap</code>. <code>DispatchError</code> and <code>DispatchResult</code> are exported for use in custom middleware.</p>
+<h3 id="conversation"><a class="header" href="#conversation">Conversation</a></h3>
+<p><code>ferogram::conversation</code> provides a <code>Conversation</code> type for sequential, stateful exchanges with a single peer. It wraps an <code>UpdateStream</code> scoped to the conversation lifetime and transparently buffers updates arriving from other peers during the exchange.</p>
+<h3 id="incomingmessage-helpers"><a class="header" href="#incomingmessage-helpers">IncomingMessage helpers</a></h3>
+<p><code>IncomingMessage</code> gained a full set of inspection methods: <code>chat_id</code>, <code>is_private</code>, <code>is_group</code>, <code>is_channel</code>, <code>is_any_group</code>, <code>from_id</code>, <code>is_bot_command</code>, <code>command</code>, <code>is_command_named</code>, <code>command_args</code>, <code>has_media</code>, <code>has_photo</code>, <code>has_document</code>, <code>is_forwarded</code>, <code>is_reply</code>, and <code>album_id</code>.</p>
+<h3 id="new-update-types"><a class="header" href="#new-update-types">New update types</a></h3>
+<p>Eight new update types are now exported from the crate root: <code>ParticipantUpdate</code>, <code>JoinRequestUpdate</code>, <code>MessageReactionUpdate</code>, <code>PollVoteUpdate</code>, <code>BotStoppedUpdate</code>, <code>ShippingQueryUpdate</code>, <code>PreCheckoutQueryUpdate</code>, and <code>ChatBoostUpdate</code>.</p>
+<h3 id="new-api-method"><a class="header" href="#new-api-method">New API method</a></h3>
+<p><code>Client::get_chat_administrators()</code> returns all admins and the creator for a channel or supergroup. For basic groups it returns all participants; use the <code>is_admin</code> field on the result to distinguish.</p>
+<h3 id="new-documentation-pages"><a class="header" href="#new-documentation-pages">New documentation pages</a></h3>
+<p>Bot Framework: Middleware &amp; Dispatcher, Finite State Machine (FSM), Conversation API. API reference: Bot Configuration, Stats &amp; Analytics.</p>
+<h3 id="upgrading-from-032"><a class="header" href="#upgrading-from-032">Upgrading from 0.3.2</a></h3>
+<pre><code class="language-toml">ferogram = "0.3.3"
+</code></pre>
+<p>To use <code>#[derive(FsmState)]</code>:</p>
+<pre><code class="language-toml">ferogram = { version = "0.3.3", features = ["derive"] }
+</code></pre>
+<hr>
+<h2 id="v032"><a class="header" href="#v032">v0.3.2</a></h2>
+<p>Released 2026-04-21. Correctness and session-save hardening.</p>
+<h3 id="seenmsgids"><a class="header" href="#seenmsgids">SeenMsgIds</a></h3>
+<p>The <code>SeenMsgIds</code> deque is now paired with a <code>HashSet</code> so duplicate checks under concurrent workers are O(1) instead of O(n). On busy connections receiving many server messages simultaneously this removes a hot path that was linear in the deque length.</p>
+<h3 id="session-save-race"><a class="header" href="#session-save-race">Session save race</a></h3>
+<p>Session temp files now get a unique name per write, and a <code>write_lock</code> serializes concurrent saves. Previously two concurrent saves could race on the rename step, which caused data loss on Windows. Both are now safe.</p>
+<h3 id="bug-fixes"><a class="header" href="#bug-fixes">Bug fixes</a></h3>
+<p>Five correctness bugs were patched:</p>
+<p>The <code>PaddedIntermediate</code> handshake was not being sent on DC pool worker connections. Without it the server would silently drop or misparse every frame from those connections.</p>
+<p><code>new_session_created</code> was resetting the session on fresh connections even when it should not, which caused a session ID mismatch on every subsequent decrypt.</p>
+<p><code>scan_body</code> was passing <code>None</code> as <code>sent_msg_id</code> during container iterations, letting stale cached results overwrite live responses from the server.</p>
+<p>The <code>importAuthorization</code> branch condition was inverted, so the import was skipped precisely in the cases where it was required and ran in cases where it was not.</p>
+<p>Server 4-byte transport error codes received during the DH handshake are now surfaced properly instead of being misclassified as “plain frame too short”.</p>
+<hr>
+<h2 id="v031"><a class="header" href="#v031">v0.3.1</a></h2>
+<p>Released 2026-04-20. Patch release fixing the docs.rs build. No functional changes from 0.3.0.</p>
+<h3 id="upgrading-from-030"><a class="header" href="#upgrading-from-030">Upgrading from 0.3.0</a></h3>
+<pre><code class="language-toml">ferogram = "0.3.1"
+</code></pre>
+<hr>
 <h2 id="v030"><a class="header" href="#v030">v0.3.0</a></h2>
 <p>Released 2026-04-19. The biggest release so far: two new crates, a redesigned connection stack, CDN file download support, and a much larger API reference.</p>
 <h3 id="two-new-crates"><a class="header" href="#two-new-crates">Two new crates</a></h3>
@@ -204,7 +251,7 @@
 <p><code>ferogram::special_config</code> implements Telegram’s last-resort fallback: decodes the encrypted response from Telegram’s Firebase/Google endpoint and extracts DC addresses from <code>help.configSimple</code>.</p>
 <h3 id="mtproto-internals"><a class="header" href="#mtproto-internals">MTProto internals</a></h3>
 <p><code>ferogram-mtproto</code> gained a <code>bind_temp_key</code> module and now re-exports <code>encrypt_bind_inner</code>, <code>gen_msg_id</code>, <code>serialize_bind_temp_auth_key</code>, <code>EncryptedSession</code>, <code>SeenMsgIds</code>, and <code>new_seen_msg_ids</code>. Primarily useful for library authors working at the MTProto layer directly.</p>
-<h3 id="new-documentation-pages"><a class="header" href="#new-documentation-pages">New documentation pages</a></h3>
+<h3 id="new-documentation-pages-1"><a class="header" href="#new-documentation-pages-1">New documentation pages</a></h3>
 <p>Advanced: CDN Downloads, Transport Probing and Resilient Connect, Connection Restart Policy, Experimental Features.</p>
 <p>API reference: ClientBuilder, Types Reference, Chat Management, Contacts and Blocking, Forum Topics, Games and Payments, Invite Links, Polls and Votes, Privacy and Notifications, Profile and Account, Stickers.</p>
 <h3 id="upgrading-from-020"><a class="header" href="#upgrading-from-020">Upgrading from 0.2.0</a></h3>
