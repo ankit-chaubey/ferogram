@@ -4,32 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! RAII typing indicator guard.
-//!
-//! [`TypingGuard`] automatically cancels the "typing..." chat action when
-//! dropped, eliminating the need to remember to call `send_chat_action`
-//! with `SendMessageAction::SendMessageCancelAction` manually.
-//!
-//! # Example
-//! ```rust,no_run
-//! use ferogram::{Client, TypingGuard};
-//! use ferogram_tl_types as tl;
-//!
-//! async fn handle(client: Client, peer: tl::enums::Peer) {
-//! // Typing indicator is sent immediately and auto-cancelled on drop.
-//! let _typing = TypingGuard::start(&client, peer.clone(),
-//!     tl::enums::SendMessageAction::SendMessageTypingAction).await.unwrap();
-//!
-//! do_expensive_work().await;
-//! // `_typing` is dropped here: Telegram sees the typing stop.
-//! }
-//! # async fn do_expensive_work() {}
-//! ```
 
 use crate::{Client, InvocationError, PeerRef};
 use ferogram_tl_types as tl;

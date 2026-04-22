@@ -4,22 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! AES-256-CTR cipher for MTProto transport obfuscation.
-//!
-//! Telegram's obfuscated transport encrypts the entire byte stream with two
-//! separate AES-256-CTR instances (TX and RX) whose keys are derived from a
-//! random 64-byte init header sent at connection start.
-//!
-//! Key derivation from the 64-byte `init` buffer:
-//! ```text
-//! TX key = init[8..40]           TX IV = init[40..56]
-//! RX key = reverse(init)[8..40]  RX IV = reverse(init)[40..56]
-//! ```
 
 #[allow(deprecated)]
 use aes::cipher::{KeyIvInit, StreamCipher, generic_array::GenericArray};

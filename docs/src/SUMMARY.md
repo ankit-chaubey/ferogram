@@ -43,6 +43,14 @@
 
 ---
 
+# Bot Framework
+
+- [Middleware & Dispatcher](./bot/middleware.md)
+- [Finite State Machine (FSM)](./bot/fsm.md)
+- [Conversation API](./bot/conversation.md)
+
+---
+
 # Client API Reference
 
 - [Client Methods](./api/client.md)
@@ -63,6 +71,8 @@
 - [Polls & Votes](./api/polls.md)
 - [Stickers](./api/stickers.md)
 - [Games & Payments](./api/games.md)
+- [Bot Configuration](./api/bot-config.md)
+- [Stats & Analytics](./api/stats.md)
 - [Privacy & Notifications](./api/privacy.md)
 
 ---

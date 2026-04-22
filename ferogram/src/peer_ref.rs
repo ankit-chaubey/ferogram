@@ -4,43 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! [`PeerRef`]: flexible peer argument accepted by all `Client` methods.
-//!
-//! Every public API method that previously required a bare `tl::enums::Peer`
-//! now accepts `impl Into<PeerRef>`, so you can pass any of:
-//!
-//! ```rust,no_run
-//! # use ferogram::Client;
-//! # async fn f(client: Client) -> anyhow::Result<()> {
-//! // @username string
-//! client.send_message_to_peer("@durov", "hi").await?;
-//!
-//! // bare username (no @)
-//! client.send_message_to_peer("durov", "hi").await?;
-//!
-//! // "me" / "self"
-//! client.send_message_to_peer("me", "hi").await?;
-//!
-//! // numeric user ID (positive)
-//! client.send_message_to_peer(12345678_i64, "hi").await?;
-//!
-//! // Bot-API channel ID (negative, -100... prefix)
-//! client.iter_messages(-1001234567890_i64);
-//!
-//! // Bot-API basic-group ID (negative, small)
-//! client.mark_as_read(-123456_i64).await?;
-//!
-//! // already-resolved peer: zero overhead
-//! use ferogram::tl;
-//! let peer = tl::enums::Peer::User(tl::types::PeerUser { user_id: 123 });
-//! client.send_message_to_peer(peer, "hi").await?;
-//! # Ok(()) }
-//! ```
 
 use ferogram_tl_types as tl;
 

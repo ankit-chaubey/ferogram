@@ -4,12 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! The public code-generation API.
 
 use std::fs::File;
 use std::io::{self, Write};
@@ -168,7 +165,7 @@ fn write_types_mod<W: Write>(
 
     for ns in namespaces {
         let bucket = &grouped[ns];
-        let indent = if ns.is_empty() {
+        let indent: String = if ns.is_empty() {
             "    ".to_owned()
         } else {
             writeln!(out, "    pub mod {ns} {{")?;
@@ -205,7 +202,7 @@ fn write_functions_mod<W: Write>(
 
     for ns in namespaces {
         let bucket = &grouped[ns];
-        let indent = if ns.is_empty() {
+        let indent: String = if ns.is_empty() {
             "    ".to_owned()
         } else {
             writeln!(out, "    pub mod {ns} {{")?;

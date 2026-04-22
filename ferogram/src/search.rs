@@ -4,41 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Fluent search builders.
-//!
-//! # In-chat search
-//! ```rust,no_run
-//! # async fn f(client: ferogram::Client, peer: ferogram_tl_types::enums::Peer)
-//! # -> Result<(), Box<dyn std::error::Error>> {
-//! let results = client
-//! .search(peer, "hello world")
-//! .min_date(1_700_000_000)
-//! .max_date(1_720_000_000)
-//! .filter(ferogram_tl_types::enums::MessagesFilter::InputMessagesFilterPhotos)
-//! .limit(50)
-//! .fetch(&client)
-//! .await?;
-//! # Ok(()) }
-//! ```
-//!
-//! # Global search
-//! ```rust,no_run
-//! # async fn f(client: ferogram::Client)
-//! # -> Result<(), Box<dyn std::error::Error>> {
-//! let results = client
-//! .search_global_builder("rust async")
-//! .broadcasts_only(true)
-//! .min_date(1_700_000_000)
-//! .limit(30)
-//! .fetch(&client)
-//! .await?;
-//! # Ok(()) }
-//! ```
 
 use ferogram_tl_types::{self as tl, Cursor, Deserializable};
 

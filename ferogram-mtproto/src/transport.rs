@@ -4,22 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Pluggable transport layer.
-//!
-//! Implement [`Transport`] over TCP, WebSocket, or any other byte-stream
-//! protocol to get MTProto message framing for free.
-//!
-//! # Transport types
-//!
-//! | Type | Use when |
-//! |------|----------|
-//! | [`AbridgedTransport`] | Direct connection, no ISP blocks |
-//! | [`ObfuscatedAbridged`] | ISP DPI blocking plain Telegram traffic |
 
 use std::io::{Read, Write};
 use std::net::TcpStream;

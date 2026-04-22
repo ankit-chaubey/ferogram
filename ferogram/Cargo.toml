@@ -18,8 +18,10 @@ ferogram-mtproto   = { workspace = true }
 ferogram-crypto    = { workspace = true }
 ferogram-session   = { workspace = true }
 ferogram-parsers   = { workspace = true }
+ferogram-derive    = { workspace = true, optional = true }
 ferogram-tl-parser = { workspace = true, optional = true }
 ferogram-tl-gen    = { workspace = true, optional = true }
+async-trait    = "0.1"
 tokio          = { version = "1",   features = ["net", "io-util", "sync", "time", "rt", "rt-multi-thread", "macros", "fs"] }
 tokio-util     = { version = "0.7", features = ["rt"] }
 parking_lot    = "0.12"
@@ -34,7 +36,7 @@ sha2           = "0.10"
 hmac           = "0.12"
 pbkdf2         = "0.12"
 tracing        = { version = "0.1", features = ["log"] }
-serde          = { version = "1", features = ["derive"], optional = true }
+serde          = { version = "1", features = ["derive"] }
 mime_guess     = "2"
 base64         = "0.22"
 chrono         = { version = "0.4", features = ["clock"] }
@@ -45,9 +47,10 @@ serde_json     = "1"
 
 [features]
 default = []
+derive          = ["dep:ferogram-derive"]
 sqlite-session  = ["ferogram-session/sqlite-session"]
 libsql-session  = ["ferogram-session/libsql-session"]
-serde           = ["dep:serde", "ferogram-session/serde"]
+serde           = ["ferogram-session/serde"]
 html            = ["ferogram-parsers/html"]
 html5ever       = ["ferogram-parsers/html5ever"]
 ## Re-export the TL parser for custom tooling.

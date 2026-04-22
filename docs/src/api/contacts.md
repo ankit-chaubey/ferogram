@@ -70,6 +70,26 @@ let results = client.search_contacts("John", 20).await?;
 
 ---
 
+## Import contacts
+
+Import phone-number contacts in bulk. Each entry is `(phone, first_name, last_name)`. Returns the raw `ImportedContacts` result containing imported IDs and resolved user objects.
+
+```rust
+let result = client.import_contacts(&[
+    ("+15550001234", "Alice", "Smith"),
+    ("+15550005678", "Bob",   "Jones"),
+]).await?;
+
+println!("Imported {} contacts", result.imported.len());
+for user in &result.users {
+    println!("  resolved: {user:?}");
+}
+```
+
+`result.retry_contacts` contains entries that could not be resolved (e.g. the number is not registered on Telegram).
+
+---
+
 ## Blocking
 
 <div class="api-card">

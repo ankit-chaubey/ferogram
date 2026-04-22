@@ -4,29 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Media upload, download, and typed wrappers.
-//!
-//! ## Upload
-//! - [`Client::upload_file`]  : sequential (small files, < 10 MB)
-//! - [`Client::upload_file_concurrent`]: parallel worker pool for large files
-//! - [`Client::upload_stream`]: reads AsyncRead → calls upload_file
-//!
-//! ## Download
-//! - [`Client::iter_download`]         : chunk-by-chunk streaming
-//! - [`Client::download_media`]        : collect all bytes
-//! - [`Client::download_media_concurrent`]: parallel multi-worker download
-//!
-//! ## Typed wrappers
-//! [`Photo`], [`Document`], [`Sticker`]: typed wrappers over raw TL types.
-//!
-//! ## Downloadable trait
-//! [`Downloadable`]: implemented by Photo, Document, Sticker so you can pass
-//! any of them to `iter_download` / `download_media`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};

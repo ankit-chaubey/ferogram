@@ -4,19 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Inline query support: two directions:
-//!
-//! ## Receiving (bot side)
-//! [`InlineQueryIter`] streams live inline queries arriving from users typing
-//! `@yourbot query`.  Backed by the update stream.
-//!
-//! [`InlineResultIter`] lets a *user* account call `messages.GetInlineBotResults`
-//! and iterate the results, with a `.send()` helper to forward a chosen result.
 
 use std::collections::VecDeque;
 

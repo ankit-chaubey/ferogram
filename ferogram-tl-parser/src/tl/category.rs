@@ -4,13 +4,12 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
 
-/// Whether a [`super::Definition`] is a data constructor or an RPC function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Whether a TL definition is a data constructor or an RPC function.
 pub enum Category {
     /// A concrete data constructor (the section before `---functions---`).
     Types,

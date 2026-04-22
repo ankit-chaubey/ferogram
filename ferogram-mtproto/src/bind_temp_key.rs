@@ -4,32 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Build the `encrypted_message` payload for `auth.bindTempAuthKey`.
-//!
-//! The inner message must be encrypted with the **permanent** auth key using
-//! the legacy **MTProto v1** scheme (SHA-1-based key derivation + AES-256-IGE),
-//! NOT the normal MTProto 2.0 (SHA-256) scheme.
-//!
-//! Wire layout of `encrypted_message`:
-//! ```text
-//!   perm_key_id (8 bytes)
-//!   msg_key     (16 bytes)  = SHA1(plaintext_no_pad)[4..20]
-//!   ciphertext  (N bytes)   = AES-IGE(plaintext, derived from perm_key + msg_key)
-//!
-//! plaintext =
-//!   server_salt   (8 bytes, random)
-//!   session_id    (8 bytes, random)
-//!   msg_id        (8 bytes)
-//!   seq_no        (4 bytes, = 0)
-//!   data_len      (4 bytes)
-//!   bind_auth_key_inner (40 bytes)
-//!   padding       (0-15 bytes to reach 16-byte alignment)
-//! ```
 
 use ferogram_crypto::{aes, derive_aes_key_iv_v1};
 use sha1::{Digest, Sha1};

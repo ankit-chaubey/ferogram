@@ -4,26 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Sans-IO MTProto authorization key generation.
-//!
-//! # Flow
-//!
-//! ```text
-//! let (req, s1) = authentication::step1()?;
-//! // send req, receive resp (ResPQ)
-//! let (req, s2) = authentication::step2(s1, resp, dc_id)?;
-//! // send req, receive resp (ServerDhParams)
-//! let (req, s3) = authentication::step3(s2, resp)?;
-//! // send req, receive resp (SetClientDhParamsAnswer)
-//! let result = authentication::finish(s3, resp)?;
-//! // on FinishResult::Done(d): d.auth_key is ready
-//! // on FinishResult::Retry{..}: call retry_step3() + finish() up to 5 times
-//! ```
 
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};

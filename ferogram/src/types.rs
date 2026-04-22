@@ -4,18 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Typed wrappers over raw TL user and chat types.
-//!
-//! The raw TL layer has `tl::enums::User` (two variants: `Empty` / `User`) and
-//! `tl::enums::Chat` (five variants: `Empty`, `Chat`, `Forbidden`,
-//! `Channel`, `ChannelForbidden`).  Working with them directly requires constant
-//! pattern-matching.  This module gives three thin wrappers: [`User`],
-//! [`Group`], and [`Channel`]: with uniform accessor APIs.
 
 use ferogram_tl_types as tl;
 

@@ -4,13 +4,12 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
 
-/// A flag reference inside a parameter type, e.g. `flags.0` in `flags.0?true`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// A conditional-field flag reference: the flags field name and the bit index.
 pub struct Flag {
     /// The name of the flags field that holds this bit (usually `"flags"`).
     pub name: String,

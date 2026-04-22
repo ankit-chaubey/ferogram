@@ -4,31 +4,225 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram/0.1.0")]
-//! # ferogram
+#![doc(html_root_url = "https://docs.rs/ferogram/0.3.3")]
+//! Async Rust client for the Telegram MTProto protocol.
 //!
-//! Async Telegram client built on MTProto.
+//! ferogram works with both user accounts and bots. It talks directly to
+//! Telegram's MTProto servers: there is no Bot API HTTP proxy involved.
 //!
-//! ## Features
-//! - User login (phone + code + 2FA SRP) and bot token login
-//! - Peer access-hash caching: API calls always carry correct access hashes
-//! - `FLOOD_WAIT` auto-retry with configurable policy
-//! - Typed async update stream: `NewMessage`, `MessageEdited`, `MessageDeleted`,
-//!   `CallbackQuery`, `InlineQuery`, `InlineSend`, `Raw`
-//! - Send / edit / delete / forward / pin messages
-//! - Search messages (per-chat and global)
+//! Built by [Ankit Chaubey](https://github.com/ankit-chaubey).
+//! Community: [t.me/Ferogram](https://t.me/Ferogram) (channel) |
+//! [t.me/FerogramChat](https://t.me/FerogramChat) (chat)
+//!
+//! # Getting started
+//!
+//! Add to `Cargo.toml`:
+//!
+//! ```toml
+//! [dependencies]
+//! ferogram = "0.3"
+//! tokio    = { version = "1", features = ["full"] }
+//! ```
+//!
+//! Get `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org).
+//!
+//! ## Bot login
+//!
+//! ```rust,no_run
+//! use ferogram::{Client, update::Update};
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     let (client, _shutdown) = Client::builder()
+//!         .api_id(std::env::var("API_ID")?.parse()?)
+//!         .api_hash(std::env::var("API_HASH")?)
+//!         .session("bot.session")
+//!         .connect()
+//!         .await?;
+//!
+//!     client.bot_sign_in(&std::env::var("BOT_TOKEN")?).await?;
+//!     client.save_session().await?;
+//!
+//!     let mut stream = client.stream_updates();
+//!     while let Some(upd) = stream.next().await {
+//!         if let Update::NewMessage(msg) = upd {
+//!             if !msg.outgoing() {
+//!                 if let Some(text) = msg.text() {
+//!                     msg.reply(text).await?;
+//!                 }
+//!             }
+//!         }
+//!     }
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## User login
+//!
+//! ```rust,no_run
+//! use ferogram::{Client, SignInError};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let (client, _shutdown) = Client::builder()
+//!         .api_id(12345)
+//!         .api_hash("your_api_hash")
+//!         .session("my.session")
+//!         .connect()
+//!         .await?;
+//!
+//!     if !client.is_authorized().await? {
+//!         let token = client.request_login_code("+1234567890").await?;
+//!         let code  = read_line();
+//!         match client.sign_in(&token, &code).await {
+//!             Ok(name) => println!("Signed in as {name}"),
+//!             Err(SignInError::PasswordRequired(t)) => {
+//!                 client.check_password(*t, "2fa_password").await?;
+//!             }
+//!             Err(e) => return Err(e.into()),
+//!         }
+//!         client.save_session().await?;
+//!     }
+//!
+//!     client.send_message("me", "Hello from ferogram!").await?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! # What's covered
+//!
+//! **Authentication**
+//! - Phone + code + 2FA SRP user login
+//! - Bot token login
+//! - Session string export / import
+//!
+//! **Updates**: typed variants from [`update::Update`]:
+//! `NewMessage`, `MessageEdited`, `MessageDeleted`, `CallbackQuery`,
+//! `InlineQuery`, `InlineSend`, `UserStatus`, `UserTyping`,
+//! `ParticipantUpdate`, `JoinRequest`, `MessageReaction`, `PollVote`,
+//! `BotStopped`, `ShippingQuery`, `PreCheckoutQuery`, `ChatBoost`, `Raw`
+//!
+//! **Messaging**
+//! - Send, edit, delete, forward, pin, unpin
+//! - Reply-to, schedule, silent flag
+//! - HTML and Markdown entity formatting (see [`parsers`])
+//! - Inline keyboards via [`keyboard::InlineKeyboardBuilder`]
+//!
+//! **Media**
+//! - Concurrent chunked file upload
+//! - Media and CDN file download
+//! - Photo, document, audio, video, sticker
+//!
+//! **Peers and dialogs**
+//! - Automatic access-hash caching for users, chats, channels
+//! - Paginated dialog iterator
+//! - Paginated per-chat message history
+//! - Global and per-chat message search
 //! - Mark as read, delete dialogs, clear mentions
-//! - Join chat / accept invite links
-//! - Chat action (typing, uploading, …)
-//! - `get_me()`: fetch own User info
-//! - Paginated dialog and message iterators
-//! - DC migration, session persistence, reconnect
+//!
+//! **Dispatcher and filters** (see [`filters`])
+//! - `FLOOD_WAIT` auto-retry with configurable policy
+//! - [`filters::Dispatcher`] with composable filter combinators (`&`, `|`, `!`)
+//! - Middleware chain (pre-handler interception, see [`middleware`])
+//! - FSM for multi-step conversations (see [`fsm`])
+//!
+//! **Connection**
+//! - DC migration
+//! - Transport probing: races Abridged vs Obfuscated connections
+//! - SOCKS5 proxy (see [`proxy`])
+//! - DNS-over-HTTPS resolver with TTL cache
+//! - Reconnect with session persistence
+//!
+//! **Raw API**
+//! - `client.invoke(&req)` for any TL function
+//! - `client.invoke_on_dc(dc_id, &req)` for specific DCs
+//! - All of Layer 224 accessible via `ferogram::tl`
+//!
+//! # Dispatcher and filters
+//!
+//! ```rust,no_run
+//! use ferogram::filters::{Dispatcher, command, private, text_contains};
+//!
+//! let mut dp = Dispatcher::new();
+//!
+//! dp.on_message(command("start"), |msg| async move {
+//!     msg.reply("Hello!").await.ok();
+//! });
+//!
+//! dp.on_message(private() & text_contains("help"), |msg| async move {
+//!     msg.reply("Type /start to begin.").await.ok();
+//! });
+//! ```
+//!
+//! # FSM
+//!
+//! ```rust,no_run
+//! use ferogram::{FsmState, fsm::MemoryStorage};
+//! use ferogram::filters::{Dispatcher, command, text};
+//! use std::sync::Arc;
+//!
+//! #[derive(FsmState, Clone, Debug, PartialEq)]
+//! enum Form { Name, Age }
+//!
+//! # async fn example() {
+//! let mut dp = Dispatcher::new();
+//! dp.with_state_storage(Arc::new(MemoryStorage::new()));
+//!
+//! dp.on_message_fsm(text(), Form::Name, |msg, state| async move {
+//!     state.set_data("name", msg.text().unwrap()).await.ok();
+//!     state.transition(Form::Age).await.ok();
+//!     msg.reply("How old are you?").await.ok();
+//! });
+//! # }
+//! ```
+//!
+//! # Session backends
+//!
+//! | Backend | Feature flag | Notes |
+//! |---|---|---|
+//! | `BinaryFileBackend` | default | Single file on disk |
+//! | `InMemoryBackend` | default | No persistence, tests |
+//! | `StringSessionBackend` | default | Base64 string, serverless |
+//! | `SqliteBackend` | `sqlite-session` | Multi-session local file |
+//! | `LibSqlBackend` | `libsql-session` | Turso / distributed libSQL |
+//!
+//! # Feature flags
+//!
+//! | Flag | What it enables |
+//! |---|---|
+//! | `sqlite-session` | `SqliteBackend` via rusqlite |
+//! | `libsql-session` | `LibSqlBackend` via libsql-client |
+//! | `html` | `parse_html` / `generate_html` (built-in parser) |
+//! | `html5ever` | Replaces `parse_html` with spec-compliant html5ever |
+//! | `derive` | `#[derive(FsmState)]` macro |
+//! | `serde` | Serde support for session types |
+//! | `parser` | Re-exports `ferogram-tl-parser` for custom tooling |
+//! | `codegen` | Re-exports `ferogram-tl-gen` for custom tooling |
+//!
+//! # Raw API
+//!
+//! ```rust,no_run
+//! use ferogram::tl;
+//!
+//! # async fn example(client: ferogram::Client) -> anyhow::Result<()> {
+//! let req = tl::functions::messages::GetDialogs {
+//!     offset_date: 0,
+//!     offset_id: 0,
+//!     offset_peer: tl::enums::InputPeer::Empty,
+//!     limit: 20,
+//!     hash: 0,
+//!     exclude_pinned: false,
+//!     folder_id: None,
+//! };
+//! let result = client.invoke(&req).await?;
+//! # Ok(())
+//! # }
+//! ```
 
 #![deny(unsafe_code)]
 
@@ -72,6 +266,17 @@ mod pts_tests;
 
 pub mod dc_migration;
 pub mod proxy;
+
+pub mod fsm;
+pub mod middleware;
+
+// Re-export FsmState at the crate root for convenience.
+pub use fsm::FsmState;
+
+// Re-export the derive macro when the feature is enabled.
+#[cfg(feature = "derive")]
+#[cfg_attr(docsrs, doc(cfg(feature = "derive")))]
+pub use ferogram_derive::FsmState;
 
 pub use builder::{BuilderError, ClientBuilder};
 pub use errors::{InvocationError, LoginToken, PasswordToken, RpcError, SignInError};
@@ -8359,7 +8564,6 @@ impl Client {
         &self,
         peer: impl Into<PeerRef>,
     ) -> Result<Vec<crate::participants::Participant>, InvocationError> {
-        use crate::participants::PeerUserIdExt;
         use ferogram_tl_types::{Cursor, Deserializable};
         let peer = peer.into().resolve(self).await?;
         match &peer {
@@ -8401,32 +8605,7 @@ impl Client {
                     .participants
                     .into_iter()
                     .filter_map(|p| {
-                        let (user_id, status) = match &p {
-                            tl::enums::ChannelParticipant::ChannelParticipant(x) => {
-                                (x.user_id, crate::participants::ParticipantStatus::Member)
-                            }
-                            tl::enums::ChannelParticipant::ParticipantSelf(x) => {
-                                (x.user_id, crate::participants::ParticipantStatus::Member)
-                            }
-                            tl::enums::ChannelParticipant::Creator(x) => {
-                                (x.user_id, crate::participants::ParticipantStatus::Creator)
-                            }
-                            tl::enums::ChannelParticipant::Admin(x) => {
-                                (x.user_id, crate::participants::ParticipantStatus::Admin)
-                            }
-                            tl::enums::ChannelParticipant::Banned(x) => (
-                                x.peer.user_id_or(0),
-                                crate::participants::ParticipantStatus::Banned,
-                            ),
-                            tl::enums::ChannelParticipant::Left(x) => (
-                                x.peer.user_id_or(0),
-                                crate::participants::ParticipantStatus::Left,
-                            ),
-                        };
-                        user_map
-                            .get(&user_id)
-                            .cloned()
-                            .map(|user| crate::participants::Participant { user, status })
+                        crate::participants::Participant::from_channel_participant(p, &user_map)
                     })
                     .collect())
             }
@@ -9467,7 +9646,7 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    /// Unarchive a dialog (move it back to folder 0 (the main list)).
+    /// Unarchive a dialog (move it back to folder 0 - the main list).
     ///
     /// # Example
     /// ```rust,no_run
@@ -10057,8 +10236,17 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    /// Send a poll to a chat. Set `quiz = true` for a quiz poll with one correct answer;
-    /// `correct_index` is only used in that case. `multiple_choice` is incompatible with quiz.
+    // send_poll
+
+    /// Send a poll to a chat.
+    ///
+    /// # Parameters
+    /// - `peer`: destination chat (username, ID, or resolved peer)
+    /// - `question`: poll question text
+    /// - `answers`: list of answer strings (2–10 items)
+    /// - `quiz`: when `true`, the poll is a quiz (one correct answer)
+    /// - `correct_index`: index of the correct answer (only used when `quiz = true`)
+    /// - `multiple_choice`: allow selecting multiple answers (incompatible with `quiz`)
     ///
     /// # Example
     /// ```rust,no_run
@@ -10168,11 +10356,18 @@ impl Client {
         Ok(())
     }
 
-    /// Set the command menu for the bot.
+    // Bot command menu
+
+    /// Set the command menu for the bot, visible in Telegram clients.
     ///
-    /// `commands` is `(command, description)` pairs without the `/` prefix.
-    /// `scope` is `None` for the default (all users, all chats).
-    /// `lang_code` is an IETF tag (e.g. `"en"`); `""` for the default locale.
+    /// `commands` is a list of `(command, description)` pairs. The command
+    /// should be lowercase and without the `/` prefix.
+    ///
+    /// `scope` controls where the commands are shown; pass `None` for the
+    /// default scope (visible to all users in all chats).
+    ///
+    /// `lang_code` is the IETF language tag (e.g. `"en"`, `"ru"`); pass `""`
+    /// for the default locale.
     ///
     /// # Example
     /// ```rust,no_run
@@ -10225,6 +10420,8 @@ impl Client {
         Ok(is_bool_true(&body))
     }
 
+    // Bot profile
+
     /// Set the bot's name, about text, and/or description for a given language.
     ///
     /// Pass `None` for any field you don't want to change.  
@@ -10238,7 +10435,7 @@ impl Client {
     ///     Some("My Awesome Bot"),         // name shown in chat header
     ///     Some("I do cool things"),       // about text (bio)
     ///     Some("Send /start to begin"),   // description (shown before first msg)
-    ///     "",                             // lang_code "" = default locale
+    ///     "",                             // lang_code - "" = default
     /// ).await?;
     /// # Ok(()) }
     /// ```
@@ -10260,7 +10457,7 @@ impl Client {
         Ok(is_bool_true(&body))
     }
 
-    /// Get the bot's current name, about text, and description.
+    /// Retrieve the bot's current name, about text, and description.
     ///
     /// Pass `""` for `lang_code` to get the default (language-independent) values.
     ///
@@ -10290,11 +10487,16 @@ impl Client {
         Ok(result)
     }
 
+    // QR code sign-in
+
     /// Generate a QR-code login token.
     ///
     /// Returns `(token_bytes, expires_unix_ts)`. Encode `token_bytes` as a
-    /// `tg://login?token=<base64url>` URL and render as a QR code. Poll for
-    /// `updateLoginToken` or call this again to check scan status.
+    /// `tg://login?token=<base64url>` URL and present as a QR code.
+    ///
+    /// Call [`import_qr_token`] once the user scans it, then poll until you
+    /// receive `Update::Raw` with `updateLoginToken` (constructor `0x564fe691`),
+    /// or call [`export_login_token`] again to check.
     ///
     /// # Example
     /// ```rust,no_run
@@ -10316,6 +10518,7 @@ impl Client {
         match tl::enums::auth::LoginToken::deserialize(&mut cur)? {
             tl::enums::auth::LoginToken::LoginToken(t) => Ok((t.token, t.expires)),
             tl::enums::auth::LoginToken::MigrateTo(m) => {
+                // Migrate and retry
                 self.migrate_to(m.dc_id).await?;
                 let req2 = tl::functions::auth::ImportLoginToken { token: m.token };
                 let body2 = self.rpc_call_raw(&req2).await?;
@@ -10328,6 +10531,7 @@ impl Client {
                 }
             }
             tl::enums::auth::LoginToken::Success(s) => {
+                // Already authorised (user scanned before we called this)
                 if let tl::enums::auth::Authorization::Authorization(a) = s.authorization {
                     self.cache_user(&a.user).await;
                     Self::extract_user_name(&a.user);
@@ -10368,9 +10572,12 @@ impl Client {
         }
     }
 
+    // Payments / Invoice
+
     /// Send an invoice to a peer (bots only).
     ///
-    /// See the [Telegram Payments docs] for parameter semantics.
+    /// Returns the sent message. Most parameters map directly to
+    /// `InputMediaInvoice`; see the [Telegram Payments docs] for details.
     ///
     /// [Telegram Payments docs]: https://core.telegram.org/bots/payments
     ///
@@ -10455,7 +10662,7 @@ impl Client {
             }),
             invoice,
             payload: payload.into().into_bytes(),
-            provider: Some(String::new()),
+            provider: None,
             provider_data: tl::enums::DataJson::DataJson(tl::types::DataJson { data: "{}".into() }),
             start_param: None,
             extended_media: None,
@@ -10545,6 +10752,8 @@ impl Client {
         Ok(())
     }
 
+    // set_emoji_status
+
     /// Set the logged-in user's emoji status.
     ///
     /// Pass `None` to clear the current status.
@@ -10577,6 +10786,8 @@ impl Client {
         let req = tl::functions::account::UpdateEmojiStatus { emoji_status };
         self.rpc_write(&req).await
     }
+
+    // transfer_chat_ownership
 
     /// Transfer ownership of a basic group to another user.
     ///
@@ -10639,6 +10850,8 @@ impl Client {
         Ok(())
     }
 
+    // get_linked_channel
+
     /// Return the linked discussion supergroup ID for a broadcast channel,
     /// or the linked broadcast channel ID for a supergroup.
     ///
@@ -10686,9 +10899,13 @@ impl Client {
         Ok(linked)
     }
 
-    /// Fetch all messages in the same album as `msg_id`.
+    // get_media_group
+
+    /// Fetch all messages belonging to the same album (grouped media) as the
+    /// given message ID in a channel or supergroup.
     ///
-    /// For non-channel peers the server returns just the single message.
+    /// Returns the full list of messages in the group (including the seed
+    /// message). For non-channel chats, the server returns the single message.
     ///
     /// # Example
     /// ```rust,no_run
@@ -10707,6 +10924,7 @@ impl Client {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
 
+        // Fetch the seed message first to get grouped_id
         let seed_ids = vec![tl::enums::InputMessage::Id(tl::types::InputMessageId {
             id: msg_id,
         })];
@@ -10742,6 +10960,7 @@ impl Client {
             }
         };
 
+        // Extract grouped_id from the seed message
         let grouped_id = seed_msgs.iter().find_map(|m| {
             if let tl::enums::Message::Message(msg) = m {
                 msg.grouped_id
@@ -10750,6 +10969,7 @@ impl Client {
             }
         });
 
+        // If there's no grouped_id, just return the single message
         let Some(gid) = grouped_id else {
             return Ok(seed_msgs
                 .into_iter()
@@ -10757,6 +10977,8 @@ impl Client {
                 .collect());
         };
 
+        // Fetch a window of messages around msg_id to find all members of the group
+        // Albums are always contiguous so a window of ±10 is more than enough
         let window_start = (msg_id - 9).max(1);
         let window_ids: Vec<tl::enums::InputMessage> = (window_start..=msg_id + 9)
             .map(|id| tl::enums::InputMessage::Id(tl::types::InputMessageId { id }))
@@ -10798,10 +11020,15 @@ impl Client {
         Ok(group)
     }
 
+    // get_stats
+
     /// Fetch broadcast channel statistics.
     ///
-    /// Returns [`tl::enums::stats::BroadcastStats`]. Requires stats to be
-    /// enabled on the channel (minimum ~500 subscribers).
+    /// Returns the raw [`tl::enums::stats::BroadcastStats`] object from which
+    /// you can read follower counts, view graphs, top-post interactions, etc.
+    ///
+    /// The channel must have statistics enabled (≥500 subscribers for
+    /// broadcast channels; stats DC must be available).
     ///
     /// # Example
     /// ```rust,no_run
@@ -10839,8 +11066,9 @@ impl Client {
 
     /// Fetch supergroup (megagroup) statistics.
     ///
-    /// Returns [`tl::enums::stats::MegagroupStats`]. The group needs enough
-    /// members for Telegram to enable stats.
+    /// Returns the raw [`tl::enums::stats::MegagroupStats`] object.
+    ///
+    /// The group must have enough members for stats to be available.
     ///
     /// # Example
     /// ```rust,no_run

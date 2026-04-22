@@ -4,21 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Update gap detection and recovery.
-//!
-//! Tracks `pts` / `qts` / `seq` / `date` plus per-channel pts, and
-//! fills gaps via `updates.getDifference` (global) and
-//! `updates.getChannelDifference` (per-channel).
-//!
-//! ## What "gap" means
-//! Telegram guarantees updates arrive in order within a pts counter.
-//! If `new_pts != local_pts + pts_count` there is a gap and we must
-//! ask the server for the missed updates before processing this one.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;

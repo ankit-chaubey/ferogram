@@ -123,3 +123,28 @@ client.accept_invite_link("https://t.me/joinchat/AbCdEfG").await?;
 // Parse invite hash from any link format
 let hash = Client::parse_invite_hash("https://t.me/+AbCdEfG12345");
 ```
+
+---
+
+## Archive & unarchive
+
+Move a dialog into the Telegram archive (folder 1) or back to the main list (folder 0):
+
+```rust
+// Move to archive - chat disappears from the main dialog list
+client.archive_chat("@somebot").await?;
+
+// Move back to main list
+client.unarchive_chat("@somebot").await?;
+```
+
+Archived chats still receive messages; they are simply hidden from the main list and muted by default until the user opens them.
+
+### Low-level folder move
+
+For finer control (e.g. custom folders), use `move_to_folder`:
+
+```rust
+// folder_id 0 = main list, 1 = archive
+client.move_to_folder("@somebot", 0).await?;
+```

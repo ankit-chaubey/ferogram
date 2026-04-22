@@ -4,44 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! [`ClientBuilder`] for constructing a [`Config`] and connecting.
-//!
-//! # Example
-//! ```rust,no_run
-//! use ferogram::Client;
-//!
-//! #[tokio::main]
-//! async fn main() -> anyhow::Result<()> {
-//! let (client, _shutdown) = Client::builder()
-//!     .api_id(12345)
-//!     .api_hash("abc123")
-//!     .session("my.session")
-//!     .catch_up(true)
-//!     .device_model("MyApp on Linux")
-//!     .system_version("Ubuntu 24.04")
-//!     .app_version("0.1.0")
-//!     .lang_code("en")
-//!     .connect().await?;
-//! Ok(())
-//! }
-//! ```
-//!
-//! Use `.session_string(s)` instead of `.session(path)` for portable base64 sessions:
-//! ```rust,no_run
-//! # use ferogram::Client;
-//! # #[tokio::main] async fn main() -> anyhow::Result<()> {
-//! let (client, _shutdown) = Client::builder()
-//! .api_id(12345)
-//! .api_hash("abc123")
-//! .session_string(std::env::var("SESSION").unwrap_or_default())
-//! .connect().await?;
-//! # Ok(()) }
-//! ```
 
 use std::sync::Arc;
 

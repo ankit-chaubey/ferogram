@@ -4,18 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! MTProxy secret parsing, transport auto-selection, and TCP connect.
-//!
-//! | Secret prefix | Transport |
-//! |---|---|
-//! | 16 raw bytes | Obfuscated Abridged |
-//! | `0xDD` + 16 bytes | PaddedIntermediate |
-//! | `0xEE` + 16 bytes + domain | FakeTLS |
 
 use crate::{InvocationError, TransportKind};
 use tokio::net::TcpStream;

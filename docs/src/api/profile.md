@@ -242,3 +242,23 @@ client.set_profile_photo(f).await?;
 // Go offline
 client.update_status(true).await?;
 ```
+
+---
+
+## Emoji status
+
+Set or clear the animated emoji shown next to the logged-in user's name (Telegram Premium feature):
+
+```rust
+// Set an emoji status using a custom emoji document ID
+// (obtain IDs from sticker sets via client.get_sticker_set)
+client.set_emoji_status(Some(5260885697911948121), None).await?;
+
+// Set with an expiry (Unix timestamp)
+client.set_emoji_status(Some(5260885697911948121), Some(1_800_000_000)).await?;
+
+// Clear the current emoji status
+client.set_emoji_status(None, None).await?;
+```
+
+`document_id` is the `id` field from a `tl::types::Document` belonging to a custom-emoji sticker. Pass `None` to remove the status. `until` is an optional Unix timestamp after which the status expires automatically; pass `None` for no expiry.

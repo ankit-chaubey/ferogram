@@ -4,6 +4,100 @@ ferogram started as a renamed continuation of [layer](https://github.com/ankit-c
 
 ---
 
+## v0.3.3
+
+Released 2026-04-22. Bot framework release: composable filters, finite state machine, middleware pipeline, conversation API, and a new proc-macro crate.
+
+### ferogram-derive
+
+A new `ferogram-derive` crate adds the `#[derive(FsmState)]` proc-macro. Applying it to a unit-variant enum generates `as_key` and `from_key` implementations automatically. The crate is gated behind a `derive` feature flag and `FsmState` is re-exported from the crate root, so the only import you need is `use ferogram::FsmState`.
+
+### Filters
+
+`ferogram::filters` provides composable, synchronous predicates over `IncomingMessage`. Built-in constructors cover the common cases: `command`, `private`, `text`, `media`, and others. Predicates compose with `&`, `|`, and `!` operators, so you can express things like `command("start") & private()` directly in the handler registration. Filters also integrate with the FSM via `StateContext`, letting you gate handlers on the current conversation state.
+
+### FSM
+
+`ferogram::fsm` provides the full finite state machine layer: the `FsmState` trait, `StateContext`, `StateKey`, `StateKeyStrategy`, and `StateStorage`. The default storage is an in-memory `DashMap`-backed store keyed by peer. Custom backends can be plugged in via an async-trait extension point, so SQLite or Redis-backed stores are straightforward to add. A new `examples/order_bot.rs` walks through a multi-step order flow driven by the FSM.
+
+### Middleware
+
+`ferogram::middleware` adds a `Middleware` trait and a `Next` chain that wraps every handler dispatch. The crate ships a ready-to-use rate-limit middleware backed by `DashMap`. `DispatchError` and `DispatchResult` are exported for use in custom middleware.
+
+### Conversation
+
+`ferogram::conversation` provides a `Conversation` type for sequential, stateful exchanges with a single peer. It wraps an `UpdateStream` scoped to the conversation lifetime and transparently buffers updates arriving from other peers during the exchange.
+
+### IncomingMessage helpers
+
+`IncomingMessage` gained a full set of inspection methods: `chat_id`, `is_private`, `is_group`, `is_channel`, `is_any_group`, `from_id`, `is_bot_command`, `command`, `is_command_named`, `command_args`, `has_media`, `has_photo`, `has_document`, `is_forwarded`, `is_reply`, and `album_id`.
+
+### New update types
+
+Eight new update types are now exported from the crate root: `ParticipantUpdate`, `JoinRequestUpdate`, `MessageReactionUpdate`, `PollVoteUpdate`, `BotStoppedUpdate`, `ShippingQueryUpdate`, `PreCheckoutQueryUpdate`, and `ChatBoostUpdate`.
+
+### New API method
+
+`Client::get_chat_administrators()` returns all admins and the creator for a channel or supergroup. For basic groups it returns all participants; use the `is_admin` field on the result to distinguish.
+
+### New documentation pages
+
+Bot Framework: Middleware & Dispatcher, Finite State Machine (FSM), Conversation API. API reference: Bot Configuration, Stats & Analytics.
+
+### Upgrading from 0.3.2
+
+```toml
+ferogram = "0.3.3"
+```
+
+To use `#[derive(FsmState)]`:
+
+```toml
+ferogram = { version = "0.3.3", features = ["derive"] }
+```
+
+---
+
+## v0.3.2
+
+Released 2026-04-21. Correctness and session-save hardening.
+
+### SeenMsgIds
+
+The `SeenMsgIds` deque is now paired with a `HashSet` so duplicate checks under concurrent workers are O(1) instead of O(n). On busy connections receiving many server messages simultaneously this removes a hot path that was linear in the deque length.
+
+### Session save race
+
+Session temp files now get a unique name per write, and a `write_lock` serializes concurrent saves. Previously two concurrent saves could race on the rename step, which caused data loss on Windows. Both are now safe.
+
+### Bug fixes
+
+Five correctness bugs were patched:
+
+The `PaddedIntermediate` handshake was not being sent on DC pool worker connections. Without it the server would silently drop or misparse every frame from those connections.
+
+`new_session_created` was resetting the session on fresh connections even when it should not, which caused a session ID mismatch on every subsequent decrypt.
+
+`scan_body` was passing `None` as `sent_msg_id` during container iterations, letting stale cached results overwrite live responses from the server.
+
+The `importAuthorization` branch condition was inverted, so the import was skipped precisely in the cases where it was required and ran in cases where it was not.
+
+Server 4-byte transport error codes received during the DH handshake are now surfaced properly instead of being misclassified as "plain frame too short".
+
+---
+
+## v0.3.1
+
+Released 2026-04-20. Patch release fixing the docs.rs build. No functional changes from 0.3.0.
+
+### Upgrading from 0.3.0
+
+```toml
+ferogram = "0.3.1"
+```
+
+---
+
 ## v0.3.0
 
 Released 2026-04-19. The biggest release so far: two new crates, a redesigned connection stack, CDN file download support, and a much larger API reference.

@@ -3,38 +3,10 @@
 //
 // ferogram-parsers: Telegram text entity parsers for ferogram
 // https://github.com/ankit-chaubey/ferogram
-
-//! Text formatting parsers: HTML and Markdown ↔ Telegram [`MessageEntity`]
-//!
-//! # Markdown (Telegram-flavoured)
-//! ## Parsing (`parse_markdown`)
-//! | Syntax | Entity |
-//! |--------|--------|
-//! | `**bold**` or `*bold*` | Bold |
-//! | `__italic__` or `_italic_` | Italic |
-//! | `~~strike~~` | Strikethrough |
-//! | `\|\|spoiler\|\|` | Spoiler |
-//! | `` `code` `` | Code |
-//! | ` ```lang\npre\n``` ` | Pre (code block) |
-//! | `[text](url)` | TextUrl |
-//! | `[text](tg://user?id=123)` | MentionName |
-//! | `![text](tg://emoji?id=123)` | CustomEmoji |
-//! | `\*`, `\_`, `\~` ... | Escaped literal char |
-//!
-//! ## Generating (`generate_markdown`)
-//! Produces the same syntax above for all supported entity types.
-//! `Underline` has no unambiguous markdown delimiter and is silently skipped.
-//!
-//! # HTML
-//! Supported tags: `<b>`, `<strong>`, `<i>`, `<em>`, `<u>`, `<s>`, `<del>`,
-//! `<code>`, `<pre>`, `<tg-spoiler>`, `<a href="url">`,
-//! `<tg-emoji emoji-id="id">text</tg-emoji>`
-//!
-//! # Feature gates
-//! * `html`     : enables `parse_html` / `generate_html` via the built-in hand-rolled
-//!   parser (zero extra deps).
-//! * `html5ever`: replaces `parse_html` with a spec-compliant html5ever tokenizer.
-//!   `generate_html` is always the same hand-rolled generator.
+//
+// If you use or modify this code, keep this notice at the top of your file
+// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// https://github.com/ankit-chaubey/ferogram
 
 use ferogram_tl_types as tl;
 

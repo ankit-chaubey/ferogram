@@ -4,15 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Build script: parse `.tl` schema files and generate Rust source code.
-//!
-//! Adding support for a new layer is as simple as dropping a new `.tl` file
-//! into `tl/` and bumping the `LAYER` constant: the rest is automatic.
 
 use std::env;
 use std::fs;

@@ -4,20 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! MTProto Intermediate and Full transport framing.
-//!
-//! Alongside the existing Abridged transport this module gives:
-//!
-//! * [`IntermediateTransport`]: each packet is `[4-byte LE length][payload]`.
-//!   More compatible than Abridged with proxies that inspect the first byte.
-//!
-//! * [`FullTransport`]: like Intermediate but additionally includes a running
-//!   sequence number and a CRC-32 checksum for integrity verification.
 
 use crate::InvocationError;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

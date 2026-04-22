@@ -4,16 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Multi-DC connection pool.
-//!
-//! Maintains one authenticated [`DcConnection`] per DC ID and routes RPC calls
-//! to the correct DC automatically.  Auth keys are shared from the home DC via
-//! `auth.exportAuthorization` / `auth.importAuthorization`.
 
 use ferogram_mtproto::{
     EncryptedSession, SeenMsgIds, Session, authentication as auth, new_seen_msg_ids,

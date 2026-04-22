@@ -4,12 +4,10 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
 
-/// Calculate the SHA-1 hash of one or more byte slices concatenated.
 #[macro_export]
 macro_rules! sha1 {
     ( $( $x:expr ),+ ) => {{

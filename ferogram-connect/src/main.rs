@@ -4,27 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Telegram MTProto full auth key generation + encrypted API demo.
-//!
-//! # What this does
-//!
-//! 1. TCP connect to Telegram DC1 (production servers)
-//! 2. Send `req_pq_multi`
-//! 3. Receive `ResPQ`, factorize PQ, RSA-encrypt, send `req_DH_params`
-//! 4. Receive `ServerDhParams`, complete DH, send `set_client_DH_params`
-//! 5. Receive `DhGenOk`, derive `AuthKey`
-//! 6. Call `help.getConfig` using MTProto 2.0 encrypted transport
-//! 7. Print the DC list from the config
-//!
-//! # Run
-//! ```
-//! cargo run -p ferogram-connect
-//! ```
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -108,7 +90,7 @@ fn recv_plain<T: Deserializable>(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Connect
+    // connect
     println!("Connecting to {} …", DC1_PROD);
     let tcp = Tcp::connect(DC1_PROD)?;
     let mut transport = ObfuscatedAbridged::new(tcp.0, 1)?;
@@ -142,7 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let dh_answer: ferogram_tl_types::enums::SetClientDhParamsAnswer = recv_plain(&mut transport)?;
 
-    // 5. Derive auth key
+    // derive auth key
     let done = match auth::finish(state3, dh_answer)? {
         auth::FinishResult::Done(f) => f,
         auth::FinishResult::Retry { .. } => return Err("DH handshake needs retry".into()),
@@ -152,7 +134,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  first_salt  = {}", done.first_salt);
     println!("  auth_key    = {:02x?}…", &done.auth_key[..8]);
 
-    // 6. Encrypted session: call help.getConfig
+    // encrypted session: call help.getConfig
     println!("\n[Encrypted] Calling help.getConfig …");
     let mut enc = EncryptedSession::new(done.auth_key, done.first_salt, done.time_offset);
 

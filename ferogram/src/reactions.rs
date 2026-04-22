@@ -4,39 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! [`InputReactions`]: typed parameter for reacting to messages.
-//!
-//!  API.
-//!
-//! # Examples
-//!
-//! ```rust,no_run
-//! use ferogram::reactions::InputReactions;
-//!
-//! // Simple emoji
-//! InputReactions::emoticon("👍");
-//!
-//! // Custom emoji (premium)
-//! InputReactions::custom_emoji(1234567890);
-//!
-//! // Remove all reactions
-//! InputReactions::remove();
-//!
-//! // Multi-reaction
-//! use ferogram_tl_types::enums::Reaction;
-//! InputReactions::from(vec![
-//! Reaction::Emoji(ferogram_tl_types::types::ReactionEmoji { emoticon: "👍".into() }),
-//! Reaction::Emoji(ferogram_tl_types::types::ReactionEmoji { emoticon: "❤️".into() }),
-//! ]);
-//!
-//! // Chained modifiers
-//! InputReactions::emoticon("🔥").big().add_to_recent();
-//! ```
 
 use ferogram_tl_types::{self as tl, enums::Reaction};
 

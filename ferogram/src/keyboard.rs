@@ -4,25 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Inline keyboard builder: create reply markups without raw TL verbosity.
-//!
-//! # Example
-//! ```rust,no_run
-//! use ferogram::keyboard::{InlineKeyboard, Button};
-//!
-//! let kb = InlineKeyboard::new()
-//! .row([Button::callback("✅ Yes", b"yes"),
-//!       Button::callback("❌ No",  b"no")])
-//! .row([Button::url("📖 Docs", "https://docs.rs/ferogram")]);
-//!
-//! // Pass to InputMessage:
-//! // let msg = InputMessage::text("Choose:").keyboard(kb);
-//! ```
 
 use ferogram_tl_types as tl;
 

@@ -4,18 +4,10 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
 
-//! The [`Serializable`] trait and its implementations for primitive TL types.
-//!
-//! Encoding follows the [MTProto Binary Serialization] spec.
-//!
-//! [MTProto Binary Serialization]: https://core.telegram.org/mtproto/serialize
-
-/// Serialize `self` into TL binary format.
 pub trait Serializable {
     /// Appends the serialized form of `self` to `buf`.
     fn serialize(&self, buf: &mut impl Extend<u8>);

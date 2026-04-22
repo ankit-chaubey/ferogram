@@ -4,12 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Pollard-rho (Brent variant) integer factorization: used for PQ step.
 
 fn gcd(mut a: u128, mut b: u128) -> u128 {
     while b != 0 {

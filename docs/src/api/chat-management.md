@@ -268,3 +268,42 @@ println!("Invite: {}", match &inv {
     _ => "",
 });
 ```
+
+---
+
+## Transfer ownership
+
+Transfer ownership of a basic group to another member. The calling user must be the current owner and must supply their 2FA SRP credential.
+
+```rust
+use ferogram_tl_types as tl;
+
+// For a no-password account, use InputCheckPasswordEmpty
+let password_check = tl::enums::InputCheckPasswordSrp::Empty(
+    tl::types::InputCheckPasswordEmpty {}
+);
+
+client.transfer_chat_ownership(
+    "@mygroup",
+    new_owner_user_id,
+    password_check,
+).await?;
+```
+
+Use [`Client::compute_password_check`](./profile.md) to build the SRP object when 2FA is enabled.
+
+> **Note**: For channels and supergroups, ownership transfer uses `channels.editCreator` on the Telegram layer, which is not yet wrapped by a dedicated helper. Use the [raw API](../advanced/raw-api.md) for that case.
+
+---
+
+## Linked channel
+
+A broadcast channel can have a linked discussion supergroup and vice-versa. Retrieve the linked chat's ID:
+
+```rust
+if let Some(linked_id) = client.get_linked_channel("@mychannel").await? {
+    println!("Linked chat ID: {linked_id}");
+}
+```
+
+Returns `None` when no linked chat is configured. Works for both directions - pass a channel to get its discussion group, or pass a supergroup to get its linked broadcast channel.

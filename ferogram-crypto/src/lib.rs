@@ -4,23 +4,70 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-crypto/0.4.6")]
-//! Cryptographic primitives for Telegram MTProto.
+#![doc(html_root_url = "https://docs.rs/ferogram-crypto/0.3.3")]
+//! Cryptographic primitives for Telegram MTProto 2.0.
 //!
-//! Provides:
-//! - AES-256-IGE encryption/decryption
-//! - SHA-1 / SHA-256 hash macros
-//! - Pollard-rho PQ factorization
-//! - RSA padding (MTProto RSA-PAD scheme)
-//! - `AuthKey`: 256-byte session key
-//! - MTProto 2.0 message encryption / decryption
-//! - DH nonce→key derivation
+//! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
+//! MTProto client built by [Ankit Chaubey](https://github.com/ankit-chaubey).
+//!
+//! - Channel: [t.me/Ferogram](https://t.me/Ferogram)
+//! - Chat: [t.me/FerogramChat](https://t.me/FerogramChat)
+//!
+//! Most users do not need this crate directly. The `ferogram` crate wraps
+//! everything. Use `ferogram-crypto` only if you are building your own MTProto
+//! transport layer or need direct access to the primitives.
+//!
+//! # What's in here
+//!
+//! - **AES-256-IGE**: MTProto's symmetric cipher. [`aes::ige_encrypt`] and
+//!   [`aes::ige_decrypt`] operate on 16-byte-aligned buffers.
+//! - **SHA-1 / SHA-256**: Hash macros used throughout key derivation and
+//!   message authentication.
+//! - **Pollard-rho PQ factorization**: Required by the DH handshake:
+//!   Telegram sends a 64-bit semiprime and expects you to factor it.
+//!   [`factorize`] does this.
+//! - **RSA (MTProto RSA-PAD)**: Used during the initial key exchange to
+//!   encrypt the inner request to Telegram's known public keys.
+//!   See [`rsa`].
+//! - **`AuthKey`**: The 256-byte session key derived after a successful DH
+//!   exchange. Wraps the raw bytes and exposes the auxiliary hash needed for
+//!   MTProto 2.0 message encryption.
+//! - **MTProto 2.0 encrypt / decrypt**: [`encrypt_data_v2`] and
+//!   [`decrypt_data_v2`] implement the full AES-IGE + SHA-256 message
+//!   protection scheme from the spec.
+//! - **DH nonce-to-key derivation**: Derives `auth_key` from the DH result
+//!   bytes using the MTProto KDF.
+//! - **Obfuscated transport**: [`ObfuscatedCipher`] implements the random-padding
+//!   + AES-CTR obfuscation layer used by `ObfuscatedAbridged` transport.
+//!
+//! # Example: AES-IGE round-trip
+//!
+//! ```rust
+//! use ferogram_crypto::aes::{ige_encrypt, ige_decrypt};
+//!
+//! let key = [0u8; 32];
+//! let iv  = [0u8; 32];
+//! let mut data = vec![0u8; 48]; // must be 16-byte aligned
+//!
+//! ige_encrypt(&mut data, &key, &iv);
+//! ige_decrypt(&mut data, &key, &iv);
+//! // data is back to zeros
+//! ```
+//!
+//! # Example: factorize
+//!
+//! ```rust
+//! use ferogram_crypto::factorize;
+//!
+//! let (p, q) = factorize(0x17ED48941A08F981);
+//! assert!(p < q);
+//! assert_eq!(p * q, 0x17ED48941A08F981);
+//! ```
 
 #![deny(unsafe_code)]
 

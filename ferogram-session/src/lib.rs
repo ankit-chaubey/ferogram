@@ -3,28 +3,71 @@
 //
 // ferogram-session: session persistence types and backends for ferogram
 // https://github.com/ankit-chaubey/ferogram
+//
+// If you use or modify this code, keep this notice at the top of your file
+// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// https://github.com/ankit-chaubey/ferogram
 
-//! Session persistence types and pluggable storage backends.
+#![cfg_attr(docsrs, feature(doc_cfg))]
+//! Session persistence types and storage backends for ferogram.
 //!
-//! Saves auth key, salt, time offset, DC table, update sequence counters,
-//! and peer access-hash cache.
+//! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
+//! MTProto client built by [Ankit Chaubey](https://github.com/ankit-chaubey).
 //!
-//! # Crate contents
+//! - Channel: [t.me/Ferogram](https://t.me/Ferogram)
+//! - Chat: [t.me/FerogramChat](https://t.me/FerogramChat)
 //!
-//! - [`PersistedSession`]: the serializable session struct (DC table,
-//!   auth keys, update counters, peer access-hash cache).
-//! - [`SessionBackend`]: the sync snapshot trait that all backends implement.
-//! - Built-in backends: [`BinaryFileBackend`], [`InMemoryBackend`],
-//!   [`StringSessionBackend`], and optionally [`SqliteBackend`] and
-//!   [`LibSqlBackend`] behind feature flags.
+//! Most users do not use this crate directly. The `ferogram` crate wires it up
+//! automatically when you call `Client::builder().session(...)` or
+//! `.session_string(...)`.
 //!
-//! ## Binary format versioning
+//! # What's in here
 //!
-//! Every file starts with a single **version byte**:
-//! - `0x01`: legacy format (DC table only, no update state or peers).
-//! - `0x02`: current format (DC table + update state + peer cache).
+//! - [`PersistedSession`]: the serializable session struct. Holds the DC table
+//!   (one `AuthKey` + salt + time offset per DC), update sequence counters
+//!   (PTS, QTS, date, seq), and the peer access-hash cache.
+//! - [`SessionBackend`]: the trait all backends implement. A single method:
+//!   `save(&PersistedSession)` and `load() -> Option<PersistedSession>`.
+//! - [`BinaryFileBackend`]: stores the session as a binary file on disk.
+//!   Good for bots and scripts. No extra dependencies.
+//! - [`InMemoryBackend`]: keeps everything in memory. Nothing survives process
+//!   exit. Used for tests and ephemeral tasks.
+//! - [`StringSessionBackend`]: serializes the session to a base64 string.
+//!   Useful for serverless environments where you store state in an env var or
+//!   database column. Load it with `Client::builder().session_string(s)`.
+//! - [`SqliteBackend`]: SQLite-backed storage via rusqlite. Behind the
+//!   `sqlite-session` feature flag. Good for local multi-account tooling.
+//! - [`LibSqlBackend`]: libSQL / Turso backend. Behind `libsql-session`.
+//!   For distributed or edge-hosted session storage.
+//!
+//! You can also implement `SessionBackend` yourself for Redis, PostgreSQL, or
+//! anything else.
+//!
+//! # Binary format
+//!
+//! The file backends start with a version byte:
+//! - `0x01`: legacy (DC table only, no update state or peer cache).
+//! - `0x02`: current (DC table + update state + peer cache).
 //!
 //! `load()` handles both. `save()` always writes v2.
+//!
+//! # Example: export and re-import a session
+//!
+//! ```rust,no_run
+//! # async fn example(client: ferogram::Client) -> anyhow::Result<()> {
+//! // Export
+//! let s = client.export_session_string().await?;
+//!
+//! // Later, in another process or after a restart:
+//! let (client, _) = ferogram::Client::builder()
+//!     .api_id(12345)
+//!     .api_hash("api_hash")
+//!     .session_string(s)
+//!     .connect()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
 
 use std::collections::HashMap;
 use std::io::{self, ErrorKind};

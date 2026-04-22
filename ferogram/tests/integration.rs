@@ -4,31 +4,10 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
 
-//! Integration-level tests for ferogram.
-//!
-//! These live in `ferogram/tests/integration.rs` (Rust integration tests
-//! run against the compiled crate, not the internals).
-//!
-//! Run with:
-//! cargo test -p ferogram --test integration
-//!
-//! Ported/inspired by ' test patterns. Tests are grouped by module:
-//! - `retry`        : RetryPolicy and RetryLoop behaviour
-//! - `session`      : SessionBackend implementations
-//! - `dc_migration` : fallback addresses, DcAuthTracker
-//! - `update_state` : UpdateStateChange application
-//! - `incoming_msg` : IncomingMessage accessor coverage
-
-// Re-exports needed for tests
-// (In real file these would be `use ferogram::...`)
-
-// Stub types matching ferogram internals for compilation in isolation
-// Replace these with the real imports when this file lives inside the crate.
 #[cfg(test)]
 mod retry {
     use std::num::NonZeroU32;

@@ -10,6 +10,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.3]: 2026-04-22
+
+### New crate
+
+- **ferogram-derive**: proc-macro crate providing `#[derive(FsmState)]`. Generates `as_key` and `from_key` for unit-variant enums. Only active with the `derive` feature flag.
+
+### New modules
+
+- **ferogram::middleware**: `Middleware` trait, `Next` chain, `DispatchError`/`DispatchResult`, and a rate-limit middleware backed by `DashMap`. Wraps handler dispatch with pre/post logic.
+- **ferogram::filters**: composable, synchronous predicates over `IncomingMessage`. Built-in constructors for command, private, text, media, and more. Supports `&`, `|`, `!` operators for compound expressions. Integrates with the FSM via `StateContext`.
+- **ferogram::fsm**: `FsmState` trait, `StateContext`, `StateKey`, `StateKeyStrategy`, and `StateStorage`. In-memory `DashMap`-backed store by default; custom backends via async-trait extension point.
+- **ferogram::conversation**: `Conversation` for stateful back-and-forth with a single peer. Wraps `UpdateStream` for the conversation lifetime and buffers updates from other peers.
+
+### Added
+
+- `IncomingMessage` gained message-inspection helpers: `chat_id()`, `is_private()`, `is_group()`, `is_channel()`, `is_any_group()`, `from_id()`, `is_bot_command()`, `command()`, `is_command_named()`, `command_args()`, `has_media()`, `has_photo()`, `has_document()`, `is_forwarded()`, `is_reply()`, `album_id()`.
+- New update types exported from the crate root: `ParticipantUpdate`, `JoinRequestUpdate`, `MessageReactionUpdate`, `PollVoteUpdate`, `BotStoppedUpdate`, `ShippingQueryUpdate`, `PreCheckoutQueryUpdate`, `ChatBoostUpdate`.
+- `Client::get_chat_administrators()`: returns all admins and the creator for a channel or supergroup. For basic groups, returns all participants (use `is_admin` on the result).
+- `FsmState` re-exported from the crate root. With the `derive` feature, `#[derive(FsmState)]` is available directly from `ferogram`.
+- Example: `examples/order_bot.rs` showing a multi-step FSM-driven order flow.
+
+### Docs
+
+New pages:
+
+- Bot Framework: Middleware & Dispatcher, Finite State Machine (FSM), Conversation API
+- API reference: Bot Configuration, Stats & Analytics
+
+**Full Changelog**: https://github.com/ankit-chaubey/ferogram/compare/v0.3.2...v0.3.3
+
+---
+
+## [0.3.2]: 2026-04-21
+
+### Changed
+
+- `SeenMsgIds` deque now paired with a `HashSet` for O(1) duplicate checks under concurrent workers (was O(n) linear scan).
+- Session temp files now use a unique name per write. A `write_lock` serializes concurrent saves to prevent a rename race on Windows.
+
+### Fixed
+
+- `PaddedIntermediate` handshake was missing in DC pool worker connections. Fixed.
+- `new_session_created` was resetting the session on fresh connections when it should not, causing a session ID mismatch on every decrypt after. Fixed.
+- `scan_body` was passing `None` as `sent_msg_id` on container iterations, letting stale results overwrite live responses. Fixed.
+- `importAuthorization` branch logic was inverted; it was skipping the import exactly when it was needed. Fixed.
+- Server 4-byte transport error codes during DH now surface properly instead of logging as "plain frame too short".
+
+**Full Changelog**: https://github.com/ankit-chaubey/ferogram/compare/v0.3.1...v0.3.2
+
+---
+
+## [0.3.1]: 2026-04-20
+
+Patch release to fix the docs.rs build. No functional changes from 0.3.0.
+
+**Full Changelog**: https://github.com/ankit-chaubey/ferogram/compare/v0.3.0...v0.3.1
+
+---
+
 ## [0.3.0]: 2026-04-19
 
 0.3.0 is a substantial release. The workspace grew by two new crates, the session and parser layers were extracted into their own packages, and the connection stack gained CDN support, DNS-over-HTTPS fallback, and transport probing. About 16.7k lines were added across 114 changed files.

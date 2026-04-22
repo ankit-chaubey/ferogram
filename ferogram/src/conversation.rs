@@ -3,35 +3,10 @@
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
-
-//! Multi-step bot conversation API.
-//!
-//! [`Conversation`] lets you implement stateful, question-answer flows without
-//! manually tracking update streams. It wraps a mutable reference to an
-//! existing [`UpdateStream`] and adds peer-filtered waiting, question/answer
-//! helpers, and inline-button (callback) waiting.
-//!
-//! Non-matching updates are buffered internally so they are not lost; drain
-//! them with [`Conversation::drain_buffered`] after the conversation ends.
-//!
-//! # Example
-//!
-//! ```rust,no_run
-//! use ferogram::{Client, UpdateStream, conversation::Conversation};
-//! use std::time::Duration;
-//!
-//! async fn onboard(
-//!     client: &Client,
-//!     stream: &mut UpdateStream,
-//!     user_id: i64,
-//! ) -> anyhow::Result<()> {
-//!     let mut conv = Conversation::new(client, stream, user_id).await?;
-//!     conv.ask("What is your name?").await?;
-//!     let name_msg = conv.get_response(Duration::from_secs(60)).await?;
-//!     conv.respond(format!("Hi {}!", name_msg.text().unwrap_or("?"))).await?;
-//!     Ok(())
-//! }
-//! ```
+//
+// If you use or modify this code, keep this notice at the top of your file
+// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// https://github.com/ankit-chaubey/ferogram
 
 use std::time::Duration;
 
@@ -106,6 +81,8 @@ impl<'a> Conversation<'a> {
         })
     }
 
+    // Sending
+
     /// Send a message to the conversation peer.
     pub async fn ask(&self, text: impl Into<String>) -> Result<IncomingMessage, ConversationError> {
         let s: String = text.into();
@@ -122,6 +99,8 @@ impl<'a> Conversation<'a> {
     ) -> Result<IncomingMessage, ConversationError> {
         self.ask(text).await
     }
+
+    // Waiting
 
     /// Wait for the next message from this peer within `deadline`.
     ///
@@ -206,6 +185,8 @@ impl<'a> Conversation<'a> {
         self.get_response(deadline).await
     }
 
+    // Introspection
+
     /// The resolved peer for this conversation.
     pub fn peer(&self) -> &tl::enums::Peer {
         &self.peer
@@ -218,6 +199,8 @@ impl<'a> Conversation<'a> {
         std::mem::take(&mut self.buffered)
     }
 }
+
+// Helpers
 
 fn peer_matches(msg_peer: Option<&tl::enums::Peer>, conv_peer: &tl::enums::Peer) -> bool {
     match (msg_peer, conv_peer) {

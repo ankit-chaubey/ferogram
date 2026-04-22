@@ -4,14 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Chat participant and member management.
-//!
-//! Provides [`Client::get_participants`], kick, ban, and admin rights management.
 
 use std::collections::VecDeque;
 
@@ -46,6 +41,34 @@ pub enum ParticipantStatus {
     Left,
     /// Kicked (banned) from the group.
     Banned,
+}
+
+impl Participant {
+    pub(crate) fn from_channel_participant(
+        p: tl::enums::ChannelParticipant,
+        user_map: &std::collections::HashMap<i64, tl::types::User>,
+    ) -> Option<Self> {
+        let (user_id, status) = match &p {
+            tl::enums::ChannelParticipant::ChannelParticipant(x) => {
+                (x.user_id, ParticipantStatus::Member)
+            }
+            tl::enums::ChannelParticipant::ParticipantSelf(x) => {
+                (x.user_id, ParticipantStatus::Member)
+            }
+            tl::enums::ChannelParticipant::Creator(x) => (x.user_id, ParticipantStatus::Creator),
+            tl::enums::ChannelParticipant::Admin(x) => (x.user_id, ParticipantStatus::Admin),
+            tl::enums::ChannelParticipant::Banned(x) => {
+                (x.peer.user_id_or(0), ParticipantStatus::Banned)
+            }
+            tl::enums::ChannelParticipant::Left(x) => {
+                (x.peer.user_id_or(0), ParticipantStatus::Left)
+            }
+        };
+        user_map
+            .get(&user_id)
+            .cloned()
+            .map(|user| Participant { user, status })
+    }
 }
 
 impl Client {
@@ -566,7 +589,7 @@ impl Client {
 
 // Helper extension for Peer
 
-pub(crate) trait PeerUserIdExt {
+trait PeerUserIdExt {
     fn user_id_or(&self, default: i64) -> i64;
 }
 

@@ -4,16 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! High-level update types delivered by [`crate::Client::stream_updates`].
-//!
-//! Every update the Telegram server pushes is classified into one of the
-//! variants of [`Update`].  The raw constructor ID is always available
-//! via [`Update::Raw`] for anything not yet wrapped.
 
 use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable};
@@ -1284,7 +1277,7 @@ pub struct BotStoppedUpdate {
 /// Respond with [`Client::answer_shipping_query`].
 #[derive(Debug, Clone)]
 pub struct ShippingQueryUpdate {
-    /// The query ID, pass to `answer_shipping_query`.
+    /// The query ID - pass to `answer_shipping_query`.
     pub query_id: i64,
     /// The user who submitted the address.
     pub user_id: i64,
@@ -1301,7 +1294,7 @@ pub struct ShippingQueryUpdate {
 /// Respond within 10 seconds via [`Client::answer_precheckout_query`].
 #[derive(Debug, Clone)]
 pub struct PreCheckoutQueryUpdate {
-    /// The query ID, pass to `answer_precheckout_query`.
+    /// The query ID - pass to `answer_precheckout_query`.
     pub query_id: i64,
     /// The user who pressed "Pay".
     pub user_id: i64,

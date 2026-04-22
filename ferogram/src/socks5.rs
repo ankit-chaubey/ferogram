@@ -4,27 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! SOCKS5 proxy connector.
-//!
-//! Provides [`Socks5Config`] that can be attached to a [`crate::Config`]
-//! so every Telegram connection is routed through a SOCKS5 proxy.
-//!
-//! # Example
-//! ```rust,no_run
-//! use ferogram::{Config, proxy::Socks5Config};
-//! use std::sync::Arc;
-//! use ferogram::retry::AutoSleep;
-//!
-//! let cfg = Config {
-//! socks5: Some(Socks5Config::new("127.0.0.1:1080")),
-//! ..Default::default()
-//! };
-//! ```
 
 use crate::InvocationError;
 use tokio::net::TcpStream;

@@ -4,14 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! Async TCP transport for MTProto (abridged framing).
-//!
-//! Handles the low-level abridged transport protocol over tokio's async TCP.
 
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

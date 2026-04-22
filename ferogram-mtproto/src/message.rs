@@ -4,12 +4,9 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
-
-//! MTProto message framing types.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -315,3 +315,36 @@ if let Some(loc) = download_location_from_media(&msg.raw) {
 // Or via IncomingMessage convenience:
 msg.download_media("output.jpg").await?;
 ```
+
+---
+
+## Media groups (albums)
+
+When Telegram delivers a grouped media send (album), each message in the group carries the same `grouped_id`. To fetch all messages belonging to the same album as a known message ID:
+
+```rust
+let msgs = client.get_media_group("@mychannel", 42).await?;
+println!("{} messages in this album", msgs.len());
+
+for m in &msgs {
+    if let Some(photo) = m.photo() {
+        println!("  photo id={}", photo.id());
+    } else if let Some(doc) = m.document() {
+        println!("  document mime={}", doc.mime_type().unwrap_or("?"));
+    }
+}
+```
+
+`get_media_group` accepts any peer and a message ID that is part of the album. It returns all messages in the group including the seed message. For non-channel chats the server returns only the single message.
+
+### Detecting albums in the update stream
+
+```rust
+if let Update::NewMessage(msg) = update {
+    if msg.grouped_id().is_some() {
+        // This message is part of an album; you can call
+        // client.get_media_group(msg.peer_id(), msg.id()).await
+        // to retrieve the full set.
+    }
+}
+```

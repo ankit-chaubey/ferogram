@@ -4,9 +4,6 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// Based on layer: https://github.com/ankit-chaubey/layer
-// Follows official Telegram client behaviour (tdesktop, TDLib).
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
@@ -126,6 +123,7 @@ async fn dispatch(upd: Update, client: Arc<Client>, me: Arc<tl::types::User>, bo
             }
             let text = msg.text().unwrap_or("").trim().to_string();
 
+            // Auto media echo
             // Fires on any photo or document that does NOT start with a command.
             // Command messages that happen to carry media are handled normally
             // by the text-command router below (e.g. a caption "/help").
@@ -1029,6 +1027,8 @@ fn human_size(bytes: usize) -> (String, f64) {
         (format!("{kb:.1} KB"), mb)
     }
 }
+
+// Send helpers
 
 async fn rp(client: &Client, peer: tl::enums::Peer, reply_to: i32, text: &str) {
     let _ = client

@@ -15,7 +15,7 @@ Runs during `cargo build` via `build.rs`. Takes a parsed TL AST from `ferogram-t
 
 ```toml
 [build-dependencies]
-ferogram-tl-gen = "0.3.0"
+ferogram-tl-gen = "0.3"
 ```
 
 ---

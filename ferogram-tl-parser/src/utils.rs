@@ -4,17 +4,10 @@
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-//
 // If you use or modify this code, keep this notice at the top of your file
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
 
-//! Utility to derive a TL constructor ID via CRC32 when no explicit `#id` is given.
-
-/// Compute the CRC32-based TL constructor ID for a definition string.
-///
-/// Follows Telegram's TL naming algorithm: strips the `= ReturnType` suffix,
-/// normalise whitespace, then CRC32 the result.
 pub(crate) fn tl_id(definition: &str) -> u32 {
     // Strip everything from ` = ` onward (as Telegram does)
     let cleaned = match definition.split_once('=') {
