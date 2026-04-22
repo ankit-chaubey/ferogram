@@ -126,7 +126,6 @@ async fn dispatch(upd: Update, client: Arc<Client>, me: Arc<tl::types::User>, bo
             }
             let text = msg.text().unwrap_or("").trim().to_string();
 
-            // ── Auto media echo ──────────────────────────────────────────────
             // Fires on any photo or document that does NOT start with a command.
             // Command messages that happen to carry media are handled normally
             // by the text-command router below (e.g. a caption "/help").
@@ -149,7 +148,6 @@ async fn dispatch(upd: Update, client: Arc<Client>, me: Arc<tl::types::User>, bo
                 h_media_echo(&client, peer, msg_id, msg).await;
                 return;
             }
-            // ────────────────────────────────────────────────────────────────
 
             if !text.starts_with('/') {
                 return;
@@ -845,8 +843,6 @@ async fn h_fmt_html(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
         .await;
 }
 
-// ── Media auto-echo ──────────────────────────────────────────────────────────
-
 /// Echo a photo or document back to the sender with download/upload speed stats.
 ///
 /// Flow:
@@ -890,7 +886,6 @@ async fn h_media_echo(
 
     let (dl_size_str, _mb) = human_size(size_bytes);
 
-    // ── Step 1: send "Downloading…" status ──────────────────────────────────
     rh(
         client,
         peer.clone(),
@@ -905,7 +900,6 @@ async fn h_media_echo(
     )
     .await;
 
-    // ── Step 2: download ─────────────────────────────────────────────────────
     let dl_start = Instant::now();
     match msg.download_media_with(client, &tmp_path).await {
         Err(e) => {
@@ -941,7 +935,6 @@ async fn h_media_echo(
     let dl_speed = actual_mb / dl_secs;
     let (actual_size_str, _) = human_size(actual_bytes);
 
-    // ── Step 3: read file ────────────────────────────────────────────────────
     let bytes = match tokio::fs::read(&tmp_path).await {
         Ok(b) => b,
         Err(e) => {
@@ -958,7 +951,6 @@ async fn h_media_echo(
     };
     let _ = tokio::fs::remove_file(&tmp_path).await;
 
-    // ── Step 4: send "Uploading…" status ────────────────────────────────────
     rh(
         client,
         peer.clone(),
@@ -969,7 +961,6 @@ async fn h_media_echo(
     )
     .await;
 
-    // ── Step 5: upload ───────────────────────────────────────────────────────
     let ul_start = Instant::now();
     let uploaded = match client
         .upload_file_concurrent(Arc::new(bytes), &file_name, &mime)
@@ -990,7 +981,6 @@ async fn h_media_echo(
     let ul_secs = ul_start.elapsed().as_secs_f64().max(0.001);
     let ul_speed = actual_mb / ul_secs;
 
-    // ── Step 6: send echoed file with stats caption ──────────────────────────
     let caption = if is_photo {
         format!(
             "✅ <b>Echo</b>\n\
@@ -1039,8 +1029,6 @@ fn human_size(bytes: usize) -> (String, f64) {
         (format!("{kb:.1} KB"), mb)
     }
 }
-
-// ── Send helpers ─────────────────────────────────────────────────────────────
 
 async fn rp(client: &Client, peer: tl::enums::Peer, reply_to: i32, text: &str) {
     let _ = client

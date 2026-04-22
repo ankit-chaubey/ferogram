@@ -47,8 +47,10 @@ mod two_factor_auth;
 pub mod update;
 
 pub mod cdn_download;
+pub mod conversation;
 pub mod dc_pool;
 pub mod dns_resolver;
+pub mod filters;
 pub mod inline_iter;
 pub mod keyboard;
 pub mod search;
@@ -97,7 +99,9 @@ pub use types::ChannelKind;
 pub use types::{Channel, Chat, Group, User};
 pub use typing_guard::TypingGuard;
 pub use update::Update;
-pub use update::{ChatActionUpdate, UserStatusUpdate};
+pub use update::{BotStoppedUpdate, MessageReactionUpdate, PollVoteUpdate};
+pub use update::{ChatActionUpdate, JoinRequestUpdate, ParticipantUpdate, UserStatusUpdate};
+pub use update::{ChatBoostUpdate, PreCheckoutQueryUpdate, ShippingQueryUpdate};
 
 /// Re-export of `ferogram_tl_types`: generated TL constructors, functions, and enums.
 /// Users can write `use ferogram::tl` instead of adding a separate `ferogram-tl-types` dep.
@@ -8337,6 +8341,105 @@ impl Client {
         Ok(result)
     }
 
+    /// Get only the administrators of a channel or supergroup.
+    ///
+    /// Returns a `Vec<Participant>` containing every admin and the creator.
+    /// For basic groups, every participant is returned (use their `is_admin` flag).
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// for admin in client.get_chat_administrators("@mychannel").await? {
+    ///     println!("{:?} - admin: {}", admin.user, admin.permissions.is_admin);
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub async fn get_chat_administrators(
+        &self,
+        peer: impl Into<PeerRef>,
+    ) -> Result<Vec<crate::participants::Participant>, InvocationError> {
+        use crate::participants::PeerUserIdExt;
+        use ferogram_tl_types::{Cursor, Deserializable};
+        let peer = peer.into().resolve(self).await?;
+        match &peer {
+            tl::enums::Peer::Channel(c) => {
+                let access_hash = self
+                    .inner
+                    .peer_cache
+                    .read()
+                    .await
+                    .channels
+                    .get(&c.channel_id)
+                    .copied()
+                    .unwrap_or(0);
+                let req = tl::functions::channels::GetParticipants {
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id: c.channel_id,
+                        access_hash,
+                    }),
+                    filter: tl::enums::ChannelParticipantsFilter::ChannelParticipantsAdmins,
+                    offset: 0,
+                    limit: 200,
+                    hash: 0,
+                };
+                let body = self.rpc_call_raw_pub(&req).await?;
+                let mut cur = Cursor::from_slice(&body);
+                let raw = match tl::enums::channels::ChannelParticipants::deserialize(&mut cur)? {
+                    tl::enums::channels::ChannelParticipants::ChannelParticipants(p) => p,
+                    tl::enums::channels::ChannelParticipants::NotModified => return Ok(vec![]),
+                };
+                let user_map: std::collections::HashMap<i64, tl::types::User> = raw
+                    .users
+                    .into_iter()
+                    .filter_map(|u| match u {
+                        tl::enums::User::User(u) => Some((u.id, u)),
+                        _ => None,
+                    })
+                    .collect();
+                Ok(raw
+                    .participants
+                    .into_iter()
+                    .filter_map(|p| {
+                        let (user_id, status) = match &p {
+                            tl::enums::ChannelParticipant::ChannelParticipant(x) => {
+                                (x.user_id, crate::participants::ParticipantStatus::Member)
+                            }
+                            tl::enums::ChannelParticipant::ParticipantSelf(x) => {
+                                (x.user_id, crate::participants::ParticipantStatus::Member)
+                            }
+                            tl::enums::ChannelParticipant::Creator(x) => {
+                                (x.user_id, crate::participants::ParticipantStatus::Creator)
+                            }
+                            tl::enums::ChannelParticipant::Admin(x) => {
+                                (x.user_id, crate::participants::ParticipantStatus::Admin)
+                            }
+                            tl::enums::ChannelParticipant::Banned(x) => (
+                                x.peer.user_id_or(0),
+                                crate::participants::ParticipantStatus::Banned,
+                            ),
+                            tl::enums::ChannelParticipant::Left(x) => (
+                                x.peer.user_id_or(0),
+                                crate::participants::ParticipantStatus::Left,
+                            ),
+                        };
+                        user_map
+                            .get(&user_id)
+                            .cloned()
+                            .map(|user| crate::participants::Participant { user, status })
+                    })
+                    .collect())
+            }
+            tl::enums::Peer::Chat(_) => {
+                // For basic groups return all members; callers check is_admin flag.
+                self.get_participants(peer, 0).await
+            }
+            _ => Err(InvocationError::Deserialize(
+                "get_chat_administrators: peer must be a chat or channel".into(),
+            )),
+        }
+    }
+
     /// Fetch the full contact list of the current user.
     ///
     /// Returns `None` when the server indicates the list hasn't changed since
@@ -8407,6 +8510,51 @@ impl Client {
             .collect();
         let req = tl::functions::contacts::DeleteContacts { id: users };
         self.rpc_write(&req).await
+    }
+
+    /// Import phone-number contacts in bulk.
+    ///
+    /// Each entry is `(phone, first_name, last_name)`.  
+    /// Returns the raw `ImportedContacts` result (imported IDs + resolved users).
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// let result = client.import_contacts(&[
+    ///     ("+15550001234", "Alice", "Smith"),
+    ///     ("+15550005678", "Bob",   "Jones"),
+    /// ]).await?;
+    /// println!("imported {} contacts", result.imported.len());
+    /// # Ok(()) }
+    /// ```
+    pub async fn import_contacts(
+        &self,
+        contacts: &[(&str, &str, &str)],
+    ) -> Result<tl::types::contacts::ImportedContacts, InvocationError> {
+        use ferogram_tl_types::{Cursor, Deserializable};
+        let contacts_tl: Vec<tl::enums::InputContact> = contacts
+            .iter()
+            .enumerate()
+            .map(|(i, (phone, first, last))| {
+                tl::enums::InputContact::InputPhoneContact(tl::types::InputPhoneContact {
+                    client_id: i as i64,
+                    phone: phone.to_string(),
+                    first_name: first.to_string(),
+                    last_name: last.to_string(),
+                    note: None,
+                })
+            })
+            .collect();
+        let req = tl::functions::contacts::ImportContacts {
+            contacts: contacts_tl,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::contacts::ImportedContacts::ImportedContacts(result) =
+            tl::enums::contacts::ImportedContacts::deserialize(&mut cur)?;
+        self.cache_users_slice_pub(&result.users).await;
+        Ok(result)
     }
 
     /// Block a user or peer so they can no longer send you messages.
@@ -9294,6 +9442,54 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Archive a dialog (move it to folder 1).
+    ///
+    /// Archived chats are hidden from the main dialog list.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// client.archive_chat("@somebot").await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn archive_chat(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let req = tl::functions::folders::EditPeerFolders {
+            folder_peers: vec![tl::enums::InputFolderPeer::InputFolderPeer(
+                tl::types::InputFolderPeer {
+                    peer: input_peer,
+                    folder_id: 1,
+                },
+            )],
+        };
+        self.rpc_write(&req).await
+    }
+
+    /// Unarchive a dialog (move it back to folder 0 (the main list)).
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// client.unarchive_chat("@somebot").await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn unarchive_chat(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let req = tl::functions::folders::EditPeerFolders {
+            folder_peers: vec![tl::enums::InputFolderPeer::InputFolderPeer(
+                tl::types::InputFolderPeer {
+                    peer: input_peer,
+                    folder_id: 0,
+                },
+            )],
+        };
+        self.rpc_write(&req).await
+    }
+
     /// Get all pinned dialogs in a folder.
     ///
     /// Use `folder_id = 0` for the main dialog list, `1` for the archive.
@@ -9859,6 +10055,825 @@ impl Client {
             settings,
         };
         self.rpc_write(&req).await
+    }
+
+    /// Send a poll to a chat. Set `quiz = true` for a quiz poll with one correct answer;
+    /// `correct_index` is only used in that case. `multiple_choice` is incompatible with quiz.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// // Regular poll
+    /// client.send_poll("@mychat", "Best language?",
+    ///     &["Rust", "Go", "Python"], false, None, false).await?;
+    ///
+    /// // Quiz with correct answer
+    /// client.send_poll("@mychat", "2 + 2 = ?",
+    ///     &["3", "4", "5"], true, Some(1), false).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn send_poll(
+        &self,
+        peer: impl Into<PeerRef>,
+        question: impl Into<String>,
+        answers: &[impl AsRef<str>],
+        quiz: bool,
+        correct_index: Option<usize>,
+        multiple_choice: bool,
+    ) -> Result<(), InvocationError> {
+        use ferogram_tl_types as tl;
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+
+        let poll_answers: Vec<tl::enums::PollAnswer> = answers
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                tl::enums::PollAnswer::PollAnswer(tl::types::PollAnswer {
+                    text: tl::enums::TextWithEntities::TextWithEntities(
+                        tl::types::TextWithEntities {
+                            text: a.as_ref().to_owned(),
+                            entities: vec![],
+                        },
+                    ),
+                    option: vec![i as u8],
+                    media: None,
+                    added_by: None,
+                    date: None,
+                })
+            })
+            .collect();
+
+        let correct_answers: Option<Vec<i32>> = if quiz {
+            correct_index.map(|i| vec![i as i32])
+        } else {
+            None
+        };
+
+        let poll = tl::enums::Poll::Poll(tl::types::Poll {
+            id: 0,
+            closed: false,
+            public_voters: false,
+            multiple_choice: multiple_choice && !quiz,
+            quiz,
+            open_answers: false,
+            revoting_disabled: false,
+            shuffle_answers: false,
+            hide_results_until_close: false,
+            creator: false,
+            question: tl::enums::TextWithEntities::TextWithEntities(tl::types::TextWithEntities {
+                text: question.into(),
+                entities: vec![],
+            }),
+            answers: poll_answers,
+            close_period: None,
+            close_date: None,
+            hash: 0,
+        });
+
+        let media = tl::enums::InputMedia::Poll(Box::new(tl::types::InputMediaPoll {
+            poll,
+            correct_answers,
+            attached_media: None,
+            solution: None,
+            solution_entities: None,
+            solution_media: None,
+        }));
+
+        let req = tl::functions::messages::SendMedia {
+            silent: false,
+            background: false,
+            clear_draft: false,
+            noforwards: false,
+            update_stickersets_order: false,
+            invert_media: false,
+            allow_paid_floodskip: false,
+            peer: input_peer,
+            reply_to: None,
+            media,
+            message: String::new(),
+            random_id: random_i64(),
+            reply_markup: None,
+            entities: None,
+            schedule_date: None,
+            schedule_repeat_period: None,
+            send_as: None,
+            quick_reply_shortcut: None,
+            effect: None,
+            allow_paid_stars: None,
+            suggested_post: None,
+        };
+        self.rpc_call_raw(&req).await?;
+        Ok(())
+    }
+
+    /// Set the command menu for the bot.
+    ///
+    /// `commands` is `(command, description)` pairs without the `/` prefix.
+    /// `scope` is `None` for the default (all users, all chats).
+    /// `lang_code` is an IETF tag (e.g. `"en"`); `""` for the default locale.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// client.set_bot_commands(
+    ///     &[("start", "Start the bot"), ("help", "Show help")],
+    ///     None,
+    ///     "",
+    /// ).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_bot_commands(
+        &self,
+        commands: &[(&str, &str)],
+        scope: Option<tl::enums::BotCommandScope>,
+        lang_code: &str,
+    ) -> Result<bool, InvocationError> {
+        let bot_commands: Vec<tl::enums::BotCommand> = commands
+            .iter()
+            .map(|(cmd, desc)| {
+                tl::enums::BotCommand::BotCommand(tl::types::BotCommand {
+                    command: cmd.to_string(),
+                    description: desc.to_string(),
+                })
+            })
+            .collect();
+        let req = tl::functions::bots::SetBotCommands {
+            scope: scope.unwrap_or(tl::enums::BotCommandScope::Default),
+            lang_code: lang_code.to_string(),
+            commands: bot_commands,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        Ok(is_bool_true(&body))
+    }
+
+    /// Clear the bot command menu for the given scope and language.
+    ///
+    /// Pass `None` for `scope` and `""` for `lang_code` to reset all commands.
+    pub async fn delete_bot_commands(
+        &self,
+        scope: Option<tl::enums::BotCommandScope>,
+        lang_code: &str,
+    ) -> Result<bool, InvocationError> {
+        let req = tl::functions::bots::ResetBotCommands {
+            scope: scope.unwrap_or(tl::enums::BotCommandScope::Default),
+            lang_code: lang_code.to_string(),
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        Ok(is_bool_true(&body))
+    }
+
+    /// Set the bot's name, about text, and/or description for a given language.
+    ///
+    /// Pass `None` for any field you don't want to change.  
+    /// Pass `""` for `lang_code` to set the default (language-independent) value.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// client.set_bot_info(
+    ///     Some("My Awesome Bot"),         // name shown in chat header
+    ///     Some("I do cool things"),       // about text (bio)
+    ///     Some("Send /start to begin"),   // description (shown before first msg)
+    ///     "",                             // lang_code "" = default locale
+    /// ).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_bot_info(
+        &self,
+        name: Option<&str>,
+        about: Option<&str>,
+        description: Option<&str>,
+        lang_code: &str,
+    ) -> Result<bool, InvocationError> {
+        let req = tl::functions::bots::SetBotInfo {
+            bot: None,
+            lang_code: lang_code.to_string(),
+            name: name.map(|s| s.to_string()),
+            about: about.map(|s| s.to_string()),
+            description: description.map(|s| s.to_string()),
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        Ok(is_bool_true(&body))
+    }
+
+    /// Get the bot's current name, about text, and description.
+    ///
+    /// Pass `""` for `lang_code` to get the default (language-independent) values.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// let info = client.get_bot_info("").await?;
+    /// println!("name: {}", info.name);
+    /// println!("about: {}", info.about);
+    /// println!("description: {}", info.description);
+    /// # Ok(()) }
+    /// ```
+    pub async fn get_bot_info(
+        &self,
+        lang_code: &str,
+    ) -> Result<tl::types::bots::BotInfo, InvocationError> {
+        use ferogram_tl_types::{Cursor, Deserializable};
+        let req = tl::functions::bots::GetBotInfo {
+            bot: None,
+            lang_code: lang_code.to_string(),
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::bots::BotInfo::BotInfo(result) =
+            tl::enums::bots::BotInfo::deserialize(&mut cur)?;
+        Ok(result)
+    }
+
+    /// Generate a QR-code login token.
+    ///
+    /// Returns `(token_bytes, expires_unix_ts)`. Encode `token_bytes` as a
+    /// `tg://login?token=<base64url>` URL and render as a QR code. Poll for
+    /// `updateLoginToken` or call this again to check scan status.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// let (token, expires) = client.export_login_token().await?;
+    /// // base64url-encode `token` and make a QR code
+    /// # Ok(()) }
+    /// ```
+    pub async fn export_login_token(&self) -> Result<(Vec<u8>, i32), InvocationError> {
+        use ferogram_tl_types::{Cursor, Deserializable};
+        let req = tl::functions::auth::ExportLoginToken {
+            api_id: self.inner.api_id,
+            api_hash: self.inner.api_hash.clone(),
+            except_ids: vec![],
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        match tl::enums::auth::LoginToken::deserialize(&mut cur)? {
+            tl::enums::auth::LoginToken::LoginToken(t) => Ok((t.token, t.expires)),
+            tl::enums::auth::LoginToken::MigrateTo(m) => {
+                self.migrate_to(m.dc_id).await?;
+                let req2 = tl::functions::auth::ImportLoginToken { token: m.token };
+                let body2 = self.rpc_call_raw(&req2).await?;
+                let mut cur2 = Cursor::from_slice(&body2);
+                match tl::enums::auth::LoginToken::deserialize(&mut cur2)? {
+                    tl::enums::auth::LoginToken::LoginToken(t) => Ok((t.token, t.expires)),
+                    _ => Err(InvocationError::Deserialize(
+                        "QR login: unexpected token state after migration".into(),
+                    )),
+                }
+            }
+            tl::enums::auth::LoginToken::Success(s) => {
+                if let tl::enums::auth::Authorization::Authorization(a) = s.authorization {
+                    self.cache_user(&a.user).await;
+                    Self::extract_user_name(&a.user);
+                    self.inner
+                        .signed_in
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    let _ = self.sync_pts_state().await;
+                }
+                Ok((vec![], 0))
+            }
+        }
+    }
+
+    /// Check whether a QR-code token has been scanned.
+    ///
+    /// Returns `Some(username)` if the user has scanned and confirmed the QR
+    /// code, or `None` if still pending.
+    pub async fn check_qr_login(&self, token: Vec<u8>) -> Result<Option<String>, InvocationError> {
+        use ferogram_tl_types::{Cursor, Deserializable};
+        let req = tl::functions::auth::ImportLoginToken { token };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        match tl::enums::auth::LoginToken::deserialize(&mut cur)? {
+            tl::enums::auth::LoginToken::Success(s) => {
+                if let tl::enums::auth::Authorization::Authorization(a) = s.authorization {
+                    self.cache_user(&a.user).await;
+                    let name = Self::extract_user_name(&a.user);
+                    self.inner
+                        .signed_in
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    let _ = self.sync_pts_state().await;
+                    Ok(Some(name))
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Send an invoice to a peer (bots only).
+    ///
+    /// See the [Telegram Payments docs] for parameter semantics.
+    ///
+    /// [Telegram Payments docs]: https://core.telegram.org/bots/payments
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # use ferogram_tl_types as tl;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// client.send_invoice(
+    ///     "@user",
+    ///     "Product name",
+    ///     "Description",
+    ///     "PAYLOAD",
+    ///     "USD",
+    ///     &[("Item A", 1500)],  // (label, amount_in_cents)
+    ///     None,                 // photo url
+    ///     false,                // need_name
+    ///     false,                // need_phone
+    ///     false,                // need_email
+    ///     false,                // need_shipping_address
+    ///     false,                // is_flexible
+    /// ).await?;
+    /// # Ok(()) }
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_invoice(
+        &self,
+        peer: impl Into<crate::PeerRef>,
+        title: impl Into<String>,
+        description: impl Into<String>,
+        payload: impl Into<String>,
+        currency: impl Into<String>,
+        prices: &[(&str, i64)],
+        photo_url: Option<String>,
+        need_name: bool,
+        need_phone: bool,
+        need_email: bool,
+        need_shipping_address: bool,
+        is_flexible: bool,
+    ) -> Result<crate::update::IncomingMessage, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+
+        let label_prices: Vec<tl::enums::LabeledPrice> = prices
+            .iter()
+            .map(|(label, amount)| {
+                tl::enums::LabeledPrice::LabeledPrice(tl::types::LabeledPrice {
+                    label: label.to_string(),
+                    amount: *amount,
+                })
+            })
+            .collect();
+
+        let invoice = tl::enums::Invoice::Invoice(tl::types::Invoice {
+            test: false,
+            name_requested: need_name,
+            phone_requested: need_phone,
+            email_requested: need_email,
+            shipping_address_requested: need_shipping_address,
+            flexible: is_flexible,
+            phone_to_provider: false,
+            email_to_provider: false,
+            recurring: false,
+            currency: currency.into(),
+            prices: label_prices,
+            max_tip_amount: None,
+            suggested_tip_amounts: None,
+            terms_url: None,
+            subscription_period: None,
+        });
+
+        let media = tl::enums::InputMedia::Invoice(Box::new(tl::types::InputMediaInvoice {
+            title: title.into(),
+            description: description.into(),
+            photo: photo_url.map(|url| {
+                tl::enums::InputWebDocument::InputWebDocument(tl::types::InputWebDocument {
+                    url,
+                    size: 0,
+                    mime_type: "image/jpeg".into(),
+                    attributes: vec![],
+                })
+            }),
+            invoice,
+            payload: payload.into().into_bytes(),
+            provider: Some(String::new()),
+            provider_data: tl::enums::DataJson::DataJson(tl::types::DataJson { data: "{}".into() }),
+            start_param: None,
+            extended_media: None,
+        }));
+
+        let req = tl::functions::messages::SendMedia {
+            silent: false,
+            background: false,
+            clear_draft: false,
+            noforwards: false,
+            update_stickersets_order: false,
+            invert_media: false,
+            allow_paid_floodskip: false,
+            peer: input_peer,
+            reply_to: None,
+            media,
+            message: String::new(),
+            random_id: crate::random_i64_pub(),
+            reply_markup: None,
+            entities: None,
+            schedule_date: None,
+            schedule_repeat_period: None,
+            send_as: None,
+            quick_reply_shortcut: None,
+            effect: None,
+            allow_paid_stars: None,
+            suggested_post: None,
+        };
+        let body = self.rpc_call_raw_pub(&req).await?;
+        Ok(self.extract_sent_message(&body, &crate::InputMessage::text(""), &peer))
+    }
+
+    /// Send an animated dice/emoji to a chat.
+    ///
+    /// `emoticon` controls which animation to use:
+    /// - `"🎲"` - classic dice (1–6)
+    /// - `"🎯"` - dart (1–6)
+    /// - `"🏀"` - basketball (1–5)
+    /// - `"⚽"` - football/soccer (1–5)
+    /// - `"🎳"` - bowling (1–6)
+    /// - `"🎰"` - slot machine (1–64)
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// client.send_dice("@mychat", "🎲").await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn send_dice(
+        &self,
+        peer: impl Into<PeerRef>,
+        emoticon: impl Into<String>,
+    ) -> Result<(), InvocationError> {
+        use ferogram_tl_types as tl;
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+
+        let media = tl::enums::InputMedia::Dice(tl::types::InputMediaDice {
+            emoticon: emoticon.into(),
+        });
+
+        let req = tl::functions::messages::SendMedia {
+            silent: false,
+            background: false,
+            clear_draft: false,
+            noforwards: false,
+            update_stickersets_order: false,
+            invert_media: false,
+            allow_paid_floodskip: false,
+            peer: input_peer,
+            reply_to: None,
+            media,
+            message: String::new(),
+            random_id: random_i64(),
+            reply_markup: None,
+            entities: None,
+            schedule_date: None,
+            schedule_repeat_period: None,
+            send_as: None,
+            quick_reply_shortcut: None,
+            effect: None,
+            allow_paid_stars: None,
+            suggested_post: None,
+        };
+        self.rpc_call_raw(&req).await?;
+        Ok(())
+    }
+
+    /// Set the logged-in user's emoji status.
+    ///
+    /// Pass `None` to clear the current status.
+    /// `until` is an optional Unix timestamp when the status should expire.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// // Set emoji status (document_id from a custom emoji sticker)
+    /// client.set_emoji_status(Some(5260885697911948121), None).await?;
+    ///
+    /// // Clear emoji status
+    /// client.set_emoji_status(None, None).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_emoji_status(
+        &self,
+        document_id: Option<i64>,
+        until: Option<i32>,
+    ) -> Result<(), InvocationError> {
+        use ferogram_tl_types as tl;
+        let emoji_status = match document_id {
+            None => tl::enums::EmojiStatus::Empty,
+            Some(id) => tl::enums::EmojiStatus::EmojiStatus(tl::types::EmojiStatus {
+                document_id: id,
+                until,
+            }),
+        };
+        let req = tl::functions::account::UpdateEmojiStatus { emoji_status };
+        self.rpc_write(&req).await
+    }
+
+    /// Transfer ownership of a basic group to another user.
+    ///
+    /// Requires the current user's 2FA password (SRP). Use
+    /// [`Client::compute_password_check`] to obtain the `InputCheckPasswordSRP`.
+    ///
+    /// For channels/supergroups use `channels.editCreator` (not yet exposed).
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// use ferogram_tl_types as tl;
+    /// let password_check = tl::enums::InputCheckPasswordSrp::Empty(
+    ///     tl::types::InputCheckPasswordEmpty {}
+    /// );
+    /// client.transfer_chat_ownership("@mygroup", 12345678, password_check).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn transfer_chat_ownership(
+        &self,
+        peer: impl Into<PeerRef>,
+        new_owner_id: i64,
+        password: tl::enums::InputCheckPasswordSrp,
+    ) -> Result<(), InvocationError> {
+        use ferogram_tl_types as tl;
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+
+        // Resolve the new owner to InputUser
+        let owner_peer = tl::enums::Peer::User(tl::types::PeerUser {
+            user_id: new_owner_id,
+        });
+        let owner_input = self
+            .inner
+            .peer_cache
+            .read()
+            .await
+            .peer_to_input(&owner_peer)?;
+        let user_id = match owner_input {
+            tl::enums::InputPeer::User(u) => {
+                tl::enums::InputUser::InputUser(tl::types::InputUser {
+                    user_id: u.user_id,
+                    access_hash: u.access_hash,
+                })
+            }
+            _ => {
+                return Err(InvocationError::Deserialize(
+                    "transfer_chat_ownership: new owner must be a user".into(),
+                ));
+            }
+        };
+
+        let req = tl::functions::messages::EditChatCreator {
+            peer: input_peer,
+            user_id,
+            password,
+        };
+        self.rpc_call_raw(&req).await?;
+        Ok(())
+    }
+
+    /// Return the linked discussion supergroup ID for a broadcast channel,
+    /// or the linked broadcast channel ID for a supergroup.
+    ///
+    /// Returns `None` when there is no linked chat.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// if let Some(linked_id) = client.get_linked_channel("@mychannel").await? {
+    ///     println!("Linked chat ID: {linked_id}");
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub async fn get_linked_channel(
+        &self,
+        peer: impl Into<PeerRef>,
+    ) -> Result<Option<i64>, InvocationError> {
+        use ferogram_tl_types as tl;
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let channel = match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                    channel_id: c.channel_id,
+                    access_hash: c.access_hash,
+                })
+            }
+            _ => {
+                return Err(InvocationError::Deserialize(
+                    "get_linked_channel: peer must be a channel or supergroup".into(),
+                ));
+            }
+        };
+        let req = tl::functions::channels::GetFullChannel { channel };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let full = tl::enums::messages::ChatFull::deserialize(&mut cur)?;
+        let linked = match full {
+            tl::enums::messages::ChatFull::ChatFull(f) => match f.full_chat {
+                tl::enums::ChatFull::ChannelFull(cf) => cf.linked_chat_id,
+                _ => None,
+            },
+        };
+        Ok(linked)
+    }
+
+    /// Fetch all messages in the same album as `msg_id`.
+    ///
+    /// For non-channel peers the server returns just the single message.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// let msgs = client.get_media_group("@mychannel", 42).await?;
+    /// println!("{} messages in album", msgs.len());
+    /// # Ok(()) }
+    /// ```
+    pub async fn get_media_group(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+    ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
+        use ferogram_tl_types as tl;
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+
+        let seed_ids = vec![tl::enums::InputMessage::Id(tl::types::InputMessageId {
+            id: msg_id,
+        })];
+
+        let seed_msgs = match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                let req = tl::functions::channels::GetMessages {
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id: c.channel_id,
+                        access_hash: c.access_hash,
+                    }),
+                    id: seed_ids,
+                };
+                let body = self.rpc_call_raw(&req).await?;
+                let mut cur = Cursor::from_slice(&body);
+                match tl::enums::messages::Messages::deserialize(&mut cur)? {
+                    tl::enums::messages::Messages::Messages(m) => m.messages,
+                    tl::enums::messages::Messages::Slice(m) => m.messages,
+                    tl::enums::messages::Messages::ChannelMessages(m) => m.messages,
+                    tl::enums::messages::Messages::NotModified(_) => vec![],
+                }
+            }
+            _ => {
+                let req = tl::functions::messages::GetMessages { id: seed_ids };
+                let body = self.rpc_call_raw(&req).await?;
+                let mut cur = Cursor::from_slice(&body);
+                match tl::enums::messages::Messages::deserialize(&mut cur)? {
+                    tl::enums::messages::Messages::Messages(m) => m.messages,
+                    tl::enums::messages::Messages::Slice(m) => m.messages,
+                    tl::enums::messages::Messages::ChannelMessages(m) => m.messages,
+                    tl::enums::messages::Messages::NotModified(_) => vec![],
+                }
+            }
+        };
+
+        let grouped_id = seed_msgs.iter().find_map(|m| {
+            if let tl::enums::Message::Message(msg) = m {
+                msg.grouped_id
+            } else {
+                None
+            }
+        });
+
+        let Some(gid) = grouped_id else {
+            return Ok(seed_msgs
+                .into_iter()
+                .map(update::IncomingMessage::from_raw)
+                .collect());
+        };
+
+        let window_start = (msg_id - 9).max(1);
+        let window_ids: Vec<tl::enums::InputMessage> = (window_start..=msg_id + 9)
+            .map(|id| tl::enums::InputMessage::Id(tl::types::InputMessageId { id }))
+            .collect();
+
+        let window_msgs = match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                let req = tl::functions::channels::GetMessages {
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id: c.channel_id,
+                        access_hash: c.access_hash,
+                    }),
+                    id: window_ids,
+                };
+                let body = self.rpc_call_raw(&req).await?;
+                let mut cur = Cursor::from_slice(&body);
+                match tl::enums::messages::Messages::deserialize(&mut cur)? {
+                    tl::enums::messages::Messages::Messages(m) => m.messages,
+                    tl::enums::messages::Messages::Slice(m) => m.messages,
+                    tl::enums::messages::Messages::ChannelMessages(m) => m.messages,
+                    tl::enums::messages::Messages::NotModified(_) => vec![],
+                }
+            }
+            _ => seed_msgs,
+        };
+
+        let group: Vec<update::IncomingMessage> = window_msgs
+            .into_iter()
+            .filter(|m| {
+                if let tl::enums::Message::Message(msg) = m {
+                    msg.grouped_id == Some(gid)
+                } else {
+                    false
+                }
+            })
+            .map(update::IncomingMessage::from_raw)
+            .collect();
+
+        Ok(group)
+    }
+
+    /// Fetch broadcast channel statistics.
+    ///
+    /// Returns [`tl::enums::stats::BroadcastStats`]. Requires stats to be
+    /// enabled on the channel (minimum ~500 subscribers).
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// let stats = client.get_broadcast_stats("@mychannel", false).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn get_broadcast_stats(
+        &self,
+        peer: impl Into<PeerRef>,
+        dark: bool,
+    ) -> Result<tl::enums::stats::BroadcastStats, InvocationError> {
+        use ferogram_tl_types as tl;
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let channel = match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                    channel_id: c.channel_id,
+                    access_hash: c.access_hash,
+                })
+            }
+            _ => {
+                return Err(InvocationError::Deserialize(
+                    "get_broadcast_stats: peer must be a channel".into(),
+                ));
+            }
+        };
+        let req = tl::functions::stats::GetBroadcastStats { dark, channel };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        Ok(tl::enums::stats::BroadcastStats::deserialize(&mut cur)?)
+    }
+
+    /// Fetch supergroup (megagroup) statistics.
+    ///
+    /// Returns [`tl::enums::stats::MegagroupStats`]. The group needs enough
+    /// members for Telegram to enable stats.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// let stats = client.get_megagroup_stats("@mysupergroup", false).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn get_megagroup_stats(
+        &self,
+        peer: impl Into<PeerRef>,
+        dark: bool,
+    ) -> Result<tl::enums::stats::MegagroupStats, InvocationError> {
+        use ferogram_tl_types as tl;
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let channel = match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                    channel_id: c.channel_id,
+                    access_hash: c.access_hash,
+                })
+            }
+            _ => {
+                return Err(InvocationError::Deserialize(
+                    "get_megagroup_stats: peer must be a supergroup".into(),
+                ));
+            }
+        };
+        let req = tl::functions::stats::GetMegagroupStats { dark, channel };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        Ok(tl::enums::stats::MegagroupStats::deserialize(&mut cur)?)
     }
 }
 

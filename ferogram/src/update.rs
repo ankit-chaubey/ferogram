@@ -409,14 +409,112 @@ impl IncomingMessage {
         crate::media::Document::from_media(self.media()?)
     }
 
-    // Convenience action methods
-    //
-    // Two tiers for every action:
-    //  1. Clientless : `msg.reply("hi").await?`
-    // Uses the embedded `self.client`. Returns an error if the message was
-    // constructed without `.with_client(...)`.
-    //  2. Explicit   : `msg.reply_with(&client, "hi").await?`
-    // Always works, even when no client is embedded.
+    /// The bare numeric chat ID (positive for users/groups, negative for channels).
+    pub fn chat_id(&self) -> i64 {
+        match self.peer_id() {
+            Some(tl::enums::Peer::User(u)) => u.user_id,
+            Some(tl::enums::Peer::Chat(c)) => c.chat_id,
+            Some(tl::enums::Peer::Channel(c)) => c.channel_id,
+            None => 0,
+        }
+    }
+
+    /// `true` when the message is in a private (1-on-1) chat.
+    pub fn is_private(&self) -> bool {
+        matches!(self.peer_id(), Some(tl::enums::Peer::User(_)))
+    }
+
+    /// `true` when the message is in a basic group.
+    pub fn is_group(&self) -> bool {
+        matches!(self.peer_id(), Some(tl::enums::Peer::Chat(_)))
+    }
+
+    /// `true` when the message is in a channel or supergroup.
+    pub fn is_channel(&self) -> bool {
+        matches!(self.peer_id(), Some(tl::enums::Peer::Channel(_)))
+    }
+
+    /// `true` when the message is in *any* multi-user chat (group or channel).
+    pub fn is_any_group(&self) -> bool {
+        self.is_group() || self.is_channel()
+    }
+
+    /// The bare sender user-ID (`from_id` as an i64). Alias of `sender_user_id`.
+    pub fn from_id(&self) -> Option<i64> {
+        self.sender_user_id()
+    }
+
+    /// `true` when the message text begins with `/` (a bot command).
+    pub fn is_bot_command(&self) -> bool {
+        self.text().is_some_and(|t| t.starts_with('/'))
+    }
+
+    /// If the message is a bot command, returns `(command, rest)` where `command`
+    /// is the command name without the `/` and optional `@BotName` suffix,
+    /// and `rest` is everything after (trimmed).
+    ///
+    /// ```rust,no_run
+    /// # fn ex(msg: ferogram::update::IncomingMessage) {
+    /// if let Some((cmd, args)) = msg.command() {
+    ///     // cmd = "start", args = "payload"
+    /// }
+    /// # }
+    /// ```
+    pub fn command(&self) -> Option<(&str, &str)> {
+        let text = self.text()?;
+        if !text.starts_with('/') {
+            return None;
+        }
+        let without_slash = &text[1..];
+        // Split off @BotName if present
+        let cmd_full = without_slash.split_whitespace().next().unwrap_or("");
+        let cmd = cmd_full.split('@').next().unwrap_or(cmd_full);
+        let rest = text[1 + cmd_full.len()..].trim();
+        Some((cmd, rest))
+    }
+
+    /// `true` if the message is the named command (case-insensitive, ignoring `@bot` suffix).
+    pub fn is_command_named(&self, name: &str) -> bool {
+        self.command()
+            .is_some_and(|(cmd, _)| cmd.eq_ignore_ascii_case(name))
+    }
+
+    /// Return the arguments portion of a bot command (text after `/cmd`), trimmed.
+    /// Returns `None` if the message is not a command.
+    pub fn command_args(&self) -> Option<&str> {
+        self.command().map(|(_, args)| args)
+    }
+
+    /// `true` if the message carries any media attachment.
+    pub fn has_media(&self) -> bool {
+        self.media().is_some()
+    }
+
+    /// `true` if the message carries a photo.
+    pub fn has_photo(&self) -> bool {
+        matches!(self.media(), Some(tl::enums::MessageMedia::Photo(_)))
+    }
+
+    /// `true` if the message carries a document (file, video, audio, etc).
+    pub fn has_document(&self) -> bool {
+        matches!(self.media(), Some(tl::enums::MessageMedia::Document(_)))
+    }
+
+    /// `true` if this message was forwarded from another chat or user.
+    pub fn is_forwarded(&self) -> bool {
+        self.forward_header().is_some()
+    }
+
+    /// `true` if this message is a reply to another message.
+    pub fn is_reply(&self) -> bool {
+        self.reply_to_message_id().is_some()
+    }
+
+    /// Alias of `grouped_id` - the album/grouped-media ID, if this message is
+    /// part of an album.
+    pub fn album_id(&self) -> Option<i64> {
+        self.grouped_id()
+    }
 
     // reply
 
@@ -1042,6 +1140,196 @@ pub struct ChatActionUpdate {
     pub action: tl::enums::SendMessageAction,
 }
 
+/// A chat member's status changed (joined, left, promoted, banned, etc.).
+///
+/// Delivered as [`Update::ParticipantUpdate`].
+/// Covers both basic groups (`updateChatParticipant`) and
+/// channels/supergroups (`updateChannelParticipant`).
+///
+/// # Example
+/// ```rust,no_run
+/// # use ferogram::{Update, update::ParticipantUpdate};
+/// # async fn example(mut stream: ferogram::UpdateStream) {
+/// while let Some(upd) = stream.next().await {
+///     if let Update::ParticipantUpdate(p) = upd {
+///         println!(
+///             "chat={:?} user={} actor={}: {:?} → {:?}",
+///             p.chat_id, p.user_id, p.actor_id,
+///             p.prev_participant, p.new_participant,
+///         );
+///     }
+/// }
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+pub struct ParticipantUpdate {
+    /// The chat (basic-group ID) or channel ID the event happened in.
+    pub chat_id: i64,
+    /// The user whose membership changed.
+    pub user_id: i64,
+    /// The admin or bot that triggered the change.
+    pub actor_id: i64,
+    /// Unix timestamp of the event.
+    pub date: i32,
+    /// Previous participant record for basic groups
+    /// (`None` = user wasn't in the chat before, or this is a channel update).
+    pub prev_participant: Option<tl::enums::ChatParticipant>,
+    /// New participant record for basic groups
+    /// (`None` = user left / was kicked, or this is a channel update).
+    pub new_participant: Option<tl::enums::ChatParticipant>,
+    /// Previous participant record for channels/supergroups
+    /// (`None` for basic-group updates).
+    pub prev_channel_participant: Option<tl::enums::ChannelParticipant>,
+    /// New participant record for channels/supergroups
+    /// (`None` for basic-group updates).
+    pub new_channel_participant: Option<tl::enums::ChannelParticipant>,
+    /// The invite link used, if any.
+    pub invite: Option<tl::enums::ExportedChatInvite>,
+    /// QTS counter (used for acknowledgement).
+    pub qts: i32,
+    /// `true` when the update comes from a channel/supergroup,
+    /// `false` for a basic group.
+    pub is_channel: bool,
+}
+
+/// A user has requested to join a chat via an invite link.
+///
+/// Delivered as [`Update::JoinRequest`].
+/// Only sent to bots that manage the chat (requires `manage_chat` admin right).
+///
+/// # Example
+/// ```rust,no_run
+/// # use ferogram::{Update, update::JoinRequestUpdate};
+/// # async fn example(mut stream: ferogram::UpdateStream) {
+/// while let Some(upd) = stream.next().await {
+///     if let Update::JoinRequest(r) = upd {
+///         println!("user {} wants to join {:?}: {:?}", r.user_id, r.peer, r.about);
+///     }
+/// }
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+pub struct JoinRequestUpdate {
+    /// The chat/channel/group the request is for.
+    pub peer: tl::enums::Peer,
+    /// The user requesting to join.
+    pub user_id: i64,
+    /// The user's bio / message attached to the request.
+    pub about: String,
+    /// The invite link they used.
+    pub invite: tl::enums::ExportedChatInvite,
+    /// Unix timestamp.
+    pub date: i32,
+    /// QTS counter.
+    pub qts: i32,
+}
+
+/// A bot received a reaction on one of its messages.
+///
+/// Delivered as [`Update::MessageReaction`]. Only for bots.
+#[derive(Debug, Clone)]
+pub struct MessageReactionUpdate {
+    /// The peer (chat/channel) where the reaction occurred.
+    pub peer: tl::enums::Peer,
+    /// The message ID that was reacted to.
+    pub msg_id: i32,
+    /// Unix timestamp.
+    pub date: i32,
+    /// The peer that reacted.
+    pub actor: tl::enums::Peer,
+    /// Reactions that were removed.
+    pub old_reactions: Vec<tl::enums::Reaction>,
+    /// Reactions that were added.
+    pub new_reactions: Vec<tl::enums::Reaction>,
+    /// QTS counter.
+    pub qts: i32,
+}
+
+/// A user voted in a poll.
+///
+/// Delivered as [`Update::PollVote`]. Only for bots that sent the poll.
+#[derive(Debug, Clone)]
+pub struct PollVoteUpdate {
+    /// The poll ID.
+    pub poll_id: i64,
+    /// The peer that voted.
+    pub peer: tl::enums::Peer,
+    /// The option bytes they selected.
+    pub options: Vec<Vec<u8>>,
+    /// Their positions in the option list.
+    pub positions: Vec<i32>,
+    /// QTS counter.
+    pub qts: i32,
+}
+
+/// A user stopped (or restarted) the bot.
+///
+/// Delivered as [`Update::BotStopped`].
+#[derive(Debug, Clone)]
+pub struct BotStoppedUpdate {
+    /// The user who stopped/restarted the bot.
+    pub user_id: i64,
+    /// Unix timestamp.
+    pub date: i32,
+    /// `true` if the bot was stopped, `false` if restarted.
+    pub stopped: bool,
+    /// QTS counter.
+    pub qts: i32,
+}
+
+/// A user submitted a shipping address for a physical-goods invoice.
+///
+/// Delivered as [`Update::ShippingQuery`]. Only for bots.
+///
+/// Respond with [`Client::answer_shipping_query`].
+#[derive(Debug, Clone)]
+pub struct ShippingQueryUpdate {
+    /// The query ID, pass to `answer_shipping_query`.
+    pub query_id: i64,
+    /// The user who submitted the address.
+    pub user_id: i64,
+    /// The invoice payload you set in `send_invoice`.
+    pub payload: Vec<u8>,
+    /// The address the user entered.
+    pub shipping_address: tl::types::PostAddress,
+}
+
+/// A user confirmed payment on the final checkout screen.
+///
+/// Delivered as [`Update::PreCheckoutQuery`]. Only for bots.
+///
+/// Respond within 10 seconds via [`Client::answer_precheckout_query`].
+#[derive(Debug, Clone)]
+pub struct PreCheckoutQueryUpdate {
+    /// The query ID, pass to `answer_precheckout_query`.
+    pub query_id: i64,
+    /// The user who pressed "Pay".
+    pub user_id: i64,
+    /// The invoice payload you set in `send_invoice`.
+    pub payload: Vec<u8>,
+    /// Payment info (name, email, phone, etc.) if requested.
+    pub info: Option<tl::types::PaymentRequestedInfo>,
+    /// The chosen shipping option ID, if applicable.
+    pub shipping_option_id: Option<String>,
+    /// ISO 4217 currency code (e.g. `"USD"`).
+    pub currency: String,
+    /// Total amount in the smallest currency unit (e.g. cents).
+    pub total_amount: i64,
+}
+
+/// A channel was boosted via the bot.
+///
+/// Delivered as [`Update::ChatBoost`]. Only for bots that manage the channel.
+#[derive(Debug, Clone)]
+pub struct ChatBoostUpdate {
+    /// The channel/chat that was boosted.
+    pub peer: tl::enums::Peer,
+    /// The boost record.
+    pub boost: tl::enums::Boost,
+    /// QTS counter.
+    pub qts: i32,
+}
+
 /// A high-level event received from Telegram.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
@@ -1062,6 +1350,23 @@ pub enum Update {
     UserStatus(UserStatusUpdate),
     /// A user is typing / uploading / recording in a chat.
     UserTyping(ChatActionUpdate),
+    /// A chat member's status changed (joined, left, promoted, banned).
+    /// Covers both basic groups and channels/supergroups.
+    ParticipantUpdate(ParticipantUpdate),
+    /// A user requested to join a chat via an invite link (bots only).
+    JoinRequest(JoinRequestUpdate),
+    /// A bot received a reaction on one of its messages (bots only).
+    MessageReaction(MessageReactionUpdate),
+    /// A user voted in a poll (bots only).
+    PollVote(PollVoteUpdate),
+    /// A user stopped or restarted the bot.
+    BotStopped(BotStoppedUpdate),
+    /// A user submitted a shipping address for a physical-goods invoice (bots only).
+    ShippingQuery(ShippingQueryUpdate),
+    /// A user confirmed payment on the final pre-checkout screen (bots only).
+    PreCheckoutQuery(PreCheckoutQueryUpdate),
+    /// A channel was boosted via the bot (bots only).
+    ChatBoost(ChatBoostUpdate),
     /// A raw TL update not mapped to any of the above variants.
     Raw(RawUpdate),
 }
@@ -1267,6 +1572,95 @@ fn from_single_update(upd: tl::enums::Update) -> Vec<Update> {
                 tl::enums::Peer::Channel(ref p) => p.channel_id,
             },
             action: u.action,
+        })],
+        // basic-group participant change
+        ChatParticipant(u) => vec![Update::ParticipantUpdate(ParticipantUpdate {
+            chat_id: u.chat_id,
+            user_id: u.user_id,
+            actor_id: u.actor_id,
+            date: u.date,
+            prev_participant: u.prev_participant,
+            new_participant: u.new_participant,
+            prev_channel_participant: None,
+            new_channel_participant: None,
+            invite: u.invite,
+            qts: u.qts,
+            is_channel: false,
+        })],
+        // channel/supergroup participant change
+        ChannelParticipant(u) => vec![Update::ParticipantUpdate(ParticipantUpdate {
+            chat_id: u.channel_id,
+            user_id: u.user_id,
+            actor_id: u.actor_id,
+            date: u.date,
+            prev_participant: None,
+            new_participant: None,
+            prev_channel_participant: u.prev_participant,
+            new_channel_participant: u.new_participant,
+            invite: u.invite,
+            qts: u.qts,
+            is_channel: true,
+        })],
+        // join request (bots only)
+        BotChatInviteRequester(u) => vec![Update::JoinRequest(JoinRequestUpdate {
+            peer: u.peer,
+            user_id: u.user_id,
+            about: u.about,
+            invite: u.invite,
+            date: u.date,
+            qts: u.qts,
+        })],
+        // message reaction (bots only)
+        BotMessageReaction(u) => vec![Update::MessageReaction(MessageReactionUpdate {
+            peer: u.peer,
+            msg_id: u.msg_id,
+            date: u.date,
+            actor: u.actor,
+            old_reactions: u.old_reactions,
+            new_reactions: u.new_reactions,
+            qts: u.qts,
+        })],
+        // poll vote (bots only)
+        MessagePollVote(u) => vec![Update::PollVote(PollVoteUpdate {
+            poll_id: u.poll_id,
+            peer: u.peer,
+            options: u.options,
+            positions: u.positions,
+            qts: u.qts,
+        })],
+        // bot stopped / restarted
+        BotStopped(u) => vec![Update::BotStopped(BotStoppedUpdate {
+            user_id: u.user_id,
+            date: u.date,
+            stopped: u.stopped,
+            qts: u.qts,
+        })],
+        // shipping query (bots only)
+        BotShippingQuery(u) => vec![Update::ShippingQuery(ShippingQueryUpdate {
+            query_id: u.query_id,
+            user_id: u.user_id,
+            payload: u.payload,
+            shipping_address: match u.shipping_address {
+                tl::enums::PostAddress::PostAddress(a) => a,
+            },
+        })],
+        // pre-checkout query (bots only)
+        BotPrecheckoutQuery(u) => vec![Update::PreCheckoutQuery(PreCheckoutQueryUpdate {
+            query_id: u.query_id,
+            user_id: u.user_id,
+            payload: u.payload,
+            info: u.info.map(|i| match i {
+                tl::enums::PaymentRequestedInfo::PaymentRequestedInfo(x) => x,
+            }),
+            shipping_option_id: u.shipping_option_id,
+            currency: u.currency,
+            total_amount: u.total_amount,
+        })],
+        // channel boost (bots only)
+        BotChatBoost(u) => vec![Update::ChatBoost(ChatBoostUpdate {
+            peer: u.peer,
+            boost: u.boost,
+            qts: u.qts,
         })],
         other => {
             let cid = tl_constructor_id(&other);

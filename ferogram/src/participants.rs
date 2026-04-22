@@ -566,7 +566,7 @@ impl Client {
 
 // Helper extension for Peer
 
-trait PeerUserIdExt {
+pub(crate) trait PeerUserIdExt {
     fn user_id_or(&self, default: i64) -> i64;
 }
 
