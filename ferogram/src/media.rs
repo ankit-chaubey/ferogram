@@ -42,6 +42,26 @@ impl AlbumItem {
         self.caption = text.into();
         self
     }
+
+    /// Set a HTML-formatted caption on this album item.
+    ///
+    /// Parses `html` into plain text + entities and stores both, so the
+    /// formatting is preserved when the album is sent.
+    pub fn caption_html(mut self, html: impl Into<String>) -> Self {
+        let (text, ents) = crate::parsers::parse_html(html.into().as_str());
+        self.caption = text;
+        self.entities = ents;
+        self
+    }
+
+    /// Set a Markdown-formatted caption on this album item.
+    pub fn caption_markdown(mut self, md: impl Into<String>) -> Self {
+        let (text, ents) = crate::parsers::parse_markdown(md.into().as_str());
+        self.caption = text;
+        self.entities = ents;
+        self
+    }
+
     pub fn reply_to(mut self, msg_id: Option<i32>) -> Self {
         self.reply_to = msg_id;
         self
@@ -900,27 +920,28 @@ impl Client {
     /// Send a file as a document or photo to a chat.
     pub async fn send_file(
         &self,
-        peer: tl::enums::Peer,
+        peer: impl Into<crate::PeerRef>,
         media: tl::enums::InputMedia,
-        caption: &str,
-    ) -> Result<(), InvocationError> {
+        msg: &crate::InputMessage,
+    ) -> Result<crate::update::IncomingMessage, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::SendMedia {
-            silent: false,
-            background: false,
-            clear_draft: false,
+            silent: msg.silent,
+            background: msg.background,
+            clear_draft: msg.clear_draft,
             noforwards: false,
             update_stickersets_order: false,
-            invert_media: false,
+            invert_media: msg.invert_media,
             allow_paid_floodskip: false,
             peer: input_peer,
-            reply_to: None,
+            reply_to: msg.reply_header(),
             media,
-            message: caption.to_string(),
+            message: msg.text.clone(),
             random_id: crate::random_i64_pub(),
-            reply_markup: None,
-            entities: None,
-            schedule_date: None,
+            reply_markup: msg.reply_markup.clone(),
+            entities: msg.entities.clone(),
+            schedule_date: msg.schedule_date,
             schedule_repeat_period: None,
             send_as: None,
             quick_reply_shortcut: None,
@@ -928,8 +949,8 @@ impl Client {
             allow_paid_stars: None,
             suggested_post: None,
         };
-        self.rpc_call_raw_pub(&req).await?;
-        Ok(())
+        let body = self.rpc_call_raw_pub(&req).await?;
+        Ok(self.extract_sent_message(&body, msg, &peer).await)
     }
 
     /// Send multiple files as an album.
@@ -940,21 +961,22 @@ impl Client {
     /// ```rust,no_run
     /// use ferogram::media::AlbumItem;
     ///
-    /// client.send_album(peer, vec![
-    /// AlbumItem::new(photo_media).caption("First photo"),
-    /// AlbumItem::new(video_media).caption("Second photo").reply_to(Some(42)),
+    /// let msgs = client.send_album(peer, vec![
+    ///     AlbumItem::new(photo_media).caption_html("<b>First photo</b>"),
+    ///     AlbumItem::new(video_media).caption("Second item").reply_to(Some(42)),
     /// ]).await?;
     ///
     /// // Shorthand: legacy tuple API still works via From impl
     /// client.send_album(peer, vec![
-    /// (photo_media, "caption".to_string()).into(),
+    ///     (photo_media, "caption".to_string()).into(),
     /// ]).await?;
     /// ```
     pub async fn send_album(
         &self,
-        peer: tl::enums::Peer,
+        peer: impl Into<crate::PeerRef>,
         items: Vec<AlbumItem>,
-    ) -> Result<(), InvocationError> {
+    ) -> Result<Vec<crate::update::IncomingMessage>, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
 
         // Use reply_to from the first item that has one.
@@ -1005,8 +1027,41 @@ impl Client {
             effect: None,
             allow_paid_stars: None,
         };
-        self.rpc_call_raw_pub(&req).await?;
-        Ok(())
+        let body = self.rpc_call_raw_pub(&req).await?;
+
+        // Parse the Updates container and collect all sent messages.
+        let mut out = Vec::new();
+        if body.len() >= 4 {
+            let cid = u32::from_le_bytes(body[..4].try_into().unwrap());
+            if cid == 0x74ae4240 || cid == 0x725b04c3 {
+                let mut cur = Cursor::from_slice(&body);
+                let updates_opt = tl::enums::Updates::deserialize(&mut cur).ok();
+                let (raw_updates, users, chats) = match updates_opt {
+                    Some(tl::enums::Updates::Updates(u)) => (u.updates, u.users, u.chats),
+                    Some(tl::enums::Updates::Combined(u)) => (u.updates, u.users, u.chats),
+                    _ => (vec![], vec![], vec![]),
+                };
+                self.cache_users_and_chats(&users, &chats).await;
+                for upd in raw_updates {
+                    match upd {
+                        tl::enums::Update::NewMessage(u) => {
+                            out.push(
+                                crate::update::IncomingMessage::from_raw(u.message)
+                                    .with_client(self.clone()),
+                            );
+                        }
+                        tl::enums::Update::NewChannelMessage(u) => {
+                            out.push(
+                                crate::update::IncomingMessage::from_raw(u.message)
+                                    .with_client(self.clone()),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     // Download

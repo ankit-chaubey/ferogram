@@ -626,6 +626,29 @@ impl IncomingMessage {
             .await
     }
 
+    /// Edit this message with full formatting: HTML, Markdown, or raw entities. Clientless.
+    ///
+    /// Unlike [`edit`] which only accepts plain text, this variant accepts an
+    /// [`InputMessage`] so you can pass `InputMessage::html(...)` or
+    /// `InputMessage::markdown(...)`.
+    pub async fn edit_ex(&self, msg: crate::InputMessage) -> Result<(), Error> {
+        let client = self.require_client("edit_ex")?.clone();
+        self.edit_ex_with(&client, msg).await
+    }
+
+    /// Edit this message with full formatting.
+    pub async fn edit_ex_with(
+        &self,
+        client: &Client,
+        msg: crate::InputMessage,
+    ) -> Result<(), Error> {
+        let peer = self
+            .peer_id()
+            .cloned()
+            .ok_or_else(|| Error::Deserialize("cannot edit_ex: unknown peer".into()))?;
+        client.edit_message_ex(peer, self.id(), msg).await
+    }
+
     // delete
 
     /// Delete this message (clientless).
@@ -636,7 +659,38 @@ impl IncomingMessage {
 
     /// Delete this message.
     pub async fn delete_with(&self, client: &Client) -> Result<(), Error> {
-        client.delete_messages(vec![self.id()], true).await
+        match self.peer_id() {
+            Some(tl::enums::Peer::Channel(_)) => {
+                // Channels and supergroups require channels.DeleteMessages.
+                let peer = self
+                    .peer_id()
+                    .cloned()
+                    .ok_or_else(|| Error::Deserialize("delete_with: no peer".into()))?;
+                let input_peer = client.resolve_to_input_peer(&peer).await?;
+                let channel = match input_peer {
+                    tl::enums::InputPeer::Channel(ic) => {
+                        tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                            channel_id: ic.channel_id,
+                            access_hash: ic.access_hash,
+                        })
+                    }
+                    _ => {
+                        return Err(Error::Deserialize(
+                            "delete_with: failed to resolve channel input".into(),
+                        ));
+                    }
+                };
+                let req = tl::functions::channels::DeleteMessages {
+                    channel,
+                    id: vec![self.id()],
+                };
+                client
+                    .invoke(&req)
+                    .await
+                    .map(|_: tl::enums::messages::AffectedMessages| ())
+            }
+            _ => client.delete_messages(vec![self.id()], true).await,
+        }
     }
 
     // mark_as_read
@@ -713,18 +767,184 @@ impl IncomingMessage {
         client: &Client,
         destination: impl Into<crate::PeerRef>,
     ) -> Result<IncomingMessage, Error> {
+        self.forward_to_ex_with(client, destination, crate::ForwardOptions::default())
+            .await
+    }
+
+    /// Forward this message with full options (silent, anonymous, scheduled). Clientless.
+    ///
+    /// Returns the forwarded message in the destination chat.
+    pub async fn forward_to_ex(
+        &self,
+        destination: impl Into<crate::PeerRef>,
+        opts: crate::ForwardOptions,
+    ) -> Result<IncomingMessage, Error> {
+        let client = self.require_client("forward_to_ex")?.clone();
+        self.forward_to_ex_with(&client, destination, opts).await
+    }
+
+    /// Forward this message with full options (silent, anonymous, scheduled).
+    ///
+    /// Returns the forwarded message in the destination chat.
+    pub async fn forward_to_ex_with(
+        &self,
+        client: &Client,
+        destination: impl Into<crate::PeerRef>,
+        opts: crate::ForwardOptions,
+    ) -> Result<IncomingMessage, Error> {
         let src = self
             .peer_id()
             .cloned()
             .ok_or_else(|| Error::Deserialize("cannot forward: unknown source peer".into()))?;
         client
-            .forward_messages_returning(destination, &[self.id()], src)
+            .forward_messages_ex(destination, &[self.id()], src, opts)
             .await
             .and_then(|v| {
                 v.into_iter()
                     .next()
                     .ok_or_else(|| Error::Deserialize("forward returned no message".into()))
             })
+    }
+
+    // HTML / Markdown convenience shorthands
+
+    /// Reply with an HTML-formatted message (clientless).
+    pub async fn reply_html(&self, html: impl Into<String>) -> Result<IncomingMessage, Error> {
+        self.reply_ex(crate::InputMessage::html(html.into())).await
+    }
+
+    /// Reply with an HTML-formatted message.
+    pub async fn reply_html_with(
+        &self,
+        client: &Client,
+        html: impl Into<String>,
+    ) -> Result<IncomingMessage, Error> {
+        self.reply_ex_with(client, crate::InputMessage::html(html.into()))
+            .await
+    }
+
+    /// Reply with a Markdown-formatted message (clientless).
+    pub async fn reply_markdown(&self, md: impl Into<String>) -> Result<IncomingMessage, Error> {
+        self.reply_ex(crate::InputMessage::markdown(md.into()))
+            .await
+    }
+
+    /// Reply with a Markdown-formatted message.
+    pub async fn reply_markdown_with(
+        &self,
+        client: &Client,
+        md: impl Into<String>,
+    ) -> Result<IncomingMessage, Error> {
+        self.reply_ex_with(client, crate::InputMessage::markdown(md.into()))
+            .await
+    }
+
+    /// Respond with an HTML-formatted message (clientless).
+    pub async fn respond_html(&self, html: impl Into<String>) -> Result<IncomingMessage, Error> {
+        self.respond_ex(crate::InputMessage::html(html.into()))
+            .await
+    }
+
+    /// Respond with an HTML-formatted message.
+    pub async fn respond_html_with(
+        &self,
+        client: &Client,
+        html: impl Into<String>,
+    ) -> Result<IncomingMessage, Error> {
+        self.respond_ex_with(client, crate::InputMessage::html(html.into()))
+            .await
+    }
+
+    /// Respond with a Markdown-formatted message (clientless).
+    pub async fn respond_markdown(&self, md: impl Into<String>) -> Result<IncomingMessage, Error> {
+        self.respond_ex(crate::InputMessage::markdown(md.into()))
+            .await
+    }
+
+    /// Respond with a Markdown-formatted message.
+    pub async fn respond_markdown_with(
+        &self,
+        client: &Client,
+        md: impl Into<String>,
+    ) -> Result<IncomingMessage, Error> {
+        self.respond_ex_with(client, crate::InputMessage::markdown(md.into()))
+            .await
+    }
+
+    /// Edit this message with HTML formatting (clientless).
+    pub async fn edit_html(&self, html: impl Into<String>) -> Result<(), Error> {
+        self.edit_ex(crate::InputMessage::html(html.into())).await
+    }
+
+    /// Edit this message with HTML formatting.
+    pub async fn edit_html_with(
+        &self,
+        client: &Client,
+        html: impl Into<String>,
+    ) -> Result<(), Error> {
+        self.edit_ex_with(client, crate::InputMessage::html(html.into()))
+            .await
+    }
+
+    /// Edit this message with Markdown formatting (clientless).
+    pub async fn edit_markdown(&self, md: impl Into<String>) -> Result<(), Error> {
+        self.edit_ex(crate::InputMessage::markdown(md.into())).await
+    }
+
+    /// Edit this message with Markdown formatting.
+    pub async fn edit_markdown_with(
+        &self,
+        client: &Client,
+        md: impl Into<String>,
+    ) -> Result<(), Error> {
+        self.edit_ex_with(client, crate::InputMessage::markdown(md.into()))
+            .await
+    }
+
+    // File sending helpers
+
+    /// Reply to this message with a media file (clientless).
+    ///
+    /// `msg` controls the caption and formatting; attach the media via
+    /// `InputMessage::text("caption").copy_media(media)` or use `InputMessage::default()`
+    /// for no caption.  The `reply_to` is set automatically to this message.
+    pub async fn reply_with_file(
+        &self,
+        media: tl::enums::InputMedia,
+        msg: crate::InputMessage,
+    ) -> Result<IncomingMessage, Error> {
+        self.respond_ex(msg.copy_media(media).reply_to(Some(self.id())))
+            .await
+    }
+
+    /// Reply to this message with a media file.
+    pub async fn reply_with_file_with(
+        &self,
+        client: &Client,
+        media: tl::enums::InputMedia,
+        msg: crate::InputMessage,
+    ) -> Result<IncomingMessage, Error> {
+        self.respond_ex_with(client, msg.copy_media(media).reply_to(Some(self.id())))
+            .await
+    }
+
+    /// Send a media file to the same chat without replying. Clientless.
+    pub async fn respond_with_file(
+        &self,
+        media: tl::enums::InputMedia,
+        msg: crate::InputMessage,
+    ) -> Result<IncomingMessage, Error> {
+        self.respond_ex(msg.copy_media(media)).await
+    }
+
+    /// Send a media file to the same chat (not as a reply).
+    pub async fn respond_with_file_with(
+        &self,
+        client: &Client,
+        media: tl::enums::InputMedia,
+        msg: crate::InputMessage,
+    ) -> Result<IncomingMessage, Error> {
+        self.respond_ex_with(client, msg.copy_media(media)).await
     }
 
     // refetch

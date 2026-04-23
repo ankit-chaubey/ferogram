@@ -1002,7 +1002,8 @@ async fn h_media_echo(
         uploaded.as_document_media()
     };
 
-    if let Err(e) = client.send_file(peer.clone(), media, &caption).await {
+    let caption_msg = InputMessage::html(caption);
+    if let Err(e) = client.send_file(peer.clone(), media, &caption_msg).await {
         rh(
             client,
             peer,

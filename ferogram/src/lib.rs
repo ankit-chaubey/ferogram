@@ -733,6 +733,26 @@ pub struct InputMessage {
     pub media: Option<tl::enums::InputMedia>,
 }
 
+/// Options for forwarding messages.
+///
+/// Used by [`Client::forward_messages_ex`], [`Client::forward_messages`] and
+/// [`IncomingMessage::forward_to_ex`].  All fields default to `false`/`None`.
+#[derive(Default, Clone)]
+pub struct ForwardOptions {
+    /// Send silently (no notification for recipient).
+    pub silent: bool,
+    /// Strip the original author attribution (`Forwarded from …`).
+    pub drop_author: bool,
+    /// Remove captions from forwarded media.
+    pub drop_media_captions: bool,
+    /// Prevent recipients from forwarding the message further.
+    pub noforwards: bool,
+    /// Reply to an existing message in the destination chat.
+    pub reply_to: Option<i32>,
+    /// Schedule forwarding for this Unix timestamp (seconds).
+    pub schedule_date: Option<i32>,
+}
+
 impl InputMessage {
     /// Create a message with the given text.
     pub fn text(text: impl Into<String>) -> Self {
@@ -3295,17 +3315,19 @@ impl Client {
                     let to_send = match result {
                         Ok(EnvelopeResult::Payload(p)) => Ok(p),
                         Ok(EnvelopeResult::RawUpdates(bodies)) => {
-                            // route through dispatch_updates so pts/seq is
-                            // properly tracked. Previously updates were sent directly
-                            // to update_tx, skipping pts tracking -> false gap ->
-                            // getDifference -> duplicate deliveries.
+                            // Return the first body to the invoke() caller so it can
+                            // deserialize the Updates response (fixes "unexpected end of
+                            // buffer" on EditMessage, ForwardMessages, SendMedia, etc.).
+                            // Concurrently dispatch ALL bodies through pts/seq tracking so
+                            // gaps are filled and the update stream stays consistent.
+                            let caller_body = bodies.first().cloned().unwrap_or_default();
                             let c = self.clone();
                             tokio::spawn(async move {
                                 for body in bodies {
                                     c.dispatch_updates(&body).await;
                                 }
                             });
-                            Ok(vec![])
+                            Ok(caller_body)
                         }
                         Ok(EnvelopeResult::Pts(pts, pts_count)) => {
                             // updateShortSentMessage: advance pts without emitting any Update.
@@ -4888,7 +4910,7 @@ impl Client {
                 suggested_post: None,
             };
             let body = self.rpc_call_raw_pub(&req).await?;
-            return Ok(self.extract_sent_message(&body, msg, &peer));
+            return Ok(self.extract_sent_message(&body, msg, &peer).await);
         }
 
         let req = tl::functions::messages::SendMessage {
@@ -4915,13 +4937,17 @@ impl Client {
             suggested_post: None,
         };
         let body = self.rpc_call_raw(&req).await?;
-        Ok(self.extract_sent_message(&body, msg, &peer))
+        Ok(self.extract_sent_message(&body, msg, &peer).await)
     }
 
     /// Parse the Updates blob returned by SendMessage / SendMedia and extract the
     /// sent message. Falls back to a synthetic stub if the response is opaque
     /// (e.g. `updateShortSentMessage` which doesn't include the full message).
-    fn extract_sent_message(
+    ///
+    /// Also caches `users` and `chats` from the Updates container so that
+    /// subsequent peer operations on users first seen in a send response don't
+    /// hit `PeerNotCached`.
+    async fn extract_sent_message(
         &self,
         body: &[u8],
         input: &InputMessage,
@@ -4936,6 +4962,9 @@ impl Client {
         if cid == 0x74ae4240 || cid == 0x725b04c3 {
             let mut cur = Cursor::from_slice(body);
             if let Ok(tl::enums::Updates::Updates(u)) = tl::enums::Updates::deserialize(&mut cur) {
+                // Cache users/chats before the dispatch_updates spawn runs,
+                // to prevent PeerNotCached races on the calling side.
+                self.cache_users_and_chats(&u.users, &u.chats).await;
                 for upd in &u.updates {
                     if let tl::enums::Update::NewMessage(nm) = upd {
                         return update::IncomingMessage::from_raw(nm.message.clone())
@@ -4950,6 +4979,7 @@ impl Client {
             if let Ok(tl::enums::Updates::Combined(u)) =
                 tl::enums::Updates::deserialize(&mut Cursor::from_slice(body))
             {
+                self.cache_users_and_chats(&u.users, &u.chats).await;
                 for upd in &u.updates {
                     if let tl::enums::Update::NewMessage(nm) = upd {
                         return update::IncomingMessage::from_raw(nm.message.clone())
@@ -5194,22 +5224,33 @@ impl Client {
         &self,
         text: &str,
     ) -> Result<update::IncomingMessage, InvocationError> {
+        self.send_to_self_ex(&InputMessage::text(text)).await
+    }
+
+    /// Send a message to Saved Messages with full formatting support.
+    ///
+    /// Accepts an [`InputMessage`], so you can use `InputMessage::html(...)` or
+    /// `InputMessage::markdown(...)` for rich text.
+    pub async fn send_to_self_ex(
+        &self,
+        msg: &InputMessage,
+    ) -> Result<update::IncomingMessage, InvocationError> {
         let req = tl::functions::messages::SendMessage {
-            no_webpage: false,
-            silent: false,
-            background: false,
-            clear_draft: false,
+            no_webpage: msg.no_webpage,
+            silent: msg.silent,
+            background: msg.background,
+            clear_draft: msg.clear_draft,
             noforwards: false,
             update_stickersets_order: false,
-            invert_media: false,
+            invert_media: msg.invert_media,
             allow_paid_floodskip: false,
             peer: tl::enums::InputPeer::PeerSelf,
-            reply_to: None,
-            message: text.to_string(),
+            reply_to: msg.reply_header(),
+            message: msg.text.clone(),
             random_id: random_i64(),
-            reply_markup: None,
-            entities: None,
-            schedule_date: None,
+            reply_markup: msg.reply_markup.clone(),
+            entities: msg.entities.clone(),
+            schedule_date: msg.schedule_date,
             schedule_repeat_period: None,
             send_as: None,
             quick_reply_shortcut: None,
@@ -5219,7 +5260,7 @@ impl Client {
         };
         let body = self.rpc_call_raw(&req).await?;
         let self_peer = tl::enums::Peer::User(tl::types::PeerUser { user_id: 0 });
-        Ok(self.extract_sent_message(&body, &InputMessage::text(text), &self_peer))
+        Ok(self.extract_sent_message(&body, msg, &self_peer).await)
     }
 
     /// Edit an existing message.
@@ -5247,6 +5288,35 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Edit an existing message with full formatting (HTML/Markdown entities).
+    ///
+    /// Unlike [`edit_message`] which only accepts plain text, this variant
+    /// accepts an [`InputMessage`] so you can pass `InputMessage::html(...)` or
+    /// `InputMessage::markdown(...)`.
+    pub async fn edit_message_ex(
+        &self,
+        peer: impl Into<PeerRef>,
+        message_id: i32,
+        msg: InputMessage,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let req = tl::functions::messages::EditMessage {
+            no_webpage: msg.no_webpage,
+            invert_media: msg.invert_media,
+            peer: input_peer,
+            id: message_id,
+            message: Some(msg.text),
+            media: msg.media,
+            reply_markup: msg.reply_markup,
+            entities: msg.entities,
+            schedule_date: msg.schedule_date,
+            schedule_repeat_period: None,
+            quick_reply_shortcut_id: None,
+        };
+        self.rpc_write(&req).await
+    }
+
     /// Forward messages from `source` to `destination`.
     pub async fn forward_messages(
         &self,
@@ -5254,37 +5324,9 @@ impl Client {
         message_ids: &[i32],
         source: impl Into<PeerRef>,
     ) -> Result<(), InvocationError> {
-        let dest = destination.into().resolve(self).await?;
-        let src = source.into().resolve(self).await?;
-        let cache = self.inner.peer_cache.read().await;
-        let to_peer = cache.peer_to_input(&dest)?;
-        let from_peer = cache.peer_to_input(&src)?;
-        drop(cache);
-
-        let req = tl::functions::messages::ForwardMessages {
-            silent: false,
-            background: false,
-            with_my_score: false,
-            drop_author: false,
-            drop_media_captions: false,
-            noforwards: false,
-            from_peer,
-            id: message_ids.to_vec(),
-            random_id: (0..message_ids.len()).map(|_| random_i64()).collect(),
-            to_peer,
-            top_msg_id: None,
-            reply_to: None,
-            schedule_date: None,
-            schedule_repeat_period: None,
-            send_as: None,
-            quick_reply_shortcut: None,
-            effect: None,
-            video_timestamp: None,
-            allow_paid_stars: None,
-            allow_paid_floodskip: false,
-            suggested_post: None,
-        };
-        self.rpc_write(&req).await
+        self.forward_messages_ex(destination, message_ids, source, ForwardOptions::default())
+            .await
+            .map(|_| ())
     }
 
     /// Forward messages and return the forwarded copies.
@@ -5297,6 +5339,21 @@ impl Client {
         message_ids: &[i32],
         source: impl Into<PeerRef>,
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
+        self.forward_messages_ex(destination, message_ids, source, ForwardOptions::default())
+            .await
+    }
+
+    /// Forward messages with full options (silent, anonymous, scheduled, etc.).
+    ///
+    /// Both [`forward_messages`] and [`forward_messages_returning`] are thin
+    /// wrappers around this method.
+    pub async fn forward_messages_ex(
+        &self,
+        destination: impl Into<PeerRef>,
+        message_ids: &[i32],
+        source: impl Into<PeerRef>,
+        opts: ForwardOptions,
+    ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
         let dest = destination.into().resolve(self).await?;
         let src = source.into().resolve(self).await?;
         let cache = self.inner.peer_cache.read().await;
@@ -5304,20 +5361,34 @@ impl Client {
         let from_peer = cache.peer_to_input(&src)?;
         drop(cache);
 
+        let reply_to = opts.reply_to.map(|id| {
+            tl::enums::InputReplyTo::Message(tl::types::InputReplyToMessage {
+                reply_to_msg_id: id,
+                top_msg_id: None,
+                reply_to_peer_id: None,
+                quote_text: None,
+                quote_entities: None,
+                quote_offset: None,
+                monoforum_peer_id: None,
+                poll_option: None,
+                todo_item_id: None,
+            })
+        });
+
         let req = tl::functions::messages::ForwardMessages {
-            silent: false,
+            silent: opts.silent,
             background: false,
             with_my_score: false,
-            drop_author: false,
-            drop_media_captions: false,
-            noforwards: false,
+            drop_author: opts.drop_author,
+            drop_media_captions: opts.drop_media_captions,
+            noforwards: opts.noforwards,
             from_peer,
             id: message_ids.to_vec(),
             random_id: (0..message_ids.len()).map(|_| random_i64()).collect(),
             to_peer,
             top_msg_id: None,
-            reply_to: None,
-            schedule_date: None,
+            reply_to,
+            schedule_date: opts.schedule_date,
             schedule_repeat_period: None,
             send_as: None,
             quick_reply_shortcut: None,
@@ -5328,18 +5399,20 @@ impl Client {
             suggested_post: None,
         };
         let body = self.rpc_call_raw(&req).await?;
-        // Parse the Updates container and collect NewMessage / NewChannelMessage updates.
+        // Parse the Updates container, cache peer info, and collect messages.
         let mut out = Vec::new();
         if body.len() >= 4 {
             let cid = u32::from_le_bytes(body[..4].try_into().unwrap());
             if cid == 0x74ae4240 || cid == 0x725b04c3 {
                 let mut cur = Cursor::from_slice(&body);
                 let updates_opt = tl::enums::Updates::deserialize(&mut cur).ok();
-                let raw_updates = match updates_opt {
-                    Some(tl::enums::Updates::Updates(u)) => u.updates,
-                    Some(tl::enums::Updates::Combined(u)) => u.updates,
-                    _ => vec![],
+                let (raw_updates, users, chats) = match updates_opt {
+                    Some(tl::enums::Updates::Updates(u)) => (u.updates, u.users, u.chats),
+                    Some(tl::enums::Updates::Combined(u)) => (u.updates, u.users, u.chats),
+                    _ => (vec![], vec![], vec![]),
                 };
+                // Cache peers so returned IncomingMessage objects are immediately usable.
+                self.cache_users_and_chats(&users, &chats).await;
                 for upd in raw_updates {
                     match upd {
                         tl::enums::Update::NewMessage(u) => {
@@ -5373,6 +5446,30 @@ impl Client {
             id: message_ids,
         };
         self.rpc_write(&req).await
+    }
+
+    /// Send an HTML-formatted message to `peer`.
+    ///
+    /// Shorthand for `client.send_message_to_peer_ex(peer, &InputMessage::html(html))`.
+    pub async fn send_html(
+        &self,
+        peer: impl Into<PeerRef>,
+        html: &str,
+    ) -> Result<update::IncomingMessage, InvocationError> {
+        self.send_message_to_peer_ex(peer, &InputMessage::html(html))
+            .await
+    }
+
+    /// Send a Markdown-formatted message to `peer`.
+    ///
+    /// Shorthand for `client.send_message_to_peer_ex(peer, &InputMessage::markdown(md))`.
+    pub async fn send_markdown(
+        &self,
+        peer: impl Into<PeerRef>,
+        md: &str,
+    ) -> Result<update::IncomingMessage, InvocationError> {
+        self.send_message_to_peer_ex(peer, &InputMessage::markdown(md))
+            .await
     }
 
     /// Get messages by their IDs from a peer.
@@ -10692,7 +10789,9 @@ impl Client {
             suggested_post: None,
         };
         let body = self.rpc_call_raw_pub(&req).await?;
-        Ok(self.extract_sent_message(&body, &crate::InputMessage::text(""), &peer))
+        Ok(self
+            .extract_sent_message(&body, &crate::InputMessage::text(""), &peer)
+            .await)
     }
 
     /// Send an animated dice/emoji to a chat.
