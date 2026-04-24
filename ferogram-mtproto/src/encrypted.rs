@@ -138,6 +138,13 @@ impl EncryptedSession {
         let secs = now.as_secs().wrapping_add(self.time_offset as i64 as u64);
         let nanos = now.subsec_nanos() as u64;
         let mut id = ((secs << 32) | (nanos << 2)) as i64;
+        // Spec requires lower 32 bits to be non-zero ("must present a
+        // fractional part").  On coarse-grained clocks (e.g. some Android/Termux
+        // environments) subsec_nanos() can be exactly 0, making the lower half 0.
+        // Set the minimum valid bit (bit 2, step = 4) when lower half is zero.
+        if (id as u64 & 0xFFFF_FFFF) == 0 {
+            id |= 4;
+        }
         if self.last_msg_id >= id {
             id = self.last_msg_id + 4;
         }
@@ -161,33 +168,21 @@ impl EncryptedSession {
         self.sequence * 2
     }
 
-    /// Correct the outgoing sequence counter when the server reports a
-    /// `bad_msg_notification` with error codes 32 (seq_no too low) or
-    /// 33 (seq_no too high).
+    /// Handle `bad_msg_notification` codes 32/33 (seq_no too low / too high).
     ///
-    pub fn correct_seq_no(&mut self, code: u32) {
-        match code {
-            32 => {
-                // seq_no too low: jump forward so next send is well above server expectation
-                self.sequence += 64;
-                log::debug!(
-                    "[ferogram] seq_no correction: code 32, bumped seq to {}",
-                    self.sequence
-                );
-            }
-            33 => {
-                // seq_no too high: step back, but never below 1 to avoid
-                // re-using seq_no=1 which was already sent this session.
-                // Zeroing would make the next content message get seq_no=1,
-                // which the server already saw and will reject again with code 32.
-                self.sequence = self.sequence.saturating_sub(16).max(1);
-                log::debug!(
-                    "[ferogram] seq_no correction: code 33, lowered seq to {}",
-                    self.sequence
-                );
-            }
-            _ => {}
-        }
+    /// The previous implementation used magic offsets (+64 / -16) that have no
+    /// basis in the MTProto spec. These caused ping-pong loops: +64 triggered
+    /// code 33 (now too high), -16 triggered code 32 (now too low), repeating
+    /// until the connection was dropped, which then hit the session_id reset bug.
+    ///
+    /// The spec-correct recovery is a full session reset (new session_id, seq_no=0).
+    /// This is what TDesktop does. The caller (`dc_pool::rpc_call`) must then resend
+    /// using the new session context.
+    pub fn correct_seq_no(&mut self, _code: u32) {
+        // Full session reset: new session_id, seq_no = 0.
+        // The server will see a brand-new session and accept seq_no starting from 1.
+        self.reset_session();
+        log::debug!("[ferogram] seq_no desync (code {_code}): performed full session reset");
     }
 
     /// Undo the last `next_seq_no` increment.
@@ -435,9 +430,9 @@ impl EncryptedSession {
         if !body_len.is_multiple_of(4) {
             return Err(DecryptError::FrameTooShort);
         }
-        // MTProto 2.0: minimum padding is 12 bytes; no upper bound.
+        // MTProto 2.0: padding must be in range [12, 1024] bytes (Security Guidelines).
         let padding = plaintext.len() - 32 - body_len;
-        if padding < 12 {
+        if !(12..=1024).contains(&padding) {
             return Err(DecryptError::FrameTooShort);
         }
         let body = plaintext[32..32 + body_len].to_vec();
@@ -461,11 +456,13 @@ impl EncryptedSession {
         self.session_id
     }
 
-    /// Reset session state: new random session_id, zeroed seq_no and last_msg_id,
-    /// cleared dedup buffer.
+    /// Reset session state: new random session_id, zeroed seq_no and last_msg_id.
     ///
-    /// Called on `bad_msg_notification` error codes 32/33 (seq_no mismatch).
-    /// Creates a new session_id and resets seq_no to avoid persistent desync.
+    /// Use this for genuine new-session creation (e.g. reconnect after auth loss,
+    /// or bad_msg_notification codes 32/33 seq_no desync).
+    /// For `new_session_created` server notifications received mid-session, use
+    /// `reset_seq_no_only()` which preserves the client session_id so that
+    /// in-flight server responses still decrypt correctly.
     pub fn reset_session(&mut self) {
         let mut rnd = [0u8; 8];
         getrandom::getrandom(&mut rnd).expect("getrandom");
@@ -481,18 +478,58 @@ impl EncryptedSession {
             self.session_id
         );
     }
+
+    /// Reset only the sequence counter and last_msg_id, keeping session_id intact.
+    ///
+    /// # Protocol basis
+    /// When the server sends `new_session_created`, it has created fresh server-side
+    /// state for the client's **existing** session_id. The client must reset seq_no
+    /// to 0 (server expectation is now 0) but MUST NOT change session_id. Doing so
+    /// would cause the server's pending response (encrypted with the old session_id)
+    /// to fail decryption with `SessionMismatch`.
+    ///
+    /// Replaces the previous `reset_session()` call in the `new_session_created` handler.
+    pub fn reset_seq_no_only(&mut self) {
+        self.sequence = 0;
+        self.last_msg_id = 0;
+        log::debug!(
+            "[ferogram] seq_no reset (session_id unchanged): {:#018x}",
+            self.session_id
+        );
+    }
 }
 
 impl EncryptedSession {
     /// Like [`decrypt_frame`] but also performs seen-msg_id deduplication using the
-    /// supplied ring.  Pass `&self.inner.seen_msg_ids` from the client.
+    /// supplied ring. Pass `&self.inner.seen_msg_ids` from the client.
+    ///
+    /// Hard-codes `time_offset = 0`. On systems where the local clock differs from
+    /// the server by more than 30 seconds, valid server messages are rejected with
+    /// `MsgIdTimeWindow`. Prefer `decrypt_frame_dedup_with_offset` when the session's
+    /// clock skew is known.
     pub fn decrypt_frame_dedup(
         auth_key: &[u8; 256],
         session_id: i64,
         frame: &mut [u8],
         seen: &SeenMsgIds,
     ) -> Result<DecryptedMessage, DecryptError> {
-        let msg = Self::decrypt_frame_with_offset(auth_key, session_id, frame, 0)?;
+        Self::decrypt_frame_dedup_with_offset(auth_key, session_id, frame, seen, 0)
+    }
+
+    /// Like [`decrypt_frame_dedup`] but applies the time-window check with the given
+    /// `time_offset` (seconds, server_time − local_time).
+    ///
+    /// Callers that track the session's clock skew (from `correct_time_offset`) should
+    /// use this variant to avoid falsely rejecting valid server frames on clock-skewed
+    /// systems. Pass `enc.time_offset()` from the owning `EncryptedSession`.
+    pub fn decrypt_frame_dedup_with_offset(
+        auth_key: &[u8; 256],
+        session_id: i64,
+        frame: &mut [u8],
+        seen: &SeenMsgIds,
+        time_offset: i32,
+    ) -> Result<DecryptedMessage, DecryptError> {
+        let msg = Self::decrypt_frame_with_offset(auth_key, session_id, frame, time_offset)?;
         {
             let mut s = seen.lock().unwrap();
             if s.1.contains(&msg.msg_id) {
@@ -567,9 +604,9 @@ impl EncryptedSession {
         if !body_len.is_multiple_of(4) {
             return Err(DecryptError::FrameTooShort);
         }
-        // MTProto 2.0: minimum padding is 12 bytes; no upper bound.
+        // MTProto 2.0: padding must be in range [12, 1024] bytes (Security Guidelines).
         let padding = plaintext.len() - 32 - body_len;
-        if padding < 12 {
+        if !(12..=1024).contains(&padding) {
             return Err(DecryptError::FrameTooShort);
         }
         let body = plaintext[32..32 + body_len].to_vec();

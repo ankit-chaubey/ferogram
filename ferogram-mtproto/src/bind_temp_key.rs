@@ -105,10 +105,22 @@ pub fn serialize_bind_temp_auth_key(
 }
 
 /// Generate a monotonic MTProto message ID from the current system clock.
+///
+/// The previous implementation used `nanos & !3` (clears bottom 2 bits), which
+/// produces values in range 0..999_999_996. `EncryptedSession::next_msg_id` uses
+/// `nanos << 2` (multiply by 4), range 0..3_999_999_996. At the same wall-clock
+/// instant the old `gen_msg_id` output was 4x smaller in the lower 32 bits than
+/// any msg_id already assigned by the session, triggering `bad_msg_notification`
+/// code 16 (msg_id too low) from the server on the bind request.
+/// Uses `nanos << 2` to match the session's scaling exactly.
 pub fn gen_msg_id() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-    ((now.as_secs() << 32) | (now.subsec_nanos() as u64 & !3)) as i64
+    let secs = now.as_secs();
+    let nanos = now.subsec_nanos() as u64;
+    // Use same formula as EncryptedSession::next_msg_id: nanos << 2.
+    // Bottom 2 bits are 0 (plaintext DH handshake message; not content-related).
+    ((secs << 32) | (nanos << 2)) as i64
 }
 
 fn tl_write_bytes(out: &mut Vec<u8>, data: &[u8]) {

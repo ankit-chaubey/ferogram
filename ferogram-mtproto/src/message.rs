@@ -8,13 +8,7 @@
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-/// Process-wide monotonically increasing counter for plaintext message IDs.
-///
-/// A global atomic ensures msg_id monotonicity across concurrent sessions.
-static GLOBAL_MSG_COUNTER: AtomicU32 = AtomicU32::new(1);
 
 /// A 64-bit MTProto message identifier.
 ///
@@ -25,20 +19,23 @@ static GLOBAL_MSG_COUNTER: AtomicU32 = AtomicU32::new(1);
 pub struct MessageId(pub u64);
 
 impl MessageId {
-    /// Generate a new message ID using the system clock and a global counter.
+    /// Generate a new message ID using the system clock and the session-local counter.
     ///
     /// MTProto msg_id layout:
     ///   bits 63–32: Unix timestamp in seconds (upper 32 bits)
     ///   bits 31–2:  intra-second sequencing counter (lower 30 bits, × 4)
     ///   bits 1–0:   must be 0b00 for client messages
     ///
-    pub(crate) fn generate(_counter: u32) -> Self {
+    /// The previous implementation accepted a `_counter` parameter but silently
+    /// ignored it, routing all calls through a process-wide `GLOBAL_MSG_COUNTER`.
+    /// The session-local `msg_counter` in `Session` was incremented uselessly.
+    /// Uses the caller-supplied `counter` directly so each `Session` instance
+    /// drives its own monotonic sequence without a global side-channel.
+    pub(crate) fn generate(counter: u32) -> Self {
         let unix_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        // Global atomic: wrapping_add ensures monotonicity across concurrent sessions.
-        let counter = GLOBAL_MSG_COUNTER.fetch_add(1, Ordering::Relaxed);
         // upper 32 bits = seconds, lower 30 bits = counter × 4 (bits 1-0 = 0b00)
         let id = (unix_secs << 32) | (u64::from(counter) << 2);
         Self(id)

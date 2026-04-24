@@ -14,25 +14,56 @@ use crate::InvocationError;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+/// Framing mode for `ObfuscatedStream`.
+///
+/// * `Abridged` - Obfuscated2 over Abridged framing (`0xEFEFEFEF` nonce tag).
+///   Used for plain and `0x??` MTProxy secrets.
+/// * `PaddedIntermediate` - Obfuscated2 over Padded Intermediate framing
+///   (`0xDDDDDDDD` nonce tag).  Required for `0xDD` MTProxy secrets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObfuscatedFraming {
+    Abridged,
+    PaddedIntermediate,
+}
+
 pub struct ObfuscatedStream {
     stream: TcpStream,
     cipher: ObfuscatedCipher,
+    framing: ObfuscatedFraming,
 }
 
 impl ObfuscatedStream {
+    /// Connect using Abridged framing (plain MTProxy secret, no 0xDD prefix).
     pub async fn connect(
         addr: &str,
         proxy_secret: Option<&[u8; 16]>,
         dc_id: i16,
     ) -> Result<Self, InvocationError> {
         let stream = TcpStream::connect(addr).await?;
-        Self::handshake(stream, proxy_secret, dc_id).await
+        Self::handshake(stream, proxy_secret, dc_id, ObfuscatedFraming::Abridged).await
+    }
+
+    /// Connect using Padded Intermediate framing (0xDD MTProxy secret).
+    pub async fn connect_padded(
+        addr: &str,
+        proxy_secret: Option<&[u8; 16]>,
+        dc_id: i16,
+    ) -> Result<Self, InvocationError> {
+        let stream = TcpStream::connect(addr).await?;
+        Self::handshake(
+            stream,
+            proxy_secret,
+            dc_id,
+            ObfuscatedFraming::PaddedIntermediate,
+        )
+        .await
     }
 
     async fn handshake(
         mut stream: TcpStream,
         proxy_secret: Option<&[u8; 16]>,
         dc_id: i16,
+        framing: ObfuscatedFraming,
     ) -> Result<Self, InvocationError> {
         use sha2::Digest;
 
@@ -77,10 +108,23 @@ impl ObfuscatedStream {
             (tx_raw, rx_raw)
         };
 
-        nonce[56] = 0xef;
-        nonce[57] = 0xef;
-        nonce[58] = 0xef;
-        nonce[59] = 0xef;
+        // Stamp the correct protocol tag at nonce[56..60].
+        // Abridged  -> 0xEFEFEFEF
+        // PaddedIntermediate -> 0xDDDDDDDD (required for 0xDD MTProxy secrets)
+        match framing {
+            ObfuscatedFraming::Abridged => {
+                nonce[56] = 0xef;
+                nonce[57] = 0xef;
+                nonce[58] = 0xef;
+                nonce[59] = 0xef;
+            }
+            ObfuscatedFraming::PaddedIntermediate => {
+                nonce[56] = 0xdd;
+                nonce[57] = 0xdd;
+                nonce[58] = 0xdd;
+                nonce[59] = 0xdd;
+            }
+        }
         let dc_bytes = dc_id.to_le_bytes();
         nonce[60] = dc_bytes[0];
         nonce[61] = dc_bytes[1];
@@ -94,63 +138,126 @@ impl ObfuscatedStream {
         cipher.encrypt(&mut nonce[56..64]);
 
         stream.write_all(&nonce).await?;
-        Ok(Self { stream, cipher })
+        Ok(Self {
+            stream,
+            cipher,
+            framing,
+        })
     }
 
     pub async fn send(&mut self, data: &[u8]) -> Result<(), InvocationError> {
-        let words = data.len() / 4;
-        let mut frame = if words < 0x7f {
-            let mut v = Vec::with_capacity(1 + data.len());
-            v.push(words as u8);
-            v
-        } else {
-            let mut v = Vec::with_capacity(4 + data.len());
-            v.extend_from_slice(&[
-                0x7f,
-                (words & 0xff) as u8,
-                ((words >> 8) & 0xff) as u8,
-                ((words >> 16) & 0xff) as u8,
-            ]);
-            v
-        };
-        frame.extend_from_slice(data);
-        self.cipher.encrypt(&mut frame);
-        self.stream.write_all(&frame).await?;
+        match self.framing {
+            ObfuscatedFraming::Abridged => {
+                let words = data.len() / 4;
+                let mut frame = if words < 0x7f {
+                    let mut v = Vec::with_capacity(1 + data.len());
+                    v.push(words as u8);
+                    v
+                } else {
+                    let mut v = Vec::with_capacity(4 + data.len());
+                    v.extend_from_slice(&[
+                        0x7f,
+                        (words & 0xff) as u8,
+                        ((words >> 8) & 0xff) as u8,
+                        ((words >> 16) & 0xff) as u8,
+                    ]);
+                    v
+                };
+                frame.extend_from_slice(data);
+                self.cipher.encrypt(&mut frame);
+                self.stream.write_all(&frame).await?;
+            }
+            ObfuscatedFraming::PaddedIntermediate => {
+                // Padded intermediate framing: 4-byte LE length of
+                // (payload + random 0-15 padding), then payload, then padding.
+                let mut pad_len_buf = [0u8; 1];
+                getrandom::getrandom(&mut pad_len_buf).ok();
+                let pad_len = (pad_len_buf[0] & 0x0f) as usize;
+                let total_payload = data.len() + pad_len;
+                let mut frame = Vec::with_capacity(4 + total_payload);
+                frame.extend_from_slice(&(total_payload as u32).to_le_bytes());
+                frame.extend_from_slice(data);
+                let mut pad = vec![0u8; pad_len];
+                getrandom::getrandom(&mut pad).ok();
+                frame.extend_from_slice(&pad);
+                self.cipher.encrypt(&mut frame);
+                self.stream.write_all(&frame).await?;
+            }
+        }
         Ok(())
     }
 
     pub async fn recv(&mut self) -> Result<Vec<u8>, InvocationError> {
-        let mut h = [0u8; 1];
-        self.stream.read_exact(&mut h).await?;
-        self.cipher.decrypt(&mut h);
+        match self.framing {
+            ObfuscatedFraming::Abridged => {
+                let mut h = [0u8; 1];
+                self.stream.read_exact(&mut h).await?;
+                self.cipher.decrypt(&mut h);
 
-        // 0x7f = extended length; otherwise the byte itself is the word count.
-        let words = if h[0] == 0x7f {
-            let mut b = [0u8; 3];
-            self.stream.read_exact(&mut b).await?;
-            self.cipher.decrypt(&mut b);
-            b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16
-        } else {
-            h[0] as usize
-        };
+                // Three cases for the first decrypted byte:
+                //   < 0x7f  -> Abridged word count
+                //   == 0x7f -> extended 3-byte word count
+                //   > 0x7f  -> transport error: read 3 more bytes and form i32
+                let words = if h[0] < 0x7f {
+                    h[0] as usize
+                } else if h[0] == 0x7f {
+                    let mut b = [0u8; 3];
+                    self.stream.read_exact(&mut b).await?;
+                    self.cipher.decrypt(&mut b);
+                    b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16
+                } else {
+                    // First byte > 0x7f, transport error code.
+                    // Read the remaining 3 bytes, form a signed i32, return error.
+                    let mut rest = [0u8; 3];
+                    self.stream.read_exact(&mut rest).await?;
+                    self.cipher.decrypt(&mut rest);
+                    let code = i32::from_le_bytes([h[0], rest[0], rest[1], rest[2]]);
+                    return Err(InvocationError::Io(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionRefused,
+                        format!("transport error from server: {code}"),
+                    )));
+                };
 
-        let mut buf = vec![0u8; words * 4];
-        self.stream.read_exact(&mut buf).await?;
-        self.cipher.decrypt(&mut buf);
+                let mut buf = vec![0u8; words * 4];
+                self.stream.read_exact(&mut buf).await?;
+                self.cipher.decrypt(&mut buf);
 
-        // Transport errors: negative signed LE i32 in the payload.
-        // Must check here; can't infer from the header byte (e.g. -404 starts 0x6C).
-        // Transport errors are exactly 4 bytes; encrypted frames are 68+ bytes.
-        if buf.len() == 4 {
-            let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
-            if code < 0 {
-                return Err(InvocationError::Io(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionRefused,
-                    format!("transport error from server: {code}"),
-                )));
+                // Secondary transport error check for the post-read payload.
+                if buf.len() == 4 {
+                    let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
+                    if code < 0 {
+                        return Err(InvocationError::Io(std::io::Error::new(
+                            std::io::ErrorKind::ConnectionRefused,
+                            format!("transport error from server: {code}"),
+                        )));
+                    }
+                }
+
+                Ok(buf)
+            }
+            ObfuscatedFraming::PaddedIntermediate => {
+                // Padded intermediate recv: read encrypted 4-byte LE
+                // length prefix, then read and decrypt payload+padding, strip padding.
+                let mut len_buf = [0u8; 4];
+                self.stream.read_exact(&mut len_buf).await?;
+                self.cipher.decrypt(&mut len_buf);
+                let total_len = i32::from_le_bytes(len_buf);
+                if total_len < 0 {
+                    return Err(InvocationError::Io(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionRefused,
+                        format!("transport error from server: {total_len}"),
+                    )));
+                }
+                let mut buf = vec![0u8; total_len as usize];
+                self.stream.read_exact(&mut buf).await?;
+                self.cipher.decrypt(&mut buf);
+                // Strip up to 15 bytes of random padding (payload is ≥24 bytes).
+                if buf.len() >= 24 {
+                    let pad = (buf.len() - 24) % 16;
+                    buf.truncate(buf.len() - pad);
+                }
+                Ok(buf)
             }
         }
-
-        Ok(buf)
     }
 }

@@ -41,14 +41,22 @@ pub fn default_dc_addresses() -> Vec<(i32, String)> {
 
 /// State that must live inside `ClientInner` to track which DCs already have
 /// a copy of the account's authorization key.
+///
+/// The previous implementation used `Vec<i32>` with O(n) `contains` scan and no
+/// deduplication on insert. Under concurrent file-download traffic, two callers
+/// could both pass `has_copied` before either completed the export/import, causing
+/// a second `auth.importAuthorization` call with already-consumed bytes, returning
+/// `AUTH_BYTES_INVALID` from Telegram.
+/// Using `HashSet<i32>` gives O(1) lookup and `insert` returns false on duplicate,
+/// letting callers detect and skip concurrent double-imports.
 pub struct DcAuthTracker {
-    copied: Mutex<Vec<i32>>,
+    copied: Mutex<std::collections::HashSet<i32>>,
 }
 
 impl DcAuthTracker {
     pub fn new() -> Self {
         Self {
-            copied: Mutex::new(Vec::new()),
+            copied: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -58,8 +66,9 @@ impl DcAuthTracker {
     }
 
     /// Mark `dc_id` as having received a copy of the auth.
-    pub fn mark_copied(&self, dc_id: i32) {
-        self.copied.lock().unwrap().push(dc_id);
+    /// Returns `true` if newly inserted, `false` if already present (concurrent duplicate).
+    pub fn mark_copied(&self, dc_id: i32) -> bool {
+        self.copied.lock().unwrap().insert(dc_id)
     }
 }
 
@@ -165,17 +174,19 @@ mod tests {
     #[test]
     fn tracker_marks_and_checks() {
         let t = DcAuthTracker::new();
-        t.mark_copied(4);
+        assert!(t.mark_copied(4), "first insert should return true");
         assert!(t.has_copied(4));
         assert!(!t.has_copied(2));
+        // Duplicate insert returns false (concurrent safety check).
+        assert!(!t.mark_copied(4), "duplicate insert should return false");
     }
 
     #[test]
     fn tracker_marks_multiple_dcs() {
         let t = DcAuthTracker::new();
-        t.mark_copied(2);
-        t.mark_copied(4);
-        t.mark_copied(5);
+        assert!(t.mark_copied(2));
+        assert!(t.mark_copied(4));
+        assert!(t.mark_copied(5));
         assert!(t.has_copied(2));
         assert!(t.has_copied(4));
         assert!(t.has_copied(5));

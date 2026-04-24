@@ -77,6 +77,92 @@ impl IntermediateTransport {
     }
 }
 
+// Padded Intermediate
+
+/// [MTProto Padded Intermediate] transport framing.
+///
+/// Init tag: `0xdddddddd` (4 bytes).  Each message is sent as:
+/// `[4-byte LE length of (payload + random padding)][payload][0–15 random bytes]`
+///
+/// This is the correct framing for `0xDD` MTProxy secrets.
+///
+/// [MTProto Padded Intermediate]: https://core.telegram.org/mtproto/mtproto-transports#padded-intermediate
+pub struct PaddedIntermediateTransport {
+    stream: TcpStream,
+    init_sent: bool,
+}
+
+impl PaddedIntermediateTransport {
+    /// Connect to `addr` and lazily send the `0xDDDDDDDD` init tag on first [`send`].
+    pub async fn connect(addr: &str) -> Result<Self, InvocationError> {
+        let stream = TcpStream::connect(addr).await?;
+        Ok(Self {
+            stream,
+            init_sent: false,
+        })
+    }
+
+    /// Wrap an existing stream (the init tag will be sent on first [`send`]).
+    pub fn from_stream(stream: TcpStream) -> Self {
+        Self {
+            stream,
+            init_sent: false,
+        }
+    }
+
+    /// Send a message with Padded Intermediate framing.
+    ///
+    /// Frame layout: `[total_len: u32 LE][data][random_pad: 0–15 bytes]`
+    /// where `total_len = data.len() + pad_len`.
+    pub async fn send(&mut self, data: &[u8]) -> Result<(), InvocationError> {
+        if !self.init_sent {
+            self.stream.write_all(&[0xdd, 0xdd, 0xdd, 0xdd]).await?;
+            self.init_sent = true;
+        }
+        let mut pad_len_buf = [0u8; 1];
+        getrandom::getrandom(&mut pad_len_buf)
+            .map_err(|_| InvocationError::Deserialize("getrandom failed".into()))?;
+        let pad_len = (pad_len_buf[0] & 0x0f) as usize;
+        let total_len = (data.len() + pad_len) as u32;
+        self.stream.write_all(&total_len.to_le_bytes()).await?;
+        self.stream.write_all(data).await?;
+        if pad_len > 0 {
+            let mut pad = vec![0u8; pad_len];
+            getrandom::getrandom(&mut pad)
+                .map_err(|_| InvocationError::Deserialize("getrandom failed".into()))?;
+            self.stream.write_all(&pad).await?;
+        }
+        Ok(())
+    }
+
+    /// Receive the next Padded Intermediate message, stripping the random padding.
+    pub async fn recv(&mut self) -> Result<Vec<u8>, InvocationError> {
+        let mut len_buf = [0u8; 4];
+        self.stream.read_exact(&mut len_buf).await?;
+        let raw = i32::from_le_bytes(len_buf);
+        if raw < 0 {
+            return Err(InvocationError::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                format!("transport error: {raw}"),
+            )));
+        }
+        let total_len = raw as usize;
+        let mut buf = vec![0u8; total_len];
+        self.stream.read_exact(&mut buf).await?;
+        // Strip up to 15 bytes of random padding.
+        // The MTProto payload is at minimum 24 bytes (32-byte minimum decrypted frame).
+        if buf.len() >= 24 {
+            let pad = (buf.len() - 24) % 16;
+            buf.truncate(buf.len() - pad);
+        }
+        Ok(buf)
+    }
+
+    pub fn into_inner(self) -> TcpStream {
+        self.stream
+    }
+}
+
 // Full
 
 /// [MTProto Full] transport framing.

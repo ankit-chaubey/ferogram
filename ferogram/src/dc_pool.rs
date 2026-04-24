@@ -420,8 +420,13 @@ impl DcConnection {
             let ping_body = build_msgs_ack_ping_body(ping_id);
             // PingDelayDisconnect is content-related (returns Pong): must use odd seq_no.
             let (ping_wire, _) = self.enc.pack_body_with_msg_id(&ping_body, true);
-            // Fire-and-forget: ignore send errors (connection will fail on the next
-            // recv if the socket is actually dead).
+            // This ping is fire-and-forget. The Pong response is a content-related
+            // server message and must be acknowledged. If the RPC result arrives before
+            // the Pong, the Pong's msg_id is never added to pending_acks. On idle
+            // connections (no subsequent RPCs) the un-acked Pong will eventually cause
+            // Telegram to close the connection. A dedicated always-running reader task
+            // that drains and acks all server messages would fix this permanently; for
+            // now the next rpc_call iteration receives and acks the Pong via pending_acks.
             let _ = Self::send_abridged(&mut self.stream, &ping_wire, self.cipher.as_mut()).await;
         }
 
@@ -489,12 +494,15 @@ impl DcConnection {
                         .await;
                     self.pending_acks.clear();
                 }
-                // Always reset session state so future requests use seq_no from 0.
-                self.enc.reset_session();
+                // Reset seq_no only, not session_id. The server created new state
+                // for our existing session_id; changing session_id here would cause
+                // all subsequent server frames (encrypted with the old session_id)
+                // to fail decryption with SessionMismatch.
+                self.enc.reset_seq_no_only();
                 if scan_result.is_none() {
-                    // No result yet  - resend with the freshly-reset session.
+                    // No result yet; resend with the freshly-reset sequence.
                     tracing::debug!(
-                        "[dc_pool] new_session_created: resetting session and resending [{session_resets}/2]"
+                        "[dc_pool] new_session_created: reset seq_no, resending [{session_resets}/2]"
                     );
                     let (wire, new_id) = self.enc.pack_with_msg_id(req);
                     sent_msg_id = new_id;
@@ -510,12 +518,15 @@ impl DcConnection {
                         if let Some(srv_id) = bad_msg_server_id {
                             self.enc.correct_time_offset(srv_id);
                         }
-                        self.enc.undo_seq_no();
+                        // Do not call undo_seq_no here. Reusing the same seq_no on a
+                        // retry violates MTProto monotonicity; the server may reject
+                        // with code 32. Let the next pack_with_msg_id assign the next
+                        // available odd seq_no for the resent message.
                     }
                     Some(32) | Some(33) => {
+                        // correct_seq_no does a full session reset (new session_id,
+                        // seq_no=0) instead of magic +/- offsets.
                         self.enc.correct_seq_no(bad_msg_code.unwrap());
-                        // correct_seq_no adjusts the base; next pack_with_msg_id
-                        // will use the corrected counter  - do NOT undo_seq_no here.
                     }
                     _ => {
                         // bad_server_salt or bad_msg code 48
@@ -685,8 +696,16 @@ impl DcConnection {
                             *need_resend = sent_msg_id.is_none_or(|id| id == bad_msg_id);
                         }
                         48 => {
-                            // Incorrect server salt (same as bad_server_salt).
+                            // bad_msg code 48 = incorrect server salt. Per spec, this
+                            // arrives together with a bad_server_salt frame in the same
+                            // container that carries the new salt. If bad_server_salt was
+                            // already processed, *salt is updated and the resend uses the
+                            // correct value. If not (partial container), resend once
+                            // conservatively; the retry loop's 5-attempt cap prevents a loop.
                             *need_resend = sent_msg_id.is_none_or(|id| id == bad_msg_id);
+                            tracing::debug!(
+                                "[dc_pool] bad_msg code 48 (wrong salt): will resend with current salt"
+                            );
                         }
                         _ => {
                             // Unknown code; resend to avoid the loop stalling.
@@ -834,7 +853,8 @@ impl DcConnection {
                         .await;
                     self.pending_acks.clear();
                 }
-                self.enc.reset_session();
+                // Reset seq_no only (see rpc_call for full explanation).
+                self.enc.reset_seq_no_only();
                 if scan_result.is_none() {
                     let (wire, new_id) = self.enc.pack_serializable_with_msg_id(req);
                     sent_msg_id = new_id;
@@ -846,7 +866,7 @@ impl DcConnection {
                         if let Some(srv_id) = bad_msg_server_id {
                             self.enc.correct_time_offset(srv_id);
                         }
-                        self.enc.undo_seq_no();
+                        // Do not call undo_seq_no (see rpc_call for explanation).
                     }
                     Some(32) | Some(33) => {
                         self.enc.correct_seq_no(bad_msg_code.unwrap());
@@ -971,8 +991,12 @@ impl DcConnection {
         }
 
         // Transport errors are exactly 4 bytes (negative LE i32).
-        // Encrypted frames are always 68+ bytes; checking only when buf.len() == 4
-        // avoids false positives from auth_key_id bytes that happen to be negative.
+        // A valid encrypted MTProto frame is always ≥ 68 bytes:
+        //   auth_key_id(8) + msg_key(16) + encrypted[salt(8)+session_id(8)+
+        //   msg_id(8)+seq_no(4)+data_len(4)+body(≥4)+padding(≥12)] ≥ 68 bytes.
+        // Checking buf.len() == 4 is therefore both necessary and sufficient to
+        // distinguish a transport error from a valid encrypted frame; this is
+        // correct by protocol structure, not merely empirically safe.
         if buf.len() == 4 {
             let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
             if code < 0 {
@@ -1073,6 +1097,11 @@ pub struct DcPool {
     socks5: Option<crate::socks5::Socks5Config>,
     /// Transport kind used for the home DC; reused for all secondary DC connections.
     transport: TransportKind,
+    /// DCs that have already received `invokeWithLayer(initConnection(...))`.
+    /// Every new auto-connected DC connection must send initConnection as the
+    /// first message so Telegram registers the client's API layer and version.
+    /// Without it the server may serve deprecated constructor IDs.
+    init_done: std::collections::HashSet<i32>,
 }
 
 impl DcPool {
@@ -1092,6 +1121,7 @@ impl DcPool {
             home_dc_id,
             socks5,
             transport,
+            init_done: std::collections::HashSet::new(),
         }
     }
 
@@ -1127,6 +1157,10 @@ impl DcPool {
             )
             .await?;
             self.conns.insert(dc_id, conn);
+            // Mark this DC as needing initConnection on its first RPC.
+            // The actual wrapping happens via the caller's run_transfer_initconnection
+            // path. Clear init_done so that path knows to re-run.
+            self.init_done.remove(&dc_id);
         }
         let result = self.conns.get_mut(&dc_id).unwrap().rpc_call(req).await;
         // Reconnect and retry once on IO error: stale pooled connection.
@@ -1135,6 +1169,7 @@ impl DcPool {
                 "[dc_pool] invoke_on_dc: IO error on DC{dc_id} (stale connection), reconnecting"
             );
             self.conns.remove(&dc_id);
+            self.init_done.remove(&dc_id); // needs initConnection on fresh connection
             let fresh = DcConnection::connect_raw(
                 &addr,
                 self.socks5.as_ref(),
@@ -1146,6 +1181,17 @@ impl DcPool {
             return self.conns.get_mut(&dc_id).unwrap().rpc_call(req).await;
         }
         result
+    }
+
+    /// Mark a DC as having completed initConnection. Call this after the
+    /// `invokeWithLayer(initConnection(...))` wrapper has been sent successfully.
+    pub fn mark_init_done(&mut self, dc_id: i32) {
+        self.init_done.insert(dc_id);
+    }
+
+    /// Returns true if this DC has already received initConnection this session.
+    pub fn is_init_done(&self, dc_id: i32) -> bool {
+        self.init_done.contains(&dc_id)
     }
 
     /// Like `invoke_on_dc` but accepts any `Serializable` type.

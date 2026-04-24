@@ -567,6 +567,13 @@ impl Client {
                     );
                     self.inner.pts_state.lock().await.pts = d.pts;
                     self.sync_pts_state().await?;
+                    // Discard any partially-accumulated updates from prior slice
+                    // iterations. These come from an intermediate state that is no
+                    // longer coherent relative to the new pts (d.pts). Returning them
+                    // would give the caller a stale partial set, and pts would then
+                    // jump forward past those updates, causing false gap detection on
+                    // the next getDifference call.
+                    all_updates.clear();
                     return Ok(all_updates);
                 }
             }
