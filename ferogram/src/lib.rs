@@ -2637,7 +2637,8 @@ impl Client {
             .ok_or_else(|| InvocationError::Deserialize("no srp_id".into()))?;
 
         let (m1, g_a) =
-            two_factor_auth::calculate_2fa(salt1, salt2, p, g, &g_b, &a, password.as_ref());
+            two_factor_auth::calculate_2fa(salt1, salt2, p, g, &g_b, &a, password.as_ref())
+                .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
         let req = tl::functions::auth::CheckPassword {
             password: tl::enums::InputCheckPasswordSrp::InputCheckPasswordSrp(
                 tl::types::InputCheckPasswordSrp {
@@ -3639,17 +3640,16 @@ impl Client {
             }
             ID_NEW_SESSION => {
                 // new_session_created#9ec20908 first_msg_id:long unique_id:long server_salt:long
-                // body[4..12]  = first_msg_id
-                // body[12..20] = unique_id
-                // body[20..28] = server_salt
+                //   body[4..12]  = first_msg_id  <- msgs with msg_id < this were NOT received
+                //   body[12..20] = unique_id
+                //   body[20..28] = server_salt
                 if body.len() >= 28 {
+                    let first_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
                     let server_salt = i64::from_le_bytes(body[20..28].try_into().unwrap());
                     {
                         let mut w = self.inner.writer.lock().await;
                         // new_session_created has odd seq_no -> must ack.
                         w.pending_ack.push(msg_id);
-                        //  clears the salt pool and inserts the fresh
-                        // server_salt with valid_until=i32::MAX (permanently valid).
                         w.salts.clear();
                         w.salts.push(FutureSalt {
                             valid_since: 0,
@@ -3658,8 +3658,62 @@ impl Client {
                         });
                         w.enc.salt = server_salt;
                         tracing::debug!(
-                            "[ferogram] new_session_created: salt pool reset to {server_salt:#x}"
+                            "[ferogram] new_session_created: salt={server_salt:#x}                              first_msg_id={first_msg_id}"
                         );
+                        // MTProto: msgs with msg_id < first_msg_id were not received
+                        // by the server and must be re-sent.
+                        let stale_ids: Vec<i64> = w
+                            .sent_bodies
+                            .keys()
+                            .filter(|&&id| id < first_msg_id)
+                            .copied()
+                            .collect();
+                        if !stale_ids.is_empty() {
+                            tracing::debug!(
+                                "[ferogram] new_session_created: re-queuing {} stale msg(s)                                  with msg_id < {first_msg_id}",
+                                stale_ids.len()
+                            );
+                        }
+                        for old_id in stale_ids {
+                            if let Some(body_bytes) = w.sent_bodies.remove(&old_id) {
+                                let (wire, new_id) = w.enc.pack_body_with_msg_id(&body_bytes, true);
+                                w.sent_bodies.insert(new_id, body_bytes);
+                                // Defer TCP send to after lock drop.
+                                w.new_session_resend_queue.push((old_id, new_id, wire));
+                            }
+                        }
+                    }
+                    // Ship resends outside the writer lock (no TCP I/O under lock).
+                    let resend_queue = {
+                        let mut w = self.inner.writer.lock().await;
+                        std::mem::take(&mut w.new_session_resend_queue)
+                    };
+                    if !resend_queue.is_empty() {
+                        let fk = self.inner.writer.lock().await.frame_kind.clone();
+                        for (old_id, new_id, wire) in resend_queue {
+                            {
+                                let mut pending = self.inner.pending.lock().await;
+                                if let Some(tx) = pending.remove(&old_id) {
+                                    pending.insert(new_id, tx);
+                                }
+                            }
+                            if let Err(e) = send_frame_write(
+                                &mut *self.inner.write_half.lock().await,
+                                &wire,
+                                &fk,
+                            )
+                            .await
+                            {
+                                tracing::warn!(
+                                    "[ferogram] new_session resend {old_id}->{new_id} failed: {e}"
+                                );
+                                self.inner.writer.lock().await.sent_bodies.remove(&new_id);
+                            } else {
+                                tracing::debug!(
+                                    "[ferogram] new_session resend {old_id}->{new_id} ok"
+                                );
+                            }
+                        }
                     }
                     // Propagate to dc_options snapshot so future worker opens use
                     // this session's salt, not the stale pre-session value.
@@ -4472,6 +4526,9 @@ impl Client {
             Qts {
                 qts: i32,
             },
+            QtsDeliver {
+                qts: i32,
+            },
             Passthrough,
         }
 
@@ -4530,7 +4587,23 @@ impl Client {
                     pts_count: u.pts_count,
                     carry: true,
                 },
+                // Secret chat messages: advance qts but don't deliver (handled by encrypted layer).
                 NewEncryptedMessage(u) => Kind::Qts { qts: u.qts },
+                // All other QTS-bearing updates: advance qts AND deliver.
+                ChatParticipant(u) => Kind::QtsDeliver { qts: u.qts },
+                ChannelParticipant(u) => Kind::QtsDeliver { qts: u.qts },
+                BotChatInviteRequester(u) => Kind::QtsDeliver { qts: u.qts },
+                BotMessageReaction(u) => Kind::QtsDeliver { qts: u.qts },
+                BotMessageReactions(u) => Kind::QtsDeliver { qts: u.qts },
+                MessagePollVote(u) => Kind::QtsDeliver { qts: u.qts },
+                BotStopped(u) => Kind::QtsDeliver { qts: u.qts },
+                BotChatBoost(u) => Kind::QtsDeliver { qts: u.qts },
+                BotBusinessConnect(u) => Kind::QtsDeliver { qts: u.qts },
+                BotNewBusinessMessage(u) => Kind::QtsDeliver { qts: u.qts },
+                BotEditBusinessMessage(u) => Kind::QtsDeliver { qts: u.qts },
+                BotDeleteBusinessMessage(u) => Kind::QtsDeliver { qts: u.qts },
+                BotPurchasedPaidMedia(u) => Kind::QtsDeliver { qts: u.qts },
+                ManagedBot(u) => Kind::QtsDeliver { qts: u.qts },
                 _ => Kind::Passthrough,
             }
         };
@@ -4610,6 +4683,26 @@ impl Client {
                     }
                 });
                 vec![]
+            }
+            Kind::QtsDeliver { qts } => {
+                // Advance qts in background, deliver the update.
+                let c = self.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = c.check_and_fill_qts_gap(qts, 1).await {
+                        tracing::warn!("[ferogram] qts gap: {e}");
+                    }
+                });
+                high.into_iter()
+                    .map(|u| match u {
+                        update::Update::NewMessage(msg) => {
+                            update::Update::NewMessage(msg.with_client(self.clone()))
+                        }
+                        update::Update::MessageEdited(msg) => {
+                            update::Update::MessageEdited(msg.with_client(self.clone()))
+                        }
+                        other => other,
+                    })
+                    .collect()
             }
             Kind::Passthrough => high
                 .into_iter()
@@ -11435,6 +11528,9 @@ struct ConnectionWriter {
     /// inner request to retry.
     ///
     container_map: std::collections::HashMap<i64, i64>,
+    /// Stale-msg resends queued under the writer lock and drained after release
+    /// to avoid holding the lock across TCP I/O.
+    new_session_resend_queue: Vec<(i64, i64, Vec<u8>)>,
     /// -style future salt pool.
     /// Sorted by valid_since ascending so the newest salt is LAST
     /// (.valid_since), which puts
@@ -11999,6 +12095,7 @@ impl Connection {
             enc: self.enc,
             frame_kind: self.frame_kind.clone(),
             pending_ack: Vec::new(),
+            new_session_resend_queue: Vec::new(),
             sent_bodies: std::collections::HashMap::new(),
             container_map: std::collections::HashMap::new(),
             salts: Vec::new(),

@@ -478,6 +478,7 @@ impl DcConnection {
                 &mut bad_msg_code,
                 &mut bad_msg_server_id,
                 Some(sent_msg_id),
+                msg.msg_id,
             )?;
             // new_session_created requires seq_no reset to 0.
             if need_session_reset {
@@ -570,6 +571,9 @@ impl DcConnection {
     /// - `need_session_reset`: set for new_session_created (seq_no must reset to 0)
     /// - `bad_msg_code`: error_code from bad_msg_notification for caller to apply correction
     /// - `bad_msg_server_id`: server msg_id for time-offset correction (codes 16/17)
+    /// - `server_msg_id`: outer frame msg_id for time-offset correction (codes 16/17).
+    ///   Must be msg.msg_id from the caller, not bad_msg_id (client clock, not server's).
+    #[allow(clippy::too_many_arguments)]
     fn scan_body(
         body: &[u8],
         salt: &mut i64,
@@ -578,6 +582,7 @@ impl DcConnection {
         bad_msg_code: &mut Option<u32>,
         bad_msg_server_id: &mut Option<i64>,
         sent_msg_id: Option<i64>,
+        server_msg_id: i64,
     ) -> Result<Option<Vec<u8>>, InvocationError> {
         if body.len() < 4 {
             return Ok(None);
@@ -604,7 +609,7 @@ impl DcConnection {
                     let mut dummy_salt = *salt;
                     let mut nr = false; let mut nsr = false;
                     let mut bc = None; let mut bsi = None;
-                    if let Some(r) = Self::scan_body(inner, &mut dummy_salt, &mut nr, &mut nsr, &mut bc, &mut bsi, None)? {
+                    if let Some(r) = Self::scan_body(inner, &mut dummy_salt, &mut nr, &mut nsr, &mut bc, &mut bsi, None, server_msg_id)? {
                         return Ok(Some(r));
                     }
                     // Unwrap the gzip directly and return the decompressed bytes.
@@ -676,18 +681,24 @@ impl DcConnection {
             }
             0xa7eff811 /* bad_msg_notification */ => {
                 // bad_msg_notification#a7eff811 bad_msg_id:long bad_msg_seqno:int error_code:int
-                // Handle clock-skew and seq_no drift so connections self-correct.
-                if body.len() >= 16 {
+                //
+                // TL layout: body[4..12]=bad_msg_id, body[12..16]=bad_msg_seqno,
+                // body[16..20]=error_code. Previous code read [12..16] as error_code
+                // (bad_msg_seqno), so error matching always compared the wrong field.
+                if body.len() >= 20 {
                     let bad_msg_id  = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                    let error_code  = i32::from_le_bytes(body[12..16].try_into().unwrap()) as u32;
+                    // body[12..16] = bad_msg_seqno, not used for recovery.
+                    let error_code  = u32::from_le_bytes(body[16..20].try_into().unwrap());
                     tracing::debug!(
                         "[dc_pool] bad_msg_notification: bad_msg_id={bad_msg_id:#018x} code={error_code}"
                     );
                     match error_code {
                         16 | 17 => {
-                            // msg_id too low/high  - time offset correction needed.
+                            // msg_id too low/high: time-offset correction needed.
+                            // server_msg_id upper 32 bits = server Unix timestamp.
+                            // bad_msg_id carries the client's clock, not the server's.
                             *bad_msg_code = Some(error_code);
-                            *bad_msg_server_id = Some(bad_msg_id);
+                            *bad_msg_server_id = Some(server_msg_id);
                             *need_resend = sent_msg_id.is_none_or(|id| id == bad_msg_id);
                         }
                         32 | 33 => {
@@ -751,7 +762,8 @@ impl DcConnection {
                     pos += inner_bytes;
                     if found.is_none() {
                         if let Some(r) = Self::scan_body(inner, salt, need_resend,
-                            need_session_reset, bad_msg_code, bad_msg_server_id, sent_msg_id)?
+                            need_session_reset, bad_msg_code, bad_msg_server_id, sent_msg_id,
+                            server_msg_id)?
                         {
                             found = Some(r);
                             // Do NOT return  - continue processing remaining items so that
@@ -764,7 +776,8 @@ impl DcConnection {
                         // rpc_results. Passing None would bypass the guard and allow
                         // a stale response to overwrite `found` on the next iteration.
                         let _ = Self::scan_body(inner, salt, need_resend, need_session_reset,
-                                                bad_msg_code, bad_msg_server_id, sent_msg_id)?;
+                                                bad_msg_code, bad_msg_server_id, sent_msg_id,
+                                                server_msg_id)?;
                     }
                 }
                 Ok(found)
@@ -783,6 +796,7 @@ impl DcConnection {
                             need_resend, need_session_reset,
                             bad_msg_code, bad_msg_server_id,
                             sent_msg_id,
+                            server_msg_id,
                         );
                     }
                 }
@@ -838,6 +852,7 @@ impl DcConnection {
                 &mut bad_msg_code,
                 &mut bad_msg_server_id,
                 Some(sent_msg_id),
+                msg.msg_id,
             )?;
             if need_session_reset {
                 session_resets += 1;

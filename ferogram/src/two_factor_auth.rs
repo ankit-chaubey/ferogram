@@ -51,7 +51,28 @@ fn xor32(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
     out
 }
 
+/// Error returned when SRP parameter validation fails.
+#[derive(Debug)]
+pub enum SrpError {
+    /// Server's g_b outside (1, p-1). RFC 5054 s2.6: exposes verifier offline.
+    GbOutOfRange,
+    /// Client's ephemeral g_a is outside (1, p-1). Degenerate exponentiation.
+    GaOutOfRange,
+}
+
+impl std::fmt::Display for SrpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SrpError::GbOutOfRange => write!(f, "SRP: server g_b out of safe range"),
+            SrpError::GaOutOfRange => write!(f, "SRP: client g_a out of safe range"),
+        }
+    }
+}
+
 /// Compute SRP `(M1, g_a)` for Telegram 2FA.
+///
+/// Returns `Err(SrpError)` if g_b or g_a is outside (1, p-1).
+/// RFC 5054 s2.6: out-of-range g_b lets a server recover the verifier offline.
 pub fn calculate_2fa(
     salt1: &[u8],
     salt2: &[u8],
@@ -60,7 +81,7 @@ pub fn calculate_2fa(
     g_b: &[u8],
     a: &[u8],
     password: impl AsRef<[u8]>,
-) -> ([u8; 32], [u8; 256]) {
+) -> Result<([u8; 32], [u8; 256]), SrpError> {
     let big_p = BigInt::from_bytes_be(Sign::Plus, p);
     let g_b = pad256(g_b);
     let a = pad256(a);
@@ -70,11 +91,30 @@ pub fn calculate_2fa(
     let big_g = BigInt::from(g as u32);
     let big_a = BigInt::from_bytes_be(Sign::Plus, &a);
 
+    // Validate g_b in (1, p-1) as required by spec.
+    {
+        let one = BigInt::from(1u32);
+        let p_minus_one = &big_p - &one;
+        if big_g_b <= one || big_g_b >= p_minus_one {
+            return Err(SrpError::GbOutOfRange);
+        }
+    }
+
     let k = sha256(&[p, &g_hash]);
     let big_k = BigInt::from_bytes_be(Sign::Plus, &k);
 
     let g_a = big_g.modpow(&big_a, &big_p);
     let g_a = pad256(&g_a.to_bytes_be().1);
+
+    // Validate our own g_a in (1, p-1).
+    {
+        let big_g_a = BigInt::from_bytes_be(Sign::Plus, &g_a);
+        let one = BigInt::from(1u32);
+        let p_minus_one = &big_p - &one;
+        if big_g_a <= one || big_g_a >= p_minus_one {
+            return Err(SrpError::GaOutOfRange);
+        }
+    }
 
     let u = sha256(&[&g_a, &g_b]);
     let big_u = BigInt::from_bytes_be(Sign::Plus, &u);
@@ -104,5 +144,5 @@ pub fn calculate_2fa(
         &k_a,
     ]);
 
-    (m1, g_a)
+    Ok((m1, g_a))
 }

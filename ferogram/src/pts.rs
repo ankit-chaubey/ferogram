@@ -208,11 +208,18 @@ impl PtsState {
         }
     }
 
-    /// Check top-level seq for UpdatesCombined containers.
-    pub fn check_seq(&self, _new_seq: i32, seq_start: i32) -> PtsCheckResult {
+    /// Check top-level seq for Updates / UpdatesCombined containers.
+    ///
+    /// Rejects seq_start > new_seq as malformed. Without this check a server
+    /// could set new_seq = i32::MAX and poison self.seq, dropping all future updates.
+    pub fn check_seq(&self, new_seq: i32, seq_start: i32) -> PtsCheckResult {
+        // Reject malformed containers where seq_start > new_seq.
+        if seq_start > new_seq {
+            return PtsCheckResult::Duplicate;
+        }
         if self.seq == 0 {
             return PtsCheckResult::Ok;
-        } // uninitialised: accept
+        } // uninitialised: accept any
         let expected = self.seq + 1;
         if seq_start == expected {
             PtsCheckResult::Ok
@@ -438,11 +445,18 @@ impl Client {
                         .get(..4)
                         .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
                         .unwrap_or(0);
-                    tracing::debug!(
-                        "[ferogram] getDifference: unrecognised response {cid:#010x}, \
-                         returning {} buffered updates ({e})",
+                    tracing::warn!(
+                        "[ferogram] getDifference: parse error cid={cid:#010x} \
+                         after {} buffered updates ({e}): resyncing pts",
                         all_updates.len()
                     );
+                    // Resync pts to the server's current state so the next
+                    // gap_tick does not immediately re-enter getDifference
+                    // with the same stale pts, which would repeat this error
+                    // on the same response indefinitely.
+                    // If sync fails here, the watchdog in check_update_deadline
+                    // resets the in-flight guard after 30 s and gap_tick retries.
+                    let _ = self.sync_pts_state().await;
                     return Ok(all_updates);
                 }
             };
@@ -731,17 +745,31 @@ impl Client {
                         update::IncomingMessage::from_raw(msg).with_client(self.clone()),
                     ));
                 }
-                self.inner
-                    .pts_state
-                    .lock()
-                    .await
-                    .advance_channel(channel_id, 0);
-                // pts=0 signals TooLong reset; persist so restart doesn't
-                // re-enter a stale pts loop.
+                // Setting pts=0 here caused an infinite loop: the next call used
+                // local_pts.max(1)=1, still far behind the server -> TooLong again.
+                // Extract the server's current pts from d.dialog instead and advance
+                // to that value. If dialog.pts is absent, remove channel from tracking
+                // so gap detection re-bootstraps on the next real update.
+                let server_channel_pts: Option<i32> = match &d.dialog {
+                    tl::enums::Dialog::Dialog(dlg) => dlg.pts,
+                    _ => None,
+                };
+                let recovery_pts = server_channel_pts.unwrap_or(0);
+                {
+                    let mut s = self.inner.pts_state.lock().await;
+                    if recovery_pts > 0 {
+                        s.advance_channel(channel_id, recovery_pts);
+                    } else {
+                        s.channel_pts.remove(&channel_id);
+                    }
+                }
                 self.persist_state(UpdateStateChange::Channel {
                     id: channel_id,
-                    pts: 0,
+                    pts: recovery_pts,
                 });
+                tracing::debug!(
+                    "[ferogram] getChannelDifference TooLong: channel {channel_id}                      reset to server pts={recovery_pts}"
+                );
             }
         }
 
