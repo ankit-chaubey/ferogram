@@ -1273,7 +1273,10 @@ impl Client {
         }
 
         let next_part = Arc::new(Mutex::new(0usize));
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(usize, Vec<u8>)>();
+        // Bounded by n_workers * 2: each worker sends one chunk then immediately
+        // fetches the next part, so at most n_workers chunks are in-flight at any
+        // time. The ×2 headroom prevents a slow consumer from stalling all workers.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(usize, Vec<u8>)>(conns.len() * 2);
         let mut tasks: tokio::task::JoinSet<Result<(), InvocationError>> =
             tokio::task::JoinSet::new();
         // Shared abort flag so a failing worker signals remaining workers
@@ -1451,7 +1454,11 @@ impl Client {
                                     f.bytes.len()
                                 )));
                             }
-                            let _ = tx.send((part, f.bytes));
+                            // Bounded send: blocks until the collector has space.
+                            // If the receiver is dropped (abort), treat as fatal.
+                            if tx.send((part, f.bytes)).await.is_err() {
+                                break;
+                            }
                         }
                         tl::enums::upload::File::CdnRedirect(_redir) => {
                             // Signal error to collector task.

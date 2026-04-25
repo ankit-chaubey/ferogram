@@ -13,7 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::fsm::{FsmState, StateContext, StateKey, StateKeyStrategy, StateStorage};
-use crate::middleware::{BoxFuture, DispatchResult, Middleware, Next};
+use crate::middleware::{BoxFuture, DispatchResult, Middleware, Next, PanicRecoveryMiddleware};
 use crate::update::{IncomingMessage, Update};
 
 // Filter trait
@@ -507,12 +507,17 @@ pub struct Dispatcher {
 impl Dispatcher {
     /// Create an empty dispatcher.
     pub fn new() -> Self {
+        // Install PanicRecoveryMiddleware as the outermost layer by default.
+        // This wraps every handler invocation in a tokio::task::spawn so that
+        // panics (including those across .await points) are caught and logged
+        // rather than killing the reader task or the whole process.
+        // Users can still prepend additional middleware via dp.middleware().
         Self {
             new_msg: Vec::new(),
             edited_msg: Vec::new(),
             fsm_new_msg: Vec::new(),
             fsm_edited_msg: Vec::new(),
-            middlewares: Vec::new(),
+            middlewares: vec![Arc::new(PanicRecoveryMiddleware::new())],
             state_storage: None,
             key_strategy: StateKeyStrategy::default(),
         }

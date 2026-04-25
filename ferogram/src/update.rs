@@ -1298,10 +1298,30 @@ impl InlineSend {
 // RawUpdate
 
 /// A TL update that has no dedicated high-level variant yet.
+///
+/// Carries the **original deserialized** [`tl::enums::Update`] so callers can
+/// match on it directly, plus the pre-computed constructor ID for quick
+/// dispatch without a second match.
+///
+/// # Example
+/// ```rust,no_run
+/// # use ferogram::{Update, update::RawUpdate};
+/// # use ferogram_tl_types as tl;
+/// # async fn example(mut stream: ferogram::UpdateStream) {
+/// while let Some(raw) = stream.next_raw().await {
+///     match raw.inner {
+///         tl::enums::Update::ReadHistoryInbox(u) => { /* handle */ }
+///         _ => {}
+///     }
+/// }
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 pub struct RawUpdate {
-    /// Constructor ID of the inner update.
+    /// Constructor ID of the inner update (pre-computed for cheap dispatch).
     pub constructor_id: u32,
+    /// The original deserialized TL update. Match on this to extract fields.
+    pub inner: tl::enums::Update,
 }
 
 /// A user's online / offline status changed.
@@ -1581,7 +1601,7 @@ pub enum Update {
     /// A channel was boosted via the bot (bots only).
     ChatBoost(ChatBoostUpdate),
     /// A raw TL update not mapped to any of the above variants.
-    Raw(RawUpdate),
+    Raw(Box<RawUpdate>),
 }
 
 // MTProto update container IDs
@@ -1877,9 +1897,10 @@ fn from_single_update(upd: tl::enums::Update) -> Vec<Update> {
         })],
         other => {
             let cid = tl_constructor_id(&other);
-            vec![Update::Raw(RawUpdate {
+            vec![Update::Raw(Box::new(RawUpdate {
                 constructor_id: cid,
-            })]
+                inner: other,
+            }))]
         }
     }
 }

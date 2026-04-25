@@ -335,7 +335,7 @@ impl Client {
         if updates.is_empty() {
             return updates;
         }
-        let mut cache = self.inner.dedupe_cache.lock().unwrap();
+        let mut cache = self.inner.dedupe_cache.lock();
         updates
             .into_iter()
             .filter(|u| {

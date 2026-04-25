@@ -19,10 +19,15 @@ use crate::{Client, InvocationError};
 
 // InlineQueryIter (bot side: receive)
 
+/// Backlog capacity for [`InlineQueryIter`]: if the consumer falls this far
+/// behind, the producer stops accepting new inline queries and the spawned
+/// feed task exits cleanly rather than growing memory without bound.
+const INLINE_QUERY_CHANNEL_CAP: usize = 256;
+
 /// Async iterator over *incoming* inline queries (bot side).
 /// Created by [`Client::iter_inline_queries`].
 pub struct InlineQueryIter {
-    rx: mpsc::UnboundedReceiver<InlineQuery>,
+    rx: mpsc::Receiver<InlineQuery>,
 }
 
 impl InlineQueryIter {
@@ -157,15 +162,20 @@ impl InlineResultIter {
 
 impl Client {
     /// Return an iterator that yields every *incoming* inline query (bot side).
+    ///
+    /// The internal channel is bounded to [`INLINE_QUERY_CHANNEL_CAP`] entries.
+    /// If the consumer stops calling [`InlineQueryIter::next`] and the backlog
+    /// fills, the feed task exits and the stream ends rather than growing memory
+    /// without bound.
     pub fn iter_inline_queries(&self) -> InlineQueryIter {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(INLINE_QUERY_CHANNEL_CAP);
         let client = self.clone();
         tokio::spawn(async move {
             let mut stream = client.stream_updates();
             loop {
                 match stream.next().await {
                     Some(Update::InlineQuery(q)) => {
-                        if tx.send(q).is_err() {
+                        if tx.send(q).await.is_err() {
                             break;
                         }
                     }

@@ -285,9 +285,9 @@ pub use media::{Document, DownloadIter, Downloadable, Photo, Sticker, UploadedFi
 pub use participants::{Participant, ProfilePhotoIter};
 pub use peer_ref::PeerRef;
 pub use proxy::{MtProxyConfig, parse_proxy_link};
-pub use restart::{ConnectionRestartPolicy, FixedInterval, NeverRestart};
+pub use restart::{ConnectionRestartPolicy, ExponentialBackoff, FixedInterval, NeverRestart};
 use retry::RetryLoop;
-pub use retry::{AutoSleep, NoRetries, RetryContext, RetryPolicy};
+pub use retry::{AutoSleep, CircuitBreaker, NoRetries, RetryContext, RetryPolicy};
 pub use search::{GlobalSearchBuilder, SearchBuilder};
 pub use session::{DcEntry, DcFlags};
 #[cfg(feature = "libsql-session")]
@@ -1213,7 +1213,7 @@ impl Default for Config {
 
 /// Asynchronous stream of [`Update`]s.
 pub struct UpdateStream {
-    rx: mpsc::UnboundedReceiver<update::Update>,
+    rx: mpsc::Receiver<update::Update>,
 }
 
 impl UpdateStream {
@@ -1223,14 +1223,15 @@ impl UpdateStream {
     }
 
     /// Wait for the next **raw** (unrecognised) update frame, skipping all
-    /// typed high-level variants. Useful for handling constructor IDs that
-    /// `ferogram` does not yet wrap: dispatch on `constructor_id` yourself.
+    /// typed high-level variants. Useful for handling update types that
+    /// `ferogram` does not yet wrap: match on `.inner` directly to extract
+    /// fields, or use `.constructor_id` for a quick type check without moving.
     ///
     /// Returns `None` when the client has disconnected.
     pub async fn next_raw(&mut self) -> Option<update::RawUpdate> {
         loop {
             match self.rx.recv().await? {
-                update::Update::Raw(r) => return Some(r),
+                update::Update::Raw(r) => return Some(*r),
                 _ => continue,
             }
         }
@@ -1312,11 +1313,13 @@ struct ClientInner {
     #[allow(clippy::type_complexity)]
     pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Vec<u8>, InvocationError>>>>>,
     /// Channel used to hand a new (OwnedReadHalf, FrameKind, auth_key, session_id)
-    /// to the reader task after a reconnect.
-    reconnect_tx: mpsc::UnboundedSender<(OwnedReadHalf, FrameKind, [u8; 256], i64)>,
+    /// to the reader task after a reconnect. Capacity 4: at most one reconnect
+    /// is in flight at any time; the bound prevents unbounded memory growth.
+    reconnect_tx: mpsc::Sender<(OwnedReadHalf, FrameKind, [u8; 256], i64)>,
     /// Send `()` here to wake the reader's reconnect backoff loop immediately.
-    /// Used by [`Client::signal_network_restored`].
-    network_hint_tx: mpsc::UnboundedSender<()>,
+    /// Used by [`Client::signal_network_restored`]. Capacity 4: hints are
+    /// best-effort; a full channel means a hint is already pending.
+    network_hint_tx: mpsc::Sender<()>,
     /// Cancelled to signal graceful shutdown to the reader task.
     #[allow(dead_code)]
     shutdown_token: CancellationToken,
@@ -1333,7 +1336,9 @@ struct ClientInner {
     /// Buffer for updates received during a possible-gap window.
     pub possible_gap: Mutex<pts::PossibleGapBuffer>,
     /// Bounded ring-buffer dedup cache  safety net beneath the pts machinery.
-    pub(crate) dedupe_cache: std::sync::Mutex<persist::BoundedDedupeCache>,
+    /// Uses `parking_lot::Mutex` for minimal overhead; the critical section is
+    /// tiny (a HashSet lookup + optional VecDeque eviction).
+    pub(crate) dedupe_cache: parking_lot::Mutex<persist::BoundedDedupeCache>,
     api_id: i32,
     api_hash: String,
     device_model: String,
@@ -1388,7 +1393,7 @@ struct ClientInner {
     /// Tracks which foreign DCs have had `auth.importAuthorization` called
     /// successfully in this session.  The account authorization binding is
     /// session-scoped and must be re-established each process run.
-    pub(crate) auth_imported: std::sync::Mutex<std::collections::HashSet<i32>>,
+    pub(crate) auth_imported: parking_lot::Mutex<std::collections::HashSet<i32>>,
 
     /// Per-DC connect gate for transfer pool initialisation.
     ///
@@ -1400,14 +1405,14 @@ struct ClientInner {
     /// mutex, then find the connection already present via the double-check
     /// inside `rpc_transfer_on_dc`.
     dc_connect_gates:
-        std::sync::Mutex<std::collections::HashMap<i32, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+        parking_lot::Mutex<std::collections::HashMap<i32, std::sync::Arc<tokio::sync::Mutex<()>>>>,
     /// Per-DC gate that serialises auth.exportAuthorization / importAuthorization.
     ///
     /// Per-DC gate that serialises auth.exportAuthorization / importAuthorization.
     /// exportAuthorization tokens are single-use; this ensures only one caller
     /// does the export/import per DC per session.
     auth_import_gates:
-        std::sync::Mutex<std::collections::HashMap<i32, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+        parking_lot::Mutex<std::collections::HashMap<i32, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 }
 
 /// The main Telegram client. Cheap to clone: internally Arc-wrapped.
@@ -1587,12 +1592,14 @@ impl Client {
         > = Arc::new(Mutex::new(HashMap::new()));
 
         // Channel the reconnect logic uses to hand a new read half to the reader task.
+        // Capacity 4: only one reconnect can be in flight; bound prevents unbounded growth.
         let (reconnect_tx, reconnect_rx) =
-            mpsc::unbounded_channel::<(OwnedReadHalf, FrameKind, [u8; 256], i64)>();
+            mpsc::channel::<(OwnedReadHalf, FrameKind, [u8; 256], i64)>(4);
 
         // Channel for external "network restored" hints: lets Android/iOS callbacks
         // skip the reconnect backoff and attempt immediately.
-        let (network_hint_tx, network_hint_rx) = mpsc::unbounded_channel::<()>();
+        // Capacity 4: hints are best-effort; a full channel means one is already queued.
+        let (network_hint_tx, network_hint_rx) = mpsc::channel::<()>(4);
 
         // Graceful shutdown token: cancel this to stop the reader task cleanly.
         let shutdown_token = CancellationToken::new();
@@ -1614,7 +1621,7 @@ impl Client {
             peer_cache: RwLock::new(PeerCache::new(config.experimental_features.clone())),
             pts_state: Mutex::new(pts::PtsState::default()),
             possible_gap: Mutex::new(pts::PossibleGapBuffer::new()),
-            dedupe_cache: std::sync::Mutex::new(persist::BoundedDedupeCache::default()),
+            dedupe_cache: parking_lot::Mutex::new(persist::BoundedDedupeCache::default()),
             api_id: config.api_id,
             api_hash: config.api_hash,
             device_model: config.device_model,
@@ -1640,9 +1647,9 @@ impl Client {
             salt_request_in_flight: std::sync::atomic::AtomicBool::new(false),
             dh_in_progress: std::sync::atomic::AtomicBool::new(false),
             signed_in: std::sync::atomic::AtomicBool::new(false),
-            dc_connect_gates: std::sync::Mutex::new(std::collections::HashMap::new()),
-            auth_import_gates: std::sync::Mutex::new(std::collections::HashMap::new()),
-            auth_imported: std::sync::Mutex::new(std::collections::HashSet::new()),
+            dc_connect_gates: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            auth_import_gates: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            auth_imported: parking_lot::Mutex::new(std::collections::HashSet::new()),
             // Persistent dedup ring for the main connection reader task.
             seen_msg_ids: ferogram_mtproto::new_seen_msg_ids(),
         });
@@ -1856,7 +1863,7 @@ impl Client {
                 let _ = client
                     .inner
                     .reconnect_tx
-                    .send((new_read, new_fk, new_ak, new_sid));
+                    .try_send((new_read, new_fk, new_ak, new_sid));
                 tokio::task::yield_now().await;
 
                 // Brief pause so the new key propagates to all of Telegram's
@@ -1982,6 +1989,8 @@ impl Client {
                                 tracing::warn!(
                                     "[ferogram] update channel full: dropping catch-up update"
                                 );
+                                metrics::counter!("ferogram.updates_dropped").increment(1);
+                                metrics::counter!("ferogram.updates_dropped").increment(1);
                                 break;
                             }
                         }
@@ -2017,6 +2026,10 @@ impl Client {
                                             tracing::warn!(
                                                 "[ferogram] update channel full: dropping channel diff update"
                                             );
+                                            metrics::counter!("ferogram.updates_dropped")
+                                                .increment(1);
+                                            metrics::counter!("ferogram.updates_dropped")
+                                                .increment(1);
                                             break;
                                         }
                                     }
@@ -2686,7 +2699,7 @@ impl Client {
                     }
                 }
                 // Clear per-DC connect gates so fresh connections can be made after re-login.
-                self.inner.dc_connect_gates.lock().unwrap().clear();
+                self.inner.dc_connect_gates.lock().clear();
                 Ok(true)
             }
             Err(e) if e.is("AUTH_KEY_UNREGISTERED") => Ok(false),
@@ -2760,23 +2773,38 @@ impl Client {
     pub fn stream_updates(&self) -> UpdateStream {
         // Guard: only one UpdateStream is supported per Client clone group.
         // A second call would compete with the first for updates, causing
-        // non-deterministic splitting. Panic early with a clear message.
+        // non-deterministic splitting. Log an error and return a closed stream
+        // so the caller's `while let Some(upd) = stream.next().await` exits
+        // immediately rather than panicking the process.
         if self
             .inner
             .stream_active
             .swap(true, std::sync::atomic::Ordering::SeqCst)
         {
-            panic!(
-                "stream_updates() called twice on the same Client: only one UpdateStream is supported per client"
+            tracing::error!(
+                "[ferogram] stream_updates() called twice on the same Client: \
+                 only one UpdateStream is supported per client. \
+                 Returning a closed stream."
             );
+            // Immediately drop the sender so the receiver yields None on first poll.
+            let (_dead_tx, rx) = mpsc::channel::<update::Update>(1);
+            return UpdateStream { rx };
         }
-        let (caller_tx, rx) = mpsc::unbounded_channel::<update::Update>();
+        // Bounded at 2048: if the handler is slower than the server sends,
+        // back-pressure propagates to the internal reader instead of OOM-ing.
+        let (caller_tx, rx) = mpsc::channel::<update::Update>(2048);
         let internal_rx = self._update_rx.clone();
         tokio::spawn(async move {
             let mut guard = internal_rx.lock().await;
             while let Some(upd) = guard.recv().await {
-                if caller_tx.send(upd).is_err() {
-                    break;
+                // try_send: if the caller channel is full, drop the update and
+                // log a warning rather than blocking or OOM-ing.
+                if caller_tx.try_send(upd).is_err() {
+                    tracing::warn!(
+                        "[ferogram] update dropped: UpdateStream consumer is too slow \
+                         (channel full at capacity 2048). Consider processing updates \
+                         faster or spawning handlers."
+                    );
                 }
             }
         });
@@ -2796,7 +2824,7 @@ impl Client {
     /// silently ignored by the reader task; if it is in a backoff loop it
     /// wakes up and tries again right away.
     pub fn signal_network_restored(&self) {
-        let _ = self.inner.network_hint_tx.send(());
+        let _ = self.inner.network_hint_tx.try_send(());
     }
 
     // Reader task
@@ -2831,8 +2859,8 @@ impl Client {
         frame_kind: FrameKind,
         auth_key: [u8; 256],
         session_id: i64,
-        mut new_conn_rx: mpsc::UnboundedReceiver<(OwnedReadHalf, FrameKind, [u8; 256], i64)>,
-        mut network_hint_rx: mpsc::UnboundedReceiver<()>,
+        mut new_conn_rx: mpsc::Receiver<(OwnedReadHalf, FrameKind, [u8; 256], i64)>,
+        mut network_hint_rx: mpsc::Receiver<()>,
         shutdown_token: CancellationToken,
     ) {
         let mut rh = read_half;
@@ -2964,6 +2992,8 @@ impl Client {
                             tracing::warn!(
                                 "[ferogram] update channel full: dropping catch-up update"
                             );
+                            metrics::counter!("ferogram.updates_dropped").increment(1);
+                            metrics::counter!("ferogram.updates_dropped").increment(1);
                             break;
                         }
                     }
@@ -2989,8 +3019,8 @@ impl Client {
         // When Some, the supervisor has already spawned init_connection on our
         // behalf (supervisor restart path). On first start this is None.
         initial_init_rx: Option<oneshot::Receiver<Result<(), InvocationError>>>,
-        new_conn_rx: &mut mpsc::UnboundedReceiver<(OwnedReadHalf, FrameKind, [u8; 256], i64)>,
-        network_hint_rx: &mut mpsc::UnboundedReceiver<()>,
+        new_conn_rx: &mut mpsc::Receiver<(OwnedReadHalf, FrameKind, [u8; 256], i64)>,
+        network_hint_rx: &mut mpsc::Receiver<()>,
     ) {
         // Tracks an in-flight init_connection task spawned after every reconnect.
         // The reader loop must keep routing frames while we wait so the RPC
@@ -3043,7 +3073,7 @@ impl Client {
                 } => {
                     tracing::info!("[ferogram] scheduled restart: reconnecting");
                     let _ = self.inner.write_half.lock().await.shutdown().await;
-                    let _ = self.inner.network_hint_tx.send(());
+                    let _ = self.inner.network_hint_tx.try_send(());
                 }
                 // Normal frame (or application-level keepalive timeout)
                 outcome = recv_frame_with_keepalive(&mut rh, &fk, self, &ak) => {
@@ -3392,6 +3422,7 @@ impl Client {
                             tracing::warn!(
                                 "[ferogram] dropping nested msg_container (proto violation)"
                             );
+                            metrics::counter!("ferogram.updates_dropped").increment(1);
                             continue;
                         }
                     }
@@ -4021,6 +4052,7 @@ impl Client {
         if body.len() < 4 {
             return;
         }
+        metrics::counter!("ferogram.updates_received").increment(1);
         let cid = u32::from_le_bytes(body[..4].try_into().unwrap());
 
         // updatesTooLong: we must call getDifference to recover missed updates.
@@ -4034,6 +4066,8 @@ impl Client {
                         for u in updates {
                             if utx.try_send(u).is_err() {
                                 tracing::warn!("[ferogram] update channel full: dropping update");
+                                metrics::counter!("ferogram.updates_dropped").increment(1);
+                                metrics::counter!("ferogram.updates_dropped").increment(1);
                                 break;
                             }
                         }
@@ -4100,6 +4134,7 @@ impl Client {
                         for u in updates {
                             if utx.try_send(u).is_err() {
                                 tracing::warn!("[ferogram] update channel full: dropping update");
+                                metrics::counter!("ferogram.updates_dropped").increment(1);
                             }
                         }
                     }
@@ -4163,6 +4198,7 @@ impl Client {
                         for u in updates {
                             if utx.try_send(u).is_err() {
                                 tracing::warn!("[ferogram] update channel full: dropping update");
+                                metrics::counter!("ferogram.updates_dropped").increment(1);
                             }
                         }
                     }
@@ -4194,6 +4230,7 @@ impl Client {
                                         tracing::warn!(
                                             "[ferogram] update channel full: dropping update"
                                         );
+                                        metrics::counter!("ferogram.updates_dropped").increment(1);
                                     }
                                 }
                             }
@@ -4470,6 +4507,7 @@ impl Client {
                                         tracing::warn!(
                                             "[ferogram] update channel full: dropping seq gap update"
                                         );
+                                        metrics::counter!("ferogram.updates_dropped").increment(1);
                                         break;
                                     }
                                 }
@@ -4630,6 +4668,7 @@ impl Client {
                                     tracing::warn!(
                                         "[ferogram] update channel full: dropping update"
                                     );
+                                    metrics::counter!("ferogram.updates_dropped").increment(1);
                                     break;
                                 }
                             }
@@ -4662,6 +4701,7 @@ impl Client {
                                         tracing::warn!(
                                             "[ferogram] update channel full: dropping update"
                                         );
+                                        metrics::counter!("ferogram.updates_dropped").increment(1);
                                         break;
                                     }
                                 }
@@ -4721,6 +4761,7 @@ impl Client {
         for u in to_send {
             if self.inner.update_tx.try_send(u).is_err() {
                 tracing::warn!("[ferogram] update channel full: dropping update");
+                metrics::counter!("ferogram.updates_dropped").increment(1);
             }
         }
     }
@@ -4741,7 +4782,7 @@ impl Client {
         fk: &mut FrameKind,
         ak: &mut [u8; 256],
         sid: &mut i64,
-        network_hint_rx: &mut mpsc::UnboundedReceiver<()>,
+        network_hint_rx: &mut mpsc::Receiver<()>,
     ) -> Option<oneshot::Receiver<Result<(), InvocationError>>> {
         let mut delay_ms = if initial_delay_ms == 0 {
             // Caller explicitly requests an immediate first attempt (e.g. init
@@ -4752,6 +4793,7 @@ impl Client {
         };
         loop {
             tracing::debug!("[ferogram] Reconnecting in {delay_ms} ms …");
+            metrics::counter!("ferogram.reconnects_total").increment(1);
             tokio::select! {
                 _ = sleep(Duration::from_millis(delay_ms)) => {}
                 hint = network_hint_rx.recv() => {
@@ -4818,6 +4860,7 @@ impl Client {
                                     tracing::warn!(
                                         "[ferogram] update channel full: dropping catch-up update"
                                     );
+                                    metrics::counter!("ferogram.updates_dropped").increment(1);
                                     break;
                                 }
                             }
@@ -6583,7 +6626,10 @@ impl Client {
         let mut rl = RetryLoop::new(Arc::clone(&self.inner.retry_policy));
         loop {
             match self.do_rpc_call(req).await {
-                Ok(body) => return Ok(body),
+                Ok(body) => {
+                    metrics::counter!("ferogram.rpc_calls_total", "result" => "ok").increment(1);
+                    return Ok(body);
+                }
                 Err(e) if e.migrate_dc_id().is_some() => {
                     // Telegram is redirecting us to a different DC.
                     // Migrate transparently and retry: no error surfaces to caller.
@@ -6596,9 +6642,13 @@ impl Client {
                 // as an I/O error, preventing callers like is_authorized() from ever
                 // seeing the real 401 and returning Ok(false).
                 Err(InvocationError::Rpc(ref r)) if r.code == 401 => {
+                    metrics::counter!("ferogram.rpc_calls_total", "result" => "error").increment(1);
                     return Err(InvocationError::Rpc(r.clone()));
                 }
-                Err(e) => rl.advance(e).await?,
+                Err(e) => {
+                    metrics::counter!("ferogram.rpc_calls_total", "result" => "error").increment(1);
+                    rl.advance(e).await?;
+                }
             }
         }
     }
@@ -6898,7 +6948,7 @@ impl Client {
         let _ = self
             .inner
             .reconnect_tx
-            .send((new_read, new_fk, new_ak, new_sid));
+            .try_send((new_read, new_fk, new_ak, new_sid));
 
         // migrate_to() is called from user-facing methods (bot_sign_in,
         // request_login_code, sign_in): NOT from inside the reader loop.
@@ -7037,7 +7087,7 @@ impl Client {
         // This prevents redundant sockets and AUTH_KEY_UNREGISTERED caused by
         // two concurrent DH handshakes for the same DC slot.
         let gate: std::sync::Arc<tokio::sync::Mutex<()>> = {
-            let mut gates = self.inner.dc_connect_gates.lock().unwrap();
+            let mut gates = self.inner.dc_connect_gates.lock();
             gates
                 .entry(target_dc)
                 .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
@@ -7437,7 +7487,7 @@ impl Client {
         } else {
             // Serialise export/import per DC: exportAuthorization tokens are single-use.
             let import_gate: std::sync::Arc<tokio::sync::Mutex<()>> = {
-                let mut gates = self.inner.auth_import_gates.lock().unwrap();
+                let mut gates = self.inner.auth_import_gates.lock();
                 gates
                     .entry(target_dc)
                     .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
@@ -7471,12 +7521,7 @@ impl Client {
                 // Re-check after acquiring gate: another worker may have already imported
                 // during the same process lifetime. auth_imported is in-memory only and is
                 // NOT cleared on reconnects. Authorization binding is per-session, not per-key.
-                let already_imported = self
-                    .inner
-                    .auth_imported
-                    .lock()
-                    .unwrap()
-                    .contains(&target_dc);
+                let already_imported = self.inner.auth_imported.lock().contains(&target_dc);
 
                 if !already_imported {
                     // Must import: account authorization binding is not live on this session.
@@ -7504,7 +7549,7 @@ impl Client {
                         },
                     })
                     .await?;
-                    self.inner.auth_imported.lock().unwrap().insert(target_dc);
+                    self.inner.auth_imported.lock().insert(target_dc);
                     tracing::debug!(
                         "[ferogram] worker conn to DC{target_dc} (foreign, cached key, auth re-imported) ready"
                     );
@@ -7584,7 +7629,7 @@ impl Client {
                 }
                 // Mark as auth-imported for this process session so subsequent
                 // open_worker_conn calls on this DC can skip re-import.
-                self.inner.auth_imported.lock().unwrap().insert(target_dc);
+                self.inner.auth_imported.lock().insert(target_dc);
                 tracing::debug!(
                     "[ferogram] worker conn to DC{target_dc} (foreign, fresh DH) ready"
                 );

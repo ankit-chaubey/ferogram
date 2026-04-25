@@ -124,18 +124,42 @@ impl Default for AutoSleep {
     }
 }
 
+/// Add deterministic ±`max_jitter_secs` jitter to `base`.
+///
+/// Uses a fast integer hash of `seed` (the fail count) so no `rand` crate is
+/// needed. Different bots have different fail counts at any given moment, so
+/// the spread is sufficient to avoid thundering-herd on simultaneous FLOOD_WAITs.
+fn jitter_duration(base: Duration, seed: u32, max_jitter_secs: u64) -> Duration {
+    // Murmur3-inspired finalizer.
+    let h = {
+        let mut v = seed as u64 ^ 0x9e37_79b9_7f4a_7c15;
+        v ^= v >> 30;
+        v = v.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        v ^= v >> 27;
+        v = v.wrapping_mul(0x94d0_49bb_1331_11eb);
+        v ^= v >> 31;
+        v
+    };
+    // Map into [-max_jitter_secs, +max_jitter_secs] in milliseconds.
+    let range_ms = max_jitter_secs * 1000 * 2 + 1;
+    let jitter_ms = (h % range_ms) as i64 - (max_jitter_secs * 1000) as i64;
+    let base_ms = base.as_millis() as i64;
+    let final_ms = (base_ms + jitter_ms).max(0) as u64;
+    Duration::from_millis(final_ms)
+}
+
 impl RetryPolicy for AutoSleep {
     fn should_retry(&self, ctx: &RetryContext) -> ControlFlow<(), Duration> {
         match &ctx.error {
-            // FLOOD_WAIT: sleep exactly as long as Telegram asks, for every
-            // occurrence up to threshold. Removing the fail_count==1 guard
-            // means a second consecutive FLOOD_WAIT is also honoured rather
-            // than propagated immediately.
+            // FLOOD_WAIT: sleep as long as Telegram asks, plus ±2 s jitter.
+            // Jitter spreads retries across clients that all hit the same limit
+            // simultaneously (e.g. after a server-side rate-limit window resets).
             InvocationError::Rpc(rpc) if rpc.code == 420 && rpc.name == "FLOOD_WAIT" => {
                 let secs = rpc.value.unwrap_or(0) as u64;
                 if secs <= self.threshold.as_secs() {
-                    tracing::info!("FLOOD_WAIT_{secs}: sleeping before retry");
-                    ControlFlow::Continue(Duration::from_secs(secs))
+                    let delay = jitter_duration(Duration::from_secs(secs), ctx.fail_count.get(), 2);
+                    tracing::info!("FLOOD_WAIT_{secs}: sleeping {delay:?} before retry");
+                    ControlFlow::Continue(delay)
                 } else {
                     ControlFlow::Break(())
                 }
@@ -146,17 +170,15 @@ impl RetryPolicy for AutoSleep {
             InvocationError::Rpc(rpc) if rpc.code == 420 && rpc.name == "SLOWMODE_WAIT" => {
                 let secs = rpc.value.unwrap_or(0) as u64;
                 if secs <= self.threshold.as_secs() {
-                    tracing::info!("SLOWMODE_WAIT_{secs}: sleeping before retry");
-                    ControlFlow::Continue(Duration::from_secs(secs))
+                    let delay = jitter_duration(Duration::from_secs(secs), ctx.fail_count.get(), 2);
+                    tracing::info!("SLOWMODE_WAIT_{secs}: sleeping {delay:?} before retry");
+                    ControlFlow::Continue(delay)
                 } else {
                     ControlFlow::Break(())
                 }
             }
 
             // Transient I/O errors: back off briefly and retry up to 3 times.
-            // Bug 13: the old guard (fail_count == 1) allowed exactly one retry, then
-            // propagated the error permanently even if the connection could be re-
-            // established.  Allow up to 3 retries.
             InvocationError::Io(_) if ctx.fail_count.get() <= 3 => {
                 if let Some(d) = self.io_errors_as_flood_of {
                     tracing::info!(
@@ -237,6 +259,111 @@ impl RetryLoop {
     }
 }
 
+// CircuitBreaker
+
+/// Internal state of a [`CircuitBreaker`].
+#[derive(Debug)]
+enum CbState {
+    /// Normal operation: counting consecutive failures.
+    Closed { consecutive_failures: u32 },
+    /// Breaker tripped: all calls rejected until cooldown expires.
+    Open { tripped_at: std::time::Instant },
+}
+
+/// A [`RetryPolicy`] that stops retrying after `threshold` consecutive
+/// failures and stays silent for a `cooldown` window before resetting.
+///
+/// # States
+/// - **Closed** (normal): forwards calls, increments a failure counter on
+///   each error, and applies an exponential back-off up to `threshold − 1`
+///   attempts.  On the `threshold`-th consecutive failure the breaker trips.
+/// - **Open** (tripped): rejects every call immediately (`Break`) for the
+///   duration of `cooldown`.
+/// - **Reset**: once `cooldown` has elapsed the breaker closes again and
+///   the failure counter resets to zero.
+///
+/// Because [`RetryPolicy`] has no success callback the breaker cannot
+/// distinguish a successful probe from a clean run; the counter simply
+/// resets when the cooldown expires.  For a full half-open probe you can
+/// wrap `CircuitBreaker` in a custom `RetryPolicy`.
+///
+/// # Example
+/// ```rust
+/// use ferogram::retry::CircuitBreaker;
+/// use std::time::Duration;
+///
+/// // Trip after 5 consecutive errors; stay open for 30 s.
+/// let policy = CircuitBreaker::new(5, Duration::from_secs(30));
+/// ```
+pub struct CircuitBreaker {
+    /// Number of consecutive failures before the breaker trips.
+    threshold: u32,
+    /// How long the breaker stays open before resetting.
+    cooldown: Duration,
+    state: std::sync::Mutex<CbState>,
+}
+
+impl CircuitBreaker {
+    /// Create a new `CircuitBreaker`.
+    ///
+    /// - `threshold`: failures before the breaker trips (minimum 1).
+    /// - `cooldown`: how long the breaker stays open.
+    pub fn new(threshold: u32, cooldown: Duration) -> Self {
+        assert!(
+            threshold >= 1,
+            "CircuitBreaker threshold must be at least 1"
+        );
+        Self {
+            threshold,
+            cooldown,
+            state: std::sync::Mutex::new(CbState::Closed {
+                consecutive_failures: 0,
+            }),
+        }
+    }
+}
+
+impl RetryPolicy for CircuitBreaker {
+    fn should_retry(&self, _ctx: &RetryContext) -> ControlFlow<(), Duration> {
+        let mut state = self.state.lock().unwrap();
+        match &*state {
+            CbState::Open { tripped_at } => {
+                if tripped_at.elapsed() >= self.cooldown {
+                    // Cooldown expired: reset to Closed, allow retry with small delay.
+                    *state = CbState::Closed {
+                        consecutive_failures: 1,
+                    };
+                    ControlFlow::Continue(Duration::from_millis(200))
+                } else {
+                    // Still open: reject immediately.
+                    ControlFlow::Break(())
+                }
+            }
+            CbState::Closed {
+                consecutive_failures,
+            } => {
+                let new_count = consecutive_failures + 1;
+                if new_count >= self.threshold {
+                    tracing::warn!(
+                        "[ferogram] CircuitBreaker tripped after {new_count} consecutive failures"
+                    );
+                    *state = CbState::Open {
+                        tripped_at: std::time::Instant::now(),
+                    };
+                    ControlFlow::Break(())
+                } else {
+                    // Exponential back-off: 200 ms × 2^(n-1), capped at ~3 s.
+                    let backoff_ms = 200u64 * (1u64 << new_count.saturating_sub(1).min(4));
+                    *state = CbState::Closed {
+                        consecutive_failures: new_count,
+                    };
+                    ControlFlow::Continue(Duration::from_millis(backoff_ms))
+                }
+            }
+        }
+    }
+}
+
 // Tests
 
 #[cfg(test)]
@@ -288,7 +415,14 @@ mod tests {
             error: flood(30),
         };
         match policy.should_retry(&ctx) {
-            ControlFlow::Continue(d) => assert_eq!(d, Duration::from_secs(30)),
+            // Jitter of ±2s is applied; accept 28..=32 s.
+            ControlFlow::Continue(d) => {
+                let secs = d.as_secs_f64();
+                assert!(
+                    secs >= 28.0 && secs <= 32.0,
+                    "expected 28-32s delay (jitter), got {secs:.3}s"
+                );
+            }
             other => panic!("expected Continue, got {other:?}"),
         }
     }
@@ -313,8 +447,15 @@ mod tests {
             error: flood(30),
         };
         match policy.should_retry(&ctx) {
-            ControlFlow::Continue(d) => assert_eq!(d, Duration::from_secs(30)),
-            other => panic!("expected Continue(30s) on second FLOOD_WAIT, got {other:?}"),
+            // Jitter of ±2s; accept 28..=32 s.
+            ControlFlow::Continue(d) => {
+                let secs = d.as_secs_f64();
+                assert!(
+                    secs >= 28.0 && secs <= 32.0,
+                    "expected 28-32s on second FLOOD_WAIT, got {secs:.3}s"
+                );
+            }
+            other => panic!("expected Continue on second FLOOD_WAIT, got {other:?}"),
         }
     }
 
@@ -424,5 +565,41 @@ mod tests {
         }));
         assert!(rl.advance(io_err()).await.is_ok());
         assert!(rl.advance(io_err()).await.is_err());
+    }
+
+    // CircuitBreaker
+
+    #[test]
+    fn circuit_breaker_trips_after_threshold() {
+        let cb = CircuitBreaker::new(3, Duration::from_secs(60));
+        let ctx = |n: u32| RetryContext {
+            fail_count: NonZeroU32::new(n).unwrap(),
+            slept_so_far: Duration::default(),
+            error: rpc(500, "INTERNAL", None),
+        };
+        // First two failures: Continue (backoff)
+        assert!(matches!(cb.should_retry(&ctx(1)), ControlFlow::Continue(_)));
+        assert!(matches!(cb.should_retry(&ctx(2)), ControlFlow::Continue(_)));
+        // Third: trips the breaker → Break
+        assert!(matches!(cb.should_retry(&ctx(3)), ControlFlow::Break(())));
+        // Subsequent calls while open → Break immediately
+        assert!(matches!(cb.should_retry(&ctx(4)), ControlFlow::Break(())));
+    }
+
+    #[test]
+    fn circuit_breaker_resets_after_cooldown() {
+        let cb = CircuitBreaker::new(2, Duration::from_millis(10));
+        let ctx = |n: u32| RetryContext {
+            fail_count: NonZeroU32::new(n).unwrap(),
+            slept_so_far: Duration::default(),
+            error: rpc(500, "INTERNAL", None),
+        };
+        // Trip the breaker
+        assert!(matches!(cb.should_retry(&ctx(1)), ControlFlow::Continue(_)));
+        assert!(matches!(cb.should_retry(&ctx(2)), ControlFlow::Break(())));
+        // Wait for cooldown
+        std::thread::sleep(Duration::from_millis(20));
+        // After cooldown: breaker resets → Continue again
+        assert!(matches!(cb.should_retry(&ctx(1)), ControlFlow::Continue(_)));
     }
 }
