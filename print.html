@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-098e516c.js";
+            window.path_to_searchindex_js = "searchindex-1ce80075.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-fb96dff5.js"></script>
@@ -315,6 +315,28 @@ Use it at your own risk. Its future and stability are not yet guaranteed.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="release-history-1"><a class="header" href="#release-history-1">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
+<hr>
+<h2 id="v034"><a class="header" href="#v034">v0.3.4</a></h2>
+<p>Released 2026-04-28. MTProto hardening release: PFS temp-key sessions, access-hash prefetch on startup, and safer deserialization across the board.</p>
+<h3 id="pfs-perfect-forward-secrecy"><a class="header" href="#pfs-perfect-forward-secrecy">PFS (Perfect Forward Secrecy)</a></h3>
+<p>A new <code>use_pfs</code> flag on <code>ClientConfig</code> enables Perfect Forward Secrecy at the transport layer. When set, the DC pool performs a temporary DH key bind immediately after the permanent auth key is established. The connection then runs under a short-lived session key derived from that bind; the permanent key is never used to encrypt traffic directly. If the bind RPC fails for any reason the pool falls back to the standard session without disrupting the connection.</p>
+<h3 id="access-hash-prefetch"><a class="header" href="#access-hash-prefetch">Access-hash prefetch</a></h3>
+<p><code>prefetch_channel_access_hashes</code> is now called automatically at startup and after every catch-up cycle. It issues a single <code>GetDialogs</code> request and caches all returned channel and user access hashes before the first live update is dispatched. In practice this eliminates the <code>CHANNEL_INVALID</code> errors that previously appeared on reconnects when an incoming update referenced a channel the in-memory cache had not yet seen.</p>
+<h3 id="from_bytes_exact"><a class="header" href="#from_bytes_exact"><code>from_bytes_exact</code></a></h3>
+<p><code>Deserializable::from_bytes_exact</code> is a new method available on all TL types. It wraps the common <code>Cursor::from_slice</code> + <code>deserialize</code> pattern and additionally returns an error if any bytes remain unconsumed after deserialization. All call sites across <code>lib.rs</code>, <code>dc_pool.rs</code>, and <code>pts.rs</code> have been migrated to it. Parse failures on incoming <code>Updates</code> frames are now logged as warnings instead of being silently discarded.</p>
+<h3 id="concurrent-get_difference-fix"><a class="header" href="#concurrent-get_difference-fix">Concurrent <code>get_difference</code> fix</a></h3>
+<p>Previously, if two tasks raced to call <code>get_difference</code> at the same time, the second would return immediately with an empty result and potentially miss a fill cycle. It now polls every 50 ms waiting for the in-flight call to finish, and gives up after 35 s with a warning so the next gap tick can retry rather than hanging indefinitely.</p>
+<h3 id="upgrading-from-033"><a class="header" href="#upgrading-from-033">Upgrading from 0.3.3</a></h3>
+<pre><code class="language-toml">ferogram = "0.3.4"
+</code></pre>
+<p>To enable PFS:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>ClientConfig {
+    use_pfs: true,
+    ..Default::default()
+}
+<span class="boring">}</span></code></pre>
 <hr>
 <h2 id="v033"><a class="header" href="#v033">v0.3.3</a></h2>
 <p>Released 2026-04-22. Bot framework release: composable filters, finite state machine, middleware pipeline, conversation API, and a new proc-macro crate.</p>
