@@ -498,7 +498,7 @@ impl Client {
                     // Fix: regenerate ferogram-tl-types from a newer api.tl that
                     // includes the missing constructor.
                     tracing::warn!(
-                        "[ferogram] getDifference: TL schema mismatch — \
+                        "[ferogram] getDifference: TL schema mismatch - \
                          unknown constructor {unknown_cid} encountered while parsing \
                          getDifference response ({} updates already accumulated). \
                          This means api.tl is missing a new constructor. \

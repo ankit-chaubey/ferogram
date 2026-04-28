@@ -4109,7 +4109,30 @@ impl Client {
             let m = match tl::types::UpdateShortMessage::deserialize(&mut cur) {
                 Ok(m) => m,
                 Err(e) => {
-                    tracing::debug!("[ferogram] updateShortMessage deserialize error: {e}");
+                    tracing::warn!(
+                        "[ferogram] updateShortMessage deserialize failed, forcing getDifference: {e}"
+                    );
+                    let c = self.clone();
+                    let utx = self.inner.update_tx.clone();
+                    tokio::spawn(async move {
+                        match c.get_difference().await {
+                            Ok(updates) => {
+                                for u in updates {
+                                    if utx.try_send(u).is_err() {
+                                        tracing::warn!(
+                                            "[ferogram] update channel full: dropping update"
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    "[ferogram] getDifference after updateShortMessage deserialize failure: {err}"
+                                );
+                            }
+                        }
+                    });
                     return;
                 }
             };
@@ -4118,7 +4141,7 @@ impl Client {
             // that would fail with USER_ID_INVALID.
             {
                 let cache = self.inner.peer_cache.read().await;
-                let known = cache.users.contains_key(&m.user_id)
+                let known = cache.users.get(&m.user_id).is_some_and(|h| *h != 0)
                     || cache.min_contexts.contains_key(&m.user_id);
                 drop(cache);
                 if !known {
@@ -4172,7 +4195,30 @@ impl Client {
             let m = match tl::types::UpdateShortChatMessage::deserialize(&mut cur) {
                 Ok(m) => m,
                 Err(e) => {
-                    tracing::debug!("[ferogram] updateShortChatMessage deserialize error: {e}");
+                    tracing::warn!(
+                        "[ferogram] updateShortChatMessage deserialize failed, forcing getDifference: {e}"
+                    );
+                    let c = self.clone();
+                    let utx = self.inner.update_tx.clone();
+                    tokio::spawn(async move {
+                        match c.get_difference().await {
+                            Ok(updates) => {
+                                for u in updates {
+                                    if utx.try_send(u).is_err() {
+                                        tracing::warn!(
+                                            "[ferogram] update channel full: dropping update"
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    "[ferogram] getDifference after updateShortChatMessage deserialize failure: {err}"
+                                );
+                            }
+                        }
+                    });
                     return;
                 }
             };
@@ -4182,7 +4228,7 @@ impl Client {
                 self.inner.peer_cache.write().await.chats.insert(m.chat_id);
 
                 let cache = self.inner.peer_cache.read().await;
-                let known = cache.users.contains_key(&m.from_id)
+                let known = cache.users.get(&m.from_id).is_some_and(|h| *h != 0)
                     || cache.min_contexts.contains_key(&m.from_id);
                 drop(cache);
                 if !known {
@@ -4264,7 +4310,30 @@ impl Client {
                     });
                 }
                 Err(e) => {
-                    tracing::debug!("[ferogram] updateShortSentMessage push deserialize error: {e}")
+                    tracing::warn!(
+                        "[ferogram] updateShortSentMessage push deserialize failed, forcing getDifference: {e}"
+                    );
+                    let c = self.clone();
+                    let utx = self.inner.update_tx.clone();
+                    tokio::spawn(async move {
+                        match c.get_difference().await {
+                            Ok(updates) => {
+                                for u in updates {
+                                    if utx.try_send(u).is_err() {
+                                        tracing::warn!(
+                                            "[ferogram] update channel full: dropping update"
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    "[ferogram] getDifference after updateShortSentMessage deserialize failure: {err}"
+                                );
+                            }
+                        }
+                    });
                 }
             }
             return;
@@ -4325,7 +4394,7 @@ impl Client {
             }
             0x78d4dec1 => {
                 // updateShort: no users/chats/seq
-                match tl::types::UpdateShort::deserialize(&mut Cursor::from_slice(body)) {
+                match tl::types::UpdateShort::deserialize(&mut Cursor::from_slice(&body[4..])) {
                     Ok(u) => ParsedContainer {
                         seq_info: None,
                         users: vec![],

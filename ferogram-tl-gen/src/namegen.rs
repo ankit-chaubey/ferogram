@@ -8,6 +8,7 @@
 // and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
 // https://github.com/ankit-chaubey/ferogram
 
+use crate::metadata::Metadata;
 use ferogram_tl_parser::tl::{Definition, Parameter, ParameterType, Type};
 
 // primitive → Rust type
@@ -140,16 +141,16 @@ pub(crate) fn type_name(ty: &Type) -> String {
 }
 
 /// Fully-qualified Rust type path, e.g. `crate::enums::InputPeer` or `Vec<i64>`.
-pub(crate) fn type_qual_name(ty: &Type) -> String {
-    type_path(ty, false)
+pub(crate) fn type_qual_name(ty: &Type, meta: &Metadata) -> String {
+    type_path(ty, meta, false)
 }
 
 /// Same as `type_qual_name` but uses `::<...>` turbofish syntax.
-pub(crate) fn type_item_path(ty: &Type) -> String {
-    type_path(ty, true)
+pub(crate) fn type_item_path(ty: &Type, meta: &Metadata) -> String {
+    type_path(ty, meta, true)
 }
 
-fn type_path(ty: &Type, turbofish: bool) -> String {
+fn type_path(ty: &Type, meta: &Metadata, turbofish: bool) -> String {
     if ty.generic_ref {
         return ty.name.clone();
     }
@@ -181,7 +182,9 @@ fn type_path(ty: &Type, turbofish: bool) -> String {
         } else {
             b.to_owned()
         }
-    } else if ty.bare {
+    } else if matches!(ty.name.as_str(), "PollResults") || ty.bare {
+        // Explicit whitelist: PollResults has one constructor and must use crate::types::
+        // (ty.bare is the original reliable signal for all other bare types).
         let mut p = String::from("crate::types::");
         for ns in &ty.namespace {
             p.push_str(ns);
@@ -204,7 +207,7 @@ fn type_path(ty: &Type, turbofish: bool) -> String {
             s.push_str("::");
         }
         s.push('<');
-        s.push_str(&type_qual_name(arg));
+        s.push_str(&type_qual_name(arg, meta));
         s.push('>');
     }
 
@@ -226,7 +229,7 @@ pub(crate) fn param_attr_name(param: &Parameter) -> String {
 }
 
 /// The full Rust type expression for a parameter, e.g. `Option<i32>`.
-pub(crate) fn param_qual_name(param: &Parameter) -> String {
+pub(crate) fn param_qual_name(param: &Parameter, meta: &Metadata) -> String {
     match &param.ty {
         ParameterType::Flags => "u32".into(),
         ParameterType::Normal { ty, flag } => {
@@ -234,7 +237,7 @@ pub(crate) fn param_qual_name(param: &Parameter) -> String {
             if flag.is_some() && ty.name == "true" {
                 return "bool".into();
             }
-            let inner = type_qual_name(ty);
+            let inner = type_qual_name(ty, meta);
             if flag.is_some() {
                 format!("Option<{inner}>")
             } else {

@@ -176,7 +176,7 @@ fn write_types_mod<W: Write>(
             write_struct(out, &indent, def, meta, config)?;
             write_identifiable(out, &indent, def)?;
             write_struct_serializable(out, &indent, def, meta)?;
-            write_struct_deserializable(out, &indent, def)?;
+            write_struct_deserializable(out, &indent, def, meta)?;
         }
 
         if !ns.is_empty() {
@@ -214,9 +214,9 @@ fn write_functions_mod<W: Write>(
             write_identifiable(out, &indent, def)?;
             write_struct_serializable(out, &indent, def, meta)?;
             if config.deserializable_functions {
-                write_struct_deserializable(out, &indent, def)?;
+                write_struct_deserializable(out, &indent, def, meta)?;
             }
-            write_remote_call(out, &indent, def)?;
+            write_remote_call(out, &indent, def, meta)?;
         }
 
         if !ns.is_empty() {
@@ -250,7 +250,7 @@ fn write_struct<W: Write>(
     out: &mut W,
     indent: &str,
     def: &Definition,
-    _meta: &Metadata,
+    meta: &Metadata,
     config: &Config,
 ) -> io::Result<()> {
     let kind = match def.category {
@@ -293,7 +293,7 @@ fn write_struct<W: Write>(
                     out,
                     "{indent}    pub {}: {},",
                     n::param_attr_name(param),
-                    n::param_qual_name(param),
+                    n::param_qual_name(param, meta),
                 )?;
             }
         }
@@ -426,6 +426,7 @@ fn write_struct_deserializable<W: Write>(
     out: &mut W,
     indent: &str,
     def: &Definition,
+    meta: &Metadata,
 ) -> io::Result<()> {
     let gl_decl = generic_list(def, ": crate::Deserializable");
     let gl_use = generic_list(def, "");
@@ -479,14 +480,14 @@ fn write_struct_deserializable<W: Write>(
                         "{indent}        let {attr} = if (_{} & (1 << {})) != 0 {{ Some({}::deserialize(buf)?) }} else {{ None }};",
                         fl.name,
                         fl.index,
-                        n::type_item_path(ty)
+                        n::type_item_path(ty, meta)
                     )?;
                 }
             } else {
                 writeln!(
                     out,
                     "{indent}        let {attr} = {}::deserialize(buf)?;",
-                    n::type_item_path(ty)
+                    n::type_item_path(ty, meta)
                 )?;
             }
         }
@@ -504,7 +505,12 @@ fn write_struct_deserializable<W: Write>(
     writeln!(out, "{indent}}}")
 }
 
-fn write_remote_call<W: Write>(out: &mut W, indent: &str, def: &Definition) -> io::Result<()> {
+fn write_remote_call<W: Write>(
+    out: &mut W,
+    indent: &str,
+    def: &Definition,
+    meta: &Metadata,
+) -> io::Result<()> {
     // Generic functions (e.g. invokeWithLayer<X>) need the type parameter on
     // the impl header and on the struct name, just like every other write_* helper.
     let gl_decl = generic_list(def, ": crate::Serializable + crate::Deserializable");
@@ -517,7 +523,7 @@ fn write_remote_call<W: Write>(out: &mut W, indent: &str, def: &Definition) -> i
     writeln!(
         out,
         "{indent}    type Return = {};",
-        n::type_qual_name(&def.ty)
+        n::type_qual_name(&def.ty, meta)
     )?;
     writeln!(out, "{indent}}}")
 }
