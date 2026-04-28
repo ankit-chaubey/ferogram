@@ -357,7 +357,7 @@ impl Client {
         // all others wait for the in-flight diff to complete instead of returning
         // empty immediately.
         //
-        // Bug 2 fix: returning Ok(vec![]) right away caused a race where
+        // returning Ok(vec![]) right away caused a race where
         // an updateShortMessage "unknown sender" getDifference call overlapped
         // with the B3 gap-timer getDifference. The spawned task got back an
         // empty result, dispatched nothing, and the DM was silently dropped.
@@ -1169,7 +1169,7 @@ impl Client {
                             {
                                 let mut s = self.inner.pts_state.lock().await;
                                 s.getting_diff_for.remove(&channel_id);
-                                s.channel_pts.remove(&channel_id); // ←  fix: delete, not advance
+                                s.channel_pts.remove(&channel_id); // delete, not advance
                                 s.permanently_invalid_channels.insert(channel_id); // ← never retry
                             }
                             Ok(buffered)

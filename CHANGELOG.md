@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.4]: 2026-04-28
+
+### Added
+
+- **PFS (Perfect Forward Secrecy)**: `use_pfs` flag on `ClientConfig`. When enabled, the DC pool performs a temp-key DH bind after auth-key negotiation. The session uses a short-lived encrypted session key; the permanent auth key is never exposed in plaintext on the wire. Falls back gracefully if the bind fails.
+- **`prefetch_channel_access_hashes`**: called automatically at startup and after catch-up. Runs a single `GetDialogs` to pre-populate channel and user access hashes before the first update arrives, preventing `CHANNEL_INVALID` errors on reconnect.
+- **`Deserializable::from_bytes_exact`**: convenience method on all TL types. Constructs a cursor, deserializes, and returns an error if bytes are left over. Replaces the repeated `Cursor::from_slice` + `deserialize` pattern throughout the codebase.
+- **`auth_key_id_from_key`** utility in `ferogram-mtproto`.
+- **`ferogram::util`** module with `decode_checked` helper used by the pts layer.
+
+### Fixed
+
+- `get_difference` no longer hangs when two tasks race to call it concurrently. The second caller now polls every 50 ms and gives up after 35 s with a warning, then lets the next gap tick retry.
+- Parse errors on incoming `Updates` frames are now logged as warnings instead of being silently dropped.
+
+### Changed
+
+- All raw `Cursor::from_slice` + `deserialize` call sites in `lib.rs`, `dc_pool.rs`, and `pts.rs` migrated to `from_bytes_exact`.
+- `step2_temp` re-exported from `ferogram-mtproto` auth module.
+
+**Full Changelog**: https://github.com/ankit-chaubey/ferogram/compare/v0.3.3...v0.3.4
+
+---
+
 ## [0.3.3]: 2026-04-22
 
 ### New crate

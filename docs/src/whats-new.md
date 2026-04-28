@@ -4,6 +4,43 @@ ferogram started as a renamed continuation of [layer](https://github.com/ankit-c
 
 ---
 
+## v0.3.4
+
+Released 2026-04-28. MTProto hardening release: PFS temp-key sessions, access-hash prefetch on startup, and safer deserialization across the board.
+
+### PFS (Perfect Forward Secrecy)
+
+A new `use_pfs` flag on `ClientConfig` enables Perfect Forward Secrecy at the transport layer. When set, the DC pool performs a temporary DH key bind immediately after the permanent auth key is established. The connection then runs under a short-lived session key derived from that bind; the permanent key is never used to encrypt traffic directly. If the bind RPC fails for any reason the pool falls back to the standard session without disrupting the connection.
+
+### Access-hash prefetch
+
+`prefetch_channel_access_hashes` is now called automatically at startup and after every catch-up cycle. It issues a single `GetDialogs` request and caches all returned channel and user access hashes before the first live update is dispatched. In practice this eliminates the `CHANNEL_INVALID` errors that previously appeared on reconnects when an incoming update referenced a channel the in-memory cache had not yet seen.
+
+### `from_bytes_exact`
+
+`Deserializable::from_bytes_exact` is a new method available on all TL types. It wraps the common `Cursor::from_slice` + `deserialize` pattern and additionally returns an error if any bytes remain unconsumed after deserialization. All call sites across `lib.rs`, `dc_pool.rs`, and `pts.rs` have been migrated to it. Parse failures on incoming `Updates` frames are now logged as warnings instead of being silently discarded.
+
+### Concurrent `get_difference` fix
+
+Previously, if two tasks raced to call `get_difference` at the same time, the second would return immediately with an empty result and potentially miss a fill cycle. It now polls every 50 ms waiting for the in-flight call to finish, and gives up after 35 s with a warning so the next gap tick can retry rather than hanging indefinitely.
+
+### Upgrading from 0.3.3
+
+```toml
+ferogram = "0.3.4"
+```
+
+To enable PFS:
+
+```rust
+ClientConfig {
+    use_pfs: true,
+    ..Default::default()
+}
+```
+
+---
+
 ## v0.3.3
 
 Released 2026-04-22. Bot framework release: composable filters, finite state machine, middleware pipeline, conversation API, and a new proc-macro crate.

@@ -2006,7 +2006,7 @@ impl Client {
                     Err(e) => tracing::warn!("[ferogram] catch_up getDifference: {e}"),
                 }
 
-                // Bug 3 fix: pre-populate access_hashes for all channels now
+                // pre-populate access_hashes for all channels now
                 // that we have a live connection.  After a fresh start (or
                 // reconnect) the in-memory peer_cache is empty, so any channel
                 // that hasn't appeared in an update yet would cause
@@ -2072,7 +2072,7 @@ impl Client {
                     .signed_in
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 let _ = client.sync_pts_state().await;
-                // Bug 3 fix: pre-populate channel access_hashes so that
+                // pre-populate channel access_hashes so that
                 // getChannelDifference can construct valid InputChannel values
                 // without hitting CHANNEL_INVALID from a missing access_hash.
                 if let Err(e) = client.prefetch_channel_access_hashes().await {
@@ -3834,7 +3834,7 @@ impl Client {
 
                 // Phase 1: hold writer only for enc-state mutations + packing.
                 // The lock is dropped BEFORE we touch `pending`, eliminating the
-                // writer→pending lock-order deadlock that existed before this fix.
+                // writer→pending lock-order deadlock.
                 let resend: Option<(Vec<u8>, i64, i64, FrameKind)> = {
                     let mut w = self.inner.writer.lock().await;
 

@@ -124,7 +124,7 @@ impl ObfuscatedAbridged {
     ///
     /// `dc_id` is embedded at bytes 60–61 of the encrypted header so that
     /// MTProxy servers can route the connection to the correct DC.
-    /// Bug 9: the old `new(stream)` signature omitted `dc_id`, causing MTProxy
+    /// The old `new(stream)` signature omitted `dc_id`, causing MTProxy
     /// to read random bytes and route the client to the wrong DC.
     pub fn new(stream: TcpStream, dc_id: i16) -> std::io::Result<Self> {
         let mut init = [0u8; 64];
@@ -185,7 +185,7 @@ impl ObfuscatedAbridged {
         let mut first = [0u8; 1];
         self.stream.read_exact(&mut first)?;
         self.cipher.decrypt(&mut first);
-        // Bug 1: first[0] > 0x7f means a 4-byte transport-level error code.
+        // first[0] > 0x7f means a 4-byte transport-level error code.
         let words = if first[0] < 0x7f {
             first[0] as usize
         } else if first[0] == 0x7f {
