@@ -269,6 +269,7 @@ pub mod proxy;
 
 pub mod fsm;
 pub mod middleware;
+pub mod util;
 
 // Re-export FsmState at the crate root for convenience.
 pub use fsm::FsmState;
@@ -1060,6 +1061,9 @@ pub struct Config {
     /// If direct TCP fails, retry via DNS-over-HTTPS (Mozilla + Google),
     /// then fall back to Firebase / Google special-config.  Default: `false`.
     pub resilient_connect: bool,
+    /// Enable PFS via `auth.bindTempAuthKey`. Adds one DH round-trip per
+    /// fresh connection. Default: `false`.
+    pub use_pfs: bool,
     /// Opt-in experimental behaviours (all off by default).
     ///
     /// See [`ExperimentalFeatures`] for per-flag documentation.
@@ -1203,6 +1207,7 @@ impl Default for Config {
             lang_code: "en".to_string(),
             probe_transport: false,
             resilient_connect: false,
+            use_pfs: true,
             experimental_features: ExperimentalFeatures::default(),
         }
     }
@@ -1377,6 +1382,8 @@ struct ClientInner {
     /// causing AUTH_KEY_UNREGISTERED immediately after reconnect.
     dh_in_progress: std::sync::atomic::AtomicBool,
 
+    /// Whether PFS (bindTempAuthKey) is enabled for new connections.
+    pfs_enabled: bool,
     /// Guards sync_state_after_dh: the function is a no-op while false so that
     /// reconnect-triggered DH completions don't fire GetState before the client
     /// is actually authorised.
@@ -1482,6 +1489,7 @@ impl Client {
                                 mtproxy.as_ref(),
                                 &transport,
                                 s.home_dc_id as i16,
+                                config.use_pfs,
                             )
                             .await
                             {
@@ -1646,6 +1654,7 @@ impl Client {
             stream_active: std::sync::atomic::AtomicBool::new(false),
             salt_request_in_flight: std::sync::atomic::AtomicBool::new(false),
             dh_in_progress: std::sync::atomic::AtomicBool::new(false),
+            pfs_enabled: config.use_pfs,
             signed_in: std::sync::atomic::AtomicBool::new(false),
             dc_connect_gates: parking_lot::Mutex::new(std::collections::HashMap::new()),
             auth_import_gates: parking_lot::Mutex::new(std::collections::HashMap::new()),
@@ -1990,12 +1999,21 @@ impl Client {
                                     "[ferogram] update channel full: dropping catch-up update"
                                 );
                                 metrics::counter!("ferogram.updates_dropped").increment(1);
-                                metrics::counter!("ferogram.updates_dropped").increment(1);
                                 break;
                             }
                         }
                     }
                     Err(e) => tracing::warn!("[ferogram] catch_up getDifference: {e}"),
+                }
+
+                // Bug 3 fix: pre-populate access_hashes for all channels now
+                // that we have a live connection.  After a fresh start (or
+                // reconnect) the in-memory peer_cache is empty, so any channel
+                // that hasn't appeared in an update yet would cause
+                // getChannelDifference to fail with CHANNEL_INVALID due to a
+                // missing access_hash.  GetDialogs fills the cache cheaply.
+                if let Err(e) = c.prefetch_channel_access_hashes().await {
+                    tracing::warn!("[ferogram] catch_up: access_hash prefetch failed: {e}");
                 }
 
                 // Limit concurrency to avoid FLOOD_WAIT from spawning one task
@@ -2028,8 +2046,6 @@ impl Client {
                                             );
                                             metrics::counter!("ferogram.updates_dropped")
                                                 .increment(1);
-                                            metrics::counter!("ferogram.updates_dropped")
-                                                .increment(1);
                                             break;
                                         }
                                     }
@@ -2056,6 +2072,14 @@ impl Client {
                     .signed_in
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 let _ = client.sync_pts_state().await;
+                // Bug 3 fix: pre-populate channel access_hashes so that
+                // getChannelDifference can construct valid InputChannel values
+                // without hitting CHANNEL_INVALID from a missing access_hash.
+                if let Err(e) = client.prefetch_channel_access_hashes().await {
+                    tracing::warn!(
+                        "[ferogram] startup: access_hash prefetch failed (non-catchup path): {e}"
+                    );
+                }
             }
         }
 
@@ -2688,7 +2712,7 @@ impl Client {
             Ok(_) => {
                 tracing::info!("[ferogram] Signed out ✓");
                 // Clear all pooled connections and cached auth keys so that
-                // stale sockets cannot survive logout/reset (gap 3 fix).
+                // stale sockets cannot survive logout/reset.
                 self.inner.dc_pool.lock().await.conns.clear();
                 self.inner.transfer_pool.lock().await.conns.clear();
                 {
@@ -2805,6 +2829,7 @@ impl Client {
                          (channel full at capacity 2048). Consider processing updates \
                          faster or spawning handlers."
                     );
+                    metrics::counter!("ferogram.updates_dropped").increment(1);
                 }
             }
         });
@@ -2992,7 +3017,6 @@ impl Client {
                             tracing::warn!(
                                 "[ferogram] update channel full: dropping catch-up update"
                             );
-                            metrics::counter!("ferogram.updates_dropped").increment(1);
                             metrics::counter!("ferogram.updates_dropped").increment(1);
                             break;
                         }
@@ -4067,7 +4091,6 @@ impl Client {
                             if utx.try_send(u).is_err() {
                                 tracing::warn!("[ferogram] update channel full: dropping update");
                                 metrics::counter!("ferogram.updates_dropped").increment(1);
-                                metrics::counter!("ferogram.updates_dropped").increment(1);
                                 break;
                             }
                         }
@@ -4917,6 +4940,7 @@ impl Client {
                 mtproxy.as_ref(),
                 &transport,
                 home_dc_id as i16,
+                self.inner.pfs_enabled,
             )
             .await
             {
@@ -5540,8 +5564,13 @@ impl Client {
         if body.len() >= 4 {
             let cid = u32::from_le_bytes(body[..4].try_into().unwrap());
             if cid == 0x74ae4240 || cid == 0x725b04c3 {
-                let mut cur = Cursor::from_slice(&body);
-                let updates_opt = tl::enums::Updates::deserialize(&mut cur).ok();
+                let updates_opt = match tl::enums::Updates::from_bytes_exact(&body) {
+                    Ok(updates) => Some(updates),
+                    Err(e) => {
+                        tracing::warn!("[ferogram] updates parse error: {e}");
+                        None
+                    }
+                };
                 let (raw_updates, users, chats) = match updates_opt {
                     Some(tl::enums::Updates::Updates(u)) => (u.updates, u.users, u.chats),
                     Some(tl::enums::Updates::Combined(u)) => (u.updates, u.users, u.chats),
@@ -5992,8 +6021,7 @@ impl Client {
         };
 
         let body = self.rpc_call_raw(&req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        let raw = match tl::enums::messages::Dialogs::deserialize(&mut cur)? {
+        let raw = match tl::enums::messages::Dialogs::from_bytes_exact(&body)? {
             tl::enums::messages::Dialogs::Dialogs(d) => d,
             tl::enums::messages::Dialogs::Slice(d) => tl::types::messages::Dialogs {
                 dialogs: d.dialogs,
@@ -6097,8 +6125,7 @@ impl Client {
         req: tl::functions::messages::GetDialogs,
     ) -> Result<Vec<Dialog>, InvocationError> {
         let body = self.rpc_call_raw(&req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        let raw = match tl::enums::messages::Dialogs::deserialize(&mut cur)? {
+        let raw = match tl::enums::messages::Dialogs::from_bytes_exact(&body)? {
             tl::enums::messages::Dialogs::Dialogs(d) => d,
             tl::enums::messages::Dialogs::Slice(d) => tl::types::messages::Dialogs {
                 dialogs: d.dialogs,
@@ -6197,8 +6224,7 @@ impl Client {
         req: tl::functions::messages::GetDialogs,
     ) -> Result<(Vec<Dialog>, Option<i32>), InvocationError> {
         let body = self.rpc_call_raw(&req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        let (raw, count) = match tl::enums::messages::Dialogs::deserialize(&mut cur)? {
+        let (raw, count) = match tl::enums::messages::Dialogs::from_bytes_exact(&body)? {
             tl::enums::messages::Dialogs::Dialogs(d) => (d, None),
             tl::enums::messages::Dialogs::Slice(d) => {
                 let cnt = Some(d.count);
@@ -6618,8 +6644,7 @@ impl Client {
 
     pub async fn invoke<R: RemoteCall>(&self, req: &R) -> Result<R::Return, InvocationError> {
         let body = self.rpc_call_raw(req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        R::Return::deserialize(&mut cur).map_err(Into::into)
+        <R::Return as tl::Deserializable>::from_bytes_exact(&body).map_err(Into::into)
     }
 
     async fn rpc_call_raw<R: RemoteCall>(&self, req: &R) -> Result<Vec<u8>, InvocationError> {
@@ -6908,6 +6933,7 @@ impl Client {
                 mtproxy.as_ref(),
                 &transport,
                 new_dc_id as i16,
+                self.inner.pfs_enabled,
             )
             .await?
         } else {
@@ -7029,6 +7055,61 @@ impl Client {
         self.cache_chats_slice(chats).await;
     }
 
+    /// Pre-populate the peer cache with access_hashes for all channels the
+    /// client currently participates in, by fetching the first page of dialogs.
+    ///
+    /// Called on startup and whenever `get_channel_difference` encounters a
+    /// missing access_hash: after a reconnect, the in-memory
+    /// `peer_cache` is empty, so channels that the bot is in but hasn't seen
+    /// any update for are missing their access_hash.  Fetching dialogs
+    /// re-populates them so `getChannelDifference` can proceed.
+    pub(crate) async fn prefetch_channel_access_hashes(&self) -> Result<(), InvocationError> {
+        let req = tl::functions::messages::GetDialogs {
+            exclude_pinned: false,
+            folder_id: None,
+            offset_date: 0,
+            offset_id: 0,
+            offset_peer: tl::enums::InputPeer::Empty,
+            limit: 100,
+            hash: 0,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let de =
+            tl::enums::messages::Dialogs::from_bytes_exact(&body).map_err(InvocationError::from)?;
+        match de {
+            tl::enums::messages::Dialogs::Dialogs(d) => {
+                tracing::debug!(
+                    "[ferogram] prefetch_channel_access_hashes: dialogs={}, users={}, chats={}",
+                    d.dialogs.len(),
+                    d.users.len(),
+                    d.chats.len()
+                );
+                self.cache_chats_slice_pub(&d.chats).await;
+                self.cache_users_slice_pub(&d.users).await;
+            }
+            tl::enums::messages::Dialogs::Slice(d) => {
+                tracing::debug!(
+                    "[ferogram] prefetch_channel_access_hashes: slice_count={}, dialogs={}, users={}, chats={}",
+                    d.count,
+                    d.dialogs.len(),
+                    d.users.len(),
+                    d.chats.len()
+                );
+                self.cache_chats_slice_pub(&d.chats).await;
+                self.cache_users_slice_pub(&d.users).await;
+            }
+            tl::enums::messages::Dialogs::NotModified(_) => {
+                tracing::debug!(
+                    "[ferogram] prefetch_channel_access_hashes: GetDialogs returned NotModified"
+                );
+            }
+        }
+        tracing::debug!(
+            "[ferogram] prefetch_channel_access_hashes: peer cache refreshed from GetDialogs"
+        );
+        Ok(())
+    }
+
     /// Public RPC call for use by sub-modules.
     #[doc(hidden)]
     pub async fn rpc_on_dc_raw_pub<R: ferogram_tl_types::RemoteCall>(
@@ -7079,7 +7160,7 @@ impl Client {
         let home = *self.inner.home_dc_id.lock().await;
         let target_dc = if dc_id == 0 { home } else { dc_id };
 
-        // --- Gap 6: per-DC connect gate ---
+        // per-DC connect gate
         // Acquire (or create) a per-DC mutex that serialises the first-use
         // setup for each DC.  Tasks that arrive while another task is already
         // setting up the same DC will block here, then find the connection
@@ -7144,6 +7225,7 @@ impl Client {
                         mtproxy.as_ref(),
                         &TransportKind::Abridged,
                         target_dc as i16,
+                        self.inner.pfs_enabled,
                     )
                     .await?
                 } else {
@@ -7155,7 +7237,7 @@ impl Client {
                     )
                     .await?
                 };
-                // --- Gap 2 fix: insert THEN init; remove on failure ---
+                // insert THEN init; remove on failure
                 self.inner
                     .transfer_pool
                     .lock()
@@ -7174,7 +7256,7 @@ impl Client {
                     return Err(e);
                 }
             } else {
-                // FOREIGN DC: check for a cached auth key first (Gap 1 fix).
+                // FOREIGN DC: check for a cached auth key first.
                 // If we already have the foreign DC's auth key (from a prior
                 // export/import), skip DH + re-export and go straight to initConnection.
                 let saved = {
@@ -7196,6 +7278,7 @@ impl Client {
                         mtproxy.as_ref(),
                         &TransportKind::Abridged,
                         target_dc as i16,
+                        self.inner.pfs_enabled,
                     )
                     .await?;
                     // Cached key skips DH but importAuthorization is still required
@@ -7229,7 +7312,7 @@ impl Client {
                         target_dc as i16,
                     )
                     .await?;
-                    // --- Gap 2 fix: insert then import; evict on failure ---
+                    // insert then import; evict on failure
                     self.inner
                         .transfer_pool
                         .lock()
@@ -7250,22 +7333,27 @@ impl Client {
                     // Save the newly obtained foreign-DC auth key so the NEXT
                     // transfer connection (and open_worker_conn) can skip DH.
                     {
-                        let pool = self.inner.transfer_pool.lock().await;
-                        if let Some(conn) = pool.conns.get(&target_dc) {
-                            let mut opts = self.inner.dc_options.lock().await;
-                            let entry =
-                                opts.entry(target_dc)
-                                    .or_insert_with(|| crate::session::DcEntry {
+                        {
+                            let pool = self.inner.transfer_pool.lock().await;
+                            if let Some(slots) = pool.conns.get(&target_dc)
+                                && let Some(slot) = slots.first()
+                                && let Ok(conn) = slot.conn.try_lock()
+                            {
+                                let mut opts = self.inner.dc_options.lock().await;
+                                let entry = opts.entry(target_dc).or_insert_with(|| {
+                                    crate::session::DcEntry {
                                         dc_id: target_dc,
                                         addr: addr.clone(),
                                         auth_key: None,
                                         first_salt: 0,
                                         time_offset: 0,
                                         flags: crate::session::DcFlags::NONE,
-                                    });
-                            entry.auth_key = Some(conn.auth_key_bytes());
-                            entry.first_salt = conn.first_salt();
-                            entry.time_offset = conn.time_offset();
+                                    }
+                                });
+                                entry.auth_key = Some(conn.auth_key_bytes());
+                                entry.first_salt = conn.first_salt();
+                                entry.time_offset = conn.time_offset();
+                            }
                         }
                     }
                 }
@@ -7293,12 +7381,7 @@ impl Client {
                 tracing::debug!(
                     "[ferogram] Transfer DC{target_dc} IO error  - evicting broken connection from pool"
                 );
-                self.inner
-                    .transfer_pool
-                    .lock()
-                    .await
-                    .conns
-                    .remove(&target_dc);
+                self.inner.transfer_pool.lock().await.evict(target_dc);
             }
             Err(InvocationError::Rpc(rpc))
                 if matches!(
@@ -7313,12 +7396,7 @@ impl Client {
                     "[ferogram] Transfer DC{target_dc} auth error ({})  - evicting and clearing cached key",
                     rpc.name
                 );
-                self.inner
-                    .transfer_pool
-                    .lock()
-                    .await
-                    .conns
-                    .remove(&target_dc);
+                self.inner.transfer_pool.lock().await.evict(target_dc);
                 let mut opts = self.inner.dc_options.lock().await;
                 if let Some(e) = opts.get_mut(&target_dc) {
                     e.auth_key = None;
@@ -7455,6 +7533,7 @@ impl Client {
                     mtproxy.as_ref(),
                     &TransportKind::Abridged,
                     target_dc as i16,
+                    self.inner.pfs_enabled,
                 )
                 .await?
             } else {
@@ -7515,6 +7594,7 @@ impl Client {
                     mtproxy.as_ref(),
                     &TransportKind::Abridged,
                     target_dc as i16,
+                    self.inner.pfs_enabled,
                 )
                 .await?;
 
@@ -7814,8 +7894,7 @@ impl Client {
         req: &R,
     ) -> Result<R::Return, InvocationError> {
         let body = self.rpc_on_dc_raw(dc_id, req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        R::Return::deserialize(&mut cur).map_err(Into::into)
+        <R::Return as tl::Deserializable>::from_bytes_exact(&body).map_err(Into::into)
     }
 
     /// Raw RPC call routed to `dc_id`, exporting auth if needed.
@@ -7856,6 +7935,7 @@ impl Client {
                     mtproxy.as_ref(),
                     &transport,
                     dc_id as i16,
+                    self.inner.pfs_enabled,
                 )
                 .await?
             } else {
@@ -11559,6 +11639,8 @@ const SALT_USE_DELAY: i32 = 60;
 struct ConnectionWriter {
     enc: EncryptedSession,
     frame_kind: FrameKind,
+    /// PFS: permanent auth key to save in session. None when PFS is off.
+    perm_auth_key: Option<[u8; 256]>,
     /// msg_ids of received content messages waiting to be acked.
     /// Drained into a MsgsAck on every outgoing frame (bundled into container
     /// when sending an RPC, or sent standalone after route_frame).
@@ -11590,7 +11672,8 @@ struct ConnectionWriter {
 
 impl ConnectionWriter {
     fn auth_key_bytes(&self) -> [u8; 256] {
-        self.enc.auth_key_bytes()
+        self.perm_auth_key
+            .unwrap_or_else(|| self.enc.auth_key_bytes())
     }
     fn first_salt(&self) -> i64 {
         self.enc.salt
@@ -11670,6 +11753,10 @@ struct Connection {
     stream: TcpStream,
     enc: EncryptedSession,
     frame_kind: FrameKind,
+    /// When PFS is active, the permanent auth key (stored in session).
+    /// `enc` holds the temp key; this field holds the perm key so
+    /// `auth_key_bytes()` returns the right value to persist.
+    perm_auth_key: Option<[u8; 256]>,
 }
 
 impl Connection {
@@ -12079,6 +12166,7 @@ impl Connection {
                 stream,
                 enc: EncryptedSession::new(done.auth_key, done.first_salt, done.time_offset),
                 frame_kind,
+                perm_auth_key: None, // connect_raw produces the perm key itself
             })
         };
 
@@ -12101,6 +12189,7 @@ impl Connection {
         mtproxy: Option<&crate::proxy::MtProxyConfig>,
         transport: &TransportKind,
         dc_id: i16,
+        pfs: bool,
     ) -> Result<Self, InvocationError> {
         let addr2 = addr.to_string();
         let socks5_c = socks5.cloned();
@@ -12108,29 +12197,200 @@ impl Connection {
         let transport_c = transport.clone();
 
         let fut = async move {
-            let (stream, frame_kind) = if let Some(ref mp) = mtproxy_c {
+            let (mut stream, frame_kind) = if let Some(ref mp) = mtproxy_c {
                 Self::open_stream_mtproxy(mp, dc_id).await?
             } else {
                 Self::open_stream(&addr2, socks5_c.as_ref(), &transport_c, dc_id).await?
             };
+            if pfs {
+                tracing::debug!("[ferogram] PFS: temp DH bind for DC{dc_id}");
+                match Self::do_pfs_bind(&mut stream, &frame_kind, &auth_key, dc_id).await {
+                    Ok(temp_enc) => {
+                        tracing::info!("[ferogram] PFS bind complete DC{dc_id}");
+                        return Ok(Self {
+                            stream,
+                            enc: temp_enc,
+                            frame_kind,
+                            perm_auth_key: Some(auth_key),
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "[ferogram] PFS bind failed DC{dc_id} ({e}); falling back to perm key"
+                        );
+                        // Graceful fallback: reconnect because DH frames left the stream dirty.
+                        // Return error and let the caller handle retry without PFS.
+                        return Err(e);
+                    }
+                }
+            }
             Ok::<Self, InvocationError>(Self {
                 stream,
                 enc: EncryptedSession::new(auth_key, first_salt, time_offset),
                 frame_kind,
+                perm_auth_key: None,
             })
         };
 
-        tokio::time::timeout(Duration::from_secs(15), fut)
+        tokio::time::timeout(Duration::from_secs(30), fut)
             .await
             .map_err(|_| {
                 InvocationError::Deserialize(format!(
-                    "connect_with_key to {addr} timed out after 15 s"
+                    "connect_with_key to {addr} timed out after 30 s"
                 ))
             })?
     }
 
+    /// Perform a fresh temp-key DH on an already-open stream, then
+    /// send `auth.bindTempAuthKey` encrypted with the temp key.
+    /// Returns an `EncryptedSession` keyed with the bound temp key.
+    async fn do_pfs_bind(
+        stream: &mut TcpStream,
+        frame_kind: &FrameKind,
+        perm_auth_key: &[u8; 256],
+        dc_id: i16,
+    ) -> Result<EncryptedSession, InvocationError> {
+        use ferogram_mtproto::{
+            auth_key_id_from_key, encrypt_bind_inner, gen_msg_id, new_seen_msg_ids,
+            serialize_bind_temp_auth_key,
+        };
+        const TEMP_EXPIRES: i32 = 86_400; // 24 h
+
+        // temp-key DH
+        let mut plain = Session::new();
+
+        let (req1, s1) = auth::step1().map_err(|e| InvocationError::Deserialize(e.to_string()))?;
+        send_frame(stream, &plain.pack(&req1).to_plaintext_bytes(), frame_kind).await?;
+        let res_pq: tl::enums::ResPq = recv_frame_plain(stream, frame_kind).await?;
+
+        let (req2, s2) = ferogram_mtproto::step2_temp(s1, res_pq, dc_id as i32, TEMP_EXPIRES)
+            .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
+        send_frame(stream, &plain.pack(&req2).to_plaintext_bytes(), frame_kind).await?;
+        let dh: tl::enums::ServerDhParams = recv_frame_plain(stream, frame_kind).await?;
+
+        let (req3, s3) =
+            auth::step3(s2, dh).map_err(|e| InvocationError::Deserialize(e.to_string()))?;
+        send_frame(stream, &plain.pack(&req3).to_plaintext_bytes(), frame_kind).await?;
+        let ans: tl::enums::SetClientDhParamsAnswer = recv_frame_plain(stream, frame_kind).await?;
+
+        let done = {
+            let mut result =
+                auth::finish(s3, ans).map_err(|e| InvocationError::Deserialize(e.to_string()))?;
+            let mut attempts = 0u8;
+            loop {
+                match result {
+                    ferogram_mtproto::FinishResult::Done(d) => break d,
+                    ferogram_mtproto::FinishResult::Retry {
+                        retry_id,
+                        dh_params,
+                        nonce,
+                        server_nonce,
+                        new_nonce,
+                    } => {
+                        attempts += 1;
+                        if attempts >= 5 {
+                            return Err(InvocationError::Deserialize(
+                                "PFS temp DH retry exceeded 5 attempts".into(),
+                            ));
+                        }
+                        let (rr, s3r) = ferogram_mtproto::retry_step3(
+                            &dh_params,
+                            nonce,
+                            server_nonce,
+                            new_nonce,
+                            retry_id,
+                        )
+                        .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
+                        send_frame(stream, &plain.pack(&rr).to_plaintext_bytes(), frame_kind)
+                            .await?;
+                        let ar: tl::enums::SetClientDhParamsAnswer =
+                            recv_frame_plain(stream, frame_kind).await?;
+                        result = auth::finish(s3r, ar)
+                            .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
+                    }
+                }
+            }
+        };
+
+        let temp_key = done.auth_key;
+        let temp_salt = done.first_salt;
+        let temp_offset = done.time_offset;
+
+        // build bindTempAuthKey body
+        let temp_key_id = auth_key_id_from_key(&temp_key);
+        let perm_key_id = auth_key_id_from_key(perm_auth_key);
+
+        let mut nonce_buf = [0u8; 8];
+        getrandom::getrandom(&mut nonce_buf)
+            .map_err(|_| InvocationError::Deserialize("getrandom nonce".into()))?;
+        let nonce = i64::from_le_bytes(nonce_buf);
+
+        let server_now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i32
+            + temp_offset;
+        let expires_at = server_now + TEMP_EXPIRES;
+
+        let seen = new_seen_msg_ids();
+        let mut temp_enc = EncryptedSession::with_seen(temp_key, temp_salt, temp_offset, seen);
+        let temp_session_id = temp_enc.session_id();
+
+        let msg_id = gen_msg_id();
+        let enc_msg = encrypt_bind_inner(
+            perm_auth_key,
+            msg_id,
+            nonce,
+            temp_key_id,
+            perm_key_id,
+            temp_session_id,
+            expires_at,
+        );
+        let bind_body = serialize_bind_temp_auth_key(perm_key_id, nonce, expires_at, &enc_msg);
+
+        // send encrypted bind request
+        let wire = temp_enc.pack_body_at_msg_id(&bind_body, msg_id);
+        send_frame(stream, &wire, frame_kind).await?;
+
+        // Receive and verify response.
+        // The server may send informational frames first (msgs_ack, new_session_created)
+        // before the actual rpc_result{boolTrue}, so we loop up to 5 frames.
+        for attempt in 0u8..5 {
+            let mut raw = recv_raw_frame(stream, frame_kind).await?;
+            let decrypted = temp_enc
+                .unpack(&mut raw)
+                .map_err(|e| InvocationError::Deserialize(format!("PFS bind decrypt: {e:?}")))?;
+            match decode_bind_response(&decrypted.body) {
+                Ok(()) => {
+                    // bindTempAuthKey succeeds under the temp key; keep the session
+                    // sequence as-is so subsequent RPCs continue from the same MTProto
+                    // message stream.
+                    return Ok(temp_enc);
+                }
+                Err(ref e) if e == "__need_more__" => {
+                    tracing::debug!(
+                        "[ferogram] PFS bind (DC{dc_id}): informational frame {attempt}, reading next"
+                    );
+                    continue;
+                }
+                Err(reason) => {
+                    tracing::error!("[ferogram] PFS bind server response (DC{dc_id}): {reason}");
+                    return Err(InvocationError::Deserialize(format!(
+                        "auth.bindTempAuthKey: {reason}"
+                    )));
+                }
+            }
+        }
+        Err(InvocationError::Deserialize(
+            "auth.bindTempAuthKey: no boolTrue after 5 frames".into(),
+        ))
+    }
+
     fn auth_key_bytes(&self) -> [u8; 256] {
-        self.enc.auth_key_bytes()
+        // When PFS is active, perm_auth_key is the key to persist in the session.
+        // enc.auth_key_bytes() would return the short-lived temp key instead.
+        self.perm_auth_key
+            .unwrap_or_else(|| self.enc.auth_key_bytes())
     }
 
     /// Split into a write-only `ConnectionWriter` and the TCP read half.
@@ -12139,6 +12399,7 @@ impl Connection {
         let writer = ConnectionWriter {
             enc: self.enc,
             frame_kind: self.frame_kind.clone(),
+            perm_auth_key: self.perm_auth_key,
             pending_ack: Vec::new(),
             new_session_resend_queue: Vec::new(),
             sent_bodies: std::collections::HashMap::new(),
@@ -12620,6 +12881,192 @@ async fn send_abridged(stream: &mut TcpStream, data: &[u8]) -> Result<(), Invoca
     frame.extend_from_slice(data);
     stream.write_all(&frame).await?;
     Ok(())
+}
+
+/// Receive raw MTProto frame bytes, respecting the negotiated FrameKind
+/// (including Obfuscated AES-256-CTR decryption). Used for the PFS bind
+/// response which arrives as an encrypted frame, not a plaintext one.
+async fn recv_raw_frame(
+    stream: &mut TcpStream,
+    kind: &FrameKind,
+) -> Result<Vec<u8>, InvocationError> {
+    match kind {
+        FrameKind::Obfuscated { cipher } => {
+            let mut h = [0u8; 1];
+            stream.read_exact(&mut h).await?;
+            cipher.lock().await.decrypt(&mut h);
+            let words = if h[0] < 0x7f {
+                h[0] as usize
+            } else {
+                let mut b = [0u8; 3];
+                stream.read_exact(&mut b).await?;
+                cipher.lock().await.decrypt(&mut b);
+                b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16
+            };
+            if words == 0 || words > 0x8000 {
+                return Err(InvocationError::Deserialize(format!(
+                    "obfuscated recv_raw: implausible word count {words}"
+                )));
+            }
+            let mut buf = vec![0u8; words * 4];
+            stream.read_exact(&mut buf).await?;
+            cipher.lock().await.decrypt(&mut buf);
+            Ok(buf)
+        }
+        // Abridged and all other transports: plain framing, no extra layer.
+        _ => recv_abridged(stream).await,
+    }
+}
+
+/// Check a decrypted PFS bind response body for boolTrue.
+/// Telegram always wraps the Bool in an rpc_result container:
+///   rpc_result#f35c6d01 req_msg_id:long result:Bool   (16 bytes total)
+/// But may also return a bare boolTrue in some implementations.
+/// Decode one bare MTProto message body for the auth.bindTempAuthKey response.
+///
+/// Returns Ok(()) if this message body contains boolTrue (success).
+/// Returns Err(msg) for real errors.
+/// Returns Err("skip") for informational messages the caller should ignore
+/// (new_session_created, future_salts, msgs_ack, pong, etc.).
+fn decode_bind_single(body: &[u8]) -> Result<(), String> {
+    const RPC_RESULT: u32 = 0xf35c6d01;
+    const BOOL_TRUE: u32 = 0x9972_75b5;
+    const BOOL_FALSE: u32 = 0xbc79_9737;
+    const RPC_ERROR: u32 = 0x2144_ca19;
+    const BAD_MSG: u32 = 0xa7ef_f811;
+    const BAD_SALT: u32 = 0xedab_447b;
+    const NEW_SESSION: u32 = 0x9ec2_0908; // new_session_created
+    const FUTURE_SALTS: u32 = 0xae50_0895;
+    const MSGS_ACK: u32 = 0x62d6_b459; // msgs_ack#62d6b459
+    const PONG: u32 = 0x347_73c5;
+
+    if body.len() < 4 {
+        return Err("skip".into());
+    }
+    let ctor = u32::from_le_bytes(body[..4].try_into().unwrap());
+
+    match ctor {
+        BOOL_TRUE => Ok(()),
+
+        BOOL_FALSE => Err("server returned boolFalse (binding rejected)".into()),
+
+        // Informational: not an error, caller skips these.
+        NEW_SESSION | FUTURE_SALTS | MSGS_ACK | PONG => Err("skip".into()),
+
+        RPC_RESULT if body.len() >= 16 => {
+            let inner = u32::from_le_bytes(body[12..16].try_into().unwrap());
+            match inner {
+                BOOL_TRUE => Ok(()),
+                BOOL_FALSE => Err("rpc_result{boolFalse} (server rejected binding)".into()),
+                RPC_ERROR if body.len() >= 20 => {
+                    let code = i32::from_le_bytes(body[16..20].try_into().unwrap());
+                    let msg = tl_read_string(body.get(20..).unwrap_or(&[])).unwrap_or_default();
+                    Err(format!("rpc_error code={code} message={msg:?}"))
+                }
+                _ => Err(format!("rpc_result inner ctor={inner:#010x}")),
+            }
+        }
+
+        BAD_MSG if body.len() >= 16 => {
+            let code = u32::from_le_bytes(body[12..16].try_into().unwrap());
+            let desc = match code {
+                16 => "msg_id too low (clock skew)",
+                17 => "msg_id too high (clock skew)",
+                18 => "incorrect lower 2 bits of msg_id",
+                19 => "duplicate msg_id",
+                20 => "message too old (>300s)",
+                32 => "msg_seqno too low",
+                33 => "msg_seqno too high",
+                34 => "even seqno expected, odd received",
+                35 => "odd seqno expected, even received",
+                48 => "incorrect server salt",
+                64 => "invalid container",
+                _ => "unknown code",
+            };
+            Err(format!("bad_msg_notification code={code} ({desc})"))
+        }
+
+        BAD_SALT if body.len() >= 24 => {
+            let new_salt = i64::from_le_bytes(body[16..24].try_into().unwrap());
+            Err(format!(
+                "bad_server_salt, server wants salt={new_salt:#018x}"
+            ))
+        }
+
+        _ => Err(format!("unknown ctor={ctor:#010x}")),
+    }
+}
+
+/// Decode the server response to auth.bindTempAuthKey.
+///
+/// Handles bare messages AND msg_container (the server frequently bundles
+/// new_session_created + rpc_result together in a container on the very first
+/// encrypted message of a fresh temp session).
+fn decode_bind_response(body: &[u8]) -> Result<(), String> {
+    const MSG_CONTAINER: u32 = 0x73f1f8dc;
+
+    if body.len() < 4 {
+        return Err(format!("response body too short ({} bytes)", body.len()));
+    }
+    let ctor = u32::from_le_bytes(body[..4].try_into().unwrap());
+
+    if ctor != MSG_CONTAINER {
+        // Bare message: decode directly.
+        return decode_bind_single(body).map_err(|e| {
+            if e == "skip" {
+                // Informational frame (msgs_ack, new_session_created, etc.).
+                // Caller should read the next frame rather than hard-fail.
+                "__need_more__".into()
+            } else {
+                e
+            }
+        });
+    }
+
+    // msg_container#73f1f8dc messages:vector<message> = MessageContainer
+    // Each message: msg_id:long seqno:int bytes:int body:bytes
+    if body.len() < 8 {
+        return Err("msg_container too short to read count".into());
+    }
+    let count = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+    let mut pos = 8usize;
+    let mut last_real_err: Option<String> = None;
+
+    for i in 0..count {
+        // header: msg_id(8) + seqno(4) + bytes(4) = 16 bytes
+        if pos + 16 > body.len() {
+            return Err(format!(
+                "msg_container truncated at message {i}/{count} (pos={pos} body_len={})",
+                body.len()
+            ));
+        }
+        let msg_bytes = u32::from_le_bytes(body[pos + 12..pos + 16].try_into().unwrap()) as usize;
+        pos += 16;
+
+        if pos + msg_bytes > body.len() {
+            return Err(format!(
+                "msg_container message {i} body overflows (need {msg_bytes}, have {})",
+                body.len() - pos
+            ));
+        }
+        let msg_body = &body[pos..pos + msg_bytes];
+        pos += msg_bytes;
+
+        match decode_bind_single(msg_body) {
+            Ok(()) => return Ok(()),           // found boolTrue; done
+            Err(e) if e == "skip" => continue, // new_session_created etc; normal
+            Err(e) => {
+                // Real error: remember it but keep iterating in case
+                // a later message in the container contains boolTrue.
+                last_real_err = Some(e);
+            }
+        }
+    }
+
+    // No message in the container returned boolTrue.
+    // If last_real_err is None, every message was informational → caller should read
+    // the next frame. If there was a real error, propagate it.
+    Err(last_real_err.unwrap_or_else(|| "__need_more__".into()))
 }
 
 async fn recv_abridged(stream: &mut TcpStream) -> Result<Vec<u8>, InvocationError> {

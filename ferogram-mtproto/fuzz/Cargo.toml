@@ -1,0 +1,33 @@
+[package]
+name = "ferogram-mtproto-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ferogram-mtproto = { path = ".." }
+
+[[bin]]
+name = "decrypt_frame"
+path = "fuzz_targets/decrypt_frame.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "unpack_frame"
+path = "fuzz_targets/unpack_frame.rs"
+test = false
+doc = false
+
+[profile.release]
+debug = 1
+
+[profile.fuzz]
+inherits = "dev"
+opt-level = 3
+incremental = false
+codegen-units = 1

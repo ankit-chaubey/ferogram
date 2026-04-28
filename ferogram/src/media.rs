@@ -1034,8 +1034,13 @@ impl Client {
         if body.len() >= 4 {
             let cid = u32::from_le_bytes(body[..4].try_into().unwrap());
             if cid == 0x74ae4240 || cid == 0x725b04c3 {
-                let mut cur = Cursor::from_slice(&body);
-                let updates_opt = tl::enums::Updates::deserialize(&mut cur).ok();
+                let updates_opt = match tl::enums::Updates::from_bytes_exact(&body) {
+                    Ok(updates) => Some(updates),
+                    Err(e) => {
+                        tracing::warn!("[ferogram] updates parse error: {e}");
+                        None
+                    }
+                };
                 let (raw_updates, users, chats) = match updates_opt {
                     Some(tl::enums::Updates::Updates(u)) => (u.updates, u.users, u.chats),
                     Some(tl::enums::Updates::Combined(u)) => (u.updates, u.users, u.chats),

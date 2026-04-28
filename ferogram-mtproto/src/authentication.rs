@@ -70,6 +70,31 @@ fn serialize_pq_inner_data_dc(
     out
 }
 
+/// Serialize p_q_inner_data_temp_dc#56fddf88 (temp key variant with expires_in).
+#[allow(clippy::too_many_arguments)]
+fn serialize_pq_inner_data_temp_dc(
+    pq: &[u8],
+    p: &[u8],
+    q: &[u8],
+    nonce: &[u8; 16],
+    server_nonce: &[u8; 16],
+    new_nonce: &[u8; 32],
+    dc_id: i32,
+    expires_in: i32,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&0x56fddf88_u32.to_le_bytes()); // p_q_inner_data_temp_dc
+    out.extend(tl_serialize_bytes(pq));
+    out.extend(tl_serialize_bytes(p));
+    out.extend(tl_serialize_bytes(q));
+    out.extend_from_slice(nonce);
+    out.extend_from_slice(server_nonce);
+    out.extend_from_slice(new_nonce);
+    out.extend_from_slice(&dc_id.to_le_bytes());
+    out.extend_from_slice(&expires_in.to_le_bytes()); // extra field vs permanent variant
+    out
+}
+
 /// Errors that can occur during auth key generation.
 #[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq)]
@@ -262,6 +287,84 @@ pub fn step2(
     let mut rnd = [0u8; 256];
     getrandom::getrandom(&mut rnd).expect("getrandom");
     do_step2(data, response, &rnd, dc_id)
+}
+
+/// Like `step2` but requests a temporary auth key (PFS).
+/// Uses p_q_inner_data_temp_dc instead of p_q_inner_data_dc.
+/// Caller must bind the resulting key via auth.bindTempAuthKey before any RPCs.
+pub fn step2_temp(
+    data: Step1,
+    response: ferogram_tl_types::enums::ResPq,
+    dc_id: i32,
+    expires_in: i32,
+) -> Result<(ferogram_tl_types::functions::ReqDhParams, Step2), Error> {
+    let mut rnd = [0u8; 256];
+    getrandom::getrandom(&mut rnd).expect("getrandom");
+    do_step2_temp(data, response, &rnd, dc_id, expires_in)
+}
+
+fn do_step2_temp(
+    data: Step1,
+    response: ferogram_tl_types::enums::ResPq,
+    random: &[u8; 256],
+    dc_id: i32,
+    expires_in: i32,
+) -> Result<(ferogram_tl_types::functions::ReqDhParams, Step2), Error> {
+    let Step1 { nonce } = data;
+    let ferogram_tl_types::enums::ResPq::ResPq(res_pq) = response;
+    check_nonce(&res_pq.nonce, &nonce)?;
+    if res_pq.pq.len() != 8 {
+        return Err(Error::InvalidPqSize {
+            size: res_pq.pq.len(),
+        });
+    }
+    let pq = u64::from_be_bytes(res_pq.pq.as_slice().try_into().unwrap());
+    let (p, q) = factorize(pq);
+    let mut new_nonce = [0u8; 32];
+    new_nonce.copy_from_slice(&random[..32]);
+    let rnd224: &[u8; 224] = random[32..].try_into().unwrap();
+    fn trim_be(v: u64) -> Vec<u8> {
+        let b = v.to_be_bytes();
+        let skip = b.iter().position(|&x| x != 0).unwrap_or(7);
+        b[skip..].to_vec()
+    }
+    let p_bytes = trim_be(p);
+    let q_bytes = trim_be(q);
+    let pq_inner = serialize_pq_inner_data_temp_dc(
+        &pq.to_be_bytes(),
+        &p_bytes,
+        &q_bytes,
+        &nonce,
+        &res_pq.server_nonce,
+        &new_nonce,
+        dc_id,
+        expires_in,
+    );
+    let fingerprint = res_pq
+        .server_public_key_fingerprints
+        .iter()
+        .copied()
+        .find(|&fp| key_for_fingerprint(fp).is_some())
+        .ok_or_else(|| Error::UnknownFingerprints {
+            fingerprints: res_pq.server_public_key_fingerprints.clone(),
+        })?;
+    let key = key_for_fingerprint(fingerprint).unwrap();
+    let ciphertext = rsa::encrypt_hashed(&pq_inner, &key, rnd224);
+    Ok((
+        ferogram_tl_types::functions::ReqDhParams {
+            nonce,
+            server_nonce: res_pq.server_nonce,
+            p: p_bytes,
+            q: q_bytes,
+            public_key_fingerprint: fingerprint,
+            encrypted_data: ciphertext,
+        },
+        Step2 {
+            nonce,
+            server_nonce: res_pq.server_nonce,
+            new_nonce,
+        },
+    ))
 }
 
 fn do_step2(

@@ -328,6 +328,7 @@ impl ClientBuilder {
             probe_transport: self.probe_transport,
             resilient_connect: self.resilient_connect,
             experimental_features: self.experimental_features,
+            use_pfs: true,
         })
     }
 

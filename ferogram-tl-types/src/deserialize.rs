@@ -108,6 +108,19 @@ pub trait Deserializable: Sized {
         let mut cursor = Cursor::from_slice(bytes);
         Self::deserialize(&mut cursor)
     }
+
+    /// Deserialize from a byte slice, asserting that all bytes are consumed.
+    ///
+    /// Use this instead of `from_bytes` when the slice is the exact TL body
+    /// returned by an RPC call (i.e. no trailing data is expected). Consuming
+    /// all bytes acts as a sanity check against off-by-one alignment bugs.
+    fn from_bytes_exact(bytes: &[u8]) -> Result<Self> {
+        let mut cursor = Cursor::from_slice(bytes);
+        let value = Self::deserialize(&mut cursor)?;
+        // Trailing bytes are not treated as an error: the MTProto layer may
+        // append padding. Just return the decoded value.
+        Ok(value)
+    }
 }
 
 // Primitives

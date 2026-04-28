@@ -104,6 +104,13 @@ pub fn serialize_bind_temp_auth_key(
     out
 }
 
+/// Returns the auth-key ID: SHA-1(key)[12..20] as little-endian i64.
+pub fn auth_key_id_from_key(key: &[u8; 256]) -> i64 {
+    use sha1::{Digest, Sha1};
+    let hash: [u8; 20] = Sha1::new().chain_update(key).finalize().into();
+    i64::from_le_bytes(hash[12..20].try_into().unwrap())
+}
+
 /// Generate a monotonic MTProto message ID from the current system clock.
 ///
 /// The previous implementation used `nanos & !3` (clears bottom 2 bits), which

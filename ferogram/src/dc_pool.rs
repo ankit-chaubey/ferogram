@@ -9,7 +9,7 @@
 // https://github.com/ankit-chaubey/ferogram
 
 use ferogram_mtproto::{
-    EncryptedSession, SeenMsgIds, Session, authentication as auth, new_seen_msg_ids,
+    EncryptedSession, SeenMsgIds, Session, authentication as auth, new_seen_msg_ids, step2_temp,
 };
 use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable, RemoteCall};
@@ -18,6 +18,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::{InvocationError, TransportKind, session::DcEntry};
+// metrics and tracing
+#[allow(unused_imports)]
+use metrics::{counter, histogram};
 
 /// A single encrypted connection to one Telegram DC.
 /// Un-acked server msg_ids to accumulate before eagerly flushing a `msgs_ack` frame.
@@ -41,6 +44,7 @@ pub struct DcConnection {
 
 impl DcConnection {
     /// Race Obfuscated / Abridged / Http transports and return the first to succeed.
+    #[tracing::instrument(skip(socks5), fields(addr = %addr, dc_id = dc_id))]
     pub async fn connect_fastest(
         addr: &str,
         socks5: Option<&crate::socks5::Socks5Config>,
@@ -110,6 +114,7 @@ impl DcConnection {
     }
 
     /// Connect and perform full DH handshake.
+    #[tracing::instrument(skip(socks5, transport), fields(addr = %addr, dc_id = dc_id))]
     pub async fn connect_raw(
         addr: &str,
         socks5: Option<&crate::socks5::Socks5Config>,
@@ -210,6 +215,7 @@ impl DcConnection {
     }
 
     /// Connect with an already-known auth key (no DH needed).
+    /// If `pfs` is true, performs a temp-key DH bind before any RPCs.
     #[allow(clippy::too_many_arguments)]
     pub async fn connect_with_key(
         addr: &str,
@@ -220,8 +226,9 @@ impl DcConnection {
         mtproxy: Option<&crate::proxy::MtProxyConfig>,
         transport: &TransportKind,
         dc_id: i16,
+        pfs: bool,
     ) -> Result<Self, InvocationError> {
-        let (stream, cipher) = if let Some(mp) = mtproxy {
+        let (mut stream, mut cipher) = if let Some(mp) = mtproxy {
             let mut s = mp.connect().await?;
             s.set_nodelay(true)?;
             let c = Self::send_transport_init(&mut s, &mp.transport, dc_id).await?;
@@ -231,6 +238,28 @@ impl DcConnection {
             let c = Self::send_transport_init(&mut s, transport, dc_id).await?;
             (s, c)
         };
+
+        if pfs {
+            tracing::debug!("[dc_pool] PFS: temp DH bind for DC{dc_id}");
+            match Self::do_pool_pfs_bind(&mut stream, cipher.as_mut(), &auth_key, dc_id).await {
+                Ok(temp_enc) => {
+                    tracing::info!("[dc_pool] PFS bind complete DC{dc_id}");
+                    return Ok(Self {
+                        stream,
+                        cipher,
+                        enc: temp_enc,
+                        pending_acks: Vec::new(),
+                        call_count: 0,
+                        seen_msg_ids: new_seen_msg_ids(),
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("[dc_pool] PFS bind failed DC{dc_id} ({e}); falling back");
+                    return Err(e);
+                }
+            }
+        }
+
         let seen = new_seen_msg_ids();
         Ok(Self {
             stream,
@@ -240,6 +269,174 @@ impl DcConnection {
             call_count: 0,
             seen_msg_ids: seen,
         })
+    }
+
+    /// Temp-key DH handshake + auth.bindTempAuthKey on an existing stream.
+    #[allow(clippy::needless_option_as_deref)]
+    async fn do_pool_pfs_bind(
+        stream: &mut tokio::net::TcpStream,
+        mut cipher: Option<&mut ferogram_crypto::ObfuscatedCipher>,
+        perm_auth_key: &[u8; 256],
+        dc_id: i16,
+    ) -> Result<EncryptedSession, InvocationError> {
+        use ferogram_mtproto::{
+            auth_key_id_from_key, encrypt_bind_inner, gen_msg_id, new_seen_msg_ids,
+            serialize_bind_temp_auth_key,
+        };
+        const TEMP_EXPIRES: i32 = 86_400; // 24 h
+
+        // temp-key DH
+        let mut plain = ferogram_mtproto::Session::new();
+
+        let (req1, s1) = auth::step1().map_err(|e| InvocationError::Deserialize(e.to_string()))?;
+        Self::send_plain_frame(
+            stream,
+            &plain.pack(&req1).to_plaintext_bytes(),
+            cipher.as_deref_mut(),
+        )
+        .await?;
+        let res_pq: tl::enums::ResPq =
+            Self::recv_plain_frame(stream, cipher.as_deref_mut()).await?;
+
+        let (req2, s2) = step2_temp(s1, res_pq, dc_id as i32, TEMP_EXPIRES)
+            .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
+        Self::send_plain_frame(
+            stream,
+            &plain.pack(&req2).to_plaintext_bytes(),
+            cipher.as_deref_mut(),
+        )
+        .await?;
+        let dh: tl::enums::ServerDhParams =
+            Self::recv_plain_frame(stream, cipher.as_deref_mut()).await?;
+
+        let (req3, s3) =
+            auth::step3(s2, dh).map_err(|e| InvocationError::Deserialize(e.to_string()))?;
+        Self::send_plain_frame(
+            stream,
+            &plain.pack(&req3).to_plaintext_bytes(),
+            cipher.as_deref_mut(),
+        )
+        .await?;
+        let ans: tl::enums::SetClientDhParamsAnswer =
+            Self::recv_plain_frame(stream, cipher.as_deref_mut()).await?;
+
+        let done = {
+            let mut result =
+                auth::finish(s3, ans).map_err(|e| InvocationError::Deserialize(e.to_string()))?;
+            let mut attempts = 0u8;
+            loop {
+                match result {
+                    ferogram_mtproto::FinishResult::Done(d) => break d,
+                    ferogram_mtproto::FinishResult::Retry {
+                        retry_id,
+                        dh_params,
+                        nonce,
+                        server_nonce,
+                        new_nonce,
+                    } => {
+                        attempts += 1;
+                        if attempts >= 5 {
+                            return Err(InvocationError::Deserialize(
+                                "PFS pool temp DH retry exceeded 5".into(),
+                            ));
+                        }
+                        let (rr, s3r) = ferogram_mtproto::retry_step3(
+                            &dh_params,
+                            nonce,
+                            server_nonce,
+                            new_nonce,
+                            retry_id,
+                        )
+                        .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
+                        Self::send_plain_frame(
+                            stream,
+                            &plain.pack(&rr).to_plaintext_bytes(),
+                            cipher.as_deref_mut(),
+                        )
+                        .await?;
+                        let ar: tl::enums::SetClientDhParamsAnswer =
+                            Self::recv_plain_frame(stream, cipher.as_deref_mut()).await?;
+                        result = auth::finish(s3r, ar)
+                            .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
+                    }
+                }
+            }
+        };
+
+        let temp_key = done.auth_key;
+        let temp_salt = done.first_salt;
+        let temp_offset = done.time_offset;
+
+        // build bindTempAuthKey body
+        let temp_key_id = auth_key_id_from_key(&temp_key);
+        let perm_key_id = auth_key_id_from_key(perm_auth_key);
+
+        let mut nonce_buf = [0u8; 8];
+        getrandom::getrandom(&mut nonce_buf)
+            .map_err(|_| InvocationError::Deserialize("getrandom nonce".into()))?;
+        let nonce = i64::from_le_bytes(nonce_buf);
+
+        let server_now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i32
+            + temp_offset;
+        let expires_at = server_now + TEMP_EXPIRES;
+
+        let seen = new_seen_msg_ids();
+        let mut temp_enc = EncryptedSession::with_seen(temp_key, temp_salt, temp_offset, seen);
+        let temp_session_id = temp_enc.session_id();
+
+        let msg_id = gen_msg_id();
+        let enc_msg = encrypt_bind_inner(
+            perm_auth_key,
+            msg_id,
+            nonce,
+            temp_key_id,
+            perm_key_id,
+            temp_session_id,
+            expires_at,
+        );
+        let bind_body = serialize_bind_temp_auth_key(perm_key_id, nonce, expires_at, &enc_msg);
+
+        // send encrypted bind request
+        let wire = temp_enc.pack_body_at_msg_id(&bind_body, msg_id);
+        Self::send_abridged(stream, &wire, cipher.as_deref_mut()).await?;
+
+        // Receive and verify response.
+        // The server may send informational frames first (msgs_ack, new_session_created)
+        // before the actual rpc_result{boolTrue}, so we loop up to 5 frames.
+        for attempt in 0u8..5 {
+            let mut raw = Self::recv_abridged(stream, cipher.as_deref_mut()).await?;
+            let decrypted = temp_enc.unpack(&mut raw).map_err(|e| {
+                InvocationError::Deserialize(format!("PFS pool bind decrypt: {e:?}"))
+            })?;
+            match pfs_pool_decode_bind_response(&decrypted.body) {
+                Ok(()) => {
+                    // bindTempAuthKey succeeds under the temp key; keep the session
+                    // sequence as-is so subsequent RPCs continue from the same MTProto
+                    // message stream.
+                    return Ok(temp_enc);
+                }
+                Err(ref e) if e == "__need_more__" => {
+                    tracing::debug!(
+                        "[ferogram] PFS pool bind (DC{dc_id}): informational frame {attempt}, reading next"
+                    );
+                    continue;
+                }
+                Err(reason) => {
+                    tracing::error!(
+                        "[ferogram] PFS pool bind server response (DC{dc_id}): {reason}"
+                    );
+                    return Err(InvocationError::Deserialize(format!(
+                        "auth.bindTempAuthKey (pool): {reason}"
+                    )));
+                }
+            }
+        }
+        Err(InvocationError::Deserialize(
+            "auth.bindTempAuthKey (pool): no boolTrue after 5 frames".into(),
+        ))
     }
 
     async fn open_tcp(
@@ -411,7 +608,9 @@ impl DcConnection {
         self.enc.time_offset
     }
 
+    #[tracing::instrument(skip(self, req), fields(method = std::any::type_name::<R>()))]
     pub async fn rpc_call<R: RemoteCall>(&mut self, req: &R) -> Result<Vec<u8>, InvocationError> {
+        let _t0 = std::time::Instant::now();
         // Periodic PingDelayDisconnect: sent before the request to piggyback on
         // the same TCP write window.  Keeps the socket alive across the download.
         self.call_count += 1;
@@ -495,15 +694,13 @@ impl DcConnection {
                         .await;
                     self.pending_acks.clear();
                 }
-                // Reset seq_no only, not session_id. The server created new state
-                // for our existing session_id; changing session_id here would cause
-                // all subsequent server frames (encrypted with the old session_id)
-                // to fail decryption with SessionMismatch.
-                self.enc.reset_seq_no_only();
+                // Keep the current session sequence. new_session_created updates the
+                // server salt and may require resending stale requests, but it does
+                // not require zeroing the local MTProto seq counter.
                 if scan_result.is_none() {
-                    // No result yet; resend with the freshly-reset sequence.
+                    // No result yet; resend using the current MTProto sequence.
                     tracing::debug!(
-                        "[dc_pool] new_session_created: reset seq_no, resending [{session_resets}/2]"
+                        "[dc_pool] new_session_created: resending [{session_resets}/2]"
                     );
                     let (wire, new_id) = self.enc.pack_with_msg_id(req);
                     sent_msg_id = new_id;
@@ -555,12 +752,13 @@ impl DcConnection {
                 Self::send_abridged(&mut self.stream, &wire, self.cipher.as_mut()).await?;
             }
             if let Some(result) = scan_result {
+                metrics::counter!("ferogram.rpc_calls_total", "result" => "ok").increment(1);
+                metrics::histogram!("ferogram.rpc_latency_ms")
+                    .record(_t0.elapsed().as_millis() as f64);
                 return Ok(result);
             }
         }
     }
-
-    /// Scan a message body for rpc_result / rpc_error, recursing into msg_container.
     ///
     /// Returns `Ok(Some(bytes))` when rpc_result is found.
     /// Returns `Ok(None)` for informational messages (continue reading).
@@ -868,8 +1066,6 @@ impl DcConnection {
                         .await;
                     self.pending_acks.clear();
                 }
-                // Reset seq_no only (see rpc_call for full explanation).
-                self.enc.reset_seq_no_only();
                 if scan_result.is_none() {
                     let (wire, new_id) = self.enc.pack_serializable_with_msg_id(req);
                     sent_msg_id = new_id;
@@ -969,7 +1165,7 @@ impl DcConnection {
                     "transfer recv: header timeout (60 s)",
                 ))
             })??;
-        if let Some(ref mut c) = cipher.as_deref_mut() {
+        if let Some(ref mut c) = cipher.as_mut() {
             c.decrypt(&mut h);
         }
 
@@ -984,7 +1180,7 @@ impl DcConnection {
                         "transfer recv: length timeout (60 s)",
                     ))
                 })??;
-            if let Some(ref mut c) = cipher.as_deref_mut() {
+            if let Some(ref mut c) = cipher.as_mut() {
                 c.decrypt(&mut b);
             }
             b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16
@@ -1078,6 +1274,131 @@ impl DcConnection {
     }
 }
 
+/// Check a decrypted PFS bind response body for boolTrue.
+/// Decode one bare MTProto message body for the auth.bindTempAuthKey response (pool path).
+fn pfs_pool_decode_bind_single(body: &[u8]) -> Result<(), String> {
+    const RPC_RESULT: u32 = 0xf35c6d01;
+    const BOOL_TRUE: u32 = 0x9972_75b5;
+    const BOOL_FALSE: u32 = 0xbc79_9737;
+    const RPC_ERROR: u32 = 0x2144_ca19;
+    const BAD_MSG: u32 = 0xa7ef_f811;
+    const BAD_SALT: u32 = 0xedab_447b;
+    const NEW_SESSION: u32 = 0x9ec2_0908;
+    const FUTURE_SALTS: u32 = 0xae50_0895;
+    const MSGS_ACK: u32 = 0x62d6_b459; // msgs_ack#62d6b459
+    const PONG: u32 = 0x0347_73c5;
+
+    if body.len() < 4 {
+        return Err("skip".into());
+    }
+    let ctor = u32::from_le_bytes(body[..4].try_into().unwrap());
+
+    match ctor {
+        BOOL_TRUE => Ok(()),
+        BOOL_FALSE => Err("server returned boolFalse (binding rejected)".into()),
+        NEW_SESSION | FUTURE_SALTS | MSGS_ACK | PONG => Err("skip".into()),
+
+        RPC_RESULT if body.len() >= 16 => {
+            let inner = u32::from_le_bytes(body[12..16].try_into().unwrap());
+            match inner {
+                BOOL_TRUE => Ok(()),
+                BOOL_FALSE => Err("rpc_result{boolFalse} (server rejected binding)".into()),
+                RPC_ERROR if body.len() >= 20 => {
+                    let code = i32::from_le_bytes(body[16..20].try_into().unwrap());
+                    let msg = tl_read_string(body.get(20..).unwrap_or(&[])).unwrap_or_default();
+                    Err(format!("rpc_error code={code} message={msg:?}"))
+                }
+                _ => Err(format!("rpc_result inner ctor={inner:#010x}")),
+            }
+        }
+
+        BAD_MSG if body.len() >= 16 => {
+            let code = u32::from_le_bytes(body[12..16].try_into().unwrap());
+            let desc = match code {
+                16 => "msg_id too low (clock skew)",
+                17 => "msg_id too high (clock skew)",
+                18 => "incorrect lower 2 bits of msg_id",
+                19 => "duplicate msg_id",
+                20 => "message too old (>300s)",
+                32 => "msg_seqno too low",
+                33 => "msg_seqno too high",
+                48 => "incorrect server salt",
+                _ => "unknown code",
+            };
+            Err(format!("bad_msg_notification code={code} ({desc})"))
+        }
+
+        BAD_SALT if body.len() >= 24 => {
+            let new_salt = i64::from_le_bytes(body[16..24].try_into().unwrap());
+            Err(format!(
+                "bad_server_salt, server wants salt={new_salt:#018x}"
+            ))
+        }
+
+        _ => Err(format!("unknown ctor={ctor:#010x}")),
+    }
+}
+
+/// Decode the server response to auth.bindTempAuthKey (pool path).
+///
+/// Handles bare messages AND msg_container (the server frequently bundles
+/// new_session_created + rpc_result together in a container).
+fn pfs_pool_decode_bind_response(body: &[u8]) -> Result<(), String> {
+    const MSG_CONTAINER: u32 = 0x73f1f8dc;
+
+    if body.len() < 4 {
+        return Err(format!("response body too short ({} bytes)", body.len()));
+    }
+    let ctor = u32::from_le_bytes(body[..4].try_into().unwrap());
+
+    if ctor != MSG_CONTAINER {
+        return pfs_pool_decode_bind_single(body).map_err(|e| {
+            if e == "skip" {
+                "__need_more__".into()
+            } else {
+                e
+            }
+        });
+    }
+
+    if body.len() < 8 {
+        return Err("msg_container too short to read count".into());
+    }
+    let count = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+    let mut pos = 8usize;
+    let mut last_real_err: Option<String> = None;
+
+    for i in 0..count {
+        if pos + 16 > body.len() {
+            return Err(format!(
+                "msg_container truncated at message {i}/{count} (pos={pos} body_len={})",
+                body.len()
+            ));
+        }
+        let msg_bytes = u32::from_le_bytes(body[pos + 12..pos + 16].try_into().unwrap()) as usize;
+        pos += 16;
+
+        if pos + msg_bytes > body.len() {
+            return Err(format!(
+                "msg_container message {i} body overflows (need {msg_bytes}, have {})",
+                body.len() - pos
+            ));
+        }
+        let msg_body = &body[pos..pos + msg_bytes];
+        pos += msg_bytes;
+
+        match pfs_pool_decode_bind_single(msg_body) {
+            Ok(()) => return Ok(()),
+            Err(e) if e == "skip" => continue,
+            Err(e) => {
+                last_real_err = Some(e);
+            }
+        }
+    }
+
+    Err(last_real_err.unwrap_or_else(|| "__need_more__".into()))
+}
+
 fn tl_read_bytes(data: &[u8]) -> Option<Vec<u8>> {
     if data.is_empty() {
         return Some(vec![]);
@@ -1102,20 +1423,30 @@ fn tl_read_string(data: &[u8]) -> Option<String> {
     tl_read_bytes(data).map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
+// Max simultaneous connections per DC.
+const MAX_CONNS_PER_DC: usize = 3;
+
+/// One slot in the per-DC connection pool.
+/// `in_flight` lets the pool pick the least-busy slot without locking it.
+pub(crate) struct ConnSlot {
+    pub conn: tokio::sync::Mutex<DcConnection>,
+    pub in_flight: std::sync::atomic::AtomicUsize,
+}
+
 /// Pool of per-DC authenticated connections.
+/// Each DC holds up to MAX_CONNS_PER_DC slots. The pool lock is dropped
+/// before any network I/O so concurrent callers don't serialize on it.
 pub struct DcPool {
-    pub(crate) conns: HashMap<i32, DcConnection>,
+    /// Per-DC connection slots; inner Vec holds slot Arcs.
+    pub(crate) conns: HashMap<i32, Vec<std::sync::Arc<ConnSlot>>>,
     addrs: HashMap<i32, String>,
     #[allow(dead_code)]
     home_dc_id: i32,
-    /// Proxy config forwarded to auto-reconnect in `invoke_on_dc`.
+    /// Proxy config forwarded to auto-reconnect.
     socks5: Option<crate::socks5::Socks5Config>,
-    /// Transport kind used for the home DC; reused for all secondary DC connections.
+    /// Transport kind reused for secondary DC connections.
     transport: TransportKind,
     /// DCs that have already received `invokeWithLayer(initConnection(...))`.
-    /// Every new auto-connected DC connection must send initConnection as the
-    /// first message so Telegram registers the client's API layer and version.
-    /// Without it the server may serve deprecated constructor IDs.
     init_done: std::collections::HashSet<i32>,
 }
 
@@ -1140,66 +1471,168 @@ impl DcPool {
         }
     }
 
-    /// Returns true if a connection for `dc_id` already exists in the pool.
+    /// Returns true if at least one connection slot exists for `dc_id`.
     pub fn has_connection(&self, dc_id: i32) -> bool {
-        self.conns.contains_key(&dc_id)
+        self.conns.get(&dc_id).is_some_and(|v| !v.is_empty())
     }
 
-    /// Insert a pre-built connection into the pool.
+    /// Insert a pre-built connection into the pool as a new slot.
     pub fn insert(&mut self, dc_id: i32, conn: DcConnection) {
-        self.conns.insert(dc_id, conn);
+        let slot = std::sync::Arc::new(ConnSlot {
+            conn: tokio::sync::Mutex::new(conn),
+            in_flight: std::sync::atomic::AtomicUsize::new(0),
+        });
+        self.conns.entry(dc_id).or_default().push(slot);
+        let total: usize = self.conns.values().map(|v| v.len()).sum();
+        metrics::gauge!("ferogram.connections_active").set(total as f64);
+    }
+
+    /// Returns the least-loaded slot for `dc_id`, creating one if needed.
+    /// Creates a new slot if all existing ones are busy and count < MAX_CONNS_PER_DC.
+    /// Drop the DcPool guard before locking the returned slot.
+    pub(crate) async fn get_or_create_slot(
+        &mut self,
+        dc_id: i32,
+        pfs: bool,
+        auth_key: Option<([u8; 256], i64, i32)>,
+    ) -> Result<std::sync::Arc<ConnSlot>, InvocationError> {
+        use std::sync::atomic::Ordering;
+
+        let addr = self.addrs.get(&dc_id).cloned().ok_or_else(|| {
+            InvocationError::Deserialize(format!("dc_pool: no address for DC{dc_id}"))
+        })?;
+
+        // Ensure at least one slot exists.
+        if !self.conns.contains_key(&dc_id) || self.conns[&dc_id].is_empty() {
+            tracing::info!("[dc_pool] auto-connecting DC{dc_id} ({addr})");
+            let conn = if let Some((key, salt, offset)) = auth_key {
+                DcConnection::connect_with_key(
+                    &addr,
+                    key,
+                    salt,
+                    offset,
+                    self.socks5.as_ref(),
+                    None,
+                    &self.transport,
+                    dc_id as i16,
+                    pfs,
+                )
+                .await?
+            } else {
+                DcConnection::connect_raw(
+                    &addr,
+                    self.socks5.as_ref(),
+                    &self.transport,
+                    dc_id as i16,
+                )
+                .await?
+            };
+            let slot = std::sync::Arc::new(ConnSlot {
+                conn: tokio::sync::Mutex::new(conn),
+                in_flight: std::sync::atomic::AtomicUsize::new(0),
+            });
+            self.conns.entry(dc_id).or_default().push(slot);
+            self.init_done.remove(&dc_id);
+            let total: usize = self.conns.values().map(|v| v.len()).sum();
+            metrics::gauge!("ferogram.connections_active").set(total as f64);
+        }
+
+        let slots = self.conns.get(&dc_id).unwrap();
+
+        // pick least-busy slot
+        let best = slots
+            .iter()
+            .min_by_key(|s| s.in_flight.load(Ordering::Relaxed))
+            .unwrap()
+            .clone();
+        let min_inflight = best.in_flight.load(Ordering::Relaxed);
+
+        // Spawn a new slot if: all are busy AND we have room for more.
+        if min_inflight > 0 && slots.len() < MAX_CONNS_PER_DC {
+            tracing::debug!(
+                "[dc_pool] DC{dc_id}: all {} slots busy (min_inflight={}), opening new slot",
+                slots.len(),
+                min_inflight
+            );
+            let conn = if let Some((key, salt, offset)) = auth_key {
+                DcConnection::connect_with_key(
+                    &addr,
+                    key,
+                    salt,
+                    offset,
+                    self.socks5.as_ref(),
+                    None,
+                    &self.transport,
+                    dc_id as i16,
+                    pfs,
+                )
+                .await?
+            } else {
+                DcConnection::connect_raw(
+                    &addr,
+                    self.socks5.as_ref(),
+                    &self.transport,
+                    dc_id as i16,
+                )
+                .await?
+            };
+            let new_slot = std::sync::Arc::new(ConnSlot {
+                conn: tokio::sync::Mutex::new(conn),
+                in_flight: std::sync::atomic::AtomicUsize::new(0),
+            });
+            let arc = new_slot.clone();
+            self.conns.get_mut(&dc_id).unwrap().push(new_slot);
+            let total: usize = self.conns.values().map(|v| v.len()).sum();
+            metrics::gauge!("ferogram.connections_active").set(total as f64);
+            return Ok(arc);
+        }
+
+        Ok(best)
+    }
+
+    /// Evict all slots for a DC (called on IO error to force reconnection).
+    pub fn evict(&mut self, dc_id: i32) {
+        self.conns.remove(&dc_id);
+        self.init_done.remove(&dc_id);
+        let total: usize = self.conns.values().map(|v| v.len()).sum();
+        metrics::gauge!("ferogram.connections_active").set(total as f64);
+        tracing::debug!("[dc_pool] evicted all slots for DC{dc_id}");
     }
 
     /// Invoke a raw RPC call on the given DC.
-    /// Auto-connects if no connection exists for the given DC.
+    /// Pool lock is released before the network round-trip begins.
     pub async fn invoke_on_dc<R: RemoteCall>(
         &mut self,
         dc_id: i32,
         _dc_entries: &[DcEntry],
         req: &R,
     ) -> Result<Vec<u8>, InvocationError> {
-        // Auto-connect if needed, using the stored address table.
-        let addr = self.addrs.get(&dc_id).cloned().ok_or_else(|| {
-            InvocationError::Deserialize(format!("invoke_on_dc: no address for DC{dc_id}"))
-        })?;
-        if !self.conns.contains_key(&dc_id) {
-            tracing::info!("[dc_pool] invoke_on_dc: auto-connecting to DC{dc_id} ({addr})");
-            let conn = DcConnection::connect_raw(
-                &addr,
-                self.socks5.as_ref(),
-                &self.transport,
-                dc_id as i16,
-            )
-            .await?;
-            self.conns.insert(dc_id, conn);
-            // Mark this DC as needing initConnection on its first RPC.
-            // The actual wrapping happens via the caller's run_transfer_initconnection
-            // path. Clear init_done so that path knows to re-run.
-            self.init_done.remove(&dc_id);
+        use std::sync::atomic::Ordering;
+        let slot = self.get_or_create_slot(dc_id, false, None).await?;
+        slot.in_flight.fetch_add(1, Ordering::Relaxed);
+        let result = slot.conn.lock().await.rpc_call(req).await;
+        slot.in_flight.fetch_sub(1, Ordering::Relaxed);
+        if let Err(ref e) = result {
+            let kind = match e {
+                InvocationError::Rpc(_) => "rpc",
+                InvocationError::Io(_) => "io",
+                _ => "other",
+            };
+            metrics::counter!("ferogram.rpc_errors_total", "kind" => kind).increment(1);
         }
-        let result = self.conns.get_mut(&dc_id).unwrap().rpc_call(req).await;
-        // Reconnect and retry once on IO error: stale pooled connection.
         if matches!(result, Err(InvocationError::Io(_))) {
-            tracing::warn!(
-                "[dc_pool] invoke_on_dc: IO error on DC{dc_id} (stale connection), reconnecting"
-            );
-            self.conns.remove(&dc_id);
-            self.init_done.remove(&dc_id); // needs initConnection on fresh connection
-            let fresh = DcConnection::connect_raw(
-                &addr,
-                self.socks5.as_ref(),
-                &self.transport,
-                dc_id as i16,
-            )
-            .await?;
-            self.conns.insert(dc_id, fresh);
-            return self.conns.get_mut(&dc_id).unwrap().rpc_call(req).await;
+            tracing::warn!("[dc_pool] IO error on DC{dc_id}, evicting all slots and retrying");
+            self.evict(dc_id);
+            let retry_slot = self.get_or_create_slot(dc_id, false, None).await?;
+            retry_slot.in_flight.fetch_add(1, Ordering::Relaxed);
+            let r = retry_slot.conn.lock().await.rpc_call(req).await;
+            retry_slot.in_flight.fetch_sub(1, Ordering::Relaxed);
+            return r;
         }
         result
     }
 
-    /// Mark a DC as having completed initConnection. Call this after the
-    /// `invokeWithLayer(initConnection(...))` wrapper has been sent successfully.
+    /// Mark a DC as having completed initConnection.
     pub fn mark_init_done(&mut self, dc_id: i32) {
         self.init_done.insert(dc_id);
     }
@@ -1210,42 +1643,32 @@ impl DcPool {
     }
 
     /// Like `invoke_on_dc` but accepts any `Serializable` type.
-    /// Used when wrapping requests in `invokeWithLayer(initConnection(...))`.
     pub async fn invoke_on_dc_serializable<S: ferogram_tl_types::Serializable>(
         &mut self,
         dc_id: i32,
         req: &S,
     ) -> Result<Vec<u8>, InvocationError> {
-        let result = self
-            .conns
-            .get_mut(&dc_id)
-            .ok_or_else(|| InvocationError::Deserialize(format!("no connection for DC{dc_id}")))?
-            .rpc_call_serializable(req)
-            .await;
-        // Reconnect and retry once on IO error: stale pooled connection.
+        use std::sync::atomic::Ordering;
+        let slot = self
+            .get_or_create_slot(dc_id, false, None)
+            .await
+            .map_err(|_| InvocationError::Deserialize(format!("no connection for DC{dc_id}")))?;
+        slot.in_flight.fetch_add(1, Ordering::Relaxed);
+        let result = slot.conn.lock().await.rpc_call_serializable(req).await;
+        slot.in_flight.fetch_sub(1, Ordering::Relaxed);
         if matches!(result, Err(InvocationError::Io(_))) {
-            tracing::warn!(
-                "[dc_pool] invoke_on_dc_serializable: IO error on DC{dc_id} (stale), reconnecting"
-            );
-            let addr =
-                self.addrs.get(&dc_id).cloned().ok_or_else(|| {
-                    InvocationError::Deserialize(format!("no address for DC{dc_id}"))
-                })?;
-            self.conns.remove(&dc_id);
-            let fresh = DcConnection::connect_raw(
-                &addr,
-                self.socks5.as_ref(),
-                &self.transport,
-                dc_id as i16,
-            )
-            .await?;
-            self.conns.insert(dc_id, fresh);
-            return self
-                .conns
-                .get_mut(&dc_id)
-                .unwrap()
+            tracing::warn!("[dc_pool] serializable IO error on DC{dc_id}, evicting and retrying");
+            self.evict(dc_id);
+            let retry_slot = self.get_or_create_slot(dc_id, false, None).await?;
+            retry_slot.in_flight.fetch_add(1, Ordering::Relaxed);
+            let r = retry_slot
+                .conn
+                .lock()
+                .await
                 .rpc_call_serializable(req)
                 .await;
+            retry_slot.in_flight.fetch_sub(1, Ordering::Relaxed);
+            return r;
         }
         result
     }
@@ -1258,9 +1681,13 @@ impl DcPool {
     }
 
     /// Save the auth keys from pool connections back into the DC entry list.
+    /// Uses the first slot per DC (all slots share the same auth key).
     pub fn collect_keys(&self, entries: &mut [DcEntry]) {
         for e in entries.iter_mut() {
-            if let Some(conn) = self.conns.get(&e.dc_id) {
+            if let Some(slots) = self.conns.get(&e.dc_id)
+                && let Some(slot) = slots.first()
+                && let Ok(conn) = slot.conn.try_lock()
+            {
                 e.auth_key = Some(conn.auth_key_bytes());
                 e.first_salt = conn.first_salt();
                 e.time_offset = conn.time_offset();

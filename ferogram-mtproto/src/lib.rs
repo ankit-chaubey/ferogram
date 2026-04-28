@@ -94,8 +94,12 @@ pub mod session;
 /// Transport-layer encoding (abridged, intermediate, padded).
 pub mod transport;
 
-pub use authentication::{Finished, finish, step1, step2, step3};
-pub use bind_temp_key::{encrypt_bind_inner, gen_msg_id, serialize_bind_temp_auth_key};
+pub use authentication::{
+    FinishResult, Finished, finish, retry_step3, step1, step2, step2_temp, step3,
+};
+pub use bind_temp_key::{
+    auth_key_id_from_key, encrypt_bind_inner, gen_msg_id, serialize_bind_temp_auth_key,
+};
 pub use encrypted::{DecryptedMessage, EncryptedSession, SeenMsgIds, new_seen_msg_ids};
 pub use message::{Message, MessageId};
 pub use session::Session;

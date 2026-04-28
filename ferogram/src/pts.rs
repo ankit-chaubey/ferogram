@@ -12,9 +12,9 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use ferogram_tl_types as tl;
-use ferogram_tl_types::{Cursor, Deserializable};
 
 use crate::session_backend::UpdateStateChange;
+use crate::util::decode_checked;
 use crate::{Client, InvocationError, RpcError, attach_client_to_update, update};
 
 /// How long to wait before declaring a pts jump a real gap (ms).
@@ -353,15 +353,53 @@ impl Client {
     /// Loops on `Difference::Slice` until the server returns a final
     /// `Difference` or `Empty`, accumulating all batches.
     pub async fn get_difference(&self) -> Result<Vec<update::Update>, InvocationError> {
-        // Atomically claim the in-flight slot via a single lock acquisition.
-        // Only the first caller proceeds; all others return immediately.
-        {
-            let mut s = self.inner.pts_state.lock().await;
-            if s.getting_global_diff {
+        // Atomically claim the in-flight slot.  Only the first caller proceeds;
+        // all others wait for the in-flight diff to complete instead of returning
+        // empty immediately.
+        //
+        // Bug 2 fix: returning Ok(vec![]) right away caused a race where
+        // an updateShortMessage "unknown sender" getDifference call overlapped
+        // with the B3 gap-timer getDifference. The spawned task got back an
+        // empty result, dispatched nothing, and the DM was silently dropped.
+        // With the wait-and-return approach, the in-flight diff dispatches the
+        // DM itself; the waiting caller then returns Ok(vec![]) safely (the
+        // updates were already sent via update_tx by the owner of the in-flight diff).
+        loop {
+            {
+                let mut s = self.inner.pts_state.lock().await;
+                if !s.getting_global_diff {
+                    // Slot is free; claim it atomically.
+                    s.getting_global_diff = true;
+                    s.getting_global_diff_since = Some(Instant::now());
+                    break; // fall through to the actual RPC
+                }
+                // Another task is running the diff; release the lock before sleeping.
+            }
+            // Poll at 50 ms intervals; timeout is 5 s longer than the inner
+            // 30 s RPC timeout so the guard is always cleared before we give
+            // up (either by the RPC completing or by the watchdog resetting it).
+            static WAIT_DEADLINE_SECS: u64 = 35;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            if !self.inner.pts_state.lock().await.getting_global_diff {
+                // In-flight diff has finished and already dispatched its updates.
                 return Ok(vec![]);
             }
-            s.getting_global_diff = true;
-            s.getting_global_diff_since = Some(Instant::now());
+            // Check the absolute deadline by inspecting getting_global_diff_since.
+            let elapsed = self
+                .inner
+                .pts_state
+                .lock()
+                .await
+                .getting_global_diff_since
+                .map(|t| t.elapsed())
+                .unwrap_or_default();
+            if elapsed.as_secs() >= WAIT_DEADLINE_SECS {
+                tracing::warn!(
+                    "[ferogram] get_difference: waited {WAIT_DEADLINE_SECS} s for \
+                     in-flight getDifference to finish; giving up (will retry on next gap)"
+                );
+                return Ok(vec![]);
+            }
         }
 
         // Drain the possible-gap buffer before the RPC.
@@ -441,13 +479,30 @@ impl Client {
             let diff = match tl::enums::updates::Difference::deserialize(&mut cur) {
                 Ok(d) => d,
                 Err(e) => {
-                    let cid = body
-                        .get(..4)
-                        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
-                        .unwrap_or(0);
+                    // Extract the unknown constructor ID directly from the error
+                    // type, rather than from body[..4] which always shows the
+                    // outer `updates.difference` constructor (misleading since
+                    // the actual failure is inside a field, e.g. new_messages).
+                    let unknown_cid = match &e {
+                        ferogram_tl_types::deserialize::Error::UnexpectedConstructor { id } => {
+                            format!("{id:#010x}")
+                        }
+                        ferogram_tl_types::deserialize::Error::UnexpectedEof => {
+                            "unexpected-eof".to_owned()
+                        }
+                    };
+                    // This most commonly means a new Telegram Message or Update
+                    // constructor was added that ferogram's api.tl doesn't know
+                    // about yet.  The TL cursor misaligns on the unknown item,
+                    // reads into zero-padding, and surfaces as 0x00000000.
+                    // Fix: regenerate ferogram-tl-types from a newer api.tl that
+                    // includes the missing constructor.
                     tracing::warn!(
-                        "[ferogram] getDifference: parse error cid={cid:#010x} \
-                         after {} buffered updates ({e}): resyncing pts",
+                        "[ferogram] getDifference: TL schema mismatch — \
+                         unknown constructor {unknown_cid} encountered while parsing \
+                         getDifference response ({} updates already accumulated). \
+                         This means api.tl is missing a new constructor. \
+                         Resyncing pts to server state to prevent infinite retry.",
                         all_updates.len()
                     );
                     // Resync pts to the server's current state so the next
@@ -609,7 +664,7 @@ impl Client {
             .copied()
             .unwrap_or(0);
 
-        let access_hash = self
+        let mut access_hash = self
             .inner
             .peer_cache
             .read()
@@ -619,19 +674,45 @@ impl Client {
             .copied()
             .unwrap_or(0);
 
-        // No access hash in cache → we can't call getChannelDifference.
-        // Attempting GetChannels with access_hash=0 also returns CHANNEL_INVALID,
-        // so skip the call entirely and let the caller handle it.
+        // No access hash in cache → try to refresh the peer cache via GetDialogs
+        // before giving up.  This handles the common case where the access_hash
+        // was evicted after a reconnect (peer_cache is in-memory only) but the
+        // channel is still accessible.
         if access_hash == 0 {
-            tracing::debug!(
-                "[ferogram] channel {channel_id}: access_hash not cached, \
-                 cannot call getChannelDifference: caller will remove from tracking"
+            tracing::warn!(
+                "[ferogram] channel {channel_id}: access_hash not cached; \
+                 attempting recovery via GetDialogs refresh"
             );
-            return Err(InvocationError::Rpc(RpcError {
-                code: 400,
-                name: "CHANNEL_INVALID".into(),
-                value: None,
-            }));
+            if let Err(e) = self.prefetch_channel_access_hashes().await {
+                tracing::warn!("[ferogram] channel {channel_id}: GetDialogs refresh failed: {e}");
+            }
+            let fresh_hash = self
+                .inner
+                .peer_cache
+                .read()
+                .await
+                .channels
+                .get(&channel_id)
+                .copied()
+                .unwrap_or(0);
+            if fresh_hash == 0 {
+                // Still missing after refresh; channel is genuinely inaccessible.
+                tracing::warn!(
+                    "[ferogram] channel {channel_id}: access_hash still missing after \
+                     GetDialogs refresh; removing from pts tracking to prevent \
+                     the infinite getChannelDifference → CHANNEL_INVALID loop"
+                );
+                return Err(InvocationError::Rpc(RpcError {
+                    code: 400,
+                    name: "CHANNEL_INVALID".into(),
+                    value: None,
+                }));
+            }
+            tracing::debug!(
+                "[ferogram] channel {channel_id}: access_hash recovered via GetDialogs"
+            );
+            // Use the freshly fetched hash for the InputChannel below.
+            access_hash = fresh_hash;
         }
 
         tracing::debug!("[ferogram] getChannelDifference channel_id={channel_id} pts={local_pts}");
@@ -686,8 +767,10 @@ impl Client {
             Err(e) => return Err(e),
         };
         let body = crate::maybe_gz_decompress(body)?;
-        let mut cur = Cursor::from_slice(&body);
-        let diff = tl::enums::updates::ChannelDifference::deserialize(&mut cur)?;
+        let diff = decode_checked::<tl::enums::updates::ChannelDifference>(
+            "updates.getChannelDifference",
+            &body,
+        )?;
 
         let mut updates = Vec::new();
 
@@ -780,8 +863,8 @@ impl Client {
         let body = self
             .rpc_call_raw_pub(&tl::functions::updates::GetState {})
             .await?;
-        let mut cur = Cursor::from_slice(&body);
-        let tl::enums::updates::State::State(s) = tl::enums::updates::State::deserialize(&mut cur)?;
+        let tl::enums::updates::State::State(s) =
+            decode_checked::<tl::enums::updates::State>("updates.getState", &body)?;
         let mut state = self.inner.pts_state.lock().await;
         state.pts = s.pts;
         state.qts = s.qts;
