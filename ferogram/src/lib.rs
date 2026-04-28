@@ -7143,8 +7143,9 @@ impl Client {
             hash: 0,
         };
         let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
         let de =
-            tl::enums::messages::Dialogs::from_bytes_exact(&body).map_err(InvocationError::from)?;
+            tl::enums::messages::Dialogs::deserialize(&mut cur).map_err(InvocationError::from)?;
         match de {
             tl::enums::messages::Dialogs::Dialogs(d) => {
                 tracing::debug!(
