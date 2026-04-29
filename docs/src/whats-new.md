@@ -41,6 +41,7 @@ changes in dialog-related types without requiring a layer bump.
 
 `Client::warm_peer_cache_from_dialogs()` is a new public opt-in method for
 cases where you need access hashes before any update has arrived for a channel.
+See [Raw API Access](./advanced/raw-api.md#peer-cache-helpers) for usage details.
 
 ### Upgrading from 0.3.4
 
@@ -58,7 +59,7 @@ Released 2026-04-28. MTProto hardening release: PFS temp-key sessions, access-ha
 
 ### PFS (Perfect Forward Secrecy)
 
-A new `use_pfs` flag on `ClientConfig` enables Perfect Forward Secrecy at the transport layer. When set, the DC pool performs a temporary DH key bind immediately after the permanent auth key is established. The connection then runs under a short-lived session key derived from that bind; the permanent key is never used to encrypt traffic directly. If the bind RPC fails for any reason the pool falls back to the standard session without disrupting the connection.
+A new `.pfs(true)` method on `ClientBuilder` enables Perfect Forward Secrecy at the transport layer. When set, the DC pool performs a temporary DH key bind immediately after the permanent auth key is established. The connection then runs under a short-lived session key derived from that bind; the permanent key is never used to encrypt traffic directly. If the bind RPC fails for any reason the pool falls back to the standard session without disrupting the connection.
 
 ### Access-hash prefetch
 
@@ -81,10 +82,13 @@ ferogram = "0.3.4"
 To enable PFS:
 
 ```rust
-ClientConfig {
-    use_pfs: true,
-    ..Default::default()
-}
+let (client, _shutdown) = Client::builder()
+    .api_id(12345)
+    .api_hash("your_hash")
+    .session("bot.session")
+    .pfs(true)
+    .connect()
+    .await?;
 ```
 
 ---

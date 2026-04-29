@@ -21,6 +21,20 @@ let peer = client.resolve_peer("@username").await?;
 client.send_message_to_peer(peer, "Hello!").await?;
 ```
 
+## Formatted convenience methods
+
+For quick one-liners when you don't need the full `InputMessage` builder:
+
+```rust
+// Send HTML-formatted text
+client.send_html(peer, "Hello <b>world</b> and <code>code</code>").await?;
+
+// Send Markdown-formatted text
+client.send_markdown(peer, "Hello **world** and `code`").await?;
+```
+
+Both return the sent `IncomingMessage`. They are shorthands for `send_message_to_peer_ex` with `InputMessage::html` or `InputMessage::markdown` respectively. The `html` feature flag must be enabled for HTML parsing.
+
 ## Rich messages with InputMessage
 
 `InputMessage` gives you full control over formatting, entities, reply markup, and more:

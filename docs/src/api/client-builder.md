@@ -208,6 +208,28 @@ See <a href="../advanced/transport-probing.md">Transport Probing & Resilient Con
 </div>
 </div>
 
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">sync</span>
+<span class="api-card-sig">.pfs(enabled: bool) → ClientBuilder</span>
+</div>
+<div class="api-card-body">
+Enable Perfect Forward Secrecy. When set, a temporary DH key bind is performed immediately after the permanent auth key is established. Traffic runs under a short-lived session key derived from that bind; the permanent key is never used to encrypt traffic directly. If the bind RPC fails for any reason, the pool falls back to the standard session without interrupting the connection.
+
+Adds one extra DH round-trip per connection. Off by default. Enable only if your threat model requires it.
+
+```rust
+let (client, _shutdown) = Client::builder()
+    .api_id(12345)
+    .api_hash("your_hash")
+    .session("bot.session")
+    .pfs(true)
+    .connect()
+    .await?;
+```
+</div>
+</div>
+
 ---
 
 ## Proxy

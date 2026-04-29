@@ -18,6 +18,13 @@ let msg = InputMessage::html("<b>Bold</b>, <i>italic</i>, <code>code</code>");
 client.send_message_to_peer_ex(peer, &msg).await?;
 ```
 
+If you just want to send without building an `InputMessage` first, the convenience methods do the same thing in one step:
+
+```rust
+client.send_html(peer, "<b>Bold</b> and <i>italic</i>").await?;
+client.send_markdown(peer, "**Bold** and _italic_").await?;
+```
+
 ## Using parse_markdown directly
 
 If you need the `(String, Vec<MessageEntity>)` tuple for further processing:

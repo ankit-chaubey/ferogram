@@ -140,6 +140,45 @@ Manually set your online/offline status. Pass <code>offline: false</code> to app
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_profile_photos(peer: impl Into&lt;PeerRef&gt;, limit: i32) → Result&lt;Vec&lt;tl::enums::Photo&gt;, InvocationError&gt;</span>
+</div>
+<div class="api-card-body">
+Fetch up to <code>limit</code> profile photos for a user. Only works on user peers  passing a chat or channel returns an error.
+
+```rust
+let photos = client.get_profile_photos(peer, 10).await?;
+for p in photos {
+    if let tl::enums::Photo::Photo(photo) = p {
+        println!("photo id={}", photo.id);
+    }
+}
+```
+</div>
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.iter_profile_photos(peer: impl Into&lt;PeerRef&gt;, chunk_size: i32) → ProfilePhotoIter</span>
+</div>
+<div class="api-card-body">
+Returns a lazy iterator over all profile photos for a user. <code>chunk_size</code> controls how many are fetched per page (pass <code>0</code> for the default). Call <code>.total_count()</code> on the iterator to get the total before iterating.
+
+```rust
+let mut iter = client.iter_profile_photos(peer, 0).await?;
+if let Some(total) = iter.total_count() {
+    println!("{total} photos total");
+}
+while let Some(photo) = iter.next(&client).await? {
+    // handle photo
+}
+```
+</div>
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
 <span class="api-card-sig">client.set_profile_photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
