@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1ce80075.js";
+            window.path_to_searchindex_js = "searchindex-b08d7c1f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-fb96dff5.js"></script>
@@ -184,10 +184,44 @@
                         <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
 <hr>
+<h2 id="v035"><a class="header" href="#v035">v0.3.5</a></h2>
+<p>Released 2026-04-30. Critical deserialization fix and update-state hardening.</p>
+<h3 id="pollresults-deserialization-fix"><a class="header" href="#pollresults-deserialization-fix">PollResults deserialization fix</a></h3>
+<p><code>PollResults</code> was incorrectly treated as a bare type throughout the codebase,
+meaning the 4-byte constructor ID was never read from the wire. The deserializer
+consumed that ID as the <code>flags</code> field instead, producing garbage flag values and
+misaligning every subsequent field read. Any <code>getChannelDifference</code> or
+<code>getDifference</code> response that contained a poll message would fail with an
+unexpected constructor id error and drop the entire update batch.</p>
+<p>The fix routes <code>PollResults</code> through <code>crate::enums::PollResults</code> like every
+other boxed type, so the constructor ID is read and validated before fields are
+deserialized. Both <code>MessageMediaPoll.results</code> and <code>updateMessagePoll.results</code>
+are affected.</p>
+<h3 id="getdifference-self-deadlock-fix"><a class="header" href="#getdifference-self-deadlock-fix">getDifference self-deadlock fix</a></h3>
+<p>The <code>reader_loop</code> select arm that fires the MessageBoxes gap deadline was
+directly awaiting <code>run_pending_differences()</code>. Because <code>reader_loop</code> is the
+only task reading TCP frames, the getDifference RPC it sent could never receive
+a response, producing a 30-second hang after any gap detection. The fix spawns
+a separate task for the diff runner, matching the pattern already used by the
+keepalive arm. A <code>diff_in_flight: AtomicBool</code> guard prevents duplicate spawns
+while a diff is already in progress.</p>
+<h3 id="lazy-access-hash-resolution"><a class="header" href="#lazy-access-hash-resolution">Lazy access-hash resolution</a></h3>
+<p>Channel access hashes are now resolved purely from incoming update entities and
+the persisted peer cache. The automatic <code>GetDialogs</code> call at startup and
+catch-up has been removed. This makes ferogram resilient to Telegram schema
+changes in dialog-related types without requiring a layer bump.</p>
+<p><code>Client::warm_peer_cache_from_dialogs()</code> is a new public opt-in method for
+cases where you need access hashes before any update has arrived for a channel.
+See <a href="./advanced/raw-api.html#peer-cache-helpers">Raw API Access</a> for usage details.</p>
+<h3 id="upgrading-from-034"><a class="header" href="#upgrading-from-034">Upgrading from 0.3.4</a></h3>
+<pre><code class="language-toml">ferogram = "0.3.5"
+</code></pre>
+<p>No API changes required. The fix is automatic.</p>
+<hr>
 <h2 id="v034"><a class="header" href="#v034">v0.3.4</a></h2>
 <p>Released 2026-04-28. MTProto hardening release: PFS temp-key sessions, access-hash prefetch on startup, and safer deserialization across the board.</p>
 <h3 id="pfs-perfect-forward-secrecy"><a class="header" href="#pfs-perfect-forward-secrecy">PFS (Perfect Forward Secrecy)</a></h3>
-<p>A new <code>use_pfs</code> flag on <code>ClientConfig</code> enables Perfect Forward Secrecy at the transport layer. When set, the DC pool performs a temporary DH key bind immediately after the permanent auth key is established. The connection then runs under a short-lived session key derived from that bind; the permanent key is never used to encrypt traffic directly. If the bind RPC fails for any reason the pool falls back to the standard session without disrupting the connection.</p>
+<p>A new <code>.pfs(true)</code> method on <code>ClientBuilder</code> enables Perfect Forward Secrecy at the transport layer. When set, the DC pool performs a temporary DH key bind immediately after the permanent auth key is established. The connection then runs under a short-lived session key derived from that bind; the permanent key is never used to encrypt traffic directly. If the bind RPC fails for any reason the pool falls back to the standard session without disrupting the connection.</p>
 <h3 id="access-hash-prefetch"><a class="header" href="#access-hash-prefetch">Access-hash prefetch</a></h3>
 <p><code>prefetch_channel_access_hashes</code> is now called automatically at startup and after every catch-up cycle. It issues a single <code>GetDialogs</code> request and caches all returned channel and user access hashes before the first live update is dispatched. In practice this eliminates the <code>CHANNEL_INVALID</code> errors that previously appeared on reconnects when an incoming update referenced a channel the in-memory cache had not yet seen.</p>
 <h3 id="from_bytes_exact"><a class="header" href="#from_bytes_exact"><code>from_bytes_exact</code></a></h3>
@@ -200,10 +234,13 @@
 <p>To enable PFS:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>ClientConfig {
-    use_pfs: true,
-    ..Default::default()
-}
+</span>let (client, _shutdown) = Client::builder()
+    .api_id(12345)
+    .api_hash("your_hash")
+    .session("bot.session")
+    .pfs(true)
+    .connect()
+    .await?;
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="v033"><a class="header" href="#v033">v0.3.3</a></h2>

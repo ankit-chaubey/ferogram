@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1ce80075.js";
+            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -357,6 +357,36 @@ match client.invoke(&amp;req).await {
     Err(e) =&gt; return Err(e.into()),
 }
 <span class="boring">}</span></code></pre>
+<h2 id="peer-cache-helpers"><a class="header" href="#peer-cache-helpers">Peer cache helpers</a></h2>
+<p>Two methods let you seed or refresh the internal peer cache without waiting for an update to arrive:</p>
+<h3 id="warm_peer_cache_from_dialogs"><a class="header" href="#warm_peer_cache_from_dialogs"><code>warm_peer_cache_from_dialogs</code></a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>client.warm_peer_cache_from_dialogs().await?;
+<span class="boring">}</span></code></pre>
+<p>Issues a single <code>GetDialogs</code> call and caches all returned channel and user access hashes. Call this at startup if your code needs to address channels by ID before any update has come in for them. Without this, a <code>CHANNEL_INVALID</code> error can appear on the first request to a channel the bot hasn’t interacted with yet in the current session.</p>
+<p>This is opt-in — ferogram no longer calls <code>GetDialogs</code> automatically at startup. See the v0.3.5 release notes for why.</p>
+<h3 id="cache_users_slice_pub--cache_chats_slice_pub"><a class="header" href="#cache_users_slice_pub--cache_chats_slice_pub"><code>cache_users_slice_pub</code> / <code>cache_chats_slice_pub</code></a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>client.cache_users_slice_pub(&amp;users_vec).await;
+client.cache_chats_slice_pub(&amp;chats_vec).await;
+<span class="boring">}</span></code></pre>
+<p>Manually insert <code>tl::enums::User</code> or <code>tl::enums::Chat</code> slices into the access-hash cache. Useful when you’ve called a raw RPC that returned user or chat objects and want them to be addressable by subsequent high-level calls.</p>
+<hr>
+<h2 id="update-state"><a class="header" href="#update-state">Update state</a></h2>
+<h3 id="sync_update_state"><a class="header" href="#sync_update_state"><code>sync_update_state</code></a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>client.sync_update_state().await;
+<span class="boring">}</span></code></pre>
+<p>Calls <code>updates.getState</code> and resets the internal pts/qts/seq/date counters to match the server. Called automatically on <code>connect()</code>. Call it manually after resuming from a long hibernation to avoid replaying a large backlog of missed updates.</p>
+<h3 id="sync_pts_state"><a class="header" href="#sync_pts_state"><code>sync_pts_state</code></a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>client.sync_pts_state().await?;
+<span class="boring">}</span></code></pre>
+<p>The fallible version of <code>sync_update_state</code>. Returns an error if the RPC itself fails. <code>sync_update_state</code> silently discards that error; use <code>sync_pts_state</code> directly when you need to handle or log a failure.</p>
 
                     </main>
 

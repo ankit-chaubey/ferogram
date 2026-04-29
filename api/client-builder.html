@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1ce80075.js";
+            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -399,6 +399,29 @@ networks where Telegram DCs are ISP-blocked. Default: <code>false</code>.
 </span>.resilient_connect(true)
 <span class="boring">}</span></code></pre>
 <p>See <a href="../advanced/transport-probing.html">Transport Probing &amp; Resilient Connect</a> for the full fallback chain and when to combine with <code>probe_transport</code>.</p>
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">sync</span>
+<span class="api-card-sig">.pfs(enabled: bool) → ClientBuilder</span>
+</div>
+
+<div class="api-card-body">
+Enable Perfect Forward Secrecy. When set, a temporary DH key bind is performed immediately after the permanent auth key is established. Traffic runs under a short-lived session key derived from that bind; the permanent key is never used to encrypt traffic directly. If the bind RPC fails for any reason, the pool falls back to the standard session without interrupting the connection.
+<p>Adds one extra DH round-trip per connection. Off by default. Enable only if your threat model requires it.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let (client, _shutdown) = Client::builder()
+    .api_id(12345)
+    .api_hash("your_hash")
+    .session("bot.session")
+    .pfs(true)
+    .connect()
+    .await?;
+<span class="boring">}</span></code></pre>
 </div>
 
 </div>

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1ce80075.js";
+            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -323,6 +323,49 @@ Manually set your online/offline status. Pass <code>offline: false</code> to app
 
 <hr>
 <h2 id="profile-photo-1"><a class="header" href="#profile-photo-1">Profile photo</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_profile_photos(peer: impl Into&lt;PeerRef&gt;, limit: i32) → Result&lt;Vec&lt;tl::enums::Photo&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Fetch up to <code>limit</code> profile photos for a user. Only works on user peers  passing a chat or channel returns an error.
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let photos = client.get_profile_photos(peer, 10).await?;
+for p in photos {
+    if let tl::enums::Photo::Photo(photo) = p {
+        println!("photo id={}", photo.id);
+    }
+}
+<span class="boring">}</span></code></pre>
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.iter_profile_photos(peer: impl Into&lt;PeerRef&gt;, chunk_size: i32) → ProfilePhotoIter</span>
+</div>
+
+<div class="api-card-body">
+Returns a lazy iterator over all profile photos for a user. <code>chunk_size</code> controls how many are fetched per page (pass <code>0</code> for the default). Call <code>.total_count()</code> on the iterator to get the total before iterating.
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let mut iter = client.iter_profile_photos(peer, 0).await?;
+if let Some(total) = iter.total_count() {
+    println!("{total} photos total");
+}
+while let Some(photo) = iter.next(&amp;client).await? {
+    // handle photo
+}
+<span class="boring">}</span></code></pre>
+</div>
+
+</div>
+
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>

@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1ce80075.js";
+            window.path_to_searchindex_js = "searchindex-b08d7c1f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-fb96dff5.js"></script>
@@ -316,10 +316,44 @@ Use it at your own risk. Its future and stability are not yet guaranteed.</p>
 <h1 id="release-history-1"><a class="header" href="#release-history-1">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
 <hr>
+<h2 id="v035"><a class="header" href="#v035">v0.3.5</a></h2>
+<p>Released 2026-04-30. Critical deserialization fix and update-state hardening.</p>
+<h3 id="pollresults-deserialization-fix"><a class="header" href="#pollresults-deserialization-fix">PollResults deserialization fix</a></h3>
+<p><code>PollResults</code> was incorrectly treated as a bare type throughout the codebase,
+meaning the 4-byte constructor ID was never read from the wire. The deserializer
+consumed that ID as the <code>flags</code> field instead, producing garbage flag values and
+misaligning every subsequent field read. Any <code>getChannelDifference</code> or
+<code>getDifference</code> response that contained a poll message would fail with an
+unexpected constructor id error and drop the entire update batch.</p>
+<p>The fix routes <code>PollResults</code> through <code>crate::enums::PollResults</code> like every
+other boxed type, so the constructor ID is read and validated before fields are
+deserialized. Both <code>MessageMediaPoll.results</code> and <code>updateMessagePoll.results</code>
+are affected.</p>
+<h3 id="getdifference-self-deadlock-fix"><a class="header" href="#getdifference-self-deadlock-fix">getDifference self-deadlock fix</a></h3>
+<p>The <code>reader_loop</code> select arm that fires the MessageBoxes gap deadline was
+directly awaiting <code>run_pending_differences()</code>. Because <code>reader_loop</code> is the
+only task reading TCP frames, the getDifference RPC it sent could never receive
+a response, producing a 30-second hang after any gap detection. The fix spawns
+a separate task for the diff runner, matching the pattern already used by the
+keepalive arm. A <code>diff_in_flight: AtomicBool</code> guard prevents duplicate spawns
+while a diff is already in progress.</p>
+<h3 id="lazy-access-hash-resolution"><a class="header" href="#lazy-access-hash-resolution">Lazy access-hash resolution</a></h3>
+<p>Channel access hashes are now resolved purely from incoming update entities and
+the persisted peer cache. The automatic <code>GetDialogs</code> call at startup and
+catch-up has been removed. This makes ferogram resilient to Telegram schema
+changes in dialog-related types without requiring a layer bump.</p>
+<p><code>Client::warm_peer_cache_from_dialogs()</code> is a new public opt-in method for
+cases where you need access hashes before any update has arrived for a channel.
+See <a href="#peer-cache-helpers">Raw API Access</a> for usage details.</p>
+<h3 id="upgrading-from-034"><a class="header" href="#upgrading-from-034">Upgrading from 0.3.4</a></h3>
+<pre><code class="language-toml">ferogram = "0.3.5"
+</code></pre>
+<p>No API changes required. The fix is automatic.</p>
+<hr>
 <h2 id="v034"><a class="header" href="#v034">v0.3.4</a></h2>
 <p>Released 2026-04-28. MTProto hardening release: PFS temp-key sessions, access-hash prefetch on startup, and safer deserialization across the board.</p>
 <h3 id="pfs-perfect-forward-secrecy"><a class="header" href="#pfs-perfect-forward-secrecy">PFS (Perfect Forward Secrecy)</a></h3>
-<p>A new <code>use_pfs</code> flag on <code>ClientConfig</code> enables Perfect Forward Secrecy at the transport layer. When set, the DC pool performs a temporary DH key bind immediately after the permanent auth key is established. The connection then runs under a short-lived session key derived from that bind; the permanent key is never used to encrypt traffic directly. If the bind RPC fails for any reason the pool falls back to the standard session without disrupting the connection.</p>
+<p>A new <code>.pfs(true)</code> method on <code>ClientBuilder</code> enables Perfect Forward Secrecy at the transport layer. When set, the DC pool performs a temporary DH key bind immediately after the permanent auth key is established. The connection then runs under a short-lived session key derived from that bind; the permanent key is never used to encrypt traffic directly. If the bind RPC fails for any reason the pool falls back to the standard session without disrupting the connection.</p>
 <h3 id="access-hash-prefetch"><a class="header" href="#access-hash-prefetch">Access-hash prefetch</a></h3>
 <p><code>prefetch_channel_access_hashes</code> is now called automatically at startup and after every catch-up cycle. It issues a single <code>GetDialogs</code> request and caches all returned channel and user access hashes before the first live update is dispatched. In practice this eliminates the <code>CHANNEL_INVALID</code> errors that previously appeared on reconnects when an incoming update referenced a channel the in-memory cache had not yet seen.</p>
 <h3 id="from_bytes_exact"><a class="header" href="#from_bytes_exact"><code>from_bytes_exact</code></a></h3>
@@ -332,10 +366,13 @@ Use it at your own risk. Its future and stability are not yet guaranteed.</p>
 <p>To enable PFS:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>ClientConfig {
-    use_pfs: true,
-    ..Default::default()
-}
+</span>let (client, _shutdown) = Client::builder()
+    .api_id(12345)
+    .api_hash("your_hash")
+    .session("bot.session")
+    .pfs(true)
+    .connect()
+    .await?;
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="v033"><a class="header" href="#v033">v0.3.3</a></h2>
@@ -1465,6 +1502,17 @@ client.send_message("123456789", "Hi").await?;
 </span>let peer = client.resolve_peer("@username").await?;
 client.send_message_to_peer(peer, "Hello!").await?;
 <span class="boring">}</span></code></pre>
+<h2 id="formatted-convenience-methods"><a class="header" href="#formatted-convenience-methods">Formatted convenience methods</a></h2>
+<p>For quick one-liners when you don’t need the full <code>InputMessage</code> builder:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Send HTML-formatted text
+client.send_html(peer, "Hello &lt;b&gt;world&lt;/b&gt; and &lt;code&gt;code&lt;/code&gt;").await?;
+
+// Send Markdown-formatted text
+client.send_markdown(peer, "Hello **world** and `code`").await?;
+<span class="boring">}</span></code></pre>
+<p>Both return the sent <code>IncomingMessage</code>. They are shorthands for <code>send_message_to_peer_ex</code> with <code>InputMessage::html</code> or <code>InputMessage::markdown</code> respectively. The <code>html</code> feature flag must be enabled for HTML parsing.</p>
 <h2 id="rich-messages-with-inputmessage"><a class="header" href="#rich-messages-with-inputmessage">Rich messages with InputMessage</a></h2>
 <p><code>InputMessage</code> gives you full control over formatting, entities, reply markup, and more:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -2310,6 +2358,12 @@ let msg = InputMessage::markdown("**Bold**, _italic_, `code`");
 let msg = InputMessage::html("&lt;b&gt;Bold&lt;/b&gt;, &lt;i&gt;italic&lt;/i&gt;, &lt;code&gt;code&lt;/code&gt;");
 
 client.send_message_to_peer_ex(peer, &amp;msg).await?;
+<span class="boring">}</span></code></pre>
+<p>If you just want to send without building an <code>InputMessage</code> first, the convenience methods do the same thing in one step:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>client.send_html(peer, "&lt;b&gt;Bold&lt;/b&gt; and &lt;i&gt;italic&lt;/i&gt;").await?;
+client.send_markdown(peer, "**Bold** and _italic_").await?;
 <span class="boring">}</span></code></pre>
 <h2 id="using-parse_markdown-directly"><a class="header" href="#using-parse_markdown-directly">Using parse_markdown directly</a></h2>
 <p>If you need the <code>(String, Vec&lt;MessageEntity&gt;)</code> tuple for further processing:</p>
@@ -5416,6 +5470,29 @@ networks where Telegram DCs are ISP-blocked. Default: <code>false</code>.
 </span>.resilient_connect(true)
 <span class="boring">}</span></code></pre>
 <p>See <a href="#transport-probing--resilient-connect">Transport Probing &amp; Resilient Connect</a> for the full fallback chain and when to combine with <code>probe_transport</code>.</p>
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">sync</span>
+<span class="api-card-sig">.pfs(enabled: bool) → ClientBuilder</span>
+</div>
+
+<div class="api-card-body">
+Enable Perfect Forward Secrecy. When set, a temporary DH key bind is performed immediately after the permanent auth key is established. Traffic runs under a short-lived session key derived from that bind; the permanent key is never used to encrypt traffic directly. If the bind RPC fails for any reason, the pool falls back to the standard session without interrupting the connection.
+<p>Adds one extra DH round-trip per connection. Off by default. Enable only if your threat model requires it.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let (client, _shutdown) = Client::builder()
+    .api_id(12345)
+    .api_hash("your_hash")
+    .session("bot.session")
+    .pfs(true)
+    .connect()
+    .await?;
+<span class="boring">}</span></code></pre>
 </div>
 
 </div>
@@ -8667,6 +8744,49 @@ Manually set your online/offline status. Pass <code>offline: false</code> to app
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_profile_photos(peer: impl Into&lt;PeerRef&gt;, limit: i32) → Result&lt;Vec&lt;tl::enums::Photo&gt;, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Fetch up to <code>limit</code> profile photos for a user. Only works on user peers  passing a chat or channel returns an error.
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let photos = client.get_profile_photos(peer, 10).await?;
+for p in photos {
+    if let tl::enums::Photo::Photo(photo) = p {
+        println!("photo id={}", photo.id);
+    }
+}
+<span class="boring">}</span></code></pre>
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.iter_profile_photos(peer: impl Into&lt;PeerRef&gt;, chunk_size: i32) → ProfilePhotoIter</span>
+</div>
+
+<div class="api-card-body">
+Returns a lazy iterator over all profile photos for a user. <code>chunk_size</code> controls how many are fetched per page (pass <code>0</code> for the default). Call <code>.total_count()</code> on the iterator to get the total before iterating.
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let mut iter = client.iter_profile_photos(peer, 0).await?;
+if let Some(total) = iter.total_count() {
+    println!("{total} photos total");
+}
+while let Some(photo) = iter.next(&amp;client).await? {
+    // handle photo
+}
+<span class="boring">}</span></code></pre>
+</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
 <span class="api-card-sig">client.set_profile_photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
 </div>
 
@@ -10124,6 +10244,36 @@ match client.invoke(&amp;req).await {
     Err(e) =&gt; return Err(e.into()),
 }
 <span class="boring">}</span></code></pre>
+<h2 id="peer-cache-helpers"><a class="header" href="#peer-cache-helpers">Peer cache helpers</a></h2>
+<p>Two methods let you seed or refresh the internal peer cache without waiting for an update to arrive:</p>
+<h3 id="warm_peer_cache_from_dialogs"><a class="header" href="#warm_peer_cache_from_dialogs"><code>warm_peer_cache_from_dialogs</code></a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>client.warm_peer_cache_from_dialogs().await?;
+<span class="boring">}</span></code></pre>
+<p>Issues a single <code>GetDialogs</code> call and caches all returned channel and user access hashes. Call this at startup if your code needs to address channels by ID before any update has come in for them. Without this, a <code>CHANNEL_INVALID</code> error can appear on the first request to a channel the bot hasn’t interacted with yet in the current session.</p>
+<p>This is opt-in — ferogram no longer calls <code>GetDialogs</code> automatically at startup. See the v0.3.5 release notes for why.</p>
+<h3 id="cache_users_slice_pub--cache_chats_slice_pub"><a class="header" href="#cache_users_slice_pub--cache_chats_slice_pub"><code>cache_users_slice_pub</code> / <code>cache_chats_slice_pub</code></a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>client.cache_users_slice_pub(&amp;users_vec).await;
+client.cache_chats_slice_pub(&amp;chats_vec).await;
+<span class="boring">}</span></code></pre>
+<p>Manually insert <code>tl::enums::User</code> or <code>tl::enums::Chat</code> slices into the access-hash cache. Useful when you’ve called a raw RPC that returned user or chat objects and want them to be addressable by subsequent high-level calls.</p>
+<hr>
+<h2 id="update-state"><a class="header" href="#update-state">Update state</a></h2>
+<h3 id="sync_update_state"><a class="header" href="#sync_update_state"><code>sync_update_state</code></a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>client.sync_update_state().await;
+<span class="boring">}</span></code></pre>
+<p>Calls <code>updates.getState</code> and resets the internal pts/qts/seq/date counters to match the server. Called automatically on <code>connect()</code>. Call it manually after resuming from a long hibernation to avoid replaying a large backlog of missed updates.</p>
+<h3 id="sync_pts_state"><a class="header" href="#sync_pts_state"><code>sync_pts_state</code></a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>client.sync_pts_state().await?;
+<span class="boring">}</span></code></pre>
+<p>The fallible version of <code>sync_update_state</code>. Returns an error if the RPC itself fails. <code>sync_update_state</code> silently discards that error; use <code>sync_pts_state</code> directly when you need to handle or log a failure.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="retry--flood-wait"><a class="header" href="#retry--flood-wait">Retry &amp; Flood Wait</a></h1>
 <p>Telegram’s rate limiting system sends <code>FLOOD_WAIT_X</code> errors when you call the API too frequently. <code>X</code> is the number of seconds you must wait before retrying.</p>

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1ce80075.js";
+            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -201,6 +201,17 @@ client.send_message("123456789", "Hi").await?;
 </span>let peer = client.resolve_peer("@username").await?;
 client.send_message_to_peer(peer, "Hello!").await?;
 <span class="boring">}</span></code></pre>
+<h2 id="formatted-convenience-methods"><a class="header" href="#formatted-convenience-methods">Formatted convenience methods</a></h2>
+<p>For quick one-liners when you don’t need the full <code>InputMessage</code> builder:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Send HTML-formatted text
+client.send_html(peer, "Hello &lt;b&gt;world&lt;/b&gt; and &lt;code&gt;code&lt;/code&gt;").await?;
+
+// Send Markdown-formatted text
+client.send_markdown(peer, "Hello **world** and `code`").await?;
+<span class="boring">}</span></code></pre>
+<p>Both return the sent <code>IncomingMessage</code>. They are shorthands for <code>send_message_to_peer_ex</code> with <code>InputMessage::html</code> or <code>InputMessage::markdown</code> respectively. The <code>html</code> feature flag must be enabled for HTML parsing.</p>
 <h2 id="rich-messages-with-inputmessage"><a class="header" href="#rich-messages-with-inputmessage">Rich messages with InputMessage</a></h2>
 <p><code>InputMessage</code> gives you full control over formatting, entities, reply markup, and more:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]

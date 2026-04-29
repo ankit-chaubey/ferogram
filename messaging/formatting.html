@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1ce80075.js";
+            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -196,6 +196,12 @@ let msg = InputMessage::markdown("**Bold**, _italic_, `code`");
 let msg = InputMessage::html("&lt;b&gt;Bold&lt;/b&gt;, &lt;i&gt;italic&lt;/i&gt;, &lt;code&gt;code&lt;/code&gt;");
 
 client.send_message_to_peer_ex(peer, &amp;msg).await?;
+<span class="boring">}</span></code></pre>
+<p>If you just want to send without building an <code>InputMessage</code> first, the convenience methods do the same thing in one step:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>client.send_html(peer, "&lt;b&gt;Bold&lt;/b&gt; and &lt;i&gt;italic&lt;/i&gt;").await?;
+client.send_markdown(peer, "**Bold** and _italic_").await?;
 <span class="boring">}</span></code></pre>
 <h2 id="using-parse_markdown-directly"><a class="header" href="#using-parse_markdown-directly">Using parse_markdown directly</a></h2>
 <p>If you need the <code>(String, Vec&lt;MessageEntity&gt;)</code> tuple for further processing:</p>
