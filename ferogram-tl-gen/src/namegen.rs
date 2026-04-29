@@ -182,9 +182,10 @@ fn type_path(ty: &Type, meta: &Metadata, turbofish: bool) -> String {
         } else {
             b.to_owned()
         }
-    } else if matches!(ty.name.as_str(), "PollResults") || ty.bare {
-        // Explicit whitelist: PollResults has one constructor and must use crate::types::
-        // (ty.bare is the original reliable signal for all other bare types).
+    } else if ty.bare {
+        // Bare types map directly to the concrete struct in crate::types::.
+        // Boxed types (including single-constructor types like PollResults) use
+        // crate::enums:: so the constructor ID is correctly read/written on the wire.
         let mut p = String::from("crate::types::");
         for ns in &ty.namespace {
             p.push_str(ns);

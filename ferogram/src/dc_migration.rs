@@ -104,7 +104,6 @@ impl Default for DcAuthTracker {
 /// - `target_dc_id == home_dc_id` (already home)
 /// - auth was already copied in this session (tracked by `DcAuthTracker`)
 ///
-/// Ported from  `Client::copy_auth_to_dc`.
 ///
 /// # Where to call this
 ///

@@ -1297,7 +1297,6 @@ fn random_fact() -> &'static str {
 }
 fn random_joke() -> &'static str {
     const J: &[&str] = &[
-        "Why do programmers prefer dark mode? Because light attracts bugs.",
         "A SQL query walks into a bar and asks two tables: 'Can I join you?'",
         "There are 10 types of people: those who understand binary and those who don't.",
         "Why do Java developers wear glasses? Because they don't C#.",

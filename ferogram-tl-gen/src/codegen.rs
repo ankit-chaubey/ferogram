@@ -445,52 +445,86 @@ fn write_struct_deserializable<W: Write>(
         "{indent}    fn deserialize({buf_name}: crate::deserialize::Buffer) -> crate::deserialize::Result<Self> {{"
     )?;
 
-    // Read flags first so optional params can check them
-    let flag_params: Vec<_> = def
-        .params
-        .iter()
-        .filter(|p| p.ty == ParameterType::Flags)
-        .collect();
-
-    for fp in &flag_params {
+    // Debug: entry banner (only for non-empty structs; empty ones use _buf)
+    let struct_name = n::def_type_name(def);
+    if !def.params.is_empty() {
         writeln!(
             out,
-            "{indent}        let _{} = u32::deserialize(buf)?;",
-            n::param_attr_name(fp)
+            "{indent}        if crate::deserialize::tl_debug() {{ \
+             eprintln!(\"[TL] >>  {}::deserialize  pos={{}}\", buf.pos()); }}",
+            struct_name
         )?;
     }
 
-    // Now deserialize each non-flag param
+    // Deserialize params in exact TL schema order.
+    // Flags fields are read inline where they appear - never hoisted.
     for param in &def.params {
-        if param.ty == ParameterType::Flags {
-            continue; // already done above
-        }
-        if let ParameterType::Normal { ty, flag } = &param.ty {
-            let attr = n::param_attr_name(param);
-            if let Some(fl) = flag {
-                if ty.name == "true" {
-                    writeln!(
-                        out,
-                        "{indent}        let {attr} = (_{} & (1 << {})) != 0;",
-                        fl.name, fl.index
-                    )?;
+        match &param.ty {
+            ParameterType::Flags => {
+                let fp_attr = n::param_attr_name(param);
+                writeln!(
+                    out,
+                    "{indent}        if crate::deserialize::tl_debug() {{ \
+                     eprintln!(\"[TL]   {struct_name}.{fp_attr} (flags) pos={{}}\", buf.pos()); }}"
+                )?;
+                writeln!(
+                    out,
+                    "{indent}        let _{fp_attr} = u32::deserialize(buf)?;"
+                )?;
+                writeln!(
+                    out,
+                    "{indent}        if crate::deserialize::tl_debug() {{ \
+                     eprintln!(\"[TL]   {struct_name}.{fp_attr} = {{:#034b}}  pos={{}}\", _{fp_attr}, buf.pos()); }}"
+                )?;
+            }
+            ParameterType::Normal { ty, flag } => {
+                let attr = n::param_attr_name(param);
+                // before
+                writeln!(
+                    out,
+                    "{indent}        if crate::deserialize::tl_debug() {{ \
+                     eprintln!(\"[TL]   {struct_name}.{attr} pos={{}}\", buf.pos()); }}"
+                )?;
+                if let Some(fl) = flag {
+                    if ty.name == "true" {
+                        writeln!(
+                            out,
+                            "{indent}        let {attr} = (_{} & (1 << {})) != 0;",
+                            fl.name, fl.index
+                        )?;
+                    } else {
+                        writeln!(
+                            out,
+                            "{indent}        let {attr} = if (_{} & (1 << {})) != 0 {{ Some({}::deserialize(buf)?) }} else {{ None }};",
+                            fl.name,
+                            fl.index,
+                            n::type_item_path(ty, meta)
+                        )?;
+                    }
                 } else {
                     writeln!(
                         out,
-                        "{indent}        let {attr} = if (_{} & (1 << {})) != 0 {{ Some({}::deserialize(buf)?) }} else {{ None }};",
-                        fl.name,
-                        fl.index,
+                        "{indent}        let {attr} = {}::deserialize(buf)?;",
                         n::type_item_path(ty, meta)
                     )?;
                 }
-            } else {
+                // after
                 writeln!(
                     out,
-                    "{indent}        let {attr} = {}::deserialize(buf)?;",
-                    n::type_item_path(ty, meta)
+                    "{indent}        if crate::deserialize::tl_debug() {{ \
+                     eprintln!(\"[TL]   {struct_name}.{attr} done  pos={{}}\", buf.pos()); }}"
                 )?;
             }
         }
+    }
+
+    // Debug: exit banner (only for non-empty structs; empty ones use _buf)
+    if !def.params.is_empty() {
+        writeln!(
+            out,
+            "{indent}        if crate::deserialize::tl_debug() {{ \
+             eprintln!(\"[TL] <<  {struct_name}::deserialize done  pos={{}}\", buf.pos()); }}"
+        )?;
     }
 
     writeln!(out, "{indent}        Ok(Self {{")?;
@@ -667,8 +701,14 @@ fn write_enum_deserializable<W: Write>(
         out,
         "{indent}    fn deserialize(buf: crate::deserialize::Buffer) -> crate::deserialize::Result<Self> {{"
     )?;
+    let enum_name = n::type_name(ty);
     writeln!(out, "{indent}        use crate::Identifiable;")?;
     writeln!(out, "{indent}        let id = u32::deserialize(buf)?;")?;
+    writeln!(
+        out,
+        "{indent}        if crate::deserialize::tl_debug() {{ \
+         eprintln!(\"[TL] ENUM  {enum_name}  ctor={{:#010x}}  pos={{}}\", id, buf.pos()); }}"
+    )?;
     writeln!(out, "{indent}        Ok(match id {{")?;
 
     for def in meta.defs_for_type(ty) {

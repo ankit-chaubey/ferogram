@@ -4,7 +4,6 @@
 
 ## Dependency graph
 
-
 ```
 Your App
  └ ferogram ← high-level Client, UpdateStream, InputMessage
@@ -20,7 +19,6 @@ Your App
 ---
 
 ## ferogram
-
 
 **The high-level async Telegram client.** Import this in your application.
 
@@ -49,7 +47,6 @@ Your App
 
 ## ferogram-tl-types
 
-
 **All generated Telegram API types.** Auto-regenerated at `cargo build` from `tl/api.tl`.
 
 ### What it provides
@@ -76,7 +73,6 @@ Most Telegram API fields use `enums::*` types because the wire format is polymor
 
 ## ferogram-mtproto
 
-
 **The MTProto session layer.** Handles the low-level mechanics of talking to Telegram.
 
 ### What it provides
@@ -89,7 +85,6 @@ Most Telegram API fields use `enums::*` types because the wire format is polymor
 
 ### DH handshake steps
 
-
 1. **PQ factorization**: `req_pq_multi` → server sends `resPQ`
 2. **Server DH params**: `req_DH_params` with encrypted key → `server_DH_params_ok`
 3. **Client DH finish**: `set_client_DH_params` → `dh_gen_ok`
@@ -99,7 +94,6 @@ After step 3, both sides hold the same auth key derived from the shared DH secre
 ---
 
 ## ferogram-crypto
-
 
 **Cryptographic primitives.** Pure Rust, `#![deny(unsafe_code)]`.
 
@@ -118,7 +112,6 @@ After step 3, both sides hold the same auth key derived from the shared DH secre
 
 ## ferogram-tl-parser
 
-
 **TL schema parser.** Converts `.tl` text into structured `Definition` values.
 
 ### Parsed AST types
@@ -133,7 +126,6 @@ Used exclusively by `build.rs` in `ferogram-tl-types`. You never import it direc
 ---
 
 ## ferogram-tl-gen
-
 
 **Rust code generator.** Takes the parsed AST and emits valid Rust source files.
 
@@ -154,7 +146,6 @@ Each type automatically gets:
 ---
 
 ## ferogram-session
-
 
 **Session persistence types and pluggable storage backends.**
 
@@ -188,7 +179,6 @@ ferogram
 ---
 
 ## ferogram-parsers
-
 
 **Telegram HTML and Markdown entity parsers.**
 

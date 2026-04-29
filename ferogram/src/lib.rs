@@ -9,7 +9,7 @@
 // https://github.com/ankit-chaubey/ferogram
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram/0.3.3")]
+#![doc(html_root_url = "https://docs.rs/ferogram/0.3.5")]
 //! Async Rust client for the Telegram MTProto protocol.
 //!
 //! ferogram works with both user accounts and bots. It talks directly to
@@ -229,10 +229,10 @@
 pub mod builder;
 mod errors;
 pub mod media;
+pub mod message_box;
 pub mod parsers;
 pub mod participants;
 pub mod persist;
-pub mod pts;
 mod restart;
 mod retry;
 mod session;
@@ -260,9 +260,6 @@ pub mod typing_guard;
 pub mod macros;
 pub mod peer_ref;
 pub mod reactions;
-
-#[cfg(test)]
-mod pts_tests;
 
 pub mod dc_migration;
 pub mod proxy;
@@ -1207,7 +1204,7 @@ impl Default for Config {
             lang_code: "en".to_string(),
             probe_transport: false,
             resilient_connect: false,
-            use_pfs: true,
+            use_pfs: false,
             experimental_features: ExperimentalFeatures::default(),
         }
     }
@@ -1337,12 +1334,12 @@ struct ClientInner {
     /// Media-only DC options (ipv6/media_only/cdn filtered separately from API DCs).
     media_dc_options: Mutex<HashMap<i32, DcEntry>>,
     pub peer_cache: RwLock<PeerCache>,
-    pub pts_state: Mutex<pts::PtsState>,
-    /// Buffer for updates received during a possible-gap window.
-    pub possible_gap: Mutex<pts::PossibleGapBuffer>,
+    /// Single-authority update state machine (gap detection, difference fetching).
+    pub message_box: Mutex<message_box::MessageBoxes>,
     /// Bounded ring-buffer dedup cache  safety net beneath the pts machinery.
     /// Uses `parking_lot::Mutex` for minimal overhead; the critical section is
     /// tiny (a HashSet lookup + optional VecDeque eviction).
+    #[allow(dead_code)]
     pub(crate) dedupe_cache: parking_lot::Mutex<persist::BoundedDedupeCache>,
     api_id: i32,
     api_hash: String,
@@ -1377,6 +1374,11 @@ struct ClientInner {
     /// Without this guard every bad_server_salt spawns a new task, which causes
     /// an exponential storm when many messages are queued with a stale salt.
     salt_request_in_flight: std::sync::atomic::AtomicBool,
+    /// Prevents spawning more than one `run_pending_differences` task at a time.
+    /// Without this guard, every deadline tick while a diff is already running
+    /// spawns an additional task.  The underlying MessageBoxes state machine
+    /// already serialises the actual RPC calls, but redundant spawns waste resources.
+    diff_in_flight: std::sync::atomic::AtomicBool,
     /// Prevents two concurrent fresh-DH handshakes racing each other.
     /// A double-DH results in one key being unregistered on Telegram's servers,
     /// causing AUTH_KEY_UNREGISTERED immediately after reconnect.
@@ -1627,8 +1629,7 @@ impl Client {
             dc_options: Mutex::new(dc_opts),
             media_dc_options: Mutex::new(media_dc_opts),
             peer_cache: RwLock::new(PeerCache::new(config.experimental_features.clone())),
-            pts_state: Mutex::new(pts::PtsState::default()),
-            possible_gap: Mutex::new(pts::PossibleGapBuffer::new()),
+            message_box: Mutex::new(message_box::MessageBoxes::new()),
             dedupe_cache: parking_lot::Mutex::new(persist::BoundedDedupeCache::default()),
             api_id: config.api_id,
             api_hash: config.api_hash,
@@ -1653,6 +1654,7 @@ impl Client {
             )),
             stream_active: std::sync::atomic::AtomicBool::new(false),
             salt_request_in_flight: std::sync::atomic::AtomicBool::new(false),
+            diff_in_flight: std::sync::atomic::AtomicBool::new(false),
             dh_in_progress: std::sync::atomic::AtomicBool::new(false),
             pfs_enabled: config.use_pfs,
             signed_in: std::sync::atomic::AtomicBool::new(false),
@@ -1705,16 +1707,9 @@ impl Client {
                     tokio::select! {
                         biased;
                         _ = shutdown_ps.cancelled() => {
-                            // Final shutdown: read pts/qts/date/seq directly from
-                            // the in-memory state and persist via apply_update_state.
-                            // Using save_session() here is unsafe: it builds a snapshot
-                            // from potentially stale in-memory fields and would silently
-                            // overwrite the fresher pts that apply_update_state may have
-                            // already committed (e.g. pts=366 clobbered back to pts=364).
-                            let (pts, qts, date, seq) = {
-                                let s = client_ps.inner.pts_state.lock().await;
-                                (s.pts, s.qts, s.date, s.seq)
-                            };
+                            // Final shutdown: snapshot from MessageBoxes and persist.
+                            let snap = client_ps.inner.message_box.lock().await.session_state();
+                            let (pts, qts, date, seq) = (snap.pts, snap.qts, snap.date, snap.seq);
                             if pts > 0 {
                                 let b = &client_ps.inner.session_backend;
                                 let _ = b.apply_update_state(
@@ -1727,10 +1722,8 @@ impl Client {
                             break;
                         }
                         _ = interval.tick() => {
-                            let (pts, qts, date, seq) = {
-                                let s = client_ps.inner.pts_state.lock().await;
-                                (s.pts, s.qts, s.date, s.seq)
-                            };
+                            let snap = client_ps.inner.message_box.lock().await.session_state();
+                            let (pts, qts, date, seq) = (snap.pts, snap.qts, snap.date, snap.seq);
                             if pts > last_pts {
                                 let backend = &client_ps.inner.session_backend;
                                 let _ = backend.apply_update_state(
@@ -1959,104 +1952,48 @@ impl Client {
                 .signed_in
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             let snap = &loaded_session.as_ref().unwrap().updates_state;
-            let mut state = client.inner.pts_state.lock().await;
-            state.pts = snap.pts;
-            state.qts = snap.qts;
-            state.date = snap.date;
-            state.seq = snap.seq;
-            for &(cid, cpts) in &snap.channels {
-                state.channel_pts.insert(cid, cpts);
+            // Restore MessageBoxes from session snapshot.
+            {
+                let mb_snap = message_box::UpdatesStateSnap {
+                    pts: snap.pts,
+                    qts: snap.qts,
+                    date: snap.date,
+                    seq: snap.seq,
+                    channels: snap
+                        .channels
+                        .iter()
+                        .map(|&(id, pts)| message_box::ChannelState { id, pts })
+                        .collect(),
+                };
+                *client.inner.message_box.lock().await = message_box::MessageBoxes::load(mb_snap);
+                tracing::info!(
+                    "[ferogram] Update state restored: pts={}, qts={}, seq={}, {} channels",
+                    snap.pts,
+                    snap.qts,
+                    snap.seq,
+                    snap.channels.len()
+                );
             }
-            tracing::info!(
-                "[ferogram] Update state restored: pts={}, qts={}, seq={}, {} channels",
-                state.pts,
-                state.qts,
-                state.seq,
-                state.channel_pts.len()
-            );
-            state.state_ready = true;
-            drop(state);
 
-            // Capture channel list before spawn: get_difference() resets
-            // PtsState via from_server_state (channel_pts preserved now, but
-            // we need the IDs to drive per-channel catch-up regardless).
-            let channel_ids: Vec<i64> = snap.channels.iter().map(|&(cid, _)| cid).collect();
-
-            // Now spawn the catch-up diff: pts is the *old* value, so
-            // getDifference will return exactly what we missed.
+            // Spawn catch-up: MessageBoxes::load already marked all entries as needing diff.
+            // run_pending_differences will drive getDifference + all getChannelDifference calls.
+            //
+            // Access hashes are resolved lazily:
+            //   1. Channel access_hashes from the previous session are already restored
+            //      into PeerCache above (from s.peers).
+            //   2. Any channels not yet known will receive their access_hash from the
+            //      entities embedded in future updates / getDifference responses.
+            //   3. If getChannelDifference is needed for a channel whose hash is still
+            //      missing, run_pending_differences skips it (end_channel_difference Banned)
+            //      and continues; the hash will arrive via a subsequent update entity.
+            //
+            // We do NOT call prefetch_channel_access_hashes() (messages.getDialogs) here.
+            // That call forces deep deserialization of Dialog/DraftMessage/PollResults/Story
+            // which are high-churn Telegram objects and break on every new beta layer.
             let c = client.clone();
-            let utx = client.inner.update_tx.clone();
             tokio::spawn(async move {
-                match c.get_difference().await {
-                    Ok(missed) => {
-                        tracing::info!(
-                            "[ferogram] catch_up: {} global updates replayed",
-                            missed.len()
-                        );
-                        for u in missed {
-                            if utx.try_send(attach_client_to_update(u, &c)).is_err() {
-                                tracing::warn!(
-                                    "[ferogram] update channel full: dropping catch-up update"
-                                );
-                                metrics::counter!("ferogram.updates_dropped").increment(1);
-                                break;
-                            }
-                        }
-                    }
-                    Err(e) => tracing::warn!("[ferogram] catch_up getDifference: {e}"),
-                }
-
-                // pre-populate access_hashes for all channels now
-                // that we have a live connection.  After a fresh start (or
-                // reconnect) the in-memory peer_cache is empty, so any channel
-                // that hasn't appeared in an update yet would cause
-                // getChannelDifference to fail with CHANNEL_INVALID due to a
-                // missing access_hash.  GetDialogs fills the cache cheaply.
-                if let Err(e) = c.prefetch_channel_access_hashes().await {
-                    tracing::warn!("[ferogram] catch_up: access_hash prefetch failed: {e}");
-                }
-
-                // Limit concurrency to avoid FLOOD_WAIT from spawning one task
-                // per channel with no cap (a session with 500 channels would
-                // fire 500 simultaneous API calls).
-                if !channel_ids.is_empty() {
-                    tracing::info!(
-                        "[ferogram] catch_up: per-channel diff for {} channels",
-                        channel_ids.len()
-                    );
-                    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(10));
-                    for channel_id in channel_ids {
-                        let c2 = c.clone();
-                        let utx2 = utx.clone();
-                        let permit = sem.clone().acquire_owned().await.unwrap();
-                        tokio::spawn(async move {
-                            let _permit = permit; // released when task completes
-                            match c2.get_channel_difference(channel_id).await {
-                                Ok(updates) => {
-                                    if !updates.is_empty() {
-                                        tracing::debug!(
-                                            "[ferogram] catch_up channel {channel_id}: {} updates",
-                                            updates.len()
-                                        );
-                                    }
-                                    for u in updates {
-                                        if utx2.try_send(u).is_err() {
-                                            tracing::warn!(
-                                                "[ferogram] update channel full: dropping channel diff update"
-                                            );
-                                            metrics::counter!("ferogram.updates_dropped")
-                                                .increment(1);
-                                            break;
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!("[ferogram] catch_up channel {channel_id}: {e}")
-                                }
-                            }
-                        });
-                    }
-                }
+                tracing::info!("[ferogram] catch_up: driving MessageBoxes diff");
+                c.run_pending_differences().await;
             });
         } else {
             // If there is a loaded session the client is already authorised.
@@ -2072,14 +2009,12 @@ impl Client {
                     .signed_in
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 let _ = client.sync_pts_state().await;
-                // pre-populate channel access_hashes so that
-                // getChannelDifference can construct valid InputChannel values
-                // without hitting CHANNEL_INVALID from a missing access_hash.
-                if let Err(e) = client.prefetch_channel_access_hashes().await {
-                    tracing::warn!(
-                        "[ferogram] startup: access_hash prefetch failed (non-catchup path): {e}"
-                    );
-                }
+                // Channel access_hashes are resolved lazily:
+                //   - Already-seen channels are restored from session (s.peers above).
+                //   - New channels receive their hash from update entities.
+                //   - We do NOT call messages.getDialogs here; that path forces
+                //     deep deserialization of Dialog/PollResults/DraftMessage/Story
+                //     which are high-churn objects that break on every Telegram beta.
             }
         }
 
@@ -2377,13 +2312,13 @@ impl Client {
         self.inner.transfer_pool.lock().await.collect_keys(&mut dcs);
 
         let pts_snap = {
-            let s = self.inner.pts_state.lock().await;
+            let snap = self.inner.message_box.lock().await.session_state();
             UpdatesStateSnap {
-                pts: s.pts,
-                qts: s.qts,
-                date: s.date,
-                seq: s.seq,
-                channels: s.channel_pts.iter().map(|(&k, &v)| (k, v)).collect(),
+                pts: snap.pts,
+                qts: snap.qts,
+                date: snap.date,
+                seq: snap.seq,
+                channels: snap.channels.iter().map(|c| (c.id, c.pts)).collect(),
             }
         };
 
@@ -2458,28 +2393,10 @@ impl Client {
     pub async fn save_session(&self) -> Result<(), InvocationError> {
         // build_persisted_session() is the source of truth for structural
         // session data: auth key, salts, DC table, peer cache.
-        // It must NOT be trusted for update counters: there is a window
-        // between when it snapshots pts_state and when save() commits to
-        // storage where apply_update_state() may have advanced pts further.
-        //
-        // Architecture:
-        //   runtime pts_state mutex  = authoritative source for pts/qts/date/seq
-        //   build_persisted_session  = authoritative source for everything else
-        //
-        // We build the structural snapshot, then unconditionally overwrite its
-        // updates_state from the live mutex. The snapshot's own copy is discarded.
-        let mut session = self.build_persisted_session().await;
-
-        // Overwrite update counters from live mutex  the only correct source.
-        // Channel pts were already collected inside build_persisted_session from
-        // the same pts_state, so only the scalar fields need refreshing here.
-        {
-            let s = self.inner.pts_state.lock().await;
-            session.updates_state.pts = s.pts;
-            session.updates_state.qts = s.qts;
-            session.updates_state.date = s.date;
-            session.updates_state.seq = s.seq;
-        }
+        // MessageBoxes is the single authoritative source for pts/qts/date/seq.
+        // build_persisted_session() already reads from message_box.session_state(),
+        // so no secondary overwrite is needed.
+        let session = self.build_persisted_session().await;
 
         self.inner
             .session_backend
@@ -2981,7 +2898,7 @@ impl Client {
             // be running to route the RPC response, or we deadlock).
             let (init_tx, init_rx) = oneshot::channel();
             let c = self.clone();
-            let utx = self.inner.update_tx.clone();
+            let _utx = self.inner.update_tx.clone();
             tokio::spawn(async move {
                 // Respect FLOOD_WAIT (same as do_reconnect_loop).
                 let result = loop {
@@ -3005,22 +2922,12 @@ impl Client {
                     {
                         c.sync_state_after_dh().await;
                     }
-                    let missed = match c.get_difference().await {
-                        Ok(updates) => updates,
-                        Err(e) => {
-                            tracing::warn!("[ferogram] getDifference failed after reconnect: {e}");
-                            vec![]
-                        }
-                    };
-                    for u in missed {
-                        if utx.try_send(u).is_err() {
-                            tracing::warn!(
-                                "[ferogram] update channel full: dropping catch-up update"
-                            );
-                            metrics::counter!("ferogram.updates_dropped").increment(1);
-                            break;
-                        }
+                    // Signal reconnect to message_box so it queues getDifference.
+                    {
+                        let mut mb = c.inner.message_box.lock().await;
+                        let _ = mb.process_updates(message_box::UpdatesLike::ConnectionClosed);
                     }
+                    c.run_pending_differences().await;
                 }
                 let _ = init_tx.send(result);
             });
@@ -3057,9 +2964,6 @@ impl Client {
         // This prevents a transient 30 s timeout from nuking a valid session.
         let mut init_fail_count: u32 = 0;
 
-        let mut gap_tick = tokio::time::interval(std::time::Duration::from_millis(1500));
-        gap_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
         let mut restart_interval = self.inner.restart_policy.restart_interval().map(|d| {
             let mut i = tokio::time::interval(d);
             i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -3071,26 +2975,37 @@ impl Client {
 
         loop {
             tokio::select! {
-                // Drive possible-gap deadline every 1.5 s: if updates were buffered
-                // waiting for a pts gap fill and no new update arrives, this fires
-                // getDifference after the 1-second window expires.
-                _ = gap_tick.tick() => {
-                    // get_difference() is now atomic (check-and-set inside a single
-                    // lock acquisition), so there is no need to guard against a
-                    // concurrent in-flight call here : get_difference() will bail
-                    // safely on its own.  Just check has_global() + deadline.
-                    if self.inner.possible_gap.lock().await.has_global() {
-                        let gap_expired = self.inner.possible_gap.lock().await.global_deadline_elapsed();
-                        if gap_expired {
-                            let c = self.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = c.check_update_deadline().await {
-                                    tracing::warn!("[ferogram] gap tick getDifference: {e}");
-                                }
-                            });
-                        }
+
+                // check_deadlines() returns now() when difference is pending, so this
+                // arm fires immediately when a gap was detected; otherwise it sleeps
+                // until the next no-update timeout (15 min default).
+                _ = tokio::time::sleep_until({
+                    let mut mb = self.inner.message_box.lock().await;
+                    mb.check_deadlines().into()
+                }) => {
+                    // IMPORTANT: never await run_pending_differences() directly here.
+                    // This arm runs inside the reader_loop select!, which is the only
+                    // task reading TCP frames and routing RPC responses.  If we await
+                    // run_pending_differences() inline, the getDifference RPC is sent
+                    // but the response frame can never arrive (reader_loop is blocked)
+                    // → 30-second self-deadlock.  Spawn a separate task instead, exactly
+                    // like the Keepalive arm below.  run_pending_differences() owns the
+                    // diff_in_flight guard internally, so concurrent spawns are safe.
+                    //
+                    // Guard: when diff_in_flight is already true (a getDifference RPC is
+                    // in progress), skip the spawn entirely.  Without this guard, the
+                    // deadline arm fires on every select iteration (check_deadlines()
+                    // returns Instant::now() while getting_diff_for is non-empty) and
+                    // spawns hundreds of tasks per second that all hit the in-flight flag
+                    // and log "diff already in flight".
+                    if !self.inner.diff_in_flight.load(std::sync::atomic::Ordering::Acquire) {
+                        let c = self.clone();
+                        tokio::spawn(async move {
+                            c.run_pending_differences().await;
+                        });
                     }
                 }
+
                 _ = async {
                     if let Some(ref mut i) = restart_interval { i.tick().await; }
                     else { std::future::pending::<()>().await; }
@@ -3228,14 +3143,10 @@ impl Client {
                         }
 
                         FrameOutcome::Keepalive => {
-                            // Drive possible-gap deadline: if updates were buffered
-                            // waiting for a gap fill and no new update has arrived
-                            // to re-trigger check_and_fill_gap, this fires getDifference.
+                            // Drive any pending diff on keepalive (gap may have been buffered).
                             let c = self.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = c.check_update_deadline().await {
-                                    tracing::warn!("[ferogram] check_update_deadline: {e}");
-                                }
+                                c.run_pending_differences().await;
                             });
                         }
                     }
@@ -3250,7 +3161,6 @@ impl Client {
                         break; // reconnect_tx dropped -> client is shutting down
                     }
                 }
-
 
                 // init_connection result (polled only when Some)
                 init_result = async { init_rx.as_mut().unwrap().await }, if init_rx.is_some() => {
@@ -3384,21 +3294,18 @@ impl Client {
                             });
                             Ok(caller_body)
                         }
-                        Ok(EnvelopeResult::Pts(pts, pts_count)) => {
-                            // updateShortSentMessage: advance pts without emitting any Update.
+                        Ok(EnvelopeResult::Pts(_pts, _pts_count)) => {
+                            // updateShortSentMessage as RPC response: signal message_box
+                            // that state may have advanced and let getDifference reconcile.
                             let c = self.clone();
                             tokio::spawn(async move {
-                                match c.check_and_fill_gap(pts, pts_count, None).await {
-                                    Ok(replayed) => {
-                                        // replayed is normally empty (no gap); emit if getDifference ran
-                                        for u in replayed {
-                                            let _ = c.inner.update_tx.try_send(u);
-                                        }
-                                    }
-                                    Err(e) => tracing::warn!(
-                                        "[ferogram] updateShortSentMessage pts advance: {e}"
-                                    ),
+                                {
+                                    let mut mb = c.inner.message_box.lock().await;
+                                    let _ = mb.process_updates(
+                                        message_box::UpdatesLike::ConnectionClosed,
+                                    );
                                 }
+                                c.run_pending_differences().await;
                             });
                             Ok(vec![])
                         }
@@ -3779,11 +3686,10 @@ impl Client {
                             e.first_salt = server_salt;
                         }
                     }
-                    // Reset pts state only after the salt update succeeds.
+                    // Signal message_box that the connection closed (gap may exist).
                     {
-                        let mut s = self.inner.pts_state.lock().await;
-                        s.state_ready = false;
-                        s.seq = 0;
+                        let mut mb = self.inner.message_box.lock().await;
+                        let _ = mb.process_updates(message_box::UpdatesLike::ConnectionClosed);
                     }
                     let c = self.clone();
                     let _handle = tokio::spawn(async move {
@@ -4055,6 +3961,7 @@ impl Client {
     /// Without the sort, a container arriving as [pts=5, pts=3, pts=4] produces
     /// a false gap on the first item (expected 3, got 5) and spuriously fires
     /// getDifference even though the filling updates are present in the same batch.
+    #[allow(dead_code)]
     fn update_sort_key(upd: &tl::enums::Update) -> i32 {
         use tl::enums::Update::*;
         match upd {
@@ -4079,281 +3986,31 @@ impl Client {
         metrics::counter!("ferogram.updates_received").increment(1);
         let cid = u32::from_le_bytes(body[..4].try_into().unwrap());
 
-        // updatesTooLong: we must call getDifference to recover missed updates.
+        // updatesTooLong: signal message_box of gap and run getDifference.
         if cid == 0xe317af7e_u32 {
-            tracing::warn!("[ferogram] updatesTooLong: getDifference");
+            tracing::warn!("[ferogram] updatesTooLong: triggering getDifference via message_box");
             let c = self.clone();
-            let utx = self.inner.update_tx.clone();
             tokio::spawn(async move {
-                match c.get_difference().await {
-                    Ok(updates) => {
-                        for u in updates {
-                            if utx.try_send(u).is_err() {
-                                tracing::warn!("[ferogram] update channel full: dropping update");
-                                metrics::counter!("ferogram.updates_dropped").increment(1);
-                                break;
-                            }
-                        }
-                    }
-                    Err(e) => tracing::warn!("[ferogram] getDifference after updatesTooLong: {e}"),
-                }
-            });
-            return;
-        }
-
-        // updateShortMessage / updateShortChatMessage carry pts/pts_count;
-        // deserialize and route through check_and_fill_gap like all other pts updates.
-        if cid == 0x313bc7f8 {
-            // updateShortMessage
-            let mut cur = Cursor::from_slice(&body[4..]);
-            let m = match tl::types::UpdateShortMessage::deserialize(&mut cur) {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::warn!(
-                        "[ferogram] updateShortMessage deserialize failed, forcing getDifference: {e}"
-                    );
-                    let c = self.clone();
-                    let utx = self.inner.update_tx.clone();
-                    tokio::spawn(async move {
-                        match c.get_difference().await {
-                            Ok(updates) => {
-                                for u in updates {
-                                    if utx.try_send(u).is_err() {
-                                        tracing::warn!(
-                                            "[ferogram] update channel full: dropping update"
-                                        );
-                                        break;
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                tracing::warn!(
-                                    "[ferogram] getDifference after updateShortMessage deserialize failure: {err}"
-                                );
-                            }
-                        }
-                    });
-                    return;
-                }
-            };
-            // If sender is not cached at all, getDifference returns full users with
-            // real access_hashes  - use that path instead of forwarding a bare update
-            // that would fail with USER_ID_INVALID.
-            {
-                let cache = self.inner.peer_cache.read().await;
-                let known = cache.users.get(&m.user_id).is_some_and(|h| *h != 0)
-                    || cache.min_contexts.contains_key(&m.user_id);
-                drop(cache);
-                if !known {
-                    tracing::debug!(
-                        "[ferogram] updateShortMessage: sender {} not cached, falling back to getDifference",
-                        m.user_id
-                    );
-                    let c2 = self.clone();
-                    let utx2 = self.inner.update_tx.clone();
-                    tokio::spawn(async move {
-                        match c2.get_difference().await {
-                            Ok(updates) => {
-                                for u in updates {
-                                    let _ = utx2.try_send(u);
-                                }
-                            }
-                            Err(e) => tracing::warn!(
-                                "[ferogram] updateShortMessage getDifference for unknown sender: {e}"
-                            ),
-                        }
-                    });
-                    return;
-                }
-            }
-            let pts = m.pts;
-            let pts_count = m.pts_count;
-            let upd = update::Update::NewMessage(update::make_short_dm(m));
-            let c = self.clone();
-            let utx = self.inner.update_tx.clone();
-            tokio::spawn(async move {
-                match c
-                    .check_and_fill_gap(pts, pts_count, Some(attach_client_to_update(upd, &c)))
-                    .await
                 {
-                    Ok(updates) => {
-                        for u in updates {
-                            if utx.try_send(u).is_err() {
-                                tracing::warn!("[ferogram] update channel full: dropping update");
-                                metrics::counter!("ferogram.updates_dropped").increment(1);
-                            }
-                        }
-                    }
-                    Err(e) => tracing::warn!("[ferogram] updateShortMessage gap fill: {e}"),
+                    let mut mb = c.inner.message_box.lock().await;
+                    let _ = mb.process_updates(message_box::UpdatesLike::ConnectionClosed);
                 }
-            });
-            return;
-        }
-        if cid == 0x4d6deea5 {
-            // updateShortChatMessage
-            let mut cur = Cursor::from_slice(&body[4..]);
-            let m = match tl::types::UpdateShortChatMessage::deserialize(&mut cur) {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::warn!(
-                        "[ferogram] updateShortChatMessage deserialize failed, forcing getDifference: {e}"
-                    );
-                    let c = self.clone();
-                    let utx = self.inner.update_tx.clone();
-                    tokio::spawn(async move {
-                        match c.get_difference().await {
-                            Ok(updates) => {
-                                for u in updates {
-                                    if utx.try_send(u).is_err() {
-                                        tracing::warn!(
-                                            "[ferogram] update channel full: dropping update"
-                                        );
-                                        break;
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                tracing::warn!(
-                                    "[ferogram] getDifference after updateShortChatMessage deserialize failure: {err}"
-                                );
-                            }
-                        }
-                    });
-                    return;
-                }
-            };
-            // Same as updateShortMessage: if sender is unknown fall back to getDifference.
-            {
-                // Always register the group chat ID so it's known for future lookups.
-                self.inner.peer_cache.write().await.chats.insert(m.chat_id);
-
-                let cache = self.inner.peer_cache.read().await;
-                let known = cache.users.get(&m.from_id).is_some_and(|h| *h != 0)
-                    || cache.min_contexts.contains_key(&m.from_id);
-                drop(cache);
-                if !known {
-                    tracing::debug!(
-                        "[ferogram] updateShortChatMessage: sender {} not cached, falling back to getDifference",
-                        m.from_id
-                    );
-                    let c2 = self.clone();
-                    let utx2 = self.inner.update_tx.clone();
-                    tokio::spawn(async move {
-                        match c2.get_difference().await {
-                            Ok(updates) => {
-                                for u in updates {
-                                    let _ = utx2.try_send(u);
-                                }
-                            }
-                            Err(e) => tracing::warn!(
-                                "[ferogram] updateShortChatMessage getDifference for unknown sender: {e}"
-                            ),
-                        }
-                    });
-                    return;
-                }
-            }
-            let pts = m.pts;
-            let pts_count = m.pts_count;
-            let upd = update::Update::NewMessage(update::make_short_chat(m));
-            let c = self.clone();
-            let utx = self.inner.update_tx.clone();
-            tokio::spawn(async move {
-                match c
-                    .check_and_fill_gap(pts, pts_count, Some(attach_client_to_update(upd, &c)))
-                    .await
-                {
-                    Ok(updates) => {
-                        for u in updates {
-                            if utx.try_send(u).is_err() {
-                                tracing::warn!("[ferogram] update channel full: dropping update");
-                                metrics::counter!("ferogram.updates_dropped").increment(1);
-                            }
-                        }
-                    }
-                    Err(e) => tracing::warn!("[ferogram] updateShortChatMessage gap fill: {e}"),
-                }
+                c.run_pending_differences().await;
             });
             return;
         }
 
-        // updateShortSentMessage push: advance pts without emitting an Update.
-        // Telegram can also PUSH updateShortSentMessage (not just in RPC responses).
-        // Extract pts and route through check_and_fill_gap.
-        if cid == ID_UPDATE_SHORT_SENT_MSG {
-            let mut cur = Cursor::from_slice(&body[4..]);
-            match tl::types::UpdateShortSentMessage::deserialize(&mut cur) {
-                Ok(m) => {
-                    let pts = m.pts;
-                    let pts_count = m.pts_count;
-                    tracing::debug!(
-                        "[ferogram] updateShortSentMessage (push): pts={pts} pts_count={pts_count}: advancing pts"
-                    );
-                    let c = self.clone();
-                    let utx = self.inner.update_tx.clone();
-                    tokio::spawn(async move {
-                        match c.check_and_fill_gap(pts, pts_count, None).await {
-                            Ok(replayed) => {
-                                for u in replayed {
-                                    if utx.try_send(u).is_err() {
-                                        tracing::warn!(
-                                            "[ferogram] update channel full: dropping update"
-                                        );
-                                        metrics::counter!("ferogram.updates_dropped").increment(1);
-                                    }
-                                }
-                            }
-                            Err(e) => tracing::warn!(
-                                "[ferogram] updateShortSentMessage push pts advance: {e}"
-                            ),
-                        }
-                    });
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "[ferogram] updateShortSentMessage push deserialize failed, forcing getDifference: {e}"
-                    );
-                    let c = self.clone();
-                    let utx = self.inner.update_tx.clone();
-                    tokio::spawn(async move {
-                        match c.get_difference().await {
-                            Ok(updates) => {
-                                for u in updates {
-                                    if utx.try_send(u).is_err() {
-                                        tracing::warn!(
-                                            "[ferogram] update channel full: dropping update"
-                                        );
-                                        break;
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                tracing::warn!(
-                                    "[ferogram] getDifference after updateShortSentMessage deserialize failure: {err}"
-                                );
-                            }
-                        }
-                    });
-                }
-            }
-            return;
-        }
-
-        // Seq check must be synchronous and act as a gate for the whole
-        // container.  The old approach spawned a task concurrently with dispatching
-        // the individual updates, meaning seq could be advanced over an unclean batch.
-        // seq must only advance after the full update loop runs with no
-        // unresolved gaps.  We mirror this: check seq first, drop the container if
-        // it's a gap or duplicate, and advance seq AFTER dispatching all updates.
-        use crate::pts::PtsCheckResult;
         use ferogram_tl_types::{Cursor, Deserializable};
 
-        // Parse the container once, capturing seq_info, users, chats, and updates.
+        #[allow(dead_code)]
         struct ParsedContainer {
             seq_info: Option<(i32, i32)>,
             users: Vec<tl::enums::User>,
             chats: Vec<tl::enums::Chat>,
             updates: Vec<tl::enums::Update>,
+            /// The original parsed Updates enum, preserved so message_box
+            /// never needs to re-deserialize raw bytes.
+            original: Option<tl::enums::Updates>,
         }
 
         let mut cur = Cursor::from_slice(body);
@@ -4361,59 +4018,99 @@ impl Client {
             0x74ae4240 => {
                 // updates#74ae4240
                 match tl::enums::Updates::deserialize(&mut cur) {
-                    Ok(tl::enums::Updates::Updates(u)) => ParsedContainer {
-                        seq_info: Some((u.seq, u.seq)),
-                        users: u.users,
-                        chats: u.chats,
-                        updates: u.updates,
-                    },
+                    Ok(tl::enums::Updates::Updates(u)) => {
+                        let original = tl::enums::Updates::Updates(u.clone());
+                        ParsedContainer {
+                            seq_info: Some((u.seq, u.seq)),
+                            users: u.users,
+                            chats: u.chats,
+                            updates: u.updates,
+                            original: Some(original),
+                        }
+                    }
                     _ => ParsedContainer {
                         seq_info: None,
                         users: vec![],
                         chats: vec![],
                         updates: vec![],
+                        original: None,
                     },
                 }
             }
             0x725b04c3 => {
                 // updatesCombined#725b04c3
                 match tl::enums::Updates::deserialize(&mut cur) {
-                    Ok(tl::enums::Updates::Combined(u)) => ParsedContainer {
-                        seq_info: Some((u.seq, u.seq_start)),
-                        users: u.users,
-                        chats: u.chats,
-                        updates: u.updates,
-                    },
+                    Ok(tl::enums::Updates::Combined(u)) => {
+                        let original = tl::enums::Updates::Combined(u.clone());
+                        ParsedContainer {
+                            seq_info: Some((u.seq, u.seq_start)),
+                            users: u.users,
+                            chats: u.chats,
+                            updates: u.updates,
+                            original: Some(original),
+                        }
+                    }
                     _ => ParsedContainer {
                         seq_info: None,
                         users: vec![],
                         chats: vec![],
                         updates: vec![],
+                        original: None,
                     },
                 }
             }
             0x78d4dec1 => {
                 // updateShort: no users/chats/seq
                 match tl::types::UpdateShort::deserialize(&mut Cursor::from_slice(&body[4..])) {
-                    Ok(u) => ParsedContainer {
-                        seq_info: None,
-                        users: vec![],
-                        chats: vec![],
-                        updates: vec![u.update],
-                    },
+                    Ok(u) => {
+                        let original = tl::enums::Updates::UpdateShort(u.clone());
+                        ParsedContainer {
+                            seq_info: None,
+                            users: vec![],
+                            chats: vec![],
+                            updates: vec![u.update],
+                            original: Some(original),
+                        }
+                    }
                     Err(_) => ParsedContainer {
                         seq_info: None,
                         users: vec![],
                         chats: vec![],
                         updates: vec![],
+                        original: None,
                     },
                 }
+            }
+            // updateShortSentMessage (0x9015e101) as a server-pushed frame:
+            // carries pts/pts_count but no user-visible content.  Without this arm
+            // it falls to `_ =>` → original:None → MalformedUpdates → Err(Gap) →
+            // try_begin_get_diff(Key::Common) - a spurious getDifference triggered
+            // on every poll vote or sent-message confirmation.
+            0x9015e101 => {
+                let mut cur = Cursor::from_slice(&body[4..]);
+                if let Ok(sent) = tl::types::UpdateShortSentMessage::deserialize(&mut cur) {
+                    tracing::debug!(
+                        "[ferogram] updateShortSentMessage (server-push): pts={} pts_count={}",
+                        sent.pts,
+                        sent.pts_count
+                    );
+                    let _ = self.inner.message_box.lock().await.process_updates(
+                        message_box::UpdatesLike::AffectedMessages(
+                            tl::types::messages::AffectedMessages {
+                                pts: sent.pts,
+                                pts_count: sent.pts_count,
+                            },
+                        ),
+                    );
+                }
+                return;
             }
             _ => ParsedContainer {
                 seq_info: None,
                 users: vec![],
                 chats: vec![],
                 updates: vec![],
+                original: None,
             },
         };
 
@@ -4454,7 +4151,6 @@ impl Client {
 
             for upd in &parsed.updates {
                 if let Some(envelope) = get_message(upd) {
-                    // --- normal messages ---
                     if let tl::enums::Message::Message(msg) = envelope {
                         let ctx_peer = extract_peer_id(&msg.peer_id);
                         let ctx = (ctx_peer, msg.id);
@@ -4567,297 +4263,395 @@ impl Client {
             }
         }
 
-        // synchronous seq gate: check before processing any updates.
-        if let Some((seq, seq_start)) = parsed.seq_info
-            && seq != 0
+        // Use the already-parsed Updates object; never re-deserialize raw bytes.
         {
-            let result = self.inner.pts_state.lock().await.check_seq(seq, seq_start);
-            match result {
-                PtsCheckResult::Ok => {
-                    // Good: will advance seq after the batch below.
-                }
-                PtsCheckResult::Duplicate => {
-                    // Already handled this container: drop it silently.
-                    tracing::debug!(
-                        "[ferogram] seq duplicate (seq={seq}, seq_start={seq_start}): dropping container"
-                    );
-                    return;
-                }
-                PtsCheckResult::Gap { expected, got } => {
-                    // Real seq gap: fire getDifference and drop the container.
-                    // getDifference will deliver the missed updates.
-                    tracing::warn!(
-                        "[ferogram] seq gap: expected {expected}, got {got}: getDifference"
-                    );
-                    let c = self.clone();
-                    let utx = self.inner.update_tx.clone();
-                    tokio::spawn(async move {
-                        match c.get_difference().await {
-                            Ok(updates) => {
-                                for u in updates {
-                                    if utx.try_send(u).is_err() {
-                                        tracing::warn!(
-                                            "[ferogram] update channel full: dropping seq gap update"
-                                        );
-                                        metrics::counter!("ferogram.updates_dropped").increment(1);
-                                        break;
-                                    }
-                                }
-                            }
-                            Err(e) => tracing::warn!("[ferogram] seq gap fill: {e}"),
+            let mb_input = match parsed.original {
+                Some(u) => message_box::UpdatesLike::Updates(Box::new(u)),
+                None => message_box::UpdatesLike::MalformedUpdates,
+            };
+
+            let mb_result = self
+                .inner
+                .message_box
+                .lock()
+                .await
+                .process_updates(mb_input);
+
+            match mb_result {
+                Ok((raw_updates, mb_users, mb_chats)) => {
+                    // Cache any users/chats returned from getDifference-style paths.
+                    if !mb_users.is_empty() || !mb_chats.is_empty() {
+                        let mut cache = self.inner.peer_cache.write().await;
+                        for u in &mb_users {
+                            cache.cache_user(u);
                         }
-                    });
-                    return; // drop this container; diff will supply updates
+                        for c in &mb_chats {
+                            cache.cache_chat(c);
+                        }
+                    }
+                    // Convert and emit each approved update.
+                    for raw in raw_updates {
+                        let highs = update::from_single_update_pub(raw);
+                        for u in highs {
+                            let u = attach_client_to_update(u, self);
+                            if self.inner.update_tx.try_send(u).is_err() {
+                                tracing::warn!("[ferogram] update channel full: dropping update");
+                                metrics::counter!("ferogram.updates_dropped").increment(1);
+                            }
+                        }
+                    }
+                }
+                Err(_gap) => {
+                    // Gap detected; deadline loop (Step 5) will fire getDifference.
+                    tracing::debug!("[ferogram/msgbox] gap in container; deadline loop will diff");
                 }
             }
         }
+    }
 
-        let mut raw: Vec<tl::enums::Update> = parsed.updates;
+    /// Persist a single update-state change to the session backend.
+    fn persist_state(&self, change: UpdateStateChange) {
+        if let Err(e) = self.inner.session_backend.apply_update_state(change) {
+            tracing::warn!("[ferogram/persist] state write failed: {e}");
+        }
+    }
 
-        // sort by (pts - pts_count) before dispatching:
-        // updates.sort_by_key(update_sort_key).  Without this, an out-of-order batch
-        // like [pts=5, pts=3, pts=4] falsely detects a gap on the first update and
-        // fires getDifference even though the filling updates are in the same container.
-        raw.sort_by_key(Self::update_sort_key);
+    /// Fetch the current server update state and initialise `MessageBoxes` if empty.
+    ///
+    /// Called after login / reconnect to anchor the pts counter so the first
+    /// `getDifference` starts from the right position.
+    pub async fn sync_pts_state(&self) -> Result<(), InvocationError> {
+        use crate::util::decode_checked;
+        let body = self
+            .rpc_call_raw_pub(&tl::functions::updates::GetState {})
+            .await?;
+        let tl::enums::updates::State::State(s) =
+            decode_checked::<tl::enums::updates::State>("updates.getState", &body)?;
 
-        for upd in raw {
-            self.dispatch_single_update(upd).await;
+        {
+            let mut mb = self.inner.message_box.lock().await;
+            if mb.is_empty() {
+                mb.set_state(s.clone());
+            }
         }
 
-        // advance seq AFTER the full batch has been dispatched: mirrors
-        // ' post-loop seq advance that only fires when !have_unresolved_gaps.
-        // (In our spawn-per-update model we can't track unresolved gaps inline, but
-        // advancing here at minimum prevents premature seq advancement before the
-        // container's pts checks have even been spawned.)
-        if let Some((seq, _)) = parsed.seq_info
-            && seq != 0
+        let (pts, qts, date, seq) = (s.pts, s.qts, s.date, s.seq);
+        tracing::debug!(
+            "[ferogram] pts synced: pts={}, qts={}, seq={}",
+            pts,
+            qts,
+            seq
+        );
+        self.persist_state(UpdateStateChange::Primary { pts, date, seq });
+        self.persist_state(UpdateStateChange::Secondary { qts });
+        Ok(())
+    }
+
+    /// Force-resync pts/qts from the server into the live message_box, regardless of
+    /// whether the message_box is empty.
+    ///
+    /// Unlike [`sync_pts_state`] (which skips the in-memory update when the box is not
+    /// empty), this method always calls [`MessageBoxes::force_reset_common_pts`] so that a
+    /// stale pts caused by an unknown TL constructor does not re-trigger getDifference.
+    async fn force_sync_pts_state(&self) -> Result<(), InvocationError> {
+        use crate::session_backend::UpdateStateChange;
+        use crate::util::decode_checked;
+        let body = self
+            .rpc_call_raw_pub(&tl::functions::updates::GetState {})
+            .await?;
+        let tl::enums::updates::State::State(s) =
+            decode_checked::<tl::enums::updates::State>("updates.getState", &body)?;
         {
-            self.inner.pts_state.lock().await.advance_seq(seq);
+            let mut mb = self.inner.message_box.lock().await;
+            mb.force_reset_common_pts(s.pts, s.qts, s.date, s.seq);
+        }
+        let (pts, qts, date, seq) = (s.pts, s.qts, s.date, s.seq);
+        tracing::debug!(
+            "[ferogram] force_sync_pts_state: pts={}, qts={}, seq={}",
+            pts,
+            qts,
+            seq
+        );
+        self.persist_state(UpdateStateChange::Primary { pts, date, seq });
+        self.persist_state(UpdateStateChange::Secondary { qts });
+        Ok(())
+    }
+
+    /// Retry `sync_pts_state` with exponential backoff after a fresh DH exchange.
+    ///
+    /// After PFS re-keying the server may return `AUTH_KEY_UNREGISTERED` for a
+    /// short window while it propagates the new key.  Retry up to five times.
+    pub async fn sync_state_after_dh(&self) {
+        if !self
+            .inner
+            .signed_in
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            tracing::debug!("[ferogram] sync_state_after_dh: not signed in yet - skipping");
+            return;
+        }
+        for delay_ms in [0u64, 100, 300, 700, 1500] {
+            if delay_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+            match self.sync_pts_state().await {
+                Ok(()) => return,
+                Err(ref e) if matches!(e, InvocationError::Rpc(r) if r.code == 401) => {
+                    tracing::debug!(
+                        "[ferogram] sync_state_after_dh: AUTH_KEY_UNREGISTERED \
+                         (delay={delay_ms}ms), retrying"
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!("[ferogram] sync_state_after_dh failed: {e}");
+                    return;
+                }
+            }
+        }
+        tracing::warn!("[ferogram] sync_state_after_dh: all retries exhausted");
+    }
+
+    /// Drive all pending `getDifference` / `getChannelDifference` calls queued by
+    /// [`MessageBoxes`].  Called from the deadline select arm and after reconnect.
+    ///
+    /// Internally acquires `diff_in_flight` so concurrent callers (reconnect, catch-up,
+    /// deadline arm) are serialised - only one getDifference is ever in flight at a time.
+    async fn run_pending_differences(&self) {
+        use message_box::PrematureEndReason;
+
+        // Acquire the single-flight guard.  Any concurrent caller (direct or spawned)
+        // exits immediately rather than issuing a second concurrent getDifference.
+        if self
+            .inner
+            .diff_in_flight
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_err()
+        {
+            tracing::debug!("[ferogram] diff already in flight, skipping concurrent call");
+            return;
+        }
+        // RAII guard: always resets diff_in_flight=false when we exit, including on panic.
+        struct DiffGuard(crate::Client);
+        impl Drop for DiffGuard {
+            fn drop(&mut self) {
+                self.0
+                    .inner
+                    .diff_in_flight
+                    .store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+        let _guard = DiffGuard(self.clone());
+
+        loop {
+            let get_diff_req = self.inner.message_box.lock().await.get_difference();
+            if let Some(req) = get_diff_req {
+                tracing::debug!("[ferogram] running getDifference");
+                let body = self.rpc_call_raw_pub(&req).await;
+                match body {
+                    Ok(raw) => {
+                        let diff = {
+                            use ferogram_tl_types::{Cursor, Deserializable};
+                            let mut cur = Cursor::from_slice(&raw);
+                            tl::enums::updates::Difference::deserialize(&mut cur)
+                        };
+                        match diff {
+                            Ok(diff) => {
+                                let (updates, users, chats) =
+                                    self.inner.message_box.lock().await.apply_difference(diff);
+                                {
+                                    let mut cache = self.inner.peer_cache.write().await;
+                                    for u in &users {
+                                        cache.cache_user(u);
+                                    }
+                                    for c in &chats {
+                                        cache.cache_chat(c);
+                                    }
+                                }
+                                self.emit_raw_updates(updates).await;
+                            }
+                            Err(e) => {
+                                let preview = &raw[..raw.len().min(16)];
+                                tracing::warn!(
+                                    "[ferogram] getDifference parse failed: {e} \
+                                     | first bytes: {:02x?}",
+                                    preview
+                                );
+                                self.inner.message_box.lock().await.abort_difference();
+                                // Force-advance pts to the server's current value so the
+                                // stale gap does not immediately re-trigger getDifference
+                                // (infinite loop when the server sends an unknown constructor
+                                // from a newer TL layer).
+                                match self.force_sync_pts_state().await {
+                                    Ok(()) => {
+                                        tracing::debug!(
+                                            "[ferogram] pts resynced after getDifference \
+                                             parse failure; resuming channel diffs"
+                                        );
+                                    }
+                                    Err(sync_err) => {
+                                        tracing::warn!(
+                                            "[ferogram] force_sync_pts_state failed after \
+                                             getDifference parse failure: {sync_err}"
+                                        );
+                                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                    }
+                                }
+                                // Use `continue` (not `break`) so pending channel diffs
+                                // still get a chance to run in the same iteration.
+                                continue;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("[ferogram] getDifference RPC failed: {e}");
+                        self.inner.message_box.lock().await.abort_difference();
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        continue; // let channel diffs run even when common diff RPC fails
+                    }
+                }
+                continue;
+            }
+
+            let get_chan_req = self.inner.message_box.lock().await.get_channel_difference();
+            if let Some((channel_id, mut req)) = get_chan_req {
+                let access_hash = {
+                    let cache = self.inner.peer_cache.read().await;
+                    cache.channels.get(&channel_id).copied().unwrap_or(0)
+                };
+                if access_hash == 0 {
+                    tracing::warn!(
+                        "[ferogram] no access_hash for channel {channel_id}; ending diff (Banned)"
+                    );
+                    self.inner
+                        .message_box
+                        .lock()
+                        .await
+                        .end_channel_difference(PrematureEndReason::Banned);
+                    continue;
+                }
+                req.channel = tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                    channel_id,
+                    access_hash,
+                });
+                req.limit = if self.inner.is_bot.load(std::sync::atomic::Ordering::Relaxed) {
+                    100_000
+                } else {
+                    100
+                };
+                tracing::debug!("[ferogram] running getChannelDifference for {channel_id}");
+                match self.rpc_call_raw_pub(&req).await {
+                    Ok(raw) => {
+                        use ferogram_tl_types::{Cursor, Deserializable};
+                        let mut cur = Cursor::from_slice(&raw);
+                        match tl::enums::updates::ChannelDifference::deserialize(&mut cur) {
+                            Ok(diff) => {
+                                let (updates, users, chats) = self
+                                    .inner
+                                    .message_box
+                                    .lock()
+                                    .await
+                                    .apply_channel_difference(diff);
+                                {
+                                    let mut cache = self.inner.peer_cache.write().await;
+                                    for u in &users {
+                                        cache.cache_user(u);
+                                    }
+                                    for c in &chats {
+                                        cache.cache_chat(c);
+                                    }
+                                }
+                                self.emit_raw_updates(updates).await;
+                            }
+                            Err(e) => {
+                                let preview = &raw[..raw.len().min(16)];
+                                tracing::warn!(
+                                    "[ferogram] getChannelDifference parse failed: {e} \
+                                     | first bytes: {:02x?}",
+                                    preview
+                                );
+                                // Drop the channel entry entirely so the stale pts does not
+                                // re-trigger getChannelDifference on the next update (same
+                                // infinite-loop fix as for Common getDifference).  The entry
+                                // will be re-created when the next update for this channel
+                                // arrives or when GetDialogs runs.
+                                self.inner
+                                    .message_box
+                                    .lock()
+                                    .await
+                                    .end_channel_difference(PrematureEndReason::Banned);
+                                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                            }
+                        }
+                    }
+                    Err(ref e) if e.is("PERSISTENT_TIMESTAMP_OUTDATED") => {
+                        tracing::warn!(
+                            "[ferogram] getChannelDifference: PERSISTENT_TIMESTAMP_OUTDATED"
+                        );
+                        self.inner
+                            .message_box
+                            .lock()
+                            .await
+                            .end_channel_difference(PrematureEndReason::TemporaryServerIssues);
+                    }
+                    Err(ref e) if e.is("CHANNEL_PRIVATE") => {
+                        tracing::info!(
+                            "[ferogram] getChannelDifference: CHANNEL_PRIVATE for {channel_id}"
+                        );
+                        self.inner
+                            .message_box
+                            .lock()
+                            .await
+                            .end_channel_difference(PrematureEndReason::Banned);
+                    }
+                    Err(InvocationError::Rpc(ref rpc)) if rpc.code == 500 => {
+                        tracing::warn!("[ferogram] getChannelDifference: server 500");
+                        self.inner
+                            .message_box
+                            .lock()
+                            .await
+                            .end_channel_difference(PrematureEndReason::TemporaryServerIssues);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "[ferogram] getChannelDifference for {channel_id} failed: {e}"
+                        );
+                        self.inner
+                            .message_box
+                            .lock()
+                            .await
+                            .end_channel_difference(PrematureEndReason::TemporaryServerIssues);
+                    }
+                }
+                continue;
+            }
+
+            // Nothing pending.
+            break;
+        }
+    }
+
+    /// Convert raw `tl::enums::Update` list → high-level updates and send to `update_tx`.
+    async fn emit_raw_updates(&self, updates: Vec<tl::enums::Update>) {
+        for raw in updates {
+            let highs = update::from_single_update_pub(raw);
+            for u in highs {
+                let u = attach_client_to_update(u, self);
+                if self.inner.update_tx.try_send(u).is_err() {
+                    tracing::warn!("[ferogram] update channel full: dropping update");
+                    metrics::counter!("ferogram.updates_dropped").increment(1);
+                }
+            }
         }
     }
 
     /// Route one bare `tl::enums::Update` through the pts/qts gap-checker,
     /// then emit surviving updates to `update_tx`.
-    async fn dispatch_single_update(&self, upd: tl::enums::Update) {
-        // Two-phase: inspect pts fields via reference first (all Copy), then
-        // convert to high-level Update (consumes upd). Avoids borrow-then-move.
-        enum Kind {
-            GlobalPts {
-                pts: i32,
-                pts_count: i32,
-                carry: bool,
-            },
-            ChannelPts {
-                channel_id: i64,
-                pts: i32,
-                pts_count: i32,
-                carry: bool,
-            },
-            Qts {
-                qts: i32,
-            },
-            QtsDeliver {
-                qts: i32,
-            },
-            Passthrough,
-        }
-
-        fn ch_from_msg(msg: &tl::enums::Message) -> i64 {
-            if let tl::enums::Message::Message(m) = msg
-                && let tl::enums::Peer::Channel(c) = &m.peer_id
-            {
-                return c.channel_id;
-            }
-            0
-        }
-
-        let kind = {
-            use tl::enums::Update::*;
-            match &upd {
-                NewMessage(u) => Kind::GlobalPts {
-                    pts: u.pts,
-                    pts_count: u.pts_count,
-                    carry: true,
-                },
-                EditMessage(u) => Kind::GlobalPts {
-                    pts: u.pts,
-                    pts_count: u.pts_count,
-                    carry: true,
-                },
-                DeleteMessages(u) => Kind::GlobalPts {
-                    pts: u.pts,
-                    pts_count: u.pts_count,
-                    carry: true,
-                },
-                ReadHistoryInbox(u) => Kind::GlobalPts {
-                    pts: u.pts,
-                    pts_count: u.pts_count,
-                    carry: false,
-                },
-                ReadHistoryOutbox(u) => Kind::GlobalPts {
-                    pts: u.pts,
-                    pts_count: u.pts_count,
-                    carry: false,
-                },
-                NewChannelMessage(u) => Kind::ChannelPts {
-                    channel_id: ch_from_msg(&u.message),
-                    pts: u.pts,
-                    pts_count: u.pts_count,
-                    carry: true,
-                },
-                EditChannelMessage(u) => Kind::ChannelPts {
-                    channel_id: ch_from_msg(&u.message),
-                    pts: u.pts,
-                    pts_count: u.pts_count,
-                    carry: true,
-                },
-                DeleteChannelMessages(u) => Kind::ChannelPts {
-                    channel_id: u.channel_id,
-                    pts: u.pts,
-                    pts_count: u.pts_count,
-                    carry: true,
-                },
-                // Secret chat messages: advance qts but don't deliver (handled by encrypted layer).
-                NewEncryptedMessage(u) => Kind::Qts { qts: u.qts },
-                // All other QTS-bearing updates: advance qts AND deliver.
-                ChatParticipant(u) => Kind::QtsDeliver { qts: u.qts },
-                ChannelParticipant(u) => Kind::QtsDeliver { qts: u.qts },
-                BotChatInviteRequester(u) => Kind::QtsDeliver { qts: u.qts },
-                BotMessageReaction(u) => Kind::QtsDeliver { qts: u.qts },
-                BotMessageReactions(u) => Kind::QtsDeliver { qts: u.qts },
-                MessagePollVote(u) => Kind::QtsDeliver { qts: u.qts },
-                BotStopped(u) => Kind::QtsDeliver { qts: u.qts },
-                BotChatBoost(u) => Kind::QtsDeliver { qts: u.qts },
-                BotBusinessConnect(u) => Kind::QtsDeliver { qts: u.qts },
-                BotNewBusinessMessage(u) => Kind::QtsDeliver { qts: u.qts },
-                BotEditBusinessMessage(u) => Kind::QtsDeliver { qts: u.qts },
-                BotDeleteBusinessMessage(u) => Kind::QtsDeliver { qts: u.qts },
-                BotPurchasedPaidMedia(u) => Kind::QtsDeliver { qts: u.qts },
-                ManagedBot(u) => Kind::QtsDeliver { qts: u.qts },
-                _ => Kind::Passthrough,
-            }
-        };
-
-        let high = update::from_single_update_pub(upd);
-
-        let to_send: Vec<update::Update> = match kind {
-            Kind::GlobalPts {
-                pts,
-                pts_count,
-                carry,
-            } => {
-                let first = if carry { high.into_iter().next() } else { None };
-                // Never await an RPC inside the reader task: spawn gap-fill so
-                // the reader loop keeps running while the RPC is in flight.
-                let c = self.clone();
-                let utx = self.inner.update_tx.clone();
-                tokio::spawn(async move {
-                    match c.check_and_fill_gap(pts, pts_count, first).await {
-                        Ok(v) => {
-                            for u in v {
-                                let u = attach_client_to_update(u, &c);
-                                if utx.try_send(u).is_err() {
-                                    tracing::warn!(
-                                        "[ferogram] update channel full: dropping update"
-                                    );
-                                    metrics::counter!("ferogram.updates_dropped").increment(1);
-                                    break;
-                                }
-                            }
-                        }
-                        Err(e) => tracing::warn!("[ferogram] pts gap: {e}"),
-                    }
-                });
-                vec![]
-            }
-            Kind::ChannelPts {
-                channel_id,
-                pts,
-                pts_count,
-                carry,
-            } => {
-                let first = if carry { high.into_iter().next() } else { None };
-                if channel_id != 0 {
-                    // Spawn to avoid awaiting inside the reader loop.
-                    let c = self.clone();
-                    let utx = self.inner.update_tx.clone();
-                    tokio::spawn(async move {
-                        match c
-                            .check_and_fill_channel_gap(channel_id, pts, pts_count, first)
-                            .await
-                        {
-                            Ok(v) => {
-                                for u in v {
-                                    let u = attach_client_to_update(u, &c);
-                                    if utx.try_send(u).is_err() {
-                                        tracing::warn!(
-                                            "[ferogram] update channel full: dropping update"
-                                        );
-                                        metrics::counter!("ferogram.updates_dropped").increment(1);
-                                        break;
-                                    }
-                                }
-                            }
-                            Err(e) => tracing::warn!("[ferogram] ch pts gap: {e}"),
-                        }
-                    });
-                    vec![]
-                } else {
-                    first.into_iter().collect()
-                }
-            }
-            Kind::Qts { qts } => {
-                // Spawn to avoid awaiting inside the reader loop.
-                let c = self.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = c.check_and_fill_qts_gap(qts, 1).await {
-                        tracing::warn!("[ferogram] qts gap: {e}");
-                    }
-                });
-                vec![]
-            }
-            Kind::QtsDeliver { qts } => {
-                // Advance qts in background, deliver the update.
-                let c = self.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = c.check_and_fill_qts_gap(qts, 1).await {
-                        tracing::warn!("[ferogram] qts gap: {e}");
-                    }
-                });
-                high.into_iter()
-                    .map(|u| match u {
-                        update::Update::NewMessage(msg) => {
-                            update::Update::NewMessage(msg.with_client(self.clone()))
-                        }
-                        update::Update::MessageEdited(msg) => {
-                            update::Update::MessageEdited(msg.with_client(self.clone()))
-                        }
-                        other => other,
-                    })
-                    .collect()
-            }
-            Kind::Passthrough => high
-                .into_iter()
-                .map(|u| match u {
-                    update::Update::NewMessage(msg) => {
-                        update::Update::NewMessage(msg.with_client(self.clone()))
-                    }
-                    update::Update::MessageEdited(msg) => {
-                        update::Update::MessageEdited(msg.with_client(self.clone()))
-                    }
-                    other => other,
-                })
-                .collect(),
-        };
-
-        for u in to_send {
-            if self.inner.update_tx.try_send(u).is_err() {
-                tracing::warn!("[ferogram] update channel full: dropping update");
-                metrics::counter!("ferogram.updates_dropped").increment(1);
-            }
-        }
-    }
-
     /// Loops with exponential backoff until a TCP+DH reconnect succeeds, then
     /// spawns `init_connection` in a background task and returns a oneshot
     /// receiver for its result.
@@ -4907,7 +4701,7 @@ impl Client {
                     // We give back a oneshot so the reader can act on failure.
                     let (init_tx, init_rx) = oneshot::channel();
                     let c = self.clone();
-                    let utx = self.inner.update_tx.clone();
+                    let _utx = self.inner.update_tx.clone();
                     tokio::spawn(async move {
                         // Respect FLOOD_WAIT before sending the result back.
                         // Without this, a FLOOD_WAIT from Telegram during init
@@ -4938,24 +4732,13 @@ impl Client {
                             {
                                 c.sync_state_after_dh().await;
                             }
-                            let missed = match c.get_difference().await {
-                                Ok(updates) => updates,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "[ferogram] getDifference failed after reconnect: {e}"
-                                    );
-                                    vec![]
-                                }
-                            };
-                            for u in missed {
-                                if utx.try_send(attach_client_to_update(u, &c)).is_err() {
-                                    tracing::warn!(
-                                        "[ferogram] update channel full: dropping catch-up update"
-                                    );
-                                    metrics::counter!("ferogram.updates_dropped").increment(1);
-                                    break;
-                                }
+                            // Signal reconnect to message_box then drive diff.
+                            {
+                                let mut mb = c.inner.message_box.lock().await;
+                                let _ =
+                                    mb.process_updates(message_box::UpdatesLike::ConnectionClosed);
                             }
+                            c.run_pending_differences().await;
                         }
                         let _ = init_tx.send(result);
                     });
@@ -6800,7 +6583,7 @@ impl Client {
                 let (wire, container_msg_id) = w.enc.pack_container(&container_payload);
 
                 w.sent_bodies.insert(req_msg_id, body); //
-                w.container_map.insert(container_msg_id, req_msg_id); // 
+                w.container_map.insert(container_msg_id, req_msg_id); //
                 self.inner.pending.lock().await.insert(req_msg_id, tx);
                 tracing::debug!(
                     "[ferogram] container: bundled {} acks + request (cid={container_msg_id})",
@@ -6875,7 +6658,7 @@ impl Client {
                 ]);
                 let (wire, container_msg_id) = w.enc.pack_container(&container_payload);
                 w.sent_bodies.insert(req_msg_id, body); //
-                w.container_map.insert(container_msg_id, req_msg_id); // 
+                w.container_map.insert(container_msg_id, req_msg_id); //
                 self.inner.pending.lock().await.insert(req_msg_id, tx);
                 tracing::debug!(
                     "[ferogram] write container: bundled {} acks + write (cid={container_msg_id})",
@@ -7124,15 +6907,32 @@ impl Client {
         self.cache_chats_slice(chats).await;
     }
 
-    /// Pre-populate the peer cache with access_hashes for all channels the
-    /// client currently participates in, by fetching the first page of dialogs.
+    /// Warm the peer cache with access_hashes by fetching the first page of
+    /// dialogs (`messages.getDialogs`).
     ///
-    /// Called on startup and whenever `get_channel_difference` encounters a
-    /// missing access_hash: after a reconnect, the in-memory
-    /// `peer_cache` is empty, so channels that the bot is in but hasn't seen
-    /// any update for are missing their access_hash.  Fetching dialogs
-    /// re-populates them so `getChannelDifference` can proceed.
-    pub(crate) async fn prefetch_channel_access_hashes(&self) -> Result<(), InvocationError> {
+    /// # When to use
+    ///
+    /// This is an **explicit, opt-in cache-warming call**.  It is **not** called
+    /// automatically during startup.  Access hashes are resolved lazily:
+    ///
+    /// * Channels already seen in a previous session have their hash restored
+    ///   from the persisted `peers` list in the session file.
+    /// * New channels receive their hash from the entities embedded in incoming
+    ///   updates, `getDifference`, or `getChannelDifference` responses.
+    ///
+    /// Call this only when you know that a channel the client needs to interact
+    /// with has never appeared in an update (e.g. the very first `send_message`
+    /// to a channel before any update has been received).
+    ///
+    /// # Why it is not called at startup
+    ///
+    /// `messages.getDialogs` forces full deserialization of
+    /// `Dialog / DraftMessage / PollResults / PeerNotifySettings / Story`.
+    /// These are high-churn Telegram objects that change silently across beta
+    /// layers, causing spurious parse failures that break startup even when the
+    /// bot would otherwise work perfectly.  Removing this from the startup path
+    /// makes Ferogram resilient to Telegram schema drift - exactly the strategy
+    pub async fn warm_peer_cache_from_dialogs(&self) -> Result<(), InvocationError> {
         let req = tl::functions::messages::GetDialogs {
             exclude_pinned: false,
             folder_id: None,
@@ -7143,13 +6943,22 @@ impl Client {
             hash: 0,
         };
         let body = self.rpc_call_raw(&req).await?;
+        tracing::debug!(
+            "[ferogram] warm_peer_cache_from_dialogs: body len={} ctor=0x{:08x}",
+            body.len(),
+            if body.len() >= 4 {
+                u32::from_le_bytes([body[0], body[1], body[2], body[3]])
+            } else {
+                0
+            },
+        );
         let mut cur = Cursor::from_slice(&body);
         let de =
             tl::enums::messages::Dialogs::deserialize(&mut cur).map_err(InvocationError::from)?;
         match de {
             tl::enums::messages::Dialogs::Dialogs(d) => {
                 tracing::debug!(
-                    "[ferogram] prefetch_channel_access_hashes: dialogs={}, users={}, chats={}",
+                    "[ferogram] warm_peer_cache_from_dialogs: dialogs={}, users={}, chats={}",
                     d.dialogs.len(),
                     d.users.len(),
                     d.chats.len()
@@ -7159,7 +6968,7 @@ impl Client {
             }
             tl::enums::messages::Dialogs::Slice(d) => {
                 tracing::debug!(
-                    "[ferogram] prefetch_channel_access_hashes: slice_count={}, dialogs={}, users={}, chats={}",
+                    "[ferogram] warm_peer_cache_from_dialogs: slice_count={}, dialogs={}, users={}, chats={}",
                     d.count,
                     d.dialogs.len(),
                     d.users.len(),
@@ -7170,12 +6979,12 @@ impl Client {
             }
             tl::enums::messages::Dialogs::NotModified(_) => {
                 tracing::debug!(
-                    "[ferogram] prefetch_channel_access_hashes: GetDialogs returned NotModified"
+                    "[ferogram] warm_peer_cache_from_dialogs: GetDialogs returned NotModified"
                 );
             }
         }
         tracing::debug!(
-            "[ferogram] prefetch_channel_access_hashes: peer cache refreshed from GetDialogs"
+            "[ferogram] warm_peer_cache_from_dialogs: peer cache refreshed from GetDialogs"
         );
         Ok(())
     }
@@ -7827,7 +7636,7 @@ impl Client {
             let body = maybe_gz_pack(&raw_body); //
             let mut w = self.inner.writer.lock().await;
             let fk = w.frame_kind.clone();
-            let acks: Vec<i64> = w.pending_ack.drain(..).collect(); // 
+            let acks: Vec<i64> = w.pending_ack.drain(..).collect(); //
             if acks.is_empty() {
                 let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
                 w.sent_bodies.insert(msg_id, body); //
@@ -7843,7 +7652,7 @@ impl Client {
                 ]);
                 let (wire, container_msg_id) = w.enc.pack_container(&container_payload);
                 w.sent_bodies.insert(req_msg_id, body); //
-                w.container_map.insert(container_msg_id, req_msg_id); // 
+                w.container_map.insert(container_msg_id, req_msg_id); //
                 self.inner.pending.lock().await.insert(req_msg_id, tx);
                 (wire, fk)
             }
@@ -9078,7 +8887,7 @@ impl Client {
 
     /// Import phone-number contacts in bulk.
     ///
-    /// Each entry is `(phone, first_name, last_name)`.  
+    /// Each entry is `(phone, first_name, last_name)`.
     /// Returns the raw `ImportedContacts` result (imported IDs + resolved users).
     ///
     /// # Example
@@ -10809,7 +10618,7 @@ impl Client {
 
     /// Set the bot's name, about text, and/or description for a given language.
     ///
-    /// Pass `None` for any field you don't want to change.  
+    /// Pass `None` for any field you don't want to change.
     /// Pass `""` for `lang_code` to set the default (language-independent) value.
     ///
     /// # Example
@@ -13479,6 +13288,7 @@ pub(crate) fn gz_inflate(data: &[u8]) -> Result<Vec<u8>, InvocationError> {
     Ok(out)
 }
 
+#[allow(dead_code)]
 pub(crate) fn maybe_gz_decompress(body: Vec<u8>) -> Result<Vec<u8>, InvocationError> {
     const ID_GZIP_PACKED_LOCAL: u32 = 0x3072cfa1;
     if body.len() >= 4 && u32::from_le_bytes(body[0..4].try_into().unwrap()) == ID_GZIP_PACKED_LOCAL

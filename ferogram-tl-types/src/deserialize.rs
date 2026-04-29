@@ -9,6 +9,20 @@
 // https://github.com/ankit-chaubey/ferogram
 
 use std::fmt;
+use std::sync::OnceLock;
+
+/// Returns `true` when the `FEROGRAM_TL_DEBUG` environment variable is set
+/// to any non-empty value.  The result is cached after the first call so there
+/// is zero overhead in hot deserialisation paths when debugging is off.
+///
+/// Enable at runtime:
+/// ```sh
+/// FEROGRAM_TL_DEBUG=1 cargo run ...
+/// ```
+pub fn tl_debug() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("FEROGRAM_TL_DEBUG").is_ok_and(|v| !v.is_empty()))
+}
 
 /// Errors that can occur during deserialization.
 #[derive(Clone, Debug, PartialEq)]

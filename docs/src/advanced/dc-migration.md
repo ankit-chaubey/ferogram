@@ -14,7 +14,6 @@ Telegram's infrastructure is split across multiple **Data Centers (DCs)**. When 
 
 The correct DC is then saved in the session file for future connections.
 
-
 *Each new DC connection performs a full DH key exchange to establish a fresh auth key for that DC.*
 
 ## Overriding the initial DC

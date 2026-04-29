@@ -65,7 +65,6 @@ Most Telegram libraries are thin wrappers around generated code or ports from Py
 
 ## Crate overview
 
-
 | Crate | Description | Typical user |
 |---|---|---|
 | **`ferogram`** | High-level async client: auth, send, receive, bots | ✅ You |

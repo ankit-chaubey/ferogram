@@ -9,7 +9,7 @@
 // https://github.com/ankit-chaubey/ferogram
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-tl-types/0.3.3")]
+#![doc(html_root_url = "https://docs.rs/ferogram-tl-types/0.3.5")]
 //! Auto-generated Telegram API types, functions, and enums for TL Layer 224.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust

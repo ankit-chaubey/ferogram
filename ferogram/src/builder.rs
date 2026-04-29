@@ -42,6 +42,7 @@ pub struct ClientBuilder {
     probe_transport: bool,
     resilient_connect: bool,
     experimental_features: ExperimentalFeatures,
+    use_pfs: bool,
 }
 
 impl Default for ClientBuilder {
@@ -67,6 +68,7 @@ impl Default for ClientBuilder {
             probe_transport: false,
             resilient_connect: false,
             experimental_features: ExperimentalFeatures::default(),
+            use_pfs: false,
         }
     }
 }
@@ -146,6 +148,17 @@ impl ClientBuilder {
     /// Default: `false`.
     pub fn catch_up(mut self, enabled: bool) -> Self {
         self.catch_up = enabled;
+        self
+    }
+
+    /// Enable Perfect Forward Secrecy via `auth.bindTempAuthKey`.
+    ///
+    /// Adds one extra DH round-trip per connection. Off by default.
+    /// Enable only if your threat model requires it.
+    ///
+    /// Default: `false`.
+    pub fn pfs(mut self, enabled: bool) -> Self {
+        self.use_pfs = enabled;
         self
     }
 
@@ -328,7 +341,7 @@ impl ClientBuilder {
             probe_transport: self.probe_transport,
             resilient_connect: self.resilient_connect,
             experimental_features: self.experimental_features,
-            use_pfs: true,
+            use_pfs: self.use_pfs,
         })
     }
 

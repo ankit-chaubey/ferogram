@@ -295,9 +295,13 @@ Integration tests use `InMemoryBackend` and don't need real credentials.
 
 Developed by [Ankit Chaubey](https://github.com/ankit-chaubey) while exploring the MTProto protocol.
 
-Thanks to [Lonami](https://codeberg.org/Lonami/grammers) for grammers (early MTProto reference), and to [Telegram Desktop](https://github.com/telegramdesktop/tdesktop) and [TDLib](https://github.com/tdlib/td) for protocol behavior references.
-
 This is still early-stage work. The API is not stable yet. Use at your own risk.
+
+---
+
+## Acknowledgments
+
+Thanks to [Lonami](https://codeberg.org/Lonami/grammers) for grammers (early MTProto reference & crucial helps in structuring), and to [Telegram Desktop](https://github.com/telegramdesktop/tdesktop) and [TDLib](https://github.com/tdlib/td) for protocol behavior references.
 
 ---
 

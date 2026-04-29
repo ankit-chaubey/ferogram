@@ -4,6 +4,54 @@ ferogram started as a renamed continuation of [layer](https://github.com/ankit-c
 
 ---
 
+## v0.3.5
+
+Released 2026-04-30. Critical deserialization fix and update-state hardening.
+
+### PollResults deserialization fix
+
+`PollResults` was incorrectly treated as a bare type throughout the codebase,
+meaning the 4-byte constructor ID was never read from the wire. The deserializer
+consumed that ID as the `flags` field instead, producing garbage flag values and
+misaligning every subsequent field read. Any `getChannelDifference` or
+`getDifference` response that contained a poll message would fail with an
+unexpected constructor id error and drop the entire update batch.
+
+The fix routes `PollResults` through `crate::enums::PollResults` like every
+other boxed type, so the constructor ID is read and validated before fields are
+deserialized. Both `MessageMediaPoll.results` and `updateMessagePoll.results`
+are affected.
+
+### getDifference self-deadlock fix
+
+The `reader_loop` select arm that fires the MessageBoxes gap deadline was
+directly awaiting `run_pending_differences()`. Because `reader_loop` is the
+only task reading TCP frames, the getDifference RPC it sent could never receive
+a response, producing a 30-second hang after any gap detection. The fix spawns
+a separate task for the diff runner, matching the pattern already used by the
+keepalive arm. A `diff_in_flight: AtomicBool` guard prevents duplicate spawns
+while a diff is already in progress.
+
+### Lazy access-hash resolution
+
+Channel access hashes are now resolved purely from incoming update entities and
+the persisted peer cache. The automatic `GetDialogs` call at startup and
+catch-up has been removed. This makes ferogram resilient to Telegram schema
+changes in dialog-related types without requiring a layer bump.
+
+`Client::warm_peer_cache_from_dialogs()` is a new public opt-in method for
+cases where you need access hashes before any update has arrived for a channel.
+
+### Upgrading from 0.3.4
+
+```toml
+ferogram = "0.3.5"
+```
+
+No API changes required. The fix is automatic.
+
+---
+
 ## v0.3.4
 
 Released 2026-04-28. MTProto hardening release: PFS temp-key sessions, access-hash prefetch on startup, and safer deserialization across the board.

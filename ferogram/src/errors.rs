@@ -70,7 +70,7 @@ impl RpcError {
     ///
     /// # Examples
     /// - `err.is("FLOOD_WAIT")`: exact match
-    /// - `err.is("PHONE_CODE_*")`: starts-with match  
+    /// - `err.is("PHONE_CODE_*")`: starts-with match
     /// - `err.is("*_INVALID")`: ends-with match
     pub fn is(&self, pattern: &str) -> bool {
         if let Some(prefix) = pattern.strip_suffix('*') {

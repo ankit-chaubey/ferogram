@@ -26,8 +26,8 @@ pub enum PeerRef {
     Username(String),
     /// Numeric ID.
     ///
-    /// Positive → user.  
-    /// Negative above `−1 000 000 000 000` → basic group (`chat_id = -id`).  
+    /// Positive → user.
+    /// Negative above `−1 000 000 000 000` → basic group (`chat_id = -id`).
     /// Negative ≤ `−1 000 000 000 000` → channel/supergroup
     /// (`channel_id = -id - 1_000_000_000_000`).
     Id(i64),

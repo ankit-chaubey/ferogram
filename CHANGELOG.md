@@ -10,6 +10,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.5]: 2026-04-30
+
+### Fixed
+
+- **PollResults deserialization** - `PollResults` was being treated as a bare
+  type (`crate::types::PollResults`) instead of a boxed type
+  (`crate::enums::PollResults`). The deserializer skipped reading the 4-byte
+  constructor ID, consuming it as the `flags` field instead. This misaligned
+  all subsequent reads inside `getChannelDifference` and `getDifference`
+  responses that contained a poll message, producing "unexpected constructor id"
+  errors and dropping those updates entirely. Fixed by removing the
+  special-case whitelist in `namegen.rs` so `PollResults` routes through
+  `crate::enums::` like every other boxed type.
+
+- **getDifference self-deadlock** - The `reader_loop` select arm that fires the
+  MessageBoxes deadline was directly awaiting `run_pending_differences()`.
+  `run_pending_differences` sends a getDifference RPC and then awaits the
+  response frame. But `reader_loop` is the only task reading TCP frames and
+  routing RPC responses - so the response could never arrive, producing a
+  30-second hang after the first gap detection. The fix: spawn a separate
+  task (same pattern already used by the Keepalive arm). A new
+  `diff_in_flight: AtomicBool` guard prevents redundant concurrent spawns
+  while a diff is already running.
+
+### Removed
+
+- **`prefetch_channel_access_hashes` from startup** - The automatic call to
+  `messages.getDialogs` during startup and catch-up has been removed. This was
+  the root cause of breakage on Telegram beta layers: the call forced full
+  deserialization of `Dialog / DraftMessage / PollResults / PeerNotifySettings
+  / Story`, all of which are high-churn objects that change without a layer
+  bump. Removing it makes Ferogram resilient to Telegram schema drift.
+
+### Changed
+
+- **Lazy access_hash resolution** - Channel access hashes are now resolved
+  purely lazily:
+  1. Hashes for channels already seen in a previous session are restored from
+     the persisted `peers` list in the session file.
+  2. New channels receive their hash from the entities embedded in incoming
+     updates / `getDifference` / `getChannelDifference` responses.
+  3. If `getChannelDifference` is triggered for a channel whose hash is still
+     unknown, `run_pending_differences` skips it gracefully
+     (`end_channel_difference Banned`) and continues; the hash arrives with the
+     next update entity.
+
+### Added
+
+- **`Client::warm_peer_cache_from_dialogs()`** - The former internal
+  `prefetch_channel_access_hashes` function is now a public, opt-in method.
+  Call it explicitly if you need a channel's access hash before any update has
+  arrived. Do not call it at startup.
+
+---
+
 ## [0.3.4]: 2026-04-28
 
 ### Added
@@ -157,7 +212,6 @@ New pages added:
 - `getDifference` deserialization no longer fails hard on unknown server responses; unknown variants are discarded and buffered updates are preserved.
 - Container message parsing now validates inner message alignment and discards malformed frames instead of propagating a parse error.
 - Transport errors `-429` and `-444` are now surfaced as log warnings before reconnecting rather than being swallowed silently.
-
 
 ## [0.1.0]: 2026-04-11
 
