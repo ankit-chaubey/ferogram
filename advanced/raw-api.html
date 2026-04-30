@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
+            window.path_to_searchindex_js = "../searchindex-16409888.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -365,7 +365,7 @@ match client.invoke(&amp;req).await {
 </span>client.warm_peer_cache_from_dialogs().await?;
 <span class="boring">}</span></code></pre>
 <p>Issues a single <code>GetDialogs</code> call and caches all returned channel and user access hashes. Call this at startup if your code needs to address channels by ID before any update has come in for them. Without this, a <code>CHANNEL_INVALID</code> error can appear on the first request to a channel the bot hasn’t interacted with yet in the current session.</p>
-<p>This is opt-in — ferogram no longer calls <code>GetDialogs</code> automatically at startup. See the v0.3.5 release notes for why.</p>
+<p>This is opt-in; ferogram no longer calls <code>GetDialogs</code> automatically at startup. See the v0.3.5 release notes for why.</p>
 <h3 id="cache_users_slice_pub--cache_chats_slice_pub"><a class="header" href="#cache_users_slice_pub--cache_chats_slice_pub"><code>cache_users_slice_pub</code> / <code>cache_chats_slice_pub</code></a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
+            window.path_to_searchindex_js = "../searchindex-16409888.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -242,11 +242,11 @@ async fn main() -&gt; anyhow::Result&lt;()&gt; {
     dp.on_message_fsm(filters::text(), OrderState::AwaitingConfirmation, |msg, state| async move {
         match msg.text().unwrap_or("").trim() {
             "yes" =&gt; {
-                state.finish().await.ok();
+                state.clear_state().await.ok();
                 msg.reply("Order placed!").await.ok();
             }
             _ =&gt; {
-                state.finish().await.ok();
+                state.clear_state().await.ok();
                 msg.reply("Order cancelled.").await.ok();
             }
         }
@@ -299,12 +299,13 @@ enum Form {
 </thead>
 <tbody>
 <tr><td><code>state.transition(new_state).await</code></td><td>Move to a new FSM state</td></tr>
-<tr><td><code>state.finish().await</code></td><td>Clear all state for this key (end the flow)</td></tr>
-<tr><td><code>state.current_state::&lt;S&gt;().await</code></td><td>Read the current state variant</td></tr>
-<tr><td><code>state.set_data(key, value).await</code></td><td>Store a serializable value</td></tr>
-<tr><td><code>state.get_data::&lt;T&gt;(key).await</code></td><td>Retrieve a stored value</td></tr>
-<tr><td><code>state.clear_data(key).await</code></td><td>Remove a single stored key</td></tr>
-<tr><td><code>state.clear_all_data().await</code></td><td>Remove all stored data for this key</td></tr>
+<tr><td><code>state.clear_state().await</code></td><td>Reset to no state (end the flow)</td></tr>
+<tr><td><code>state.set_data(field, value).await</code></td><td>Store a serializable value</td></tr>
+<tr><td><code>state.get_data::&lt;T&gt;(field).await</code></td><td>Retrieve a stored value</td></tr>
+<tr><td><code>state.get_all_data().await</code></td><td>All stored data as <code>HashMap&lt;String, Value&gt;</code></td></tr>
+<tr><td><code>state.clear_data().await</code></td><td>Delete all data, keep current state</td></tr>
+<tr><td><code>state.clear_all().await</code></td><td>Delete state and all associated data</td></tr>
+<tr><td><code>state.key()</code></td><td>Inspect the active <code>StateKey</code></td></tr>
 </tbody>
 </table>
 </div>

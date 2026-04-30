@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
+            window.path_to_searchindex_js = "../searchindex-16409888.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -189,14 +189,14 @@
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// @username string (with or without @)
-client.send_message_to_peer("@durov", "hi").await?;
-client.send_message_to_peer("durov",  "hi").await?;
+client.send_message("@durov", "hi").await?;
+client.send_message("durov",  "hi").await?;
 
 // "me" / "self": always resolves to the logged-in account
-client.send_message_to_peer("me", "Note to self").await?;
+client.send_message("me", "Note to self").await?;
 
 // Positive i64: Telegram user ID
-client.send_message_to_peer(12345678_i64, "hi").await?;
+client.send_message(12345678_i64, "hi").await?;
 
 // Negative i64: Bot-API channel ID (-100… prefix)
 client.iter_messages(-1001234567890_i64);
@@ -207,7 +207,7 @@ client.mark_as_read(-123456_i64).await?;
 // Already-resolved TL peer: zero overhead, no network call
 use ferogram::tl;
 let peer = tl::enums::Peer::User(tl::types::PeerUser { user_id: 123 });
-client.send_message_to_peer(peer, "hi").await?;
+client.send_message(peer, "hi").await?;
 <span class="boring">}</span></code></pre>
 <h3 id="peerref-variants"><a class="header" href="#peerref-variants"><code>PeerRef</code> variants</a></h3>
 <div class="table-wrapper">

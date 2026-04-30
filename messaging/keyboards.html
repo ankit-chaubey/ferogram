@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
+            window.path_to_searchindex_js = "../searchindex-16409888.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -205,12 +205,7 @@ let kb = InlineKeyboard::new()
         Button::url("📖 Docs", "https://docs.rs/ferogram"),
     ]);
 
-client
-    .send_message_to_peer_ex(
-        peer.clone(),
-        &amp;InputMessage::text("Do you want to proceed?").keyboard(kb),
-    )
-    .await?;
+client.send_message(peer.clone(), InputMessage::text("Do you want to proceed?").keyboard(kb)).await?;
 <span class="boring">}</span></code></pre>
 <h3 id="inlinekeyboard-methods"><a class="header" href="#inlinekeyboard-methods"><code>InlineKeyboard</code> methods</a></h3>
 <div class="table-wrapper">
@@ -302,11 +297,7 @@ let kb = ReplyKeyboard::new()
     .resize()      // shrink to fit content (recommended)
     .single_use(); // hide after one press
 
-client
-    .send_message_to_peer_ex(
-        peer.clone(),
-        &amp;InputMessage::text("Choose file type:").keyboard(kb),
-    )
+client.send_message(peer.clone(), InputMessage::text("Choose file type:").keyboard(kb))
     .await?;
 <span class="boring">}</span></code></pre>
 <h3 id="replykeyboard-methods"><a class="header" href="#replykeyboard-methods"><code>ReplyKeyboard</code> methods</a></h3>
@@ -335,7 +326,7 @@ let remove = tl::enums::ReplyMarkup::ReplyKeyboardHide(
     tl::types::ReplyKeyboardHide { selective: false }
 );
 client
-    .send_message_to_peer_ex(peer.clone(), &amp;InputMessage::text("Done.").reply_markup(remove))
+    .send_message(peer.clone(), InputMessage::text("Done.").reply_markup(remove))
     .await?;
 <span class="boring">}</span></code></pre>
 <hr>
@@ -407,7 +398,7 @@ let msg = InputMessage::text(text)
     .entities(entities)
     .reply_markup(kb);
 
-client.send_message_to_peer_ex(peer, &amp;msg).await?;
+client.send_message(peer, msg).await?;
 <span class="boring">}</span></code></pre>
 <h2 id="all-button-types"><a class="header" href="#all-button-types">All button types</a></h2>
 <div class="table-wrapper">

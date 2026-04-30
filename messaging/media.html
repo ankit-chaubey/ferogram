@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
+            window.path_to_searchindex_js = "../searchindex-16409888.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -342,14 +342,42 @@ enables built-in MIME detection from the file extension.</li>
 </table>
 </div>
 <hr>
+<h2 id="upload-media-reusable"><a class="header" href="#upload-media-reusable">Upload media (reusable)</a></h2>
+<p>Upload a file to Telegram’s servers and get back an <code>InputMedia</code> handle that can be reused in multiple sends without re-uploading:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::InputMessage;
+
+let uploaded = client.upload_file(&amp;bytes, "photo.jpg", "image/jpeg").await?;
+let media = uploaded.as_photo_media();
+
+// Upload to Telegram's servers (no message sent)
+let stored = client.upload_media("@peer", media.clone()).await?;
+
+// Reuse the stored media handle
+let msg = InputMessage::text("Here it is!").copy_media(stored.into_input_media());
+client.send_message("@peer", msg).await?;
+<span class="boring">}</span></code></pre>
+<hr>
 <h2 id="send-file"><a class="header" href="#send-file">Send file</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Send as document (false) or as photo/media (true)
-client.send_file(peer.clone(), uploaded, false).await?;
+</span>use ferogram::InputMessage;
+
+// Send a file as document or photo
+let uploaded = client.upload_file(&amp;bytes, "photo.jpg", "image/jpeg").await?;
+client.send_file("@peer", uploaded.as_photo_media(), &amp;InputMessage::text("Caption")).await?;
+
+// Or attach via InputMessage
+let msg = InputMessage::text("Here is the file")
+    .copy_media(uploaded.as_document_media());
+client.send_message("@peer", msg).await?;
 
 // Send as album (multiple files in one message group)
-client.send_album(peer.clone(), vec![uploaded_a, uploaded_b]).await?;
+client.send_album("@peer", vec![
+    uploaded_a.as_photo_media(),
+    uploaded_b.as_photo_media(),
+]).await?;
 <span class="boring">}</span></code></pre>
 <h3 id="albumitem-per-item-control-in-albums"><a class="header" href="#albumitem-per-item-control-in-albums"><code>AlbumItem</code>: per-item control in albums</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]

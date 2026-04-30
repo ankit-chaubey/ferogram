@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b08d7c1f.js";
+            window.path_to_searchindex_js = "searchindex-16409888.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-fb96dff5.js"></script>
@@ -190,10 +190,13 @@
 </thead>
 <tbody>
 <tr><td><code>sqlite-session</code></td><td>❌</td><td>SQLite-backed session storage via <code>rusqlite</code></td></tr>
-<tr><td><code>libsql-session</code></td><td>❌</td><td>libsql / Turso session storage: local or remote (<strong>Added in v0.4.7</strong>)</td></tr>
+<tr><td><code>libsql-session</code></td><td>❌</td><td>libsql / Turso session storage: local or remote (<strong>Added in v0.3.0</strong>)</td></tr>
 <tr><td><code>html</code></td><td>❌</td><td>Built-in hand-rolled HTML parser (<code>parse_html</code>, <code>generate_html</code>)</td></tr>
 <tr><td><code>html5ever</code></td><td>❌</td><td>Spec-compliant html5ever tokenizer: overrides the built-in <code>html</code> parser</td></tr>
 <tr><td><code>serde</code></td><td>❌</td><td><code>serde::Serialize</code> / <code>Deserialize</code> on <code>Config</code> and public structs</td></tr>
+<tr><td><code>derive</code></td><td>❌</td><td><code>#[derive(FsmState)]</code> proc-macro for FSM state enums</td></tr>
+<tr><td><code>parser</code></td><td>❌</td><td>Re-exports <code>ferogram-tl-parser</code> for custom TL schema tooling</td></tr>
+<tr><td><code>codegen</code></td><td>❌</td><td>Re-exports <code>ferogram-tl-gen</code> for custom code generation tooling</td></tr>
 </tbody>
 </table>
 </div>
@@ -211,19 +214,19 @@
 <li><code>ClientBuilder</code>: fluent connection builder</li>
 </ul>
 <pre><code class="language-toml"># SQLite session only
-ferogram = { version = "0.2.0", features = ["sqlite-session"] }
+ferogram = { version = "0.3.6", features = ["sqlite-session"] }
 
 # LibSQL / Turso session (new in 0.2.0)
-ferogram = { version = "0.2.0", features = ["libsql-session"] }
+ferogram = { version = "0.3.6", features = ["libsql-session"] }
 
 # HTML parsing (minimal, no extra deps)
-ferogram = { version = "0.2.0", features = ["html"] }
+ferogram = { version = "0.3.6", features = ["html"] }
 
 # HTML parsing (spec-compliant, adds html5ever dep)
-ferogram = { version = "0.2.0", features = ["html5ever"] }
+ferogram = { version = "0.3.6", features = ["html5ever"] }
 
 # Multiple features at once
-ferogram = { version = "0.2.0", features = ["sqlite-session", "html"] }
+ferogram = { version = "0.3.6", features = ["sqlite-session", "html"] }
 </code></pre>
 <hr>
 <h2 id="ferogram-tl-types"><a class="header" href="#ferogram-tl-types">ferogram-tl-types</a></h2>
@@ -245,14 +248,14 @@ ferogram = { version = "0.2.0", features = ["sqlite-session", "html"] }
 </table>
 </div>
 <h3 id="example-enable-serde"><a class="header" href="#example-enable-serde">Example: enable serde</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.2.0", features = ["tl-api", "impl-serde"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.3.6", features = ["tl-api", "impl-serde"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let json = serde_json::to_string(&amp;some_tl_type)?;
 <span class="boring">}</span></code></pre>
 <h3 id="example-name_for_id-debugging"><a class="header" href="#example-name_for_id-debugging">Example: name_for_id (debugging)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.2.0", features = ["tl-api", "name-for-id"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.3.6", features = ["tl-api", "name-for-id"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -263,13 +266,13 @@ if let Some(name) = name_for_id(0x74ae4240) {
 }
 <span class="boring">}</span></code></pre>
 <h3 id="example-minimal-no-debug-no-conversions"><a class="header" href="#example-minimal-no-debug-no-conversions">Example: minimal (no Debug, no conversions)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.2.0", default-features = false, features = ["tl-api"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.3.6", default-features = false, features = ["tl-api"] }
 </code></pre>
 <p>Reduces compile time when you don’t need convenience traits.</p>
 <hr>
 <h2 id="string-session-no-feature-flag-needed"><a class="header" href="#string-session-no-feature-flag-needed">String session: no feature flag needed</a></h2>
 <p><code>StringSessionBackend</code> and <code>export_session_string()</code> are available in the default build: no feature flag required:</p>
-<pre><code class="language-toml">ferogram = "0.2.0"   # already includes StringSessionBackend
+<pre><code class="language-toml">ferogram = "0.3.6"   # already includes StringSessionBackend
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -280,7 +283,7 @@ let (client, _) = Client::with_string_session(&amp;s, api_id, api_hash).await?;
 <h2 id="docsrs-build-matrix"><a class="header" href="#docsrs-build-matrix">docs.rs build matrix</a></h2>
 <p>When building docs on docs.rs, all feature flags are enabled:</p>
 <pre><code class="language-toml">[package.metadata.docs.rs]
-features = ["sqlite-session", "libsql-session", "html", "html5ever"]
+features = ["sqlite-session", "libsql-session", "serde", "html", "html5ever", "parser", "codegen"]
 rustdoc-args = ["--cfg", "docsrs"]
 </code></pre>
 

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
+            window.path_to_searchindex_js = "../searchindex-16409888.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -190,28 +190,42 @@
 while let Some(update) = stream.next().await {
     match update {
         // Messages
-        Update::NewMessage(msg)     =&gt; { /* IncomingMessage */ }
-        Update::MessageEdited(msg)  =&gt; { /* IncomingMessage */ }
-        Update::MessageDeleted(del) =&gt; { /* MessageDeletion */ }
+        Update::NewMessage(msg)       =&gt; { /* IncomingMessage */ }
+        Update::MessageEdited(msg)    =&gt; { /* IncomingMessage */ }
+        Update::MessageDeleted(del)   =&gt; { /* MessageDeleted */ }
 
         // Bot interactions
-        Update::CallbackQuery(cb)   =&gt; { /* CallbackQuery */ }
-        Update::InlineQuery(iq)     =&gt; { /* InlineQuery */ }
-        Update::InlineSend(is)      =&gt; { /* InlineSend */ }
+        Update::CallbackQuery(cb)     =&gt; { /* CallbackQuery */ }
+        Update::InlineQuery(iq)       =&gt; { /* InlineQuery */ }
+        Update::InlineSend(is)        =&gt; { /* InlineSend */ }
 
         // Presence
-        Update::UserTyping(action)  =&gt; { /* ChatActionUpdate */ }
-        Update::UserStatus(status)  =&gt; { /* UserStatusUpdate */ }
+        Update::UserTyping(action)    =&gt; { /* UserTyping */ }
+        Update::UserStatus(status)    =&gt; { /* UserStatus */ }
+
+        // Group/channel events
+        Update::ParticipantUpdate(p)  =&gt; { /* ParticipantUpdate */ }
+        Update::JoinRequest(jr)       =&gt; { /* JoinRequest */ }
+        Update::MessageReaction(mr)   =&gt; { /* MessageReaction */ }
+        Update::PollVote(pv)          =&gt; { /* PollVote */ }
+        Update::BotStopped(bs)        =&gt; { /* BotStopped */ }
+
+        // Payments
+        Update::ShippingQuery(sq)     =&gt; { /* ShippingQuery */ }
+        Update::PreCheckoutQuery(pcq) =&gt; { /* PreCheckoutQuery */ }
+
+        // Boosts
+        Update::ChatBoost(cb)         =&gt; { /* ChatBoost */ }
 
         // Raw passthrough
-        Update::Raw(raw)            =&gt; { /* RawUpdate */ }
+        Update::Raw(raw)              =&gt; { /* RawUpdate */ }
 
         _ =&gt; {}  // required: Update is #[non_exhaustive]
     }
 }
 <span class="boring">}</span></code></pre>
 <hr>
-<h2 id="messagedeletion"><a class="header" href="#messagedeletion"><code>MessageDeletion</code></a></h2>
+<h2 id="messagedeleted"><a class="header" href="#messagedeleted"><code>MessageDeleted</code></a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>Update::MessageDeleted(del) =&gt; {
@@ -264,7 +278,7 @@ is.query         // String: original query
 is.edit_message(&amp;client, updated_input_msg).await?;
 <span class="boring">}</span></code></pre>
 <hr>
-<h2 id="chatactionupdate-usertyping"><a class="header" href="#chatactionupdate-usertyping"><code>ChatActionUpdate</code> (UserTyping)</a></h2>
+<h2 id="usertyping"><a class="header" href="#usertyping"><code>UserTyping</code></a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>Update::UserTyping(action) =&gt; {
@@ -274,13 +288,97 @@ is.edit_message(&amp;client, updated_input_msg).await?;
 }
 <span class="boring">}</span></code></pre>
 <hr>
-<h2 id="userstatusupdate"><a class="header" href="#userstatusupdate"><code>UserStatusUpdate</code></a></h2>
+<h2 id="userstatus"><a class="header" href="#userstatus"><code>UserStatus</code></a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>Update::UserStatus(status) =&gt; {
     status.user_id  // i64
     status.status   // tl::enums::UserStatus
     // variants: UserStatusOnline, UserStatusOffline, UserStatusRecently, etc.
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="participantupdate"><a class="header" href="#participantupdate"><code>ParticipantUpdate</code></a></h2>
+<p>Fires when a user joins, leaves, or has their rights changed in a group or channel.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Update::ParticipantUpdate(p) =&gt; {
+    p.peer      // tl::enums::Peer: the chat
+    p.user_id   // i64
+    // p.prev_participant / p.new_participant: Option&lt;tl::enums::ChannelParticipant&gt;
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="joinrequest"><a class="header" href="#joinrequest"><code>JoinRequest</code></a></h2>
+<p>Fires when a user submits a join request to a group or channel.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Update::JoinRequest(jr) =&gt; {
+    jr.peer     // tl::enums::Peer
+    jr.user_id  // i64
+    // Approve/decline via client.join_request(peer, user_id, approve)
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="messagereaction"><a class="header" href="#messagereaction"><code>MessageReaction</code></a></h2>
+<p>Fires when a reaction is added or removed on a message.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Update::MessageReaction(mr) =&gt; {
+    mr.peer    // tl::enums::Peer
+    mr.msg_id  // i32
+    // mr.reactions: list of current reactions
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="pollvote"><a class="header" href="#pollvote"><code>PollVote</code></a></h2>
+<p>Fires when a user votes in a poll.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Update::PollVote(pv) =&gt; {
+    pv.poll_id  // i64
+    pv.user_id  // i64
+    // pv.options: Vec&lt;Vec&lt;u8&gt;&gt; - option IDs chosen
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="botstopped"><a class="header" href="#botstopped"><code>BotStopped</code></a></h2>
+<p>Fires when a user blocks or unblocks the bot.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Update::BotStopped(bs) =&gt; {
+    bs.user_id  // i64
+    bs.stopped  // bool: true = blocked, false = unblocked
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="shippingquery"><a class="header" href="#shippingquery"><code>ShippingQuery</code></a></h2>
+<p>Fires during the payment flow when the user provides a shipping address (for physical goods).</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Update::ShippingQuery(sq) =&gt; {
+    // sq.query_id, sq.user_id, sq.payload, sq.shipping_address
+    client.answer_shipping_query(sq.query_id, true, shipping_options, None).await?;
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="precheckoutquery"><a class="header" href="#precheckoutquery"><code>PreCheckoutQuery</code></a></h2>
+<p>Fires just before a payment is confirmed.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Update::PreCheckoutQuery(pcq) =&gt; {
+    // pcq.query_id, pcq.user_id, pcq.currency, pcq.total_amount, pcq.payload
+    client.answer_precheckout_query(pcq.query_id, true, None).await?;
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="chatboost"><a class="header" href="#chatboost"><code>ChatBoost</code></a></h2>
+<p>Fires when a channel receives a boost event.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Update::ChatBoost(cb) =&gt; {
+    cb.peer   // tl::enums::Peer: the channel
+    // cb.boost: boost details
 }
 <span class="boring">}</span></code></pre>
 <hr>

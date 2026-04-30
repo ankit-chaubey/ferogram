@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
+            window.path_to_searchindex_js = "../searchindex-16409888.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -192,96 +192,188 @@ client.send_message("@username", "Hello!").await?;
 client.send_message("me", "Note to self").await?;
 client.send_to_self("Quick note").await?;
 
-// By numeric ID (string form)
-client.send_message("123456789", "Hi").await?;
+// By numeric ID
+client.send_message(123456789_i64, "Hi").await?;
 <span class="boring">}</span></code></pre>
-<h2 id="send-to-a-resolved-peer"><a class="header" href="#send-to-a-resolved-peer">Send to a resolved peer</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let peer = client.resolve_peer("@username").await?;
-client.send_message_to_peer(peer, "Hello!").await?;
-<span class="boring">}</span></code></pre>
-<h2 id="formatted-convenience-methods"><a class="header" href="#formatted-convenience-methods">Formatted convenience methods</a></h2>
-<p>For quick one-liners when you don’t need the full <code>InputMessage</code> builder:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Send HTML-formatted text
-client.send_html(peer, "Hello &lt;b&gt;world&lt;/b&gt; and &lt;code&gt;code&lt;/code&gt;").await?;
-
-// Send Markdown-formatted text
-client.send_markdown(peer, "Hello **world** and `code`").await?;
-<span class="boring">}</span></code></pre>
-<p>Both return the sent <code>IncomingMessage</code>. They are shorthands for <code>send_message_to_peer_ex</code> with <code>InputMessage::html</code> or <code>InputMessage::markdown</code> respectively. The <code>html</code> feature flag must be enabled for HTML parsing.</p>
+<p><code>send_message</code> accepts anything that implements <code>Into&lt;PeerRef&gt;</code> as the peer (username string, numeric ID, or resolved <code>tl::enums::Peer</code>). The second argument accepts anything that implements <code>Into&lt;InputMessage&gt;</code>, including a bare <code>&amp;str</code> or <code>String</code> for plain text.</p>
+<hr>
 <h2 id="rich-messages-with-inputmessage"><a class="header" href="#rich-messages-with-inputmessage">Rich messages with InputMessage</a></h2>
-<p><code>InputMessage</code> gives you full control over formatting, entities, reply markup, and more:</p>
+<p><code>InputMessage</code> gives full control over formatting, entities, reply markup, and more:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use ferogram::{InputMessage, parsers::parse_markdown};
+</span>use ferogram::InputMessage;
 
-// Markdown formatting
-let (text, entities) = parse_markdown("**Bold** and _italic_ and `code`");
-let msg = InputMessage::text(text)
-    .entities(entities);
+// Plain text
+client.send_message("@peer", InputMessage::text("Hello!")).await?;
 
-client.send_message_to_peer_ex(peer, &amp;msg).await?;
+// Markdown-formatted
+client.send_message("@peer", InputMessage::markdown("**Bold** and _italic_ and `code`")).await?;
+
+// HTML-formatted (requires `html` feature)
+client.send_message("@peer", InputMessage::html("Hello &lt;b&gt;world&lt;/b&gt;")).await?;
+
+// Reply to a message
+let msg = InputMessage::text("This is a reply").reply_to(Some(original_id));
+client.send_message("@peer", msg).await?;
+
+// Silent message (no notification)
+let msg = InputMessage::text("Quiet update").silent(true);
+client.send_message("@peer", msg).await?;
 <span class="boring">}</span></code></pre>
-<h2 id="reply-to-a-message"><a class="header" href="#reply-to-a-message">Reply to a message</a></h2>
+<hr>
+<h2 id="message-shorthands-on-incomingmessage"><a class="header" href="#message-shorthands-on-incomingmessage">Message shorthands on <code>IncomingMessage</code></a></h2>
+<p>Every received message exposes shorthand methods that embed the client:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let msg = InputMessage::text("This is a reply")
-    .reply_to(Some(original_message_id));
+</span>// Quote-reply in the same chat
+msg.reply(InputMessage::text("Got it!")).await?;
 
-client.send_message_to_peer_ex(peer, &amp;msg).await?;
+// Send to the same chat without quoting
+msg.respond("Noted.").await?;
+
+// Edit the message
+msg.edit(InputMessage::text("Updated!")).await?;
+
+// Forward to another chat
+msg.forward_to("@other_chat").await?;
+
+// Delete
+msg.delete().await?;
+
+// Pin / unpin
+msg.pin().await?;
+msg.unpin().await?;
+
+// Mark as read
+msg.mark_as_read().await?;
+
+// Reload from server
+msg.refetch().await?;
+
+// Fetch the message being replied to
+if let Some(parent) = msg.get_reply().await? {
+    println!("Replied to: {}", parent.text().unwrap_or(""));
+}
 <span class="boring">}</span></code></pre>
-<h2 id="with-inline-keyboard"><a class="header" href="#with-inline-keyboard">With inline keyboard</a></h2>
+<p>All of these have explicit <code>_with(client, ...)</code> variants for use outside handler closures.</p>
+<hr>
+<h2 id="inline-keyboards-with-inputmessage"><a class="header" href="#inline-keyboards-with-inputmessage">Inline keyboards with InputMessage</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use ferogram_tl_types as tl;
+</span>use ferogram::{InputMessage, InlineKeyboard, Button};
 
-let keyboard = tl::enums::ReplyMarkup::ReplyInlineMarkup(
-    tl::types::ReplyInlineMarkup {
-        rows: vec![
-            tl::enums::KeyboardButtonRow::KeyboardButtonRow(
-                tl::types::KeyboardButtonRow {
-                    buttons: vec![
-                        tl::enums::KeyboardButton::Callback(
-                            tl::types::KeyboardButtonCallback {
-                                requires_password: false,
-                                style: None,
-                                text: "Click me!".into(),
-                                data: b"my_data".to_vec(),
-                            }
-                        ),
-                    ]
-                }
-            )
-        ]
-    }
-);
+let kb = InlineKeyboard::new()
+    .row([
+        Button::callback("✅ Yes", b"yes"),
+        Button::callback("❌ No",  b"no"),
+    ]);
 
-let msg = InputMessage::text("Choose an option:")
-    .reply_markup(keyboard);
-
-client.send_message_to_peer_ex(peer, &amp;msg).await?;
+let msg = InputMessage::text("Confirm?").reply_markup(kb);
+client.send_message("@peer", msg).await?;
 <span class="boring">}</span></code></pre>
-<h2 id="delete-messages"><a class="header" href="#delete-messages">Delete messages</a></h2>
+<hr>
+<h2 id="clicking-inline-buttons"><a class="header" href="#clicking-inline-buttons">Clicking inline buttons</a></h2>
+<p>Three targeting modes via <code>ButtonFilter</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// revoke = true removes for everyone, false removes only for you
-client.delete_messages(vec![msg_id_1, msg_id_2], true).await?;
+</span>use ferogram::update::ButtonFilter;
+
+// By position (row, col - 0-based)
+msg.click_button(ButtonFilter::Pos(0, 0)).await?;
+
+// By exact button label
+msg.click_button(ButtonFilter::Text("✅ Yes")).await?;
+
+// By callback data bytes
+msg.click_button(ButtonFilter::Data(b"action:buy")).await?;
+
+// By arbitrary predicate
+msg.click_button_where(|text, data| text.starts_with("✅")).await?;
 <span class="boring">}</span></code></pre>
+<p><code>find_button</code> and <code>find_button_where</code> return <code>Option&lt;(row, col)&gt;</code> without sending anything.</p>
+<hr>
+<h2 id="edit-forward-delete-pin-standalone-client-methods"><a class="header" href="#edit-forward-delete-pin-standalone-client-methods">Edit, forward, delete, pin (standalone client methods)</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Edit by message ID
+client.edit_message("@peer", msg_id, InputMessage::text("New text")).await?;
+
+// Forward messages
+client.forward_messages("@source", &amp;[id1, id2], "@dest").await?;
+
+// Delete messages (revoke = remove for everyone)
+client.delete_messages(&amp;[msg_id_1, msg_id_2], true).await?;
+
+// Pin / unpin
+client.pin_message("@peer", msg_id).await?;
+client.unpin_message("@peer", msg_id).await?;
+client.unpin_all_messages("@peer").await?;
+
+// Get pinned message
+let pinned = client.get_pinned_message("@peer").await?;
+
+// Mark as read
+client.mark_as_read("@peer").await?;
+
+// Export a permanent message link
+let link = client.export_message_link("@peer", msg_id).await?;
+
+// Who has read a message (groups/channels with read receipts)
+let readers = client.get_message_read_participants("@peer", msg_id).await?;
+<span class="boring">}</span></code></pre>
+<hr>
 <h2 id="fetch-message-history"><a class="header" href="#fetch-message-history">Fetch message history</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// (peer, limit, offset_id)
-// offset_id = 0 means start from the newest
-let messages = client.get_messages(peer, 50, 0).await?;
+</span>// get_message_history(peer, limit, offset_id)
+// offset_id = 0 starts from the newest
+let messages = client.get_message_history("@peer", 50, 0).await?;
 
 for msg in messages {
-    if let tl::enums::Message::Message(m) = msg {
-        println!("{}: {}", m.id, m.message);
-    }
+    println!("{}: {}", msg.id(), msg.text().unwrap_or(""));
 }
+
+// Lazy iterator (auto-paginating)
+let mut iter = client.iter_messages("@peer");
+while let Some(msg) = iter.next(&amp;client).await {
+    println!("{}", msg.text().unwrap_or(""));
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="scheduled-messages"><a class="header" href="#scheduled-messages">Scheduled messages</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::InputMessage;
+
+// Schedule at a Unix timestamp
+let msg = InputMessage::text("Happy New Year!").schedule_date(Some(1735689600));
+client.send_message("@peer", msg).await?;
+
+// Schedule to send when the recipient comes online
+let msg = InputMessage::text("Hey!").schedule_once_online();
+client.send_message("@peer", msg).await?;
+
+// List scheduled messages
+let scheduled = client.get_scheduled_messages("@peer").await?;
+
+// Send a scheduled message immediately
+client.send_scheduled_now("@peer", &amp;[scheduled_id]).await?;
+
+// Cancel a scheduled message
+client.delete_scheduled_messages("@peer", &amp;[scheduled_id]).await?;
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="drafts"><a class="header" href="#drafts">Drafts</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Save or update a draft
+client.save_draft("@peer", "Draft text").await?;
+
+// Trigger server push of all drafts as update events
+client.sync_drafts().await?;
+
+// Delete all drafts
+client.clear_all_drafts().await?;
 <span class="boring">}</span></code></pre>
 
                     </main>

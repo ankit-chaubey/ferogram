@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
+            window.path_to_searchindex_js = "../searchindex-16409888.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -297,7 +297,7 @@ async fn handle_command(
 
     // _typing drops here → indicator cancelled
     client
-        .send_message_to_peer(peer, &amp;result)
+        .send_message(peer, &amp;result)
         .await?;
 
     Ok(())

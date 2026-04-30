@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b08d7c1f.js";
+            window.path_to_searchindex_js = "searchindex-16409888.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-fb96dff5.js"></script>
@@ -194,7 +194,7 @@ match client.send_message("@peer", "Hello").await {
 
     // Telegram returned an RPC error
     Err(InvocationError::Rpc(e)) =&gt; {
-        eprintln!("Telegram error {}: {}", e.code, e.message);
+        eprintln!("Telegram error {}: {}", e.code, e.name);
 
         // Pattern-match the error name
         if e.is("FLOOD_WAIT") {
@@ -222,6 +222,8 @@ match client.send_message("@peer", "Hello").await {
 <tr><td><code>InvocationError::Rpc(RpcError)</code></td><td>Telegram returned a TL error</td></tr>
 <tr><td><code>InvocationError::Io(io::Error)</code></td><td>Network or socket error</td></tr>
 <tr><td><code>InvocationError::Deserialize(e)</code></td><td>Failed to decode server response</td></tr>
+<tr><td><code>InvocationError::Dropped</code></td><td>Request dropped (sender task shut down)</td></tr>
+<tr><td><code>InvocationError::PeerNotCached(String)</code></td><td>Peer seen before but its <code>access_hash</code> was never stored; resolve via <code>client.resolve_peer()</code> first</td></tr>
 </tbody>
 </table>
 </div>
@@ -232,7 +234,7 @@ match client.send_message("@peer", "Hello").await {
 <tr><th>Method</th><th>Return</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>.is("PATTERN")</code></td><td><code>bool</code></td><td><code>true</code> if this is an <code>Rpc</code> error whose message contains <code>PATTERN</code></td></tr>
+<tr><td><code>.is("PATTERN")</code></td><td><code>bool</code></td><td><code>true</code> if this is an <code>Rpc</code> error whose <code>name</code> matches <code>PATTERN</code>; supports <code>*</code> prefix/suffix wildcards</td></tr>
 <tr><td><code>.flood_wait_seconds()</code></td><td><code>Option&lt;u64&gt;</code></td><td>Seconds to wait for <code>FLOOD_WAIT_X</code> errors</td></tr>
 </tbody>
 </table>
@@ -244,9 +246,10 @@ match client.send_message("@peer", "Hello").await {
 </span>let e: RpcError = /* ... */;
 
 e.code               // i32: HTTP-like error code (400, 401, 403, 420, etc.)
-e.message            // String: e.g. "FLOOD_WAIT_30"
-e.is("FLOOD_WAIT")   // bool: prefix/substring match
-e.flood_wait_seconds() // Option&lt;u64&gt;: parses the number from FLOOD_WAIT_N
+e.name               // String: SCREAMING_SNAKE_CASE with digits removed, e.g. "FLOOD_WAIT"
+e.value              // Option&lt;u32&gt;: numeric suffix, e.g. Some(30) for FLOOD_WAIT_30
+e.is("FLOOD_WAIT")   // bool: exact match; "FLOOD_*" / "*_INVALID" for prefix/suffix wildcards
+e.flood_wait_seconds() // Option&lt;u64&gt;: seconds for FLOOD_WAIT_N errors
 <span class="boring">}</span></code></pre>
 <h3 id="common-error-codes"><a class="header" href="#common-error-codes">Common error codes</a></h3>
 <div class="table-wrapper">

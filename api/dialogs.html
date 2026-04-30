@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
+            window.path_to_searchindex_js = "../searchindex-16409888.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -267,7 +267,7 @@ while let Some(msg) = iter.next(&amp;client).await? {
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Latest N messages from a peer
-let messages = client.get_messages(peer.clone(), 20).await?;
+let messages = client.get_message_history(peer.clone(), 20).await?;
 
 // Specific message IDs
 let messages = client.get_messages_by_id(peer.clone(), &amp;[100, 101, 102]).await?;
@@ -286,6 +286,9 @@ let parent = client.get_reply_to_message(peer.clone(), msg_id).await?;
 </span>// List all scheduled messages
 let scheduled = client.get_scheduled_messages(peer.clone()).await?;
 
+// Send a scheduled message immediately
+client.send_scheduled_now(peer.clone(), &amp;[scheduled_id]).await?;
+
 // Cancel a scheduled message
 client.delete_scheduled_messages(peer.clone(), &amp;[scheduled_id]).await?;
 <span class="boring">}</span></code></pre>
@@ -301,6 +304,19 @@ client.clear_mentions(peer.clone()).await?;
 
 // Leave and remove from dialog list
 client.delete_dialog(peer.clone()).await?;
+
+// Pin / unpin a dialog
+client.pin_dialog(peer.clone()).await?;
+client.unpin_dialog(peer.clone()).await?;
+
+// Get pinned dialogs (folder_id: 0 = main, 1 = archived)
+let pinned = client.get_pinned_dialogs(0).await?;
+
+// Set manual unread flag on a dialog
+client.mark_dialog_unread(peer.clone(), true).await?;
+
+// Clear the manual unread flag
+client.mark_dialog_read(peer.clone()).await?;
 
 // Join a public group/channel
 client.join_chat("@somegroup").await?;

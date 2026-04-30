@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
+            window.path_to_searchindex_js = "../searchindex-16409888.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -330,7 +330,7 @@ Manually set your online/offline status. Pass <code>offline: false</code> to app
 </div>
 
 <div class="api-card-body">
-Fetch up to <code>limit</code> profile photos for a user. Only works on user peers  passing a chat or channel returns an error.
+Fetch up to <code>limit</code> profile photos for a user. Only works on user peers; passing a chat or channel returns an error.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let photos = client.get_profile_photos(peer, 10).await?;

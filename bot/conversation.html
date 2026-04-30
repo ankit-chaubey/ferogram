@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b08d7c1f.js";
+            window.path_to_searchindex_js = "../searchindex-16409888.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fb96dff5.js"></script>
@@ -239,6 +239,8 @@ let mut conv = Conversation::new(&amp;client, &amp;mut stream, peer).await?;
 <tbody>
 <tr><td><code>conv.get_response(deadline).await</code></td><td>Wait for the next message from the peer</td></tr>
 <tr><td><code>conv.wait_click(deadline).await</code></td><td>Wait for the peer to press an inline button</td></tr>
+<tr><td><code>conv.wait_read(deadline).await</code></td><td>Wait until messages are read (any non-message update from peer)</td></tr>
+<tr><td><code>conv.ask_and_wait(text, deadline).await</code></td><td>Send a message and immediately wait for the reply</td></tr>
 </tbody>
 </table>
 </div>
