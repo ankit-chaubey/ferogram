@@ -17,7 +17,7 @@ Session persistence for ferogram. Extracted in v0.3.0 so that session storage ca
 
 ```toml
 [dependencies]
-ferogram-session = "0.3"
+ferogram-session = "0.3.6"
 ```
 
 ---
@@ -97,7 +97,7 @@ let backend = StringSessionBackend::new(std::env::var("SESSION").unwrap_or_defau
 ### SqliteBackend (feature: `sqlite-session`)
 
 ```toml
-ferogram-session = { version = "0.3", features = ["sqlite-session"] }
+ferogram-session = { version = "0.3.6", features = ["sqlite-session"] }
 ```
 
 ```rust
@@ -109,7 +109,7 @@ let backend = SqliteBackend::open("sessions.db")?;
 ### LibSqlBackend (feature: `libsql-session`)
 
 ```toml
-ferogram-session = { version = "0.3", features = ["libsql-session"] }
+ferogram-session = { version = "0.3.6", features = ["libsql-session"] }
 ```
 
 ```rust

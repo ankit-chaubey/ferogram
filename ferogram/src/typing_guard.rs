@@ -34,19 +34,25 @@ impl TypingGuard {
         action: tl::enums::SendMessageAction,
     ) -> Result<Self, InvocationError> {
         let peer = peer.into().resolve(client).await?;
-        Self::start_ex(client, peer, action, None, Duration::from_secs(4)).await
+        Self::start_inner(client, peer, action, None, Duration::from_secs(4)).await
     }
 
-    /// Like [`start`](Self::start) but also accepts a forum **topic id**
-    /// (`top_msg_id`) and a custom **repeat delay**.
+    /// Send `action` to a **forum topic** thread in `peer` and keep it alive
+    /// until the guard is dropped.
     ///
-    /// # Arguments
-    /// * `topic_id`    : `Some(msg_id)` for a forum topic thread; `None` for
-    ///   the main chat.
-    /// * `repeat_delay`: How often to re-send the action to keep it alive.
-    ///   Telegram drops the indicator after ~5 s; ≤ 4 s is
-    ///   recommended.
-    pub async fn start_ex(
+    /// `topic_id` is the `top_msg_id` of the forum topic thread.
+    pub async fn start_in_topic(
+        client: &Client,
+        peer: impl Into<PeerRef>,
+        action: tl::enums::SendMessageAction,
+        topic_id: i32,
+    ) -> Result<Self, InvocationError> {
+        let peer = peer.into().resolve(client).await?;
+        Self::start_inner(client, peer, action, Some(topic_id), Duration::from_secs(4)).await
+    }
+
+    /// Internal helper shared by `start` and `start_in_topic`.
+    pub(crate) async fn start_inner(
         client: &Client,
         peer: tl::enums::Peer,
         action: tl::enums::SendMessageAction,
@@ -126,7 +132,7 @@ impl Client {
         topic_id: i32,
     ) -> Result<TypingGuard, InvocationError> {
         let peer = peer.into().resolve(self).await?;
-        TypingGuard::start_ex(
+        TypingGuard::start_inner(
             self,
             peer,
             tl::enums::SendMessageAction::SendMessageTypingAction,

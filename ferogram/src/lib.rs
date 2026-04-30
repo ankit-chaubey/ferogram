@@ -301,8 +301,8 @@ pub use socks5::Socks5Config;
 pub use types::ChannelKind;
 pub use types::{Channel, Chat, Group, User};
 pub use typing_guard::TypingGuard;
-pub use update::Update;
 pub use update::{BotStoppedUpdate, MessageReactionUpdate, PollVoteUpdate};
+pub use update::{ButtonFilter, Update};
 pub use update::{ChatActionUpdate, JoinRequestUpdate, ParticipantUpdate, UserStatusUpdate};
 pub use update::{ChatBoostUpdate, PreCheckoutQueryUpdate, ShippingQueryUpdate};
 
@@ -733,7 +733,7 @@ pub struct InputMessage {
 
 /// Options for forwarding messages.
 ///
-/// Used by [`Client::forward_messages_ex`], [`Client::forward_messages`] and
+/// Used by [`Client::forward_messages_with`], [`Client::forward_messages`] and
 /// [`IncomingMessage::forward_to_ex`].  All fields default to `false`/`None`.
 #[derive(Default, Clone)]
 pub struct ForwardOptions {
@@ -749,6 +749,18 @@ pub struct ForwardOptions {
     pub reply_to: Option<i32>,
     /// Schedule forwarding for this Unix timestamp (seconds).
     pub schedule_date: Option<i32>,
+}
+
+/// Selects which flavour of message link [`Client::export_message_link`] should produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LinkKind {
+    /// A plain `t.me/channel/msgid` permalink (default).
+    #[default]
+    Normal,
+    /// A link that reveals the whole album / media group the message belongs to.
+    Grouped,
+    /// A link that opens the thread (comments) attached to a channel post.
+    Thread,
 }
 
 impl InputMessage {
@@ -859,22 +871,8 @@ impl InputMessage {
     }
 
     /// Attach a reply markup (inline or reply keyboard).
-    pub fn reply_markup(mut self, rm: tl::enums::ReplyMarkup) -> Self {
-        self.reply_markup = Some(rm);
-        self
-    }
-
-    /// Attach an [`crate::keyboard::InlineKeyboard`].
-    ///
-    /// ```rust,no_run
-    /// use ferogram::{InputMessage, keyboard::{InlineKeyboard, Button}};
-    ///
-    /// let msg = InputMessage::text("Pick one:")
-    /// .keyboard(InlineKeyboard::new()
-    ///     .row([Button::callback("A", b"a"), Button::callback("B", b"b")]));
-    /// ```
-    pub fn keyboard(mut self, kb: impl Into<tl::enums::ReplyMarkup>) -> Self {
-        self.reply_markup = Some(kb.into());
+    pub fn reply_markup(mut self, rm: impl Into<tl::enums::ReplyMarkup>) -> Self {
+        self.reply_markup = Some(rm.into());
         self
     }
 
@@ -939,7 +937,75 @@ impl From<String> for InputMessage {
     }
 }
 
-/// Which MTProto transport framing to use for all connections.
+/// Which kind of mini-app to open.
+///
+/// Passed to [`Client::open_mini_app`].
+pub enum MiniApp {
+    /// The bot's main mini-app (no inline button required).
+    Main,
+    /// A URL-based WebView mini-app (full JS bridge, generates a `query_id`).
+    Url(String),
+    /// A registered bot app opened by its TL handle (deeplink style).
+    App {
+        /// The bot that owns the app.
+        bot: tl::enums::InputUser,
+        /// The app handle returned by `messages.GetBotApp`.
+        app: tl::enums::InputBotApp,
+        /// Optional start parameter forwarded to the app.
+        start_param: Option<String>,
+    },
+    /// A simple WebView with no JS bridge and no `query_id`.
+    Simple(String),
+}
+
+/// An active mini-app session returned by [`Client::open_mini_app`].
+///
+/// Call [`prolong`](MiniAppSession::prolong) periodically to keep the session
+/// alive while the user interacts with the WebView.
+pub struct MiniAppSession {
+    /// The URL the WebView should load.
+    pub url: String,
+    /// The `query_id` for answering `web_app_data` callbacks (`None` for Simple).
+    pub query_id: Option<i64>,
+    client: Client,
+    input_peer: tl::enums::InputPeer,
+}
+
+impl MiniAppSession {
+    fn from_result(
+        client: Client,
+        input_peer: tl::enums::InputPeer,
+        res: tl::enums::WebViewResult,
+    ) -> Result<Self, InvocationError> {
+        match res {
+            tl::enums::WebViewResult::Url(r) => Ok(Self {
+                url: r.url,
+                query_id: r.query_id,
+                client,
+                input_peer,
+            }),
+        }
+    }
+
+    /// Extend the session lifetime.
+    ///
+    /// Telegram requires this to be called every ~25 seconds while the user is
+    /// actively using the mini-app.
+    pub async fn prolong(&self) -> Result<(), InvocationError> {
+        self.client
+            .invoke(&tl::functions::messages::ProlongWebView {
+                silent: false,
+                peer: self.input_peer.clone(),
+                bot: tl::enums::InputUser::UserSelf,
+                query_id: self.query_id.unwrap_or(0),
+                reply_to: None,
+                send_as: None,
+            })
+            .await
+            .map(|_: bool| ())
+    }
+}
+
 ///
 /// | Variant | Init bytes | Notes |
 /// |---------|-----------|-------|
@@ -1209,10 +1275,6 @@ impl Default for Config {
         }
     }
 }
-
-// UpdateStream
-// UpdateStream lives here; next_raw() added.
-
 /// Asynchronous stream of [`Update`]s.
 pub struct UpdateStream {
     rx: mpsc::Receiver<update::Update>,
@@ -1239,8 +1301,6 @@ impl UpdateStream {
         }
     }
 }
-
-// Dialog
 
 /// A Telegram dialog (chat, user, channel).
 #[derive(Debug, Clone)]
@@ -1298,8 +1358,6 @@ impl Dialog {
         }
     }
 }
-
-// ClientInner
 
 struct ClientInner {
     /// Crypto/state for the connection: EncryptedSession, salts, acks, etc.
@@ -2684,6 +2742,33 @@ impl Client {
             .into_iter()
             .map(crate::types::User::from_raw)
             .collect())
+    }
+
+    /// Resolve a user by message context (no access_hash required).
+    /// Returns `None` if Telegram returns no matching user.
+    pub async fn get_user_from_message(
+        &self,
+        peer: tl::enums::InputPeer,
+        msg_id: i32,
+        user_id: i64,
+    ) -> Result<Option<tl::types::User>, InvocationError> {
+        let req = tl::functions::users::GetUsers {
+            id: vec![tl::enums::InputUser::FromMessage(
+                tl::types::InputUserFromMessage {
+                    peer,
+                    msg_id,
+                    user_id,
+                },
+            )],
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let users = Vec::<tl::enums::User>::deserialize(&mut cur)?;
+        self.cache_users_slice(&users).await;
+        Ok(users.into_iter().find_map(|u| match u {
+            tl::enums::User::User(u) => Some(u),
+            _ => None,
+        }))
     }
 
     /// Fetch information about the logged-in user.
@@ -4291,7 +4376,7 @@ impl Client {
                     }
                     // Convert and emit each approved update.
                     for raw in raw_updates {
-                        let highs = update::from_single_update_pub(raw);
+                        let highs = update::from_single_update(raw);
                         for u in highs {
                             let u = attach_client_to_update(u, self);
                             if self.inner.update_tx.try_send(u).is_err() {
@@ -4320,10 +4405,10 @@ impl Client {
     ///
     /// Called after login / reconnect to anchor the pts counter so the first
     /// `getDifference` starts from the right position.
-    pub async fn sync_pts_state(&self) -> Result<(), InvocationError> {
+    pub(crate) async fn sync_pts_state(&self) -> Result<(), InvocationError> {
         use crate::util::decode_checked;
         let body = self
-            .rpc_call_raw_pub(&tl::functions::updates::GetState {})
+            .rpc_call_raw(&tl::functions::updates::GetState {})
             .await?;
         let tl::enums::updates::State::State(s) =
             decode_checked::<tl::enums::updates::State>("updates.getState", &body)?;
@@ -4357,7 +4442,7 @@ impl Client {
         use crate::session_backend::UpdateStateChange;
         use crate::util::decode_checked;
         let body = self
-            .rpc_call_raw_pub(&tl::functions::updates::GetState {})
+            .rpc_call_raw(&tl::functions::updates::GetState {})
             .await?;
         let tl::enums::updates::State::State(s) =
             decode_checked::<tl::enums::updates::State>("updates.getState", &body)?;
@@ -4381,7 +4466,7 @@ impl Client {
     ///
     /// After PFS re-keying the server may return `AUTH_KEY_UNREGISTERED` for a
     /// short window while it propagates the new key.  Retry up to five times.
-    pub async fn sync_state_after_dh(&self) {
+    pub(crate) async fn sync_state_after_dh(&self) {
         if !self
             .inner
             .signed_in
@@ -4452,7 +4537,7 @@ impl Client {
             let get_diff_req = self.inner.message_box.lock().await.get_difference();
             if let Some(req) = get_diff_req {
                 tracing::debug!("[ferogram] running getDifference");
-                let body = self.rpc_call_raw_pub(&req).await;
+                let body = self.rpc_call_raw(&req).await;
                 match body {
                     Ok(raw) => {
                         let diff = {
@@ -4545,7 +4630,7 @@ impl Client {
                     100
                 };
                 tracing::debug!("[ferogram] running getChannelDifference for {channel_id}");
-                match self.rpc_call_raw_pub(&req).await {
+                match self.rpc_call_raw(&req).await {
                     Ok(raw) => {
                         use ferogram_tl_types::{Cursor, Deserializable};
                         let mut cur = Cursor::from_slice(&raw);
@@ -4639,7 +4724,7 @@ impl Client {
     /// Convert raw `tl::enums::Update` list → high-level updates and send to `update_tx`.
     async fn emit_raw_updates(&self, updates: Vec<tl::enums::Update>) {
         for raw in updates {
-            let highs = update::from_single_update_pub(raw);
+            let highs = update::from_single_update(raw);
             for u in highs {
                 let u = attach_client_to_update(u, self);
                 if self.inner.update_tx.try_send(u).is_err() {
@@ -4857,37 +4942,28 @@ impl Client {
     // Messaging
 
     /// Send a text message. Use `"me"` for Saved Messages.
+    /// Send a message to any peer.
+    ///
+    /// `peer` accepts anything that converts to [`PeerRef`]: a `&str` username,
+    /// an `i64` Telegram ID, or an already-resolved `tl::enums::Peer`.
+    ///
+    /// `msg` accepts a plain `&str`/`String` **or** a full [`InputMessage`]
+    /// (with keyboard, formatting, media, scheduling, etc.).
+    ///
+    /// ```rust,no_run
+    /// // Plain text
+    /// client.send_message("@username", "Hello!").await?;
+    ///
+    /// // HTML with keyboard
+    /// client.send_message(chat_id, InputMessage::html("<b>Pick</b>").reply_markup(kb)).await?;
+    /// ```
     pub async fn send_message(
         &self,
-        peer: &str,
-        text: &str,
-    ) -> Result<update::IncomingMessage, InvocationError> {
-        let p = self.resolve_peer(peer).await?;
-        self.send_message_to_peer(p, text).await
-    }
-
-    /// Send a message to a peer (plain text shorthand).
-    ///
-    /// Accepts anything that converts to [`PeerRef`]: a `&str` username,
-    /// an `i64` ID, or an already-resolved `tl::enums::Peer`.
-    pub async fn send_message_to_peer(
-        &self,
         peer: impl Into<PeerRef>,
-        text: &str,
+        msg: impl Into<InputMessage>,
     ) -> Result<update::IncomingMessage, InvocationError> {
-        self.send_message_to_peer_ex(peer, &InputMessage::text(text))
-            .await
-    }
-
-    /// Send a message with full [`InputMessage`] options.
-    ///
-    /// Accepts anything that converts to [`PeerRef`].
-    /// Returns the sent message as an [`update::IncomingMessage`].
-    pub async fn send_message_to_peer_ex(
-        &self,
-        peer: impl Into<PeerRef>,
-        msg: &InputMessage,
-    ) -> Result<update::IncomingMessage, InvocationError> {
+        let msg = msg.into();
+        let msg = &msg;
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let schedule = if msg.schedule_once_online {
@@ -4921,7 +4997,7 @@ impl Client {
                 allow_paid_stars: None,
                 suggested_post: None,
             };
-            let body = self.rpc_call_raw_pub(&req).await?;
+            let body = self.rpc_call_raw(&req).await?;
             return Ok(self.extract_sent_message(&body, msg, &peer).await);
         }
 
@@ -5231,22 +5307,130 @@ impl Client {
             .with_client(self.clone())
     }
 
-    /// Send directly to Saved Messages.
-    pub async fn send_to_self(
+    /// Open a Telegram mini-app and return a [`MiniAppSession`].
+    ///
+    /// Wraps all four raw TL WebView requests behind a single, ergonomic API.
+    ///
+    /// ```rust,no_run
+    /// // Main mini-app of a bot
+    /// let session = client.open_mini_app("@MyBot", MiniApp::Main).await?;
+    /// println!("WebView URL: {}", session.url);
+    ///
+    /// // URL-based mini-app (message button style)
+    /// let session = client.open_mini_app(chat_id, MiniApp::Url("https://...".into())).await?;
+    ///
+    /// // Keep the session alive while the user interacts
+    /// session.prolong().await?;
+    /// ```
+    pub async fn open_mini_app(
         &self,
-        text: &str,
-    ) -> Result<update::IncomingMessage, InvocationError> {
-        self.send_to_self_ex(&InputMessage::text(text)).await
+        peer: impl Into<PeerRef>,
+        app: MiniApp,
+    ) -> Result<MiniAppSession, InvocationError> {
+        let peer_ref = peer.into().resolve(self).await?;
+        let input_peer = self
+            .inner
+            .peer_cache
+            .read()
+            .await
+            .peer_to_input(&peer_ref)?;
+
+        match app {
+            MiniApp::Main => {
+                let res = self
+                    .invoke(&tl::functions::messages::RequestMainWebView {
+                        compact: false,
+                        fullscreen: false,
+                        peer: input_peer.clone(),
+                        bot: tl::enums::InputUser::UserSelf,
+                        start_param: None,
+                        theme_params: None,
+                        platform: "android".into(),
+                    })
+                    .await
+                    .map(|r: tl::enums::WebViewResult| r)?;
+                MiniAppSession::from_result(self.clone(), input_peer, res)
+            }
+            MiniApp::Url(url) => {
+                let res = self
+                    .invoke(&tl::functions::messages::RequestWebView {
+                        compact: false,
+                        fullscreen: false,
+                        from_bot_menu: false,
+                        silent: false,
+                        peer: input_peer.clone(),
+                        bot: tl::enums::InputUser::UserSelf,
+                        url: Some(url),
+                        start_param: None,
+                        theme_params: None,
+                        platform: "android".into(),
+                        reply_to: None,
+                        send_as: None,
+                    })
+                    .await
+                    .map(|r: tl::enums::WebViewResult| r)?;
+                MiniAppSession::from_result(self.clone(), input_peer, res)
+            }
+            MiniApp::App {
+                bot: _,
+                app,
+                start_param,
+            } => {
+                let res = self
+                    .invoke(&tl::functions::messages::RequestAppWebView {
+                        compact: false,
+                        fullscreen: false,
+                        write_allowed: false,
+                        peer: input_peer.clone(),
+                        app,
+                        start_param,
+                        theme_params: None,
+                        platform: "android".into(),
+                    })
+                    .await
+                    .map(|r: tl::enums::WebViewResult| r)?;
+                MiniAppSession::from_result(self.clone(), input_peer, res)
+            }
+            MiniApp::Simple(url) => {
+                let res = self
+                    .invoke(&tl::functions::messages::RequestSimpleWebView {
+                        compact: false,
+                        fullscreen: false,
+                        from_switch_webview: false,
+                        from_side_menu: false,
+                        bot: tl::enums::InputUser::UserSelf,
+                        url: Some(url),
+                        start_param: None,
+                        theme_params: None,
+                        platform: "android".into(),
+                    })
+                    .await
+                    .map(|r: tl::enums::WebViewResult| r)?;
+                Ok(MiniAppSession {
+                    url: match res {
+                        tl::enums::WebViewResult::Url(r) => r.url,
+                    },
+                    query_id: None,
+                    client: self.clone(),
+                    input_peer,
+                })
+            }
+        }
     }
 
-    /// Send a message to Saved Messages with full formatting support.
+    /// Send a message to Saved Messages.
     ///
-    /// Accepts an [`InputMessage`], so you can use `InputMessage::html(...)` or
-    /// `InputMessage::markdown(...)` for rich text.
-    pub async fn send_to_self_ex(
+    /// Accepts a plain `&str`/`String` or a full [`InputMessage`] for HTML/Markdown formatting.
+    ///
+    /// ```rust,no_run
+    /// client.send_to_self("Hello!").await?;
+    /// client.send_to_self(InputMessage::html("<b>Bold</b>")).await?;
+    /// ```
+    pub async fn send_to_self(
         &self,
-        msg: &InputMessage,
+        msg: impl Into<InputMessage>,
     ) -> Result<update::IncomingMessage, InvocationError> {
+        let msg = msg.into();
         let req = tl::functions::messages::SendMessage {
             no_webpage: msg.no_webpage,
             silent: msg.silent,
@@ -5272,45 +5456,24 @@ impl Client {
         };
         let body = self.rpc_call_raw(&req).await?;
         let self_peer = tl::enums::Peer::User(tl::types::PeerUser { user_id: 0 });
-        Ok(self.extract_sent_message(&body, msg, &self_peer).await)
+        Ok(self.extract_sent_message(&body, &msg, &self_peer).await)
     }
 
     /// Edit an existing message.
+    ///
+    /// Accepts a plain `&str`/`String` or a full [`InputMessage`] for HTML/Markdown/media edits.
+    ///
+    /// ```rust,no_run
+    /// client.edit_message(peer, id, "Updated text").await?;
+    /// client.edit_message(peer, id, InputMessage::html("<b>Updated</b>")).await?;
+    /// ```
     pub async fn edit_message(
         &self,
         peer: impl Into<PeerRef>,
         message_id: i32,
-        new_text: &str,
+        msg: impl Into<InputMessage>,
     ) -> Result<(), InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let req = tl::functions::messages::EditMessage {
-            no_webpage: false,
-            invert_media: false,
-            peer: input_peer,
-            id: message_id,
-            message: Some(new_text.to_string()),
-            media: None,
-            reply_markup: None,
-            entities: None,
-            schedule_date: None,
-            schedule_repeat_period: None,
-            quick_reply_shortcut_id: None,
-        };
-        self.rpc_write(&req).await
-    }
-
-    /// Edit an existing message with full formatting (HTML/Markdown entities).
-    ///
-    /// Unlike [`edit_message`] which only accepts plain text, this variant
-    /// accepts an [`InputMessage`] so you can pass `InputMessage::html(...)` or
-    /// `InputMessage::markdown(...)`.
-    pub async fn edit_message_ex(
-        &self,
-        peer: impl Into<PeerRef>,
-        message_id: i32,
-        msg: InputMessage,
-    ) -> Result<(), InvocationError> {
+        let msg = msg.into();
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::EditMessage {
@@ -5330,36 +5493,22 @@ impl Client {
     }
 
     /// Forward messages from `source` to `destination`.
+    ///
+    /// Returns the forwarded copies in the destination chat.
+    /// For custom options (silent, anonymous, scheduled) use [`ForwardOptions`] with the
+    /// internal `forward_messages_with`.
     pub async fn forward_messages(
         &self,
         destination: impl Into<PeerRef>,
         message_ids: &[i32],
         source: impl Into<PeerRef>,
-    ) -> Result<(), InvocationError> {
-        self.forward_messages_ex(destination, message_ids, source, ForwardOptions::default())
-            .await
-            .map(|_| ())
-    }
-
-    /// Forward messages and return the forwarded copies.
-    ///
-    /// Like [`forward_messages`] but parses the Updates response and returns
-    /// the new messages in the destination chat, matching  behaviour.
-    pub async fn forward_messages_returning(
-        &self,
-        destination: impl Into<PeerRef>,
-        message_ids: &[i32],
-        source: impl Into<PeerRef>,
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
-        self.forward_messages_ex(destination, message_ids, source, ForwardOptions::default())
+        self.forward_messages_with(destination, message_ids, source, ForwardOptions::default())
             .await
     }
 
     /// Forward messages with full options (silent, anonymous, scheduled, etc.).
-    ///
-    /// Both [`forward_messages`] and [`forward_messages_returning`] are thin
-    /// wrappers around this method.
-    pub async fn forward_messages_ex(
+    async fn forward_messages_with(
         &self,
         destination: impl Into<PeerRef>,
         message_ids: &[i32],
@@ -5453,40 +5602,27 @@ impl Client {
     }
 
     /// Delete messages by ID.
+    ///
+    /// Set `revoke = true` to delete for **everyone** in the chat.
+    /// Set `revoke = false` to delete only for yourself.
+    ///
+    /// ```rust,no_run
+    /// // delete for yourself only
+    /// client.delete_messages(&[123, 456], false).await?;
+    ///
+    /// // delete for everyone
+    /// client.delete_messages(&[123, 456], true).await?;
+    /// ```
     pub async fn delete_messages(
         &self,
-        message_ids: Vec<i32>,
+        message_ids: &[i32],
         revoke: bool,
     ) -> Result<(), InvocationError> {
         let req = tl::functions::messages::DeleteMessages {
             revoke,
-            id: message_ids,
+            id: message_ids.to_vec(),
         };
         self.rpc_write(&req).await
-    }
-
-    /// Send an HTML-formatted message to `peer`.
-    ///
-    /// Shorthand for `client.send_message_to_peer_ex(peer, &InputMessage::html(html))`.
-    pub async fn send_html(
-        &self,
-        peer: impl Into<PeerRef>,
-        html: &str,
-    ) -> Result<update::IncomingMessage, InvocationError> {
-        self.send_message_to_peer_ex(peer, &InputMessage::html(html))
-            .await
-    }
-
-    /// Send a Markdown-formatted message to `peer`.
-    ///
-    /// Shorthand for `client.send_message_to_peer_ex(peer, &InputMessage::markdown(md))`.
-    pub async fn send_markdown(
-        &self,
-        peer: impl Into<PeerRef>,
-        md: &str,
-    ) -> Result<update::IncomingMessage, InvocationError> {
-        self.send_message_to_peer_ex(peer, &InputMessage::markdown(md))
-            .await
     }
 
     /// Get messages by their IDs from a peer.
@@ -5586,7 +5722,28 @@ impl Client {
     }
 
     /// Pin a message in a chat.
+    ///
+    /// Set `silent = true` to pin without notifying chat members.
+    /// Set `silent = false` to send a pin notification (default for groups/channels).
+    ///
+    /// ```rust,no_run
+    /// // pin with notification
+    /// client.pin_message(peer, msg_id, false).await?;
+    ///
+    /// // pin silently
+    /// client.pin_message(peer, msg_id, true).await?;
+    /// ```
     pub async fn pin_message(
+        &self,
+        peer: impl Into<PeerRef>,
+        message_id: i32,
+        silent: bool,
+    ) -> Result<(), InvocationError> {
+        self.pin_message_raw(peer, message_id, silent, false, false)
+            .await
+    }
+
+    async fn pin_message_raw(
         &self,
         peer: impl Into<PeerRef>,
         message_id: i32,
@@ -5612,7 +5769,8 @@ impl Client {
         peer: impl Into<PeerRef>,
         message_id: i32,
     ) -> Result<(), InvocationError> {
-        self.pin_message(peer, message_id, true, true, false).await
+        self.pin_message_raw(peer, message_id, true, true, false)
+            .await
     }
 
     /// Fetch the message that `message` is replying to.
@@ -5629,7 +5787,7 @@ impl Client {
     /// }
     /// # Ok(()) }
     /// ```
-    pub async fn get_reply_to_message(
+    pub(crate) async fn get_reply_to_message(
         &self,
         message: &update::IncomingMessage,
     ) -> Result<Option<update::IncomingMessage>, InvocationError> {
@@ -5693,36 +5851,13 @@ impl Client {
 
     // Message search
 
-    /// Search messages in a chat (simple form).
-    /// For advanced filtering use [`Client::search`] -> [`SearchBuilder`].
-    pub async fn search_messages(
-        &self,
-        peer: impl Into<PeerRef>,
-        query: &str,
-        limit: i32,
-    ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
-        self.search(peer, query).limit(limit).fetch(self).await
-    }
-
     /// Fluent search builder for in-chat message search.
     pub fn search(&self, peer: impl Into<PeerRef>, query: &str) -> SearchBuilder {
         SearchBuilder::new(peer.into(), query.to_string())
     }
 
-    /// Search globally (simple form). For filtering use [`Client::search_global_builder`].
-    pub async fn search_global(
-        &self,
-        query: &str,
-        limit: i32,
-    ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
-        self.search_global_builder(query)
-            .limit(limit)
-            .fetch(self)
-            .await
-    }
-
     /// Fluent builder for global cross-chat search.
-    pub fn search_global_builder(&self, query: &str) -> GlobalSearchBuilder {
+    pub fn search_global(&self, query: &str) -> GlobalSearchBuilder {
         GlobalSearchBuilder::new(query.to_string())
     }
 
@@ -5770,13 +5905,13 @@ impl Client {
     pub async fn delete_scheduled_messages(
         &self,
         peer: impl Into<PeerRef>,
-        ids: Vec<i32>,
+        ids: &[i32],
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::DeleteScheduledMessages {
             peer: input_peer,
-            id: ids,
+            id: ids.to_vec(),
         };
         self.rpc_write(&req).await
     }
@@ -6230,7 +6365,7 @@ impl Client {
     /// Like [`download_media_to_file`] but routes `GetFile` to `dc_id`.
     /// Use this when you know the file's home DC (from `Document::dc_id()` etc.)
     /// to avoid AuthKeyMismatch from cross-DC routing confusion.
-    pub async fn download_media_to_file_on_dc(
+    async fn download_media_to_file_on_dc(
         &self,
         location: tl::enums::InputFileLocation,
         dc_id: i32,
@@ -6364,17 +6499,21 @@ impl Client {
         None
     }
 
-    // Message history (paginated)
-
     /// Fetch a page of messages from a peer's history.
-    pub async fn get_messages(
+    ///
+    /// Returns messages newest-first. Use `offset_id = 0` to start from the
+    /// latest message. Pass the `id()` of the last received message as
+    /// `offset_id` to fetch the next page.
+    pub async fn get_message_history(
         &self,
-        peer: tl::enums::InputPeer,
+        peer: impl Into<PeerRef>,
         limit: i32,
         offset_id: i32,
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetHistory {
-            peer,
+            peer: input_peer,
             offset_id,
             offset_date: 0,
             add_offset: 0,
@@ -6419,7 +6558,7 @@ impl Client {
     /// Resolve a Telegram username to a [`tl::enums::Peer`] and cache the access hash.
     ///
     /// Also accepts usernames without the leading `@`.
-    pub async fn resolve_username(
+    pub(crate) async fn resolve_username(
         &self,
         username: &str,
     ) -> Result<tl::enums::Peer, InvocationError> {
@@ -6872,10 +7011,6 @@ impl Client {
     /// Called automatically on `connect()`. Call it manually if you
     /// need to reset the update gap-detection counters, e.g. after resuming
     /// from a long hibernation.
-    pub async fn sync_update_state(&self) {
-        let _ = self.sync_pts_state().await;
-    }
-
     async fn cache_user(&self, user: &tl::enums::User) {
         self.inner.peer_cache.write().await.cache_user(user);
     }
@@ -6885,7 +7020,7 @@ impl Client {
         cache.cache_users(users);
     }
 
-    async fn cache_chats_slice(&self, chats: &[tl::enums::Chat]) {
+    pub(crate) async fn cache_chats_slice(&self, chats: &[tl::enums::Chat]) {
         let mut cache = self.inner.peer_cache.write().await;
         cache.cache_chats(chats);
     }
@@ -6895,16 +7030,6 @@ impl Client {
         let mut cache = self.inner.peer_cache.write().await;
         cache.cache_users(users);
         cache.cache_chats(chats);
-    }
-
-    #[doc(hidden)]
-    pub async fn cache_users_slice_pub(&self, users: &[tl::enums::User]) {
-        self.cache_users_slice(users).await;
-    }
-
-    #[doc(hidden)]
-    pub async fn cache_chats_slice_pub(&self, chats: &[tl::enums::Chat]) {
-        self.cache_chats_slice(chats).await;
     }
 
     /// Warm the peer cache with access_hashes by fetching the first page of
@@ -6963,8 +7088,8 @@ impl Client {
                     d.users.len(),
                     d.chats.len()
                 );
-                self.cache_chats_slice_pub(&d.chats).await;
-                self.cache_users_slice_pub(&d.users).await;
+                self.cache_chats_slice(&d.chats).await;
+                self.cache_users_slice(&d.users).await;
             }
             tl::enums::messages::Dialogs::Slice(d) => {
                 tracing::debug!(
@@ -6974,8 +7099,8 @@ impl Client {
                     d.users.len(),
                     d.chats.len()
                 );
-                self.cache_chats_slice_pub(&d.chats).await;
-                self.cache_users_slice_pub(&d.users).await;
+                self.cache_chats_slice(&d.chats).await;
+                self.cache_users_slice(&d.users).await;
             }
             tl::enums::messages::Dialogs::NotModified(_) => {
                 tracing::debug!(
@@ -6989,29 +7114,6 @@ impl Client {
         Ok(())
     }
 
-    /// Public RPC call for use by sub-modules.
-    #[doc(hidden)]
-    pub async fn rpc_on_dc_raw_pub<R: ferogram_tl_types::RemoteCall>(
-        &self,
-        dc_id: i32,
-        req: &R,
-    ) -> Result<Vec<u8>, InvocationError> {
-        let home = *self.inner.home_dc_id.lock().await;
-        if dc_id == 0 || dc_id == home {
-            // Same DC as home  - use main connection to avoid double-encrypt.
-            return self.rpc_call_raw_pub(req).await;
-        }
-        self.rpc_on_dc_raw(dc_id, req).await
-    }
-
-    #[doc(hidden)]
-    pub async fn rpc_call_raw_pub<R: ferogram_tl_types::RemoteCall>(
-        &self,
-        req: &R,
-    ) -> Result<Vec<u8>, InvocationError> {
-        self.rpc_call_raw(req).await
-    }
-
     /// Route a file transfer RPC call through the dedicated transfer pool.
     ///
     /// Pass `dc_id = 0` for the home DC (uploads always go here).
@@ -7021,8 +7123,7 @@ impl Client {
     /// separate auth key, seq_no, msg_id stream, salt, and pending map.
     /// This prevents `Crypto(InvalidBuffer)` caused by mixing file traffic with
     /// the update/dialog stream on the main connection.
-    #[doc(hidden)]
-    pub async fn rpc_transfer_on_dc_pub<R: ferogram_tl_types::RemoteCall>(
+    pub(crate) async fn rpc_transfer_on_dc_pub<R: ferogram_tl_types::RemoteCall>(
         &self,
         dc_id: i32,
         req: &R,
@@ -7664,17 +7765,6 @@ impl Client {
         }
     }
 
-    pub async fn count_channels(&self) -> Result<usize, InvocationError> {
-        let mut iter = self.iter_dialogs();
-        let mut count = 0usize;
-        while let Some(dialog) = iter.next(self).await? {
-            if matches!(dialog.peer(), Some(tl::enums::Peer::Channel(_))) {
-                count += 1;
-            }
-        }
-        Ok(count)
-    }
-
     ///
     /// Returns a [`DialogIter`] that can be advanced with [`DialogIter::next`].
     /// Lets you page through all dialogs without loading them all at once.
@@ -8230,8 +8320,8 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let full = tl::enums::messages::ChatFull::deserialize(&mut cur)?;
         let tl::enums::messages::ChatFull::ChatFull(ref f) = full;
-        self.cache_users_slice_pub(&f.users).await;
-        self.cache_chats_slice_pub(&f.chats).await;
+        self.cache_users_slice(&f.users).await;
+        self.cache_chats_slice(&f.chats).await;
         Ok(full)
     }
 
@@ -8265,7 +8355,7 @@ impl Client {
     pub async fn invite_users(
         &self,
         peer: impl Into<PeerRef>,
-        user_ids: Vec<i64>,
+        user_ids: &[i64],
     ) -> Result<(), InvocationError> {
         if user_ids.is_empty() {
             return Ok(());
@@ -8277,8 +8367,8 @@ impl Client {
             tl::enums::InputPeer::Channel(c) => {
                 let cache = self.inner.peer_cache.read().await;
                 let users: Vec<tl::enums::InputUser> = user_ids
-                    .into_iter()
-                    .map(|id| {
+                    .iter()
+                    .map(|&id| {
                         let hash = cache.users.get(&id).copied().unwrap_or(0);
                         tl::enums::InputUser::InputUser(tl::types::InputUser {
                             user_id: id,
@@ -8297,7 +8387,7 @@ impl Client {
             }
             tl::enums::InputPeer::Chat(c) => {
                 // Legacy groups: add one at a time
-                for id in user_ids {
+                for &id in user_ids {
                     let hash = self
                         .inner
                         .peer_cache
@@ -8522,7 +8612,7 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let invites = tl::enums::messages::ExportedChatInvites::deserialize(&mut cur)?;
         let tl::enums::messages::ExportedChatInvites::ExportedChatInvites(result) = invites;
-        self.cache_users_slice_pub(&result.users).await;
+        self.cache_users_slice(&result.users).await;
         Ok(result.invites)
     }
 
@@ -8573,14 +8663,20 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    /// Approve a pending join request from `user_id`.
+    /// Approve or reject a single pending join request from `user_id`.
     ///
-    /// Only works for chats with `request_needed` invite links or join-request
-    /// enabled channels. Approving adds the user immediately.
-    pub async fn approve_join_request(
+    /// Set `approve = true` to add the user immediately.
+    /// Set `approve = false` to dismiss the request (user can request again unless banned).
+    ///
+    /// ```rust,no_run
+    /// client.join_request(peer, user_id, true).await?;   // approve
+    /// client.join_request(peer, user_id, false).await?;  // reject
+    /// ```
+    pub async fn join_request(
         &self,
         peer: impl Into<PeerRef>,
         user_id: i64,
+        approve: bool,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
@@ -8594,7 +8690,7 @@ impl Client {
             .copied()
             .unwrap_or(0);
         let req = tl::functions::messages::HideChatJoinRequest {
-            approved: true,
+            approved: approve,
             peer: input_peer,
             user_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
                 user_id,
@@ -8604,67 +8700,26 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    /// Reject (dismiss) a pending join request from `user_id`.
+    /// Approve or reject **all** pending join requests for a chat.
     ///
-    /// The user is not added to the chat and can request again later unless
-    /// they are subsequently banned.
-    pub async fn reject_join_request(
+    /// Set `approve = true` to approve all, `false` to reject all.
+    /// Pass `link = Some(invite_link)` to act only on requests from that link,
+    /// or `link = None` to act on all pending requests at once.
+    ///
+    /// ```rust,no_run
+    /// client.all_join_requests(peer, true, None).await?;   // approve all
+    /// client.all_join_requests(peer, false, None).await?;  // reject all
+    /// ```
+    pub async fn all_join_requests(
         &self,
         peer: impl Into<PeerRef>,
-        user_id: i64,
-    ) -> Result<(), InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let user_hash = self
-            .inner
-            .peer_cache
-            .read()
-            .await
-            .users
-            .get(&user_id)
-            .copied()
-            .unwrap_or(0);
-        let req = tl::functions::messages::HideChatJoinRequest {
-            approved: false,
-            peer: input_peer,
-            user_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
-                user_id,
-                access_hash: user_hash,
-            }),
-        };
-        self.rpc_write(&req).await
-    }
-
-    /// Approve all pending join requests for a chat, optionally filtered to a
-    /// specific invite link.
-    ///
-    /// Pass `link = None` to approve requests from all invite links at once.
-    pub async fn approve_all_join_requests(
-        &self,
-        peer: impl Into<PeerRef>,
+        approve: bool,
         link: Option<String>,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::HideAllChatJoinRequests {
-            approved: true,
-            peer: input_peer,
-            link,
-        };
-        self.rpc_write(&req).await
-    }
-
-    /// Reject all pending join requests for a chat, optionally filtered to a
-    /// specific invite link.
-    pub async fn reject_all_join_requests(
-        &self,
-        peer: impl Into<PeerRef>,
-        link: Option<String>,
-    ) -> Result<(), InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let req = tl::functions::messages::HideAllChatJoinRequests {
-            approved: false,
+            approved: approve,
             peer: input_peer,
             link,
         };
@@ -8712,7 +8767,7 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::messages::ChatInviteImporters::ChatInviteImporters(result) =
             tl::enums::messages::ChatInviteImporters::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
+        self.cache_users_slice(&result.users).await;
         Ok(result
             .importers
             .into_iter()
@@ -8736,7 +8791,7 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::messages::ChatAdminsWithInvites::ChatAdminsWithInvites(result) =
             tl::enums::messages::ChatAdminsWithInvites::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
+        self.cache_users_slice(&result.users).await;
         Ok(result)
     }
 
@@ -8781,7 +8836,7 @@ impl Client {
                     limit: 200,
                     hash: 0,
                 };
-                let body = self.rpc_call_raw_pub(&req).await?;
+                let body = self.rpc_call_raw(&req).await?;
                 let mut cur = Cursor::from_slice(&body);
                 let raw = match tl::enums::channels::ChannelParticipants::deserialize(&mut cur)? {
                     tl::enums::channels::ChannelParticipants::ChannelParticipants(p) => p,
@@ -8815,18 +8870,17 @@ impl Client {
 
     /// Fetch the full contact list of the current user.
     ///
-    /// Returns `None` when the server indicates the list hasn't changed since
-    /// the last fetch (contacts.ContactsNotModified).
-    pub async fn get_contacts(&self) -> Result<Option<Vec<tl::enums::User>>, InvocationError> {
+    /// Returns an empty list when the server reports no changes since the last fetch.
+    pub async fn get_contacts(&self) -> Result<Vec<tl::enums::User>, InvocationError> {
         let req = tl::functions::contacts::GetContacts { hash: 0 };
         let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         match tl::enums::contacts::Contacts::deserialize(&mut cur)? {
             tl::enums::contacts::Contacts::Contacts(c) => {
-                self.cache_users_slice_pub(&c.users).await;
-                Ok(Some(c.users))
+                self.cache_users_slice(&c.users).await;
+                Ok(c.users)
             }
-            tl::enums::contacts::Contacts::NotModified => Ok(None),
+            tl::enums::contacts::Contacts::NotModified => Ok(vec![]),
         }
     }
 
@@ -8866,14 +8920,14 @@ impl Client {
     }
 
     /// Remove one or more users from the contact list.
-    pub async fn delete_contacts(&self, user_ids: Vec<i64>) -> Result<(), InvocationError> {
+    pub async fn delete_contacts(&self, user_ids: &[i64]) -> Result<(), InvocationError> {
         if user_ids.is_empty() {
             return Ok(());
         }
         let cache = self.inner.peer_cache.read().await;
         let users: Vec<tl::enums::InputUser> = user_ids
-            .into_iter()
-            .map(|id| {
+            .iter()
+            .map(|&id| {
                 let hash = cache.users.get(&id).copied().unwrap_or(0);
                 tl::enums::InputUser::InputUser(tl::types::InputUser {
                     user_id: id,
@@ -8926,7 +8980,7 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::contacts::ImportedContacts::ImportedContacts(result) =
             tl::enums::contacts::ImportedContacts::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
+        self.cache_users_slice(&result.users).await;
         Ok(result)
     }
 
@@ -8971,8 +9025,8 @@ impl Client {
             tl::enums::contacts::Blocked::Blocked(b) => (b.blocked, b.chats, b.users),
             tl::enums::contacts::Blocked::Slice(b) => (b.blocked, b.chats, b.users),
         };
-        self.cache_users_slice_pub(&users).await;
-        self.cache_chats_slice_pub(&chats).await;
+        self.cache_users_slice(&users).await;
+        self.cache_chats_slice(&chats).await;
         Ok(blocked
             .into_iter()
             .map(|b| match b {
@@ -8997,8 +9051,8 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::contacts::Found::Found(found) =
             tl::enums::contacts::Found::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&found.users).await;
-        self.cache_chats_slice_pub(&found.chats).await;
+        self.cache_users_slice(&found.users).await;
+        self.cache_chats_slice(&found.chats).await;
         // Combine my_results + results, deduplicated by position
         let mut peers = found.my_results;
         for p in found.results {
@@ -9068,7 +9122,7 @@ impl Client {
     /// Update the current user's display name and/or bio.
     ///
     /// Pass `None` for any field you do not want to change.
-    pub async fn update_profile(
+    pub async fn set_profile(
         &self,
         first_name: Option<String>,
         last_name: Option<String>,
@@ -9087,7 +9141,7 @@ impl Client {
     /// Set the username of the current account.
     ///
     /// Pass an empty string to remove the username.
-    pub async fn update_username(
+    pub async fn set_username(
         &self,
         username: impl Into<String>,
     ) -> Result<tl::enums::User, InvocationError> {
@@ -9099,12 +9153,15 @@ impl Client {
         Ok(tl::enums::User::deserialize(&mut cur)?)
     }
 
-    /// Set the online/offline status of the current account.
-    ///
-    /// Pass `offline = true` to appear offline immediately.
-    /// Pass `offline = false` to appear online.
-    pub async fn update_status(&self, offline: bool) -> Result<(), InvocationError> {
-        let req = tl::functions::account::UpdateStatus { offline };
+    /// Appear online to other users.
+    pub async fn set_online(&self) -> Result<(), InvocationError> {
+        let req = tl::functions::account::UpdateStatus { offline: false };
+        self.rpc_write(&req).await
+    }
+
+    /// Appear offline immediately.
+    pub async fn set_offline(&self) -> Result<(), InvocationError> {
+        let req = tl::functions::account::UpdateStatus { offline: true };
         self.rpc_write(&req).await
     }
 
@@ -9192,13 +9249,13 @@ impl Client {
     pub async fn send_scheduled_now(
         &self,
         peer: impl Into<PeerRef>,
-        ids: Vec<i32>,
+        ids: &[i32],
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::SendScheduledMessages {
             peer: input_peer,
-            id: ids,
+            id: ids.to_vec(),
         };
         self.rpc_write(&req).await
     }
@@ -9287,8 +9344,8 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::messages::DiscussionMessage::DiscussionMessage(result) =
             tl::enums::messages::DiscussionMessage::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
-        self.cache_chats_slice_pub(&result.chats).await;
+        self.cache_users_slice(&result.users).await;
+        self.cache_chats_slice(&result.chats).await;
         Ok(result)
     }
 
@@ -9379,17 +9436,16 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::users::UserFull::UserFull(result) =
             tl::enums::users::UserFull::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
-        self.cache_chats_slice_pub(&result.chats).await;
+        self.cache_users_slice(&result.users).await;
+        self.cache_chats_slice(&result.chats).await;
         let tl::enums::UserFull::UserFull(full_user) = result.full_user;
         Ok(full_user)
     }
 
-    /// Fetch the reaction counters for a list of messages.
+    /// Refresh the reaction counters for a list of messages.
     ///
-    /// The server pushes an `updateMessageReactions` update; this call
-    /// triggers that refresh for the given `msg_ids`.
-    pub async fn get_message_reactions(
+    /// The server pushes an `updateMessageReactions` update for each message.
+    pub async fn get_reactions(
         &self,
         peer: impl Into<PeerRef>,
         msg_ids: Vec<i32>,
@@ -9403,11 +9459,11 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    /// Get the list of users who reacted to a message with a specific reaction.
+    /// Get the paginated list of users who reacted to a message.
     ///
     /// Pass `reaction = None` to get all reactions. `limit` is max 100.
     /// Use `offset` from the previous response for pagination.
-    pub async fn get_reaction_list(
+    pub async fn iter_reaction_users(
         &self,
         peer: impl Into<PeerRef>,
         msg_id: i32,
@@ -9428,8 +9484,8 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::messages::MessageReactionsList::MessageReactionsList(result) =
             tl::enums::messages::MessageReactionsList::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
-        self.cache_chats_slice_pub(&result.chats).await;
+        self.cache_users_slice(&result.users).await;
+        self.cache_chats_slice(&result.chats).await;
         Ok(result)
     }
 
@@ -9583,8 +9639,8 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::channels::AdminLogResults::AdminLogResults(result) =
             tl::enums::channels::AdminLogResults::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
-        self.cache_chats_slice_pub(&result.chats).await;
+        self.cache_users_slice(&result.users).await;
+        self.cache_chats_slice(&result.chats).await;
         Ok(result
             .events
             .into_iter()
@@ -9667,7 +9723,38 @@ impl Client {
     /// Export a permanent link to a specific message in a channel.
     ///
     /// Returns the `t.me/channel/msgid` link string.
+    ///
+    /// Use [`LinkKind`] to control which flavour of link is produced:
+    /// - [`LinkKind::Normal`]   - plain permalink (default)
+    /// - [`LinkKind::Grouped`]  - link that shows the whole album / media group
+    /// - [`LinkKind::Thread`]   - link that opens the thread (comments) for the post
+    ///
+    /// ```rust,no_run
+    /// // plain link
+    /// let url = client.export_message_link(peer, msg_id, LinkKind::Normal).await?;
+    ///
+    /// // grouped / album link
+    /// let url = client.export_message_link(peer, msg_id, LinkKind::Grouped).await?;
+    ///
+    /// // thread / comments link
+    /// let url = client.export_message_link(peer, msg_id, LinkKind::Thread).await?;
+    /// ```
     pub async fn export_message_link(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+        kind: LinkKind,
+    ) -> Result<String, InvocationError> {
+        let (grouped, thread) = match kind {
+            LinkKind::Normal => (false, false),
+            LinkKind::Grouped => (true, false),
+            LinkKind::Thread => (false, true),
+        };
+        self.export_message_link_raw(peer, msg_id, grouped, thread)
+            .await
+    }
+
+    async fn export_message_link_raw(
         &self,
         peer: impl Into<PeerRef>,
         msg_id: i32,
@@ -9720,8 +9807,8 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::channels::SendAsPeers::SendAsPeers(result) =
             tl::enums::channels::SendAsPeers::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
-        self.cache_chats_slice_pub(&result.chats).await;
+        self.cache_users_slice(&result.users).await;
+        self.cache_chats_slice(&result.chats).await;
         Ok(result
             .peers
             .into_iter()
@@ -9778,7 +9865,7 @@ impl Client {
     ///
     /// The server responds with an `Updates` containing `updateDraftMessage`
     /// entries; this method triggers that push and returns immediately.
-    pub async fn get_all_drafts(&self) -> Result<(), InvocationError> {
+    pub async fn sync_drafts(&self) -> Result<(), InvocationError> {
         let req = tl::functions::messages::GetAllDrafts {};
         self.rpc_write(&req).await
     }
@@ -9875,15 +9962,25 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::messages::PeerDialogs::PeerDialogs(result) =
             tl::enums::messages::PeerDialogs::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
-        self.cache_chats_slice_pub(&result.chats).await;
+        self.cache_users_slice(&result.users).await;
+        self.cache_chats_slice(&result.chats).await;
         Ok(result.dialogs)
     }
 
-    /// Mark a dialog as unread (or read).
-    ///
-    /// `unread = true` adds the unread mark; `false` removes it.
+    /// Mark a dialog as unread.
     pub async fn mark_dialog_unread(
+        &self,
+        peer: impl Into<PeerRef>,
+    ) -> Result<(), InvocationError> {
+        self.set_dialog_unread_flag(peer, true).await
+    }
+
+    /// Mark a dialog as read (clears the unread mark).
+    pub async fn mark_dialog_read(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+        self.set_dialog_unread_flag(peer, false).await
+    }
+
+    async fn set_dialog_unread_flag(
         &self,
         peer: impl Into<PeerRef>,
         unread: bool,
@@ -9964,8 +10061,8 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::messages::VotesList::VotesList(result) =
             tl::enums::messages::VotesList::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
-        self.cache_chats_slice_pub(&result.chats).await;
+        self.cache_users_slice(&result.users).await;
+        self.cache_chats_slice(&result.chats).await;
         Ok(result)
     }
 
@@ -9996,8 +10093,8 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::messages::ForumTopics::ForumTopics(result) =
             tl::enums::messages::ForumTopics::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
-        self.cache_chats_slice_pub(&result.chats).await;
+        self.cache_users_slice(&result.users).await;
+        self.cache_chats_slice(&result.chats).await;
         Ok(result.topics)
     }
 
@@ -10017,8 +10114,8 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::messages::ForumTopics::ForumTopics(result) =
             tl::enums::messages::ForumTopics::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
-        self.cache_chats_slice_pub(&result.chats).await;
+        self.cache_users_slice(&result.users).await;
+        self.cache_chats_slice(&result.chats).await;
         Ok(result.topics)
     }
 
@@ -10225,7 +10322,7 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::messages::HighScores::HighScores(result) =
             tl::enums::messages::HighScores::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
+        self.cache_users_slice(&result.users).await;
         Ok(result
             .scores
             .into_iter()
@@ -10369,8 +10466,8 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::account::PrivacyRules::PrivacyRules(result) =
             tl::enums::account::PrivacyRules::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
-        self.cache_chats_slice_pub(&result.chats).await;
+        self.cache_users_slice(&result.users).await;
+        self.cache_chats_slice(&result.chats).await;
         Ok(result.rules)
     }
 
@@ -10388,8 +10485,8 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::account::PrivacyRules::PrivacyRules(result) =
             tl::enums::account::PrivacyRules::deserialize(&mut cur)?;
-        self.cache_users_slice_pub(&result.users).await;
-        self.cache_chats_slice_pub(&result.chats).await;
+        self.cache_users_slice(&result.users).await;
+        self.cache_chats_slice(&result.chats).await;
         Ok(result.rules)
     }
 
@@ -10429,8 +10526,6 @@ impl Client {
         };
         self.rpc_write(&req).await
     }
-
-    // send_poll
 
     /// Send a poll to a chat.
     ///
@@ -10885,7 +10980,7 @@ impl Client {
             allow_paid_stars: None,
             suggested_post: None,
         };
-        let body = self.rpc_call_raw_pub(&req).await?;
+        let body = self.rpc_call_raw(&req).await?;
         Ok(self
             .extract_sent_message(&body, &crate::InputMessage::text(""), &peer)
             .await)
@@ -10948,8 +11043,6 @@ impl Client {
         Ok(())
     }
 
-    // set_emoji_status
-
     /// Set the logged-in user's emoji status.
     ///
     /// Pass `None` to clear the current status.
@@ -10982,8 +11075,6 @@ impl Client {
         let req = tl::functions::account::UpdateEmojiStatus { emoji_status };
         self.rpc_write(&req).await
     }
-
-    // transfer_chat_ownership
 
     /// Transfer ownership of a basic group to another user.
     ///
@@ -11046,8 +11137,6 @@ impl Client {
         Ok(())
     }
 
-    // get_linked_channel
-
     /// Return the linked discussion supergroup ID for a broadcast channel,
     /// or the linked broadcast channel ID for a supergroup.
     ///
@@ -11094,8 +11183,6 @@ impl Client {
         };
         Ok(linked)
     }
-
-    // get_media_group
 
     /// Fetch all messages belonging to the same album (grouped media) as the
     /// given message ID in a channel or supergroup.
@@ -11216,27 +11303,12 @@ impl Client {
         Ok(group)
     }
 
-    // get_stats
-
     /// Fetch broadcast channel statistics.
     ///
-    /// Returns the raw [`tl::enums::stats::BroadcastStats`] object from which
-    /// you can read follower counts, view graphs, top-post interactions, etc.
-    ///
-    /// The channel must have statistics enabled (≥500 subscribers for
-    /// broadcast channels; stats DC must be available).
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// # use ferogram::Client;
-    /// # async fn ex(client: Client) -> anyhow::Result<()> {
-    /// let stats = client.get_broadcast_stats("@mychannel", false).await?;
-    /// # Ok(()) }
-    /// ```
+    /// Returns the raw [`tl::enums::stats::BroadcastStats`] object.
     pub async fn get_broadcast_stats(
         &self,
         peer: impl Into<PeerRef>,
-        dark: bool,
     ) -> Result<tl::enums::stats::BroadcastStats, InvocationError> {
         use ferogram_tl_types as tl;
         let peer = peer.into().resolve(self).await?;
@@ -11254,7 +11326,10 @@ impl Client {
                 ));
             }
         };
-        let req = tl::functions::stats::GetBroadcastStats { dark, channel };
+        let req = tl::functions::stats::GetBroadcastStats {
+            dark: false,
+            channel,
+        };
         let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         Ok(tl::enums::stats::BroadcastStats::deserialize(&mut cur)?)
@@ -11263,20 +11338,9 @@ impl Client {
     /// Fetch supergroup (megagroup) statistics.
     ///
     /// Returns the raw [`tl::enums::stats::MegagroupStats`] object.
-    ///
-    /// The group must have enough members for stats to be available.
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// # use ferogram::Client;
-    /// # async fn ex(client: Client) -> anyhow::Result<()> {
-    /// let stats = client.get_megagroup_stats("@mysupergroup", false).await?;
-    /// # Ok(()) }
-    /// ```
     pub async fn get_megagroup_stats(
         &self,
         peer: impl Into<PeerRef>,
-        dark: bool,
     ) -> Result<tl::enums::stats::MegagroupStats, InvocationError> {
         use ferogram_tl_types as tl;
         let peer = peer.into().resolve(self).await?;
@@ -11294,7 +11358,10 @@ impl Client {
                 ));
             }
         };
-        let req = tl::functions::stats::GetMegagroupStats { dark, channel };
+        let req = tl::functions::stats::GetMegagroupStats {
+            dark: false,
+            channel,
+        };
         let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         Ok(tl::enums::stats::MegagroupStats::deserialize(&mut cur)?)
@@ -11458,16 +11525,12 @@ impl MessageIter {
 
 /// Public wrapper for `random_i64` used by sub-modules.
 #[doc(hidden)]
-pub fn random_i64_pub() -> i64 {
+pub(crate) fn random_i64_pub() -> i64 {
     random_i64()
 }
 
-pub fn is_bool_true(body: &[u8]) -> bool {
+pub(crate) fn is_bool_true(body: &[u8]) -> bool {
     body.len() == 4 && u32::from_le_bytes(body[0..4].try_into().unwrap_or([0u8; 4])) == 0x997275b5
-}
-
-pub fn is_bool_false(body: &[u8]) -> bool {
-    body.len() == 4 && u32::from_le_bytes(body[0..4].try_into().unwrap_or([0u8; 4])) == 0xbc799737
 }
 
 /// How framing bytes are sent/received on a connection.
@@ -13108,8 +13171,6 @@ async fn recv_frame_plain<T: Deserializable>(
     T::deserialize(&mut cur).map_err(Into::into)
 }
 
-// MTProto envelope
-
 enum EnvelopeResult {
     Payload(Vec<u8>),
     /// Raw update bytes to be routed through dispatch_updates for proper pts tracking.
@@ -13227,8 +13288,6 @@ fn unwrap_envelope(body: Vec<u8>) -> Result<EnvelopeResult, InvocationError> {
     }
 }
 
-// Utilities
-
 fn random_i64() -> i64 {
     let mut b = [0u8; 8];
     getrandom::getrandom(&mut b).expect("getrandom");
@@ -13300,8 +13359,6 @@ pub(crate) fn maybe_gz_decompress(body: Vec<u8>) -> Result<Vec<u8>, InvocationEr
     }
 }
 
-// outgoing gzip compression
-
 /// Minimum body size above which we attempt zlib compression.
 /// Below this threshold the gzip_packed wrapper overhead exceeds the gain.
 const COMPRESSION_THRESHOLD: usize = 512;
@@ -13366,8 +13423,6 @@ fn build_msgs_ack_body(msg_ids: &[i64]) -> Vec<u8> {
     }
     out
 }
-
-// MessageContainer body builder
 
 /// Build the body of a `msg_container#73f1f8dc` from a list of
 /// `(msg_id, seqno, body)` inner messages.

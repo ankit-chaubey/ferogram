@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::Utc;
+use ferogram::tl;
 use ferogram::{Client, InputMessage, SignInError, TransportKind, update::Update};
-use ferogram::{tl, tl::Cursor, tl::Deserializable};
 
 const API_ID: i32 = 0;
 const API_HASH: &str = "";
@@ -188,10 +188,10 @@ async fn route(
             let _ = client.mark_as_read(peer).await;
         }
         ".del" => {
-            let _ = client.delete_messages(vec![msg_id], true).await;
+            let _ = client.delete_messages(&[msg_id], true).await;
         }
         ".pin" => {
-            let _ = client.pin_message(peer, msg_id, true, false, false).await;
+            let _ = client.pin_message(peer, msg_id, true).await;
         }
         ".unpin" => {
             let _ = client.unpin_message(peer, msg_id).await;
@@ -227,27 +227,13 @@ async fn route(
 }
 
 async fn cache_sender(client: &Client, user_id: i64, msg_id: i32, chat_peer: &tl::enums::Peer) {
-    let ctx = match chat_peer {
+    let peer = match chat_peer {
         tl::enums::Peer::Chat(c) => {
             tl::enums::InputPeer::Chat(tl::types::InputPeerChat { chat_id: c.chat_id })
         }
         _ => tl::enums::InputPeer::Empty,
     };
-    let req = tl::functions::users::GetUsers {
-        id: vec![tl::enums::InputUser::FromMessage(
-            tl::types::InputUserFromMessage {
-                peer: ctx,
-                msg_id,
-                user_id,
-            },
-        )],
-    };
-    if let Ok(body) = client.rpc_call_raw_pub(&req).await {
-        let mut cur = Cursor::from_slice(&body);
-        if let Ok(users) = Vec::<tl::enums::User>::deserialize(&mut cur) {
-            client.cache_users_slice_pub(&users).await;
-        }
-    }
+    let _ = client.get_user_from_message(peer, msg_id, user_id).await;
 }
 
 async fn cmd_ping(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
@@ -342,43 +328,27 @@ async fn cmd_whois(
         rp(client, peer, reply_to, "❓ Unknown sender.").await;
         return;
     };
-    let ctx = match chat_peer {
+    let peer_ctx = match chat_peer {
         tl::enums::Peer::Chat(c) => {
             tl::enums::InputPeer::Chat(tl::types::InputPeerChat { chat_id: c.chat_id })
         }
         _ => tl::enums::InputPeer::Empty,
     };
-    let req = tl::functions::users::GetUsers {
-        id: vec![tl::enums::InputUser::FromMessage(
-            tl::types::InputUserFromMessage {
-                peer: ctx,
-                msg_id: reply_to,
-                user_id: uid,
-            },
-        )],
-    };
-    match client.rpc_call_raw_pub(&req).await {
-        Ok(body) => {
-            let mut cur = Cursor::from_slice(&body);
-            if let Ok(users) = Vec::<tl::enums::User>::deserialize(&mut cur) {
-                client.cache_users_slice_pub(&users).await;
-                if let Some(tl::enums::User::User(u)) = users.into_iter().next() {
-                    let f = u.first_name.as_deref().unwrap_or("");
-                    let l = u.last_name.as_deref().unwrap_or("");
-                    let uname = u
-                        .username
-                        .as_deref()
-                        .map(|s| format!("@{s}"))
-                        .unwrap_or_else(|| "none".into());
-                    rh(client, peer, reply_to, &format!(
-                        "👤 <b>User Info</b>\n\n<b>Name:</b> {}\n<b>Username:</b> {uname}\n<b>ID:</b> <code>{}</code>\n<b>Bot:</b> {} <b>Verified:</b> {} <b>Premium:</b> {}",
-                        esc(format!("{f} {l}").trim()), u.id, boo(u.bot), boo(u.verified), boo(u.premium),
-                    )).await;
-                } else {
-                    rp(client, peer, reply_to, "❓ User not found.").await;
-                }
-            }
+    match client.get_user_from_message(peer_ctx, reply_to, uid).await {
+        Ok(Some(u)) => {
+            let f = u.first_name.as_deref().unwrap_or("");
+            let l = u.last_name.as_deref().unwrap_or("");
+            let uname = u
+                .username
+                .as_deref()
+                .map(|s| format!("@{s}"))
+                .unwrap_or_else(|| "none".into());
+            rh(client, peer, reply_to, &format!(
+                "👤 <b>User Info</b>\n\n<b>Name:</b> {}\n<b>Username:</b> {uname}\n<b>ID:</b> <code>{}</code>\n<b>Bot:</b> {} <b>Verified:</b> {} <b>Premium:</b> {}",
+                esc(format!("{f} {l}").trim()), u.id, boo(u.bot), boo(u.verified), boo(u.premium),
+            )).await;
         }
+        Ok(None) => rp(client, peer, reply_to, "❓ User not found.").await,
         Err(e) => rp(client, peer, reply_to, &format!("❌ {e}")).await,
     }
 }
@@ -445,13 +415,13 @@ async fn cmd_help(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
 
 async fn rp(client: &Client, peer: tl::enums::Peer, reply_to: i32, text: &str) {
     let _ = client
-        .send_message_to_peer_ex(peer, &InputMessage::text(text).reply_to(Some(reply_to)))
+        .send_message(peer, InputMessage::text(text).reply_to(Some(reply_to)))
         .await;
 }
 
 async fn rh(client: &Client, peer: tl::enums::Peer, reply_to: i32, html: &str) {
     let _ = client
-        .send_message_to_peer_ex(peer, &InputMessage::html(html).reply_to(Some(reply_to)))
+        .send_message(peer, InputMessage::html(html).reply_to(Some(reply_to)))
         .await;
 }
 

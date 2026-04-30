@@ -14,7 +14,7 @@ match client.send_message("@peer", "Hello").await {
 
     // Telegram returned an RPC error
     Err(InvocationError::Rpc(e)) => {
-        eprintln!("Telegram error {}: {}", e.code, e.message);
+        eprintln!("Telegram error {}: {}", e.code, e.name);
 
         // Pattern-match the error name
         if e.is("FLOOD_WAIT") {
@@ -40,12 +40,14 @@ match client.send_message("@peer", "Hello").await {
 | `InvocationError::Rpc(RpcError)` | Telegram returned a TL error |
 | `InvocationError::Io(io::Error)` | Network or socket error |
 | `InvocationError::Deserialize(e)` | Failed to decode server response |
+| `InvocationError::Dropped` | Request dropped (sender task shut down) |
+| `InvocationError::PeerNotCached(String)` | Peer seen before but its `access_hash` was never stored; resolve via `client.resolve_peer()` first |
 
 ### `InvocationError` methods
 
 | Method | Return | Description |
 |---|---|---|
-| `.is("PATTERN")` | `bool` | `true` if this is an `Rpc` error whose message contains `PATTERN` |
+| `.is("PATTERN")` | `bool` | `true` if this is an `Rpc` error whose `name` matches `PATTERN`; supports `*` prefix/suffix wildcards |
 | `.flood_wait_seconds()` | `Option<u64>` | Seconds to wait for `FLOOD_WAIT_X` errors |
 
 ---
@@ -56,9 +58,10 @@ match client.send_message("@peer", "Hello").await {
 let e: RpcError = /* ... */;
 
 e.code               // i32: HTTP-like error code (400, 401, 403, 420, etc.)
-e.message            // String: e.g. "FLOOD_WAIT_30"
-e.is("FLOOD_WAIT")   // bool: prefix/substring match
-e.flood_wait_seconds() // Option<u64>: parses the number from FLOOD_WAIT_N
+e.name               // String: SCREAMING_SNAKE_CASE with digits removed, e.g. "FLOOD_WAIT"
+e.value              // Option<u32>: numeric suffix, e.g. Some(30) for FLOOD_WAIT_30
+e.is("FLOOD_WAIT")   // bool: exact match; "FLOOD_*" / "*_INVALID" for prefix/suffix wildcards
+e.flood_wait_seconds() // Option<u64>: seconds for FLOOD_WAIT_N errors
 ```
 
 ### Common error codes

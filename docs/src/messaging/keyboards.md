@@ -27,12 +27,7 @@ let kb = InlineKeyboard::new()
         Button::url("📖 Docs", "https://docs.rs/ferogram"),
     ]);
 
-client
-    .send_message_to_peer_ex(
-        peer.clone(),
-        &InputMessage::text("Do you want to proceed?").keyboard(kb),
-    )
-    .await?;
+client.send_message(peer.clone(), InputMessage::text("Do you want to proceed?").keyboard(kb)).await?;
 ```
 
 ### `InlineKeyboard` methods
@@ -128,11 +123,7 @@ let kb = ReplyKeyboard::new()
     .resize()      // shrink to fit content (recommended)
     .single_use(); // hide after one press
 
-client
-    .send_message_to_peer_ex(
-        peer.clone(),
-        &InputMessage::text("Choose file type:").keyboard(kb),
-    )
+client.send_message(peer.clone(), InputMessage::text("Choose file type:").keyboard(kb))
     .await?;
 ```
 
@@ -158,7 +149,7 @@ let remove = tl::enums::ReplyMarkup::ReplyKeyboardHide(
     tl::types::ReplyKeyboardHide { selective: false }
 );
 client
-    .send_message_to_peer_ex(peer.clone(), &InputMessage::text("Done.").reply_markup(remove))
+    .send_message(peer.clone(), InputMessage::text("Done.").reply_markup(remove))
     .await?;
 ```
 
@@ -238,7 +229,7 @@ let msg = InputMessage::text(text)
     .entities(entities)
     .reply_markup(kb);
 
-client.send_message_to_peer_ex(peer, &msg).await?;
+client.send_message(peer, msg).await?;
 ```
 
 ## All button types

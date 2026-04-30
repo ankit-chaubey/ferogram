@@ -122,7 +122,7 @@ impl Client {
             limit,
             hash: 0,
         };
-        let body = self.rpc_call_raw_pub(&req).await?;
+        let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         let raw = match tl::enums::channels::ChannelParticipants::deserialize(&mut cur)? {
             tl::enums::channels::ChannelParticipants::ChannelParticipants(p) => p,
@@ -180,7 +180,7 @@ impl Client {
         chat_id: i64,
     ) -> Result<Vec<Participant>, InvocationError> {
         let req = tl::functions::messages::GetFullChat { chat_id };
-        let body = self.rpc_call_raw_pub(&req).await?;
+        let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::messages::ChatFull::ChatFull(full) =
             tl::enums::messages::ChatFull::deserialize(&mut cur)?;
@@ -230,12 +230,17 @@ impl Client {
         Ok(result)
     }
 
-    /// Kick a user from a basic group (chat). For channels, use [`ban_participant`].
+    /// Kick a user from a group chat or channel.
+    ///
+    /// For basic groups, this removes the user immediately.
+    /// For channels and supergroups, it bans then unbans them (a Telegram kick).
     pub async fn kick_participant(
         &self,
-        chat_id: i64,
+        peer: impl Into<PeerRef>,
         user_id: i64,
     ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let access_hash = self
             .inner
             .peer_cache
@@ -245,22 +250,127 @@ impl Client {
             .get(&user_id)
             .copied()
             .unwrap_or(0);
-        let req = tl::functions::messages::DeleteChatUser {
-            revoke_history: false,
-            chat_id,
-            user_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
-                user_id,
-                access_hash,
-            }),
-        };
-        self.rpc_call_raw_pub(&req).await?;
+        match &input_peer {
+            tl::enums::InputPeer::Chat(c) => {
+                let req = tl::functions::messages::DeleteChatUser {
+                    revoke_history: false,
+                    chat_id: c.chat_id,
+                    user_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
+                        user_id,
+                        access_hash,
+                    }),
+                };
+                self.rpc_call_raw(&req).await?;
+            }
+            tl::enums::InputPeer::Channel(c) => {
+                // For channels: ban then immediately unban (standard kick)
+                let ban_req = tl::functions::channels::EditBanned {
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id: c.channel_id,
+                        access_hash: c.access_hash,
+                    }),
+                    participant: tl::enums::InputPeer::User(tl::types::InputPeerUser {
+                        user_id,
+                        access_hash,
+                    }),
+                    banned_rights: tl::enums::ChatBannedRights::ChatBannedRights(
+                        tl::types::ChatBannedRights {
+                            view_messages: true,
+                            send_messages: true,
+                            send_media: true,
+                            send_stickers: true,
+                            send_gifs: true,
+                            send_games: true,
+                            send_inline: true,
+                            embed_links: true,
+                            send_polls: true,
+                            change_info: true,
+                            invite_users: true,
+                            pin_messages: true,
+                            manage_topics: false,
+                            send_photos: false,
+                            send_videos: false,
+                            send_roundvideos: false,
+                            send_audios: false,
+                            send_voices: false,
+                            send_docs: false,
+                            send_plain: false,
+                            edit_rank: false,
+                            until_date: 0,
+                        },
+                    ),
+                };
+                self.rpc_call_raw(&ban_req).await?;
+                // Unban immediately to allow them to re-join if they have a link
+                let unban_req = tl::functions::channels::EditBanned {
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id: c.channel_id,
+                        access_hash: c.access_hash,
+                    }),
+                    participant: tl::enums::InputPeer::User(tl::types::InputPeerUser {
+                        user_id,
+                        access_hash,
+                    }),
+                    banned_rights: tl::enums::ChatBannedRights::ChatBannedRights(
+                        tl::types::ChatBannedRights {
+                            view_messages: false,
+                            send_messages: false,
+                            send_media: false,
+                            send_stickers: false,
+                            send_gifs: false,
+                            send_games: false,
+                            send_inline: false,
+                            embed_links: false,
+                            send_polls: false,
+                            change_info: false,
+                            invite_users: false,
+                            pin_messages: false,
+                            manage_topics: false,
+                            send_photos: false,
+                            send_videos: false,
+                            send_roundvideos: false,
+                            send_audios: false,
+                            send_voices: false,
+                            send_docs: false,
+                            send_plain: false,
+                            edit_rank: false,
+                            until_date: 0,
+                        },
+                    ),
+                };
+                self.rpc_call_raw(&unban_req).await?;
+            }
+            _ => {
+                return Err(InvocationError::Deserialize(
+                    "kick_participant: peer must be a chat or channel".into(),
+                ));
+            }
+        }
         Ok(())
     }
 
-    /// Ban a user from a channel or supergroup.
-    ///
-    /// Pass `until_date = 0` for a permanent ban.
+    /// Permanently ban a user from a channel or supergroup.
     pub async fn ban_participant(
+        &self,
+        channel: impl Into<PeerRef>,
+        user_id: i64,
+    ) -> Result<(), InvocationError> {
+        self.ban_participant_raw(channel, user_id, 0).await
+    }
+
+    /// Ban a user from a channel or supergroup until `until_ts` (Unix timestamp).
+    ///
+    /// Use [`ban_participant`] for a permanent ban.
+    pub async fn ban_participant_until(
+        &self,
+        channel: impl Into<PeerRef>,
+        user_id: i64,
+        until_ts: i32,
+    ) -> Result<(), InvocationError> {
+        self.ban_participant_raw(channel, user_id, until_ts).await
+    }
+
+    async fn ban_participant_raw(
         &self,
         channel: impl Into<PeerRef>,
         user_id: i64,
@@ -332,14 +442,29 @@ impl Client {
                 },
             ),
         };
-        self.rpc_call_raw_pub(&req).await?;
+        self.rpc_call_raw(&req).await?;
         Ok(())
     }
 
-    /// Promote (or demote) a user to admin in a channel or supergroup.
-    ///
-    /// Pass `promote = true` to grant admin rights, `false` to remove them.
+    /// Promote a user to admin in a channel or supergroup with default admin rights.
     pub async fn promote_participant(
+        &self,
+        channel: impl Into<PeerRef>,
+        user_id: i64,
+    ) -> Result<(), InvocationError> {
+        self.set_participant_admin(channel, user_id, true).await
+    }
+
+    /// Remove admin rights from a user in a channel or supergroup.
+    pub async fn demote_participant(
+        &self,
+        channel: impl Into<PeerRef>,
+        user_id: i64,
+    ) -> Result<(), InvocationError> {
+        self.set_participant_admin(channel, user_id, false).await
+    }
+
+    async fn set_participant_admin(
         &self,
         channel: impl Into<PeerRef>,
         user_id: i64,
@@ -429,7 +554,7 @@ impl Client {
             admin_rights: tl::enums::ChatAdminRights::ChatAdminRights(rights),
             rank: None,
         };
-        self.rpc_call_raw_pub(&req).await?;
+        self.rpc_call_raw(&req).await?;
         Ok(())
     }
 
@@ -463,7 +588,7 @@ impl Client {
             max_id: 0,
             limit,
         };
-        let body = self.rpc_call_raw_pub(&req).await?;
+        let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         match tl::enums::photos::Photos::deserialize(&mut cur)? {
             tl::enums::photos::Photos::Photos(p) => Ok(p.photos),
@@ -531,13 +656,13 @@ impl Client {
             q: query.to_string(),
             limit: 20,
         };
-        let body = self.rpc_call_raw_pub(&req).await?;
+        let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::contacts::Found::Found(found) =
             tl::enums::contacts::Found::deserialize(&mut cur)?;
 
-        self.cache_users_slice_pub(&found.users).await;
-        self.cache_chats_slice_pub(&found.chats).await;
+        self.cache_users_slice(&found.users).await;
+        self.cache_chats_slice(&found.chats).await;
 
         let mut peers = Vec::new();
         for r in found.my_results.iter().chain(found.results.iter()) {
@@ -561,6 +686,7 @@ impl Client {
     /// // remove all reactions
     /// client.send_reaction(peer, msg_id, InputReactions::remove()).await?;
     /// ```
+    #[doc(hidden)]
     pub async fn send_reaction(
         &self,
         peer: impl Into<PeerRef>,
@@ -582,7 +708,7 @@ impl Client {
                 Some(r.reactions)
             },
         };
-        self.rpc_call_raw_pub(&req).await?;
+        self.rpc_call_raw(&req).await?;
         Ok(())
     }
 }
@@ -937,7 +1063,7 @@ impl Client {
             }),
             banned_rights: rights,
         };
-        self.rpc_call_raw_pub(&req).await?;
+        self.rpc_call_raw(&req).await?;
         Ok(())
     }
 
@@ -996,16 +1122,16 @@ impl Client {
             admin_rights: rights,
             rank,
         };
-        self.rpc_call_raw_pub(&req).await?;
+        self.rpc_call_raw(&req).await?;
         Ok(())
     }
 
-    // iter_participants with filter
+    // get_participants_filtered
 
     /// Fetch participants with an optional filter, paginated.
     ///
     /// `filter` defaults to `ChannelParticipantsRecent` when `None`.
-    pub async fn iter_participants(
+    pub async fn get_participants_filtered(
         &self,
         peer: impl Into<PeerRef>,
         filter: Option<tl::enums::ChannelParticipantsFilter>,
@@ -1036,7 +1162,7 @@ impl Client {
                     limit,
                     hash: 0,
                 };
-                let body = self.rpc_call_raw_pub(&req).await?;
+                let body = self.rpc_call_raw(&req).await?;
                 let mut cur = Cursor::from_slice(&body);
                 let raw = match tl::enums::channels::ChannelParticipants::deserialize(&mut cur)? {
                     tl::enums::channels::ChannelParticipants::ChannelParticipants(p) => p,
@@ -1098,7 +1224,7 @@ impl Client {
             }
             tl::enums::Peer::Chat(c) => self.get_chat_participants(c.chat_id).await,
             _ => Err(InvocationError::Deserialize(
-                "iter_participants: must be chat or channel".into(),
+                "get_participants_filtered: must be chat or channel".into(),
             )),
         }
     }
@@ -1150,7 +1276,7 @@ impl Client {
                 access_hash: user_hash,
             }),
         };
-        let body = self.rpc_call_raw_pub(&req).await?;
+        let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::channels::ChannelParticipant::ChannelParticipant(raw) =
             tl::enums::channels::ChannelParticipant::deserialize(&mut cur)?;
@@ -1275,7 +1401,7 @@ impl ProfilePhotoIter {
             max_id: 0,
             limit: self.chunk_size,
         };
-        let body = self.client.rpc_call_raw_pub(&req).await?;
+        let body = self.client.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
 
         let (photos, total): (Vec<tl::enums::Photo>, Option<i32>) =

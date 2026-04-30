@@ -10,14 +10,14 @@ Every `Client` method that previously required a bare `tl::enums::Peer` now acce
 
 ```rust
 // @username string (with or without @)
-client.send_message_to_peer("@durov", "hi").await?;
-client.send_message_to_peer("durov",  "hi").await?;
+client.send_message("@durov", "hi").await?;
+client.send_message("durov",  "hi").await?;
 
 // "me" / "self": always resolves to the logged-in account
-client.send_message_to_peer("me", "Note to self").await?;
+client.send_message("me", "Note to self").await?;
 
 // Positive i64: Telegram user ID
-client.send_message_to_peer(12345678_i64, "hi").await?;
+client.send_message(12345678_i64, "hi").await?;
 
 // Negative i64: Bot-API channel ID (-100… prefix)
 client.iter_messages(-1001234567890_i64);
@@ -28,7 +28,7 @@ client.mark_as_read(-123456_i64).await?;
 // Already-resolved TL peer: zero overhead, no network call
 use ferogram::tl;
 let peer = tl::enums::Peer::User(tl::types::PeerUser { user_id: 123 });
-client.send_message_to_peer(peer, "hi").await?;
+client.send_message(peer, "hi").await?;
 ```
 
 ### `PeerRef` variants

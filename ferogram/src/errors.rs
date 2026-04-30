@@ -116,7 +116,7 @@ pub enum InvocationError {
     /// (e.g. it arrived as a *min* user with no message context, or as a
     /// channel you have not yet opened).
     ///
-    /// **Fix:** resolve the peer first via `client.resolve_peer(id)` or ensure
+    /// Resolve the peer first via `client.resolve_peer(id)` or ensure
     /// that at least one message from this peer flows through the update loop
     /// before using it as a target.
     ///

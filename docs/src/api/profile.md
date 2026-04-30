@@ -143,7 +143,7 @@ Manually set your online/offline status. Pass <code>offline: false</code> to app
 <span class="api-card-sig">client.get_profile_photos(peer: impl Into&lt;PeerRef&gt;, limit: i32) → Result&lt;Vec&lt;tl::enums::Photo&gt;, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Fetch up to <code>limit</code> profile photos for a user. Only works on user peers  passing a chat or channel returns an error.
+Fetch up to <code>limit</code> profile photos for a user. Only works on user peers; passing a chat or channel returns an error.
 
 ```rust
 let photos = client.get_profile_photos(peer, 10).await?;

@@ -99,8 +99,8 @@ impl Button {
         }
     }
 
-    /// A button that opens a mini-app WebView.
-    pub fn webview(text: impl Into<String>, url: impl Into<String>) -> Self {
+    /// A button that opens a mini-app (full WebView with JS bridge).
+    pub fn mini_app(text: impl Into<String>, url: impl Into<String>) -> Self {
         Self {
             inner: tl::enums::KeyboardButton::WebView(tl::types::KeyboardButtonWebView {
                 text: text.into(),
@@ -110,8 +110,8 @@ impl Button {
         }
     }
 
-    /// A button that opens a simple WebView (no JS bridge).
-    pub fn simple_webview(text: impl Into<String>, url: impl Into<String>) -> Self {
+    /// A button that opens a simple mini-app (no JS bridge, no query_id).
+    pub fn mini_app_simple(text: impl Into<String>, url: impl Into<String>) -> Self {
         Self {
             inner: tl::enums::KeyboardButton::SimpleWebView(
                 tl::types::KeyboardButtonSimpleWebView {

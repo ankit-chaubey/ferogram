@@ -46,7 +46,7 @@ Written from scratch in async Rust on Tokio, organized as a workspace of focused
 
 ```toml
 [dependencies]
-ferogram = "0.3"
+ferogram = "0.3.6"
 tokio    = { version = "1", features = ["full"] }
 ```
 
@@ -55,7 +55,7 @@ Get `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org).
 Optional features:
 
 ```toml
-ferogram = { version = "0.3", features = [
+ferogram = { version = "0.3.6", features = [
     "sqlite-session",  # SQLite backend (rusqlite)
     "libsql-session",  # libSQL / Turso backend
     "html",            # HTML entity parser
@@ -206,7 +206,7 @@ while let Some(upd) = stream.next().await {
 }
 ```
 
-Filters compose with `&`, `|`, `!`. Built-ins include `command`, `private`, `group`, `channel`, `text`, `media`, `regex`, `custom`, and more.
+Filters compose with `&`, `|`, `!`. Built-ins include `command`, `private`, `group`, `channel`, `text`, `media`, `forwarded`, `reply`, `album`, `custom`, and more.
 
 ---
 
@@ -241,7 +241,7 @@ State storage is pluggable. Implement `StateStorage` for Redis, SQL, or anything
 | `StringSessionBackend` | default | Base64 string. Serverless / env-var. |
 | `SqliteBackend` | `sqlite-session` | Multi-session local file. |
 | `LibSqlBackend` | `libsql-session` | Turso / distributed libSQL. |
-| Custom |: | Implement `SessionBackend`. |
+| Custom | | Implement `SessionBackend`. |
 
 ```rust
 let s = client.export_session_string().await?;

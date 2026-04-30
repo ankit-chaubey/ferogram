@@ -46,7 +46,7 @@ Login is required on every run since nothing persists.
 ## SQLite (robust, long-running servers)
 
 ```toml
-ferogram = { version = "0.2.0", features = ["sqlite-session"] }
+ferogram = { version = "0.3.6", features = ["sqlite-session"] }
 ```
 
 ```rust

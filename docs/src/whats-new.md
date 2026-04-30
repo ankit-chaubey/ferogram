@@ -4,6 +4,24 @@ ferogram started as a renamed continuation of [layer](https://github.com/ankit-c
 
 ---
 
+## v0.3.6
+
+Released 2026-04-30. API stabilization update towards v0.4.0.
+
+Some APIs have been simplified, merged, or removed where redundant. This may require a one-time migration. The goal is a consistent, predictable API that does not need disruptive changes again.
+
+Future updates will focus on new features and improvements.
+
+See [FEATURES.md](https://github.com/ankit-chaubey/ferogram/blob/main/FEATURES.md) for the full current API surface.
+
+### Upgrading from 0.3.5
+
+```toml
+ferogram = "0.3.6"
+```
+
+---
+
 ## v0.3.5
 
 Released 2026-04-30. Critical deserialization fix and update-state hardening.

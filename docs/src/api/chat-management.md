@@ -307,3 +307,53 @@ if let Some(linked_id) = client.get_linked_channel("@mychannel").await? {
 ```
 
 Returns `None` when no linked chat is configured. Works for both directions - pass a channel to get its discussion group, or pass a supergroup to get its linked broadcast channel.
+
+---
+
+## History, albums, and identity
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">async</span>
+<span class="api-card-sig">client.delete_chat_history(peer: impl Into&lt;PeerRef&gt;, max_id: i32, revoke: bool) → Result&lt;(), InvocationError&gt;</span>
+</div>
+<div class="api-card-body">Delete the current user's message history in a chat up to <code>max_id</code>. When <code>revoke</code> is <code>true</code>, deletes for all members (only possible if you are an admin).</div>
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">async</span>
+<span class="api-card-sig">client.get_media_group(peer: impl Into&lt;PeerRef&gt;, msg_id: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+</div>
+<div class="api-card-body">Fetch all messages that belong to the same grouped media album as <code>msg_id</code>.</div>
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">async</span>
+<span class="api-card-sig">client.get_send_as_peers(peer: impl Into&lt;PeerRef&gt;) → Result&lt;Vec&lt;tl::enums::Peer&gt;, InvocationError&gt;</span>
+</div>
+<div class="api-card-body">List the identities the current user can send messages as in <code>peer</code>. Returns the user's own account plus any channels they manage that are allowed as send-as identities in this chat.</div>
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge">async</span>
+<span class="api-card-sig">client.set_default_send_as(peer: impl Into&lt;PeerRef&gt;, send_as: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+</div>
+<div class="api-card-body">Set the default send-as identity for <code>peer</code>. <code>send_as</code> must be one of the peers returned by <code>get_send_as_peers</code>.</div>
+</div>
+
+```rust
+// Delete own history up to message 500
+client.delete_chat_history("@peer", 500, false).await?;
+
+// Fetch all messages in an album
+let album = client.get_media_group("@channel", msg_id).await?;
+
+// List send-as identities
+let identities = client.get_send_as_peers("@group").await?;
+
+// Set default send-as
+client.set_default_send_as("@group", "@mychannel").await?;
+```

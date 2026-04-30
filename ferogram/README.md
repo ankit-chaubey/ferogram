@@ -31,7 +31,7 @@ For the full workspace (crypto, session, TL types, etc.) see the [repository roo
 
 ```toml
 [dependencies]
-ferogram = "0.3"
+ferogram = "0.3.6"
 tokio    = { version = "1", features = ["full"] }
 ```
 
@@ -40,7 +40,7 @@ Get `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org).
 Optional feature flags:
 
 ```toml
-ferogram = { version = "0.3", features = [
+ferogram = { version = "0.3.6", features = [
     "sqlite-session",  # SqliteBackend via rusqlite
     "libsql-session",  # LibSqlBackend via libsql-client (Turso)
     "html",            # parse_html / generate_html (built-in parser)

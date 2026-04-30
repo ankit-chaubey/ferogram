@@ -61,6 +61,8 @@ Both accept any `Into<String>`.
 |---|---|
 | `conv.get_response(deadline).await` | Wait for the next message from the peer |
 | `conv.wait_click(deadline).await` | Wait for the peer to press an inline button |
+| `conv.wait_read(deadline).await` | Wait until messages are read (any non-message update from peer) |
+| `conv.ask_and_wait(text, deadline).await` | Send a message and immediately wait for the reply |
 
 `deadline` is a `std::time::Duration`. If no response arrives within the deadline, the method returns `ConversationError::Timeout`.
 

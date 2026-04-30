@@ -49,11 +49,6 @@ async fn dispatch(
         // Commands
         Update::NewMessage(msg) if !msg.outgoing() => {
             let text = msg.text().unwrap_or("").trim().to_string();
-            let peer = match msg.peer_id() {
-                Some(p) => p.clone(),
-                None    => return Ok(()),
-            };
-            let reply_to = msg.id();
 
             if !text.starts_with('/') { return Ok(()); }
 
@@ -66,8 +61,7 @@ async fn dispatch(
                         "👋 **Hello!** I'm built with **ferogram**: async Telegram MTProto in Rust 🦀\n\n\
                          Use /help to see all commands."
                     );
-                    client.send_message_to_peer_ex(peer, &InputMessage::text(t)
-                        .entities(e).reply_to(Some(reply_to))).await?;
+                    msg.reply(InputMessage::text(t).entities(e)).await?;
                 }
                 "/help" => {
                     let (t, e) = parse_markdown(
@@ -80,44 +74,43 @@ async fn dispatch(
                          /reverse `<text>`: esreveR\n\
                          /id: Your user and chat ID"
                     );
-                    client.send_message_to_peer_ex(peer, &InputMessage::text(t)
-                        .entities(e).reply_to(Some(reply_to))).await?;
+                    msg.reply(InputMessage::text(t).entities(e)).await?;
                 }
                 "/ping" => {
                     let start = std::time::Instant::now();
-                    client.send_message_to_peer(peer.clone(), "🏓 …").await?;
+                    let sent = msg.respond("🏓 …").await?;
                     let ms = start.elapsed().as_millis();
                     let (t, e) = parse_markdown(&format!("🏓 **Pong!** `{ms} ms`"));
-                    client.send_message_to_peer_ex(peer, &InputMessage::text(t)
-                        .entities(e).reply_to(Some(reply_to))).await?;
+                    sent.edit(InputMessage::text(t).entities(e)).await?;
                 }
-                "/echo"    => { client.send_message_to_peer(peer, if arg.is_empty() { "Usage: /echo <text>" } else { arg }).await?; }
-                "/upper"   => { client.send_message_to_peer(peer, &arg.to_uppercase()).await?; }
-                "/lower"   => { client.send_message_to_peer(peer, &arg.to_lowercase()).await?; }
+                "/echo"    => { msg.reply(if arg.is_empty() { "Usage: /echo <text>" } else { arg }).await?; }
+                "/upper"   => { msg.reply(arg.to_uppercase().as_str()).await?; }
+                "/lower"   => { msg.reply(arg.to_lowercase().as_str()).await?; }
                 "/reverse" => {
                     let rev: String = arg.chars().rev().collect();
-                    client.send_message_to_peer(peer, &rev).await?;
+                    msg.reply(rev.as_str()).await?;
                 }
                 "/id" => {
-                    let chat = match &peer {
-                        tl::enums::Peer::User(u)    => format!("User `{}`",    u.user_id),
-                        tl::enums::Peer::Chat(c)    => format!("Group `{}`",   c.chat_id),
-                        tl::enums::Peer::Channel(c) => format!("Channel `{}`", c.channel_id),
-                    };
-                    let (t, e) = parse_markdown(&format!("🪪 **Chat:** {chat}"));
-                    client.send_message_to_peer_ex(peer, &InputMessage::text(t)
-                        .entities(e).reply_to(Some(reply_to))).await?;
+                    if let Some(peer) = msg.peer_id() {
+                        let chat = match peer {
+                            tl::enums::Peer::User(u)    => format!("User `{}`",    u.user_id),
+                            tl::enums::Peer::Chat(c)    => format!("Group `{}`",   c.chat_id),
+                            tl::enums::Peer::Channel(c) => format!("Channel `{}`", c.channel_id),
+                        };
+                        let (t, e) = parse_markdown(&format!("🪪 **Chat:** {chat}"));
+                        msg.reply(InputMessage::text(t).entities(e)).await?;
+                    }
                 }
-                _ => { client.send_message_to_peer(peer, "❓ Unknown command. Try /help").await?; }
+                _ => { msg.reply("❓ Unknown command. Try /help").await?; }
             }
         }
 
         // Callback queries
         Update::CallbackQuery(cb) => {
             match cb.data().unwrap_or("") {
-                "help"  => { client.answer_callback_query(cb.query_id, Some("Send /help for commands"), false).await?; }
-                "about" => { client.answer_callback_query(cb.query_id, Some("Built with ferogram: Rust MTProto 🦀"), true).await?; }
-                _       => { client.answer_callback_query(cb.query_id, None, false).await?; }
+                "help"  => { client.answer_callback_query(cb.query_id, Some("Send /help for commands"), false, None, 0).await?; }
+                "about" => { client.answer_callback_query(cb.query_id, Some("Built with ferogram: Rust MTProto 🦀"), true, None, 0).await?; }
+                _       => { client.answer_callback_query(cb.query_id, None, false, None, 0).await?; }
             }
         }
 

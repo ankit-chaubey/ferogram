@@ -444,9 +444,9 @@ async fn h_start(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
         vec![bu("⭐ GitHub", "https://github.com/ankit-chaubey/ferogram")],
     ]);
     let _ = client
-        .send_message_to_peer_ex(
+        .send_message(
             peer,
-            &InputMessage::html(text)
+            InputMessage::html(text)
                 .reply_markup(kb)
                 .reply_to(Some(reply_to)),
         )
@@ -492,9 +492,9 @@ async fn h_ping(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
         bc("🕐 Time", "cb:time"),
     ]]);
     let _ = client
-        .send_message_to_peer_ex(
+        .send_message(
             peer,
-            &InputMessage::html(&text)
+            InputMessage::html(&text)
                 .reply_markup(kb)
                 .reply_to(Some(reply_to)),
         )
@@ -542,9 +542,9 @@ async fn h_time(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
     );
     let kb = kb(vec![vec![bc("🔁 Refresh", "cb:time")]]);
     let _ = client
-        .send_message_to_peer_ex(
+        .send_message(
             peer,
-            &InputMessage::html(&text)
+            InputMessage::html(&text)
                 .reply_markup(kb)
                 .reply_to(Some(reply_to)),
         )
@@ -561,9 +561,9 @@ async fn h_stats(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
     );
     let kb = kb(vec![vec![bc("🔁 Refresh", "cb:stats")]]);
     let _ = client
-        .send_message_to_peer_ex(
+        .send_message(
             peer,
-            &InputMessage::html(&text)
+            InputMessage::html(&text)
                 .reply_markup(kb)
                 .reply_to(Some(reply_to)),
         )
@@ -581,9 +581,9 @@ async fn h_ferogram(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
         bc("📡 Version", "cb:ferogram"),
     ]]);
     let _ = client
-        .send_message_to_peer_ex(
+        .send_message(
             peer,
-            &InputMessage::html(&text)
+            InputMessage::html(&text)
                 .reply_markup(kb)
                 .reply_to(Some(reply_to)),
         )
@@ -603,9 +603,9 @@ async fn h_about(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
         vec![bc("📊 Stats", "cb:stats"), bc("📡 Layer", "cb:ferogram")],
     ]);
     let _ = client
-        .send_message_to_peer_ex(
+        .send_message(
             peer,
-            &InputMessage::html(&text)
+            InputMessage::html(&text)
                 .reply_markup(kb)
                 .reply_to(Some(reply_to)),
         )
@@ -809,9 +809,9 @@ async fn h_password(client: &Client, peer: tl::enums::Peer, reply_to: i32, arg: 
 async fn h_fmt_md(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
     // InputMessage::markdown() parses the markdown inline, no manual entity wiring needed.
     let _ = client
-        .send_message_to_peer_ex(
+        .send_message(
             peer,
-            &InputMessage::markdown(
+            InputMessage::markdown(
                 "**Markdown example**\n\n\
                 *bold* · _italic_ · ~~strike~~ · ||spoiler||\n\
                 `inline code`\n\
@@ -826,9 +826,9 @@ async fn h_fmt_md(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
 async fn h_fmt_html(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
     // InputMessage::html() parses the HTML inline, no manual entity wiring needed.
     let _ = client
-        .send_message_to_peer_ex(
+        .send_message(
             peer,
-            &InputMessage::html(
+            InputMessage::html(
                 "<b>HTML example</b>\n\n\
                 <b>bold</b> · <i>italic</i> · <u>underline</u> · \
                 <s>strike</s> · <tg-spoiler>spoiler</tg-spoiler>\n\
@@ -899,7 +899,7 @@ async fn h_media_echo(
     .await;
 
     let dl_start = Instant::now();
-    match msg.download_media_with(client, &tmp_path).await {
+    match msg.download_media(&tmp_path).await {
         Err(e) => {
             rh(
                 client,
@@ -1033,13 +1033,13 @@ fn human_size(bytes: usize) -> (String, f64) {
 
 async fn rp(client: &Client, peer: tl::enums::Peer, reply_to: i32, text: &str) {
     let _ = client
-        .send_message_to_peer_ex(peer, &InputMessage::text(text).reply_to(Some(reply_to)))
+        .send_message(peer, InputMessage::text(text).reply_to(Some(reply_to)))
         .await;
 }
 
 async fn rh(client: &Client, peer: tl::enums::Peer, reply_to: i32, html: &str) {
     let _ = client
-        .send_message_to_peer_ex(peer, &InputMessage::html(html).reply_to(Some(reply_to)))
+        .send_message(peer, InputMessage::html(html).reply_to(Some(reply_to)))
         .await;
 }
 

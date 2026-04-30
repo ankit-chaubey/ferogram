@@ -28,7 +28,7 @@ use ferogram::parsers::parse_markdown;
 
 ```rust
 let msg = InputMessage::text("Hello, world!");
-client.send_message_to_peer_ex(peer, &msg).await?;
+client.send_message(peer, msg).await?;
 ```
 
 ## Markdown formatting
@@ -130,5 +130,5 @@ let msg = InputMessage::text(text)
     .no_webpage(true)
     .reply_markup(keyboard);
 
-client.send_message_to_peer_ex(channel_peer, &msg).await?;
+client.send_message(channel_peer, msg).await?;
 ```

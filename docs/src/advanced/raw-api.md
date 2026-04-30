@@ -196,7 +196,7 @@ client.warm_peer_cache_from_dialogs().await?;
 
 Issues a single `GetDialogs` call and caches all returned channel and user access hashes. Call this at startup if your code needs to address channels by ID before any update has come in for them. Without this, a `CHANNEL_INVALID` error can appear on the first request to a channel the bot hasn't interacted with yet in the current session.
 
-This is opt-in — ferogram no longer calls `GetDialogs` automatically at startup. See the v0.3.5 release notes for why.
+This is opt-in; ferogram no longer calls `GetDialogs` automatically at startup. See the v0.3.5 release notes for why.
 
 ### `cache_users_slice_pub` / `cache_chats_slice_pub`
 

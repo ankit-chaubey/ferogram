@@ -6,7 +6,7 @@
 
 ```toml
 [dependencies]
-ferogram = "0.2.0"
+ferogram = "0.3.6"
 tokio        = { version = "1", features = ["full"] }
 ```
 
@@ -57,7 +57,7 @@ For bots, additionally get a **bot token** from [@BotFather](https://t.me/BotFat
 ### SQLite session storage
 
 ```toml
-ferogram = { version = "0.2.0", features = ["sqlite-session"] }
+ferogram = { version = "0.3.6", features = ["sqlite-session"] }
 ```
 
 Stores session data in a SQLite database instead of a binary file. More robust for long-running servers.
@@ -65,7 +65,7 @@ Stores session data in a SQLite database instead of a binary file. More robust f
 ### LibSQL / Turso session storage: New in v0.2.0
 
 ```toml
-ferogram = { version = "0.2.0", features = ["libsql-session"] }
+ferogram = { version = "0.3.6", features = ["libsql-session"] }
 ```
 
 Backed by [libsql](https://github.com/tursodatabase/libsql): supports local embedded databases and remote Turso cloud databases. Ideal for serverless or distributed deployments.
@@ -92,9 +92,12 @@ No feature flag needed. Encode a session as a base64 string and restore it anywh
 let s = client.export_session_string().await?;
 
 // Restore
-let (client, _shutdown) = Client::with_string_session(
-    &s, api_id, api_hash,
-).await?;
+let (client, _shutdown) = Client::builder()
+    .api_id(api_id)
+    .api_hash(api_hash)
+    .session_string(s)
+    .connect()
+    .await?;
 ```
 
 See [Session Backends](./authentication/session-backends.md) for the full guide.
@@ -103,10 +106,10 @@ See [Session Backends](./authentication/session-backends.md) for the full guide.
 
 ```toml
 # Built-in hand-rolled HTML parser (no extra deps)
-ferogram = { version = "0.2.0", features = ["html"] }
+ferogram = { version = "0.3.6", features = ["html"] }
 
 # OR: spec-compliant html5ever tokenizer (overrides built-in)
-ferogram = { version = "0.2.0", features = ["html5ever"] }
+ferogram = { version = "0.3.6", features = ["html5ever"] }
 ```
 
 | Feature | Deps added | Notes |
@@ -119,7 +122,7 @@ ferogram = { version = "0.2.0", features = ["html5ever"] }
 If you use `ferogram-tl-types` directly for raw API access:
 
 ```toml
-ferogram-tl-types = { version = "0.2.0", features = [
+ferogram-tl-types = { version = "0.3.6", features = [
     "tl-api",          # Telegram API types (required)
     "tl-mtproto",      # Low-level MTProto types
     "impl-debug",      # Debug trait on all types (default ON)

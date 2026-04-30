@@ -75,7 +75,7 @@ while let Some(msg) = iter.next(&client).await? {
 
 ```rust
 // Latest N messages from a peer
-let messages = client.get_messages(peer.clone(), 20).await?;
+let messages = client.get_message_history(peer.clone(), 20).await?;
 
 // Specific message IDs
 let messages = client.get_messages_by_id(peer.clone(), &[100, 101, 102]).await?;
@@ -96,6 +96,9 @@ let parent = client.get_reply_to_message(peer.clone(), msg_id).await?;
 // List all scheduled messages
 let scheduled = client.get_scheduled_messages(peer.clone()).await?;
 
+// Send a scheduled message immediately
+client.send_scheduled_now(peer.clone(), &[scheduled_id]).await?;
+
 // Cancel a scheduled message
 client.delete_scheduled_messages(peer.clone(), &[scheduled_id]).await?;
 ```
@@ -113,6 +116,19 @@ client.clear_mentions(peer.clone()).await?;
 
 // Leave and remove from dialog list
 client.delete_dialog(peer.clone()).await?;
+
+// Pin / unpin a dialog
+client.pin_dialog(peer.clone()).await?;
+client.unpin_dialog(peer.clone()).await?;
+
+// Get pinned dialogs (folder_id: 0 = main, 1 = archived)
+let pinned = client.get_pinned_dialogs(0).await?;
+
+// Set manual unread flag on a dialog
+client.mark_dialog_unread(peer.clone(), true).await?;
+
+// Clear the manual unread flag
+client.mark_dialog_read(peer.clone()).await?;
 
 // Join a public group/channel
 client.join_chat("@somegroup").await?;

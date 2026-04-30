@@ -95,7 +95,7 @@ impl InlineResult {
             quick_reply_shortcut: None,
             allow_paid_stars: None,
         };
-        self.client.rpc_call_raw_pub(&req).await?;
+        self.client.rpc_call_raw(&req).await?;
         Ok(())
     }
 }
@@ -134,7 +134,7 @@ impl InlineResultIter {
             return Ok(None);
         }
 
-        let raw = self.client.rpc_call_raw_pub(&self.request).await?;
+        let raw = self.client.rpc_call_raw(&self.request).await?;
         let mut cur = Cursor::from_slice(&raw);
         let tl::enums::messages::BotResults::BotResults(r) =
             tl::enums::messages::BotResults::deserialize(&mut cur)?;

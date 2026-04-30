@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.6]: 2026-04-30
+
+### API Stabilization (Towards v0.4.0)
+
+This release focuses on giving the high-level APIs their final shape before v0.4.0.
+
+Some APIs have been simplified, merged, or removed where redundant. This may require a one-time migration, but it means a cleaner experience and no more overlapping methods going forward.
+
+Once stabilized, future updates will focus on new features and improvements without disruptive API changes.
+
+See [FEATURES.md](FEATURES.md) for the full list of what is currently public and supported.
+
+---
+
 ## [0.3.5]: 2026-04-30
 
 ### Fixed

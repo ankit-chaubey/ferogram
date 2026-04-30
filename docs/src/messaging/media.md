@@ -145,14 +145,45 @@ let uploaded = client
 
 ---
 
+## Upload media (reusable)
+
+Upload a file to Telegram's servers and get back an `InputMedia` handle that can be reused in multiple sends without re-uploading:
+
+```rust
+use ferogram::InputMessage;
+
+let uploaded = client.upload_file(&bytes, "photo.jpg", "image/jpeg").await?;
+let media = uploaded.as_photo_media();
+
+// Upload to Telegram's servers (no message sent)
+let stored = client.upload_media("@peer", media.clone()).await?;
+
+// Reuse the stored media handle
+let msg = InputMessage::text("Here it is!").copy_media(stored.into_input_media());
+client.send_message("@peer", msg).await?;
+```
+
+---
+
 ## Send file
 
 ```rust
-// Send as document (false) or as photo/media (true)
-client.send_file(peer.clone(), uploaded, false).await?;
+use ferogram::InputMessage;
+
+// Send a file as document or photo
+let uploaded = client.upload_file(&bytes, "photo.jpg", "image/jpeg").await?;
+client.send_file("@peer", uploaded.as_photo_media(), &InputMessage::text("Caption")).await?;
+
+// Or attach via InputMessage
+let msg = InputMessage::text("Here is the file")
+    .copy_media(uploaded.as_document_media());
+client.send_message("@peer", msg).await?;
 
 // Send as album (multiple files in one message group)
-client.send_album(peer.clone(), vec![uploaded_a, uploaded_b]).await?;
+client.send_album("@peer", vec![
+    uploaded_a.as_photo_media(),
+    uploaded_b.as_photo_media(),
+]).await?;
 ```
 
 ### `AlbumItem`: per-item control in albums

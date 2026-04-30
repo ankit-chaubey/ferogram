@@ -949,7 +949,7 @@ impl Client {
             allow_paid_stars: None,
             suggested_post: None,
         };
-        let body = self.rpc_call_raw_pub(&req).await?;
+        let body = self.rpc_call_raw(&req).await?;
         Ok(self.extract_sent_message(&body, msg, &peer).await)
     }
 
@@ -1027,7 +1027,7 @@ impl Client {
             effect: None,
             allow_paid_stars: None,
         };
-        let body = self.rpc_call_raw_pub(&req).await?;
+        let body = self.rpc_call_raw(&req).await?;
 
         // Parse the Updates container and collect all sent messages.
         let mut out = Vec::new();

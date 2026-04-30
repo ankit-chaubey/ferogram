@@ -15,14 +15,14 @@ let msg = InputMessage::markdown("**Bold**, _italic_, `code`");
 // HTML
 let msg = InputMessage::html("<b>Bold</b>, <i>italic</i>, <code>code</code>");
 
-client.send_message_to_peer_ex(peer, &msg).await?;
+client.send_message(peer, msg).await?;
 ```
 
 If you just want to send without building an `InputMessage` first, the convenience methods do the same thing in one step:
 
 ```rust
-client.send_html(peer, "<b>Bold</b> and <i>italic</i>").await?;
-client.send_markdown(peer, "**Bold** and _italic_").await?;
+client.send_message(peer, InputMessage::html("<b>Bold</b> and <i>italic</i>")).await?;
+client.send_message(peer, InputMessage::markdown("**Bold** and _italic_")).await?;
 ```
 
 ## Using parse_markdown directly
@@ -36,7 +36,7 @@ use ferogram::InputMessage;
 let (plain, entities) = parse_markdown("**Bold text**, _italic_, `inline code`");
 
 let msg = InputMessage::text(plain).entities(entities);
-client.send_message_to_peer_ex(peer, &msg).await?;
+client.send_message(peer, msg).await?;
 ```
 
 ## Markdown syntax

@@ -183,7 +183,7 @@ while let Some(update) = updates.next().await {
 <span class="api-card-sig">client.send_message(peer: &str, text: &str) → Result&lt;IncomingMessage, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Send a plain-text message. <code>peer</code> can be <code>"me"</code>, <code>"@username"</code>, or a numeric ID string. For rich formatting, use <code>send_message_to_peer_ex</code>.
+Send a plain-text message. <code>peer</code> can be <code>"me"</code>, <code>"@username"</code>, or a numeric ID string. Pass an <code>InputMessage</code> for rich formatting, keyboard, or media.
 </div>
 </div>
 
@@ -198,7 +198,7 @@ Send a plain-text message. <code>peer</code> can be <code>"me"</code>, <code>"@u
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_message_to_peer(peer: Peer, text: &str) → Result&lt;IncomingMessage, InvocationError&gt;</span>
+<span class="api-card-sig">client.send_message(peer: Peer, text: &str) → Result&lt;IncomingMessage, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Send a plain text message to a resolved <code>tl::enums::Peer</code>.</div>
 </div>
@@ -206,10 +206,10 @@ Send a plain-text message. <code>peer</code> can be <code>"me"</code>, <code>"@u
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_message_to_peer_ex(peer: Peer, msg: &InputMessage) → Result&lt;IncomingMessage, InvocationError&gt;</span>
+<span class="api-card-sig">client.send_message(peer: impl Into&lt;PeerRef&gt;, msg: impl Into&lt;InputMessage&gt;) → Result&lt;IncomingMessage, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Full-featured send with the <a href="./input-message.md"><code>InputMessage</code></a> builder: supports markdown entities, reply-to, inline keyboard, scheduled date, silent flag, and more.
+Full-featured send with the <a href="./input-message.md"><code>InputMessage</code></a> builder: supports markdown entities, reply-to, inline keyboard, scheduled date, silent flag, and more. A bare <code>&str</code> or <code>String</code> is accepted as a shorthand for plain text.
 </div>
 </div>
 

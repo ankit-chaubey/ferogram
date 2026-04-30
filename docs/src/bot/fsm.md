@@ -69,11 +69,11 @@ async fn main() -> anyhow::Result<()> {
     dp.on_message_fsm(filters::text(), OrderState::AwaitingConfirmation, |msg, state| async move {
         match msg.text().unwrap_or("").trim() {
             "yes" => {
-                state.finish().await.ok();
+                state.clear_state().await.ok();
                 msg.reply("Order placed!").await.ok();
             }
             _ => {
-                state.finish().await.ok();
+                state.clear_state().await.ok();
                 msg.reply("Order cancelled.").await.ok();
             }
         }
@@ -131,12 +131,13 @@ Handler functions registered via `on_message_fsm` receive a `StateContext` as th
 | Method | Description |
 |---|---|
 | `state.transition(new_state).await` | Move to a new FSM state |
-| `state.finish().await` | Clear all state for this key (end the flow) |
-| `state.current_state::<S>().await` | Read the current state variant |
-| `state.set_data(key, value).await` | Store a serializable value |
-| `state.get_data::<T>(key).await` | Retrieve a stored value |
-| `state.clear_data(key).await` | Remove a single stored key |
-| `state.clear_all_data().await` | Remove all stored data for this key |
+| `state.clear_state().await` | Reset to no state (end the flow) |
+| `state.set_data(field, value).await` | Store a serializable value |
+| `state.get_data::<T>(field).await` | Retrieve a stored value |
+| `state.get_all_data().await` | All stored data as `HashMap<String, Value>` |
+| `state.clear_data().await` | Delete all data, keep current state |
+| `state.clear_all().await` | Delete state and all associated data |
+| `state.key()` | Inspect the active `StateKey` |
 
 `set_data` / `get_data` use `serde_json` internally, so any `Serialize + DeserializeOwned` type works.
 

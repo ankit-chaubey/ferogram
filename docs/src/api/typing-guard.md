@@ -137,7 +137,7 @@ async fn handle_command(
 
     // _typing drops here → indicator cancelled
     client
-        .send_message_to_peer(peer, &result)
+        .send_message(peer, &result)
         .await?;
 
     Ok(())

@@ -88,16 +88,8 @@ impl<'a> Conversation<'a> {
         let s: String = text.into();
         Ok(self
             .client
-            .send_message_to_peer(self.peer.clone(), &s)
+            .send_message(self.peer.clone(), s.as_str())
             .await?)
-    }
-
-    /// Send a message (alias for [`ask`](Self::ask)).
-    pub async fn respond(
-        &self,
-        text: impl Into<String>,
-    ) -> Result<IncomingMessage, ConversationError> {
-        self.ask(text).await
     }
 
     // Waiting

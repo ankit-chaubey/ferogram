@@ -114,7 +114,7 @@ Pass an **empty string** to start a fresh session with no stored data.
 Requires feature flag:
 
 ```toml
-ferogram = { version = "0.2.0", features = ["sqlite-session"] }
+ferogram = { version = "0.3.6", features = ["sqlite-session"] }
 ```
 
 ```rust
@@ -138,7 +138,7 @@ The file is created if it doesn't exist.
 Requires feature flag:
 
 ```toml
-ferogram = { version = "0.2.0", features = ["libsql-session"] }
+ferogram = { version = "0.3.6", features = ["libsql-session"] }
 ```
 
 ```rust

@@ -13,6 +13,17 @@ use ferogram_tl_types::{Cursor, Deserializable};
 
 use crate::{Client, InvocationError as Error};
 
+/// Filter for [`IncomingMessage::find_button`].
+#[derive(Debug, Clone)]
+pub enum ButtonFilter<'a> {
+    /// Match by grid position (`row`, `col`), 0-based.
+    Pos(usize, usize),
+    /// Match the first button whose label equals `text`.
+    Text(&'a str),
+    /// Match the first callback button whose data equals `data`.
+    Data(&'a [u8]),
+}
+
 /// A new or edited message.
 #[derive(Clone)]
 pub struct IncomingMessage {
@@ -36,7 +47,7 @@ impl std::fmt::Debug for IncomingMessage {
 }
 
 impl IncomingMessage {
-    pub fn from_raw(raw: tl::enums::Message) -> Self {
+    pub(crate) fn from_raw(raw: tl::enums::Message) -> Self {
         Self { raw, client: None }
     }
 
@@ -49,7 +60,7 @@ impl IncomingMessage {
     /// let msg = IncomingMessage::from_raw(raw).with_client(client);
     /// # }
     /// ```
-    pub fn with_client(mut self, client: Client) -> Self {
+    pub(crate) fn with_client(mut self, client: Client) -> Self {
         self.client = Some(client);
         self
     }
@@ -209,22 +220,6 @@ impl IncomingMessage {
     /// retrieve the full message object.
     ///
     /// [`reply_to_message_id`]: IncomingMessage::reply_to_message_id
-    pub async fn reply_to_message(
-        &self,
-        client: &Client,
-    ) -> Result<Option<IncomingMessage>, Error> {
-        let reply_id = match self.reply_to_message_id() {
-            Some(id) => id,
-            None => return Ok(None),
-        };
-        let peer = match self.peer_id() {
-            Some(p) => p.clone(),
-            None => return Ok(None),
-        };
-        let msgs = client.get_messages_by_id(peer, &[reply_id]).await?;
-        Ok(msgs.into_iter().next())
-    }
-
     /// The message's send time as a [`chrono::DateTime<chrono::Utc>`].
     ///
     /// Typed wrapper around the raw `date()` Unix timestamp.
@@ -432,11 +427,6 @@ impl IncomingMessage {
         self.is_group() || self.is_channel()
     }
 
-    /// The bare sender user-ID (`from_id` as an i64). Alias of `sender_user_id`.
-    pub fn from_id(&self) -> Option<i64> {
-        self.sender_user_id()
-    }
-
     /// `true` when the message text begins with `/` (a bot command).
     pub fn is_bot_command(&self) -> bool {
         self.text().is_some_and(|t| t.starts_with('/'))
@@ -509,147 +499,85 @@ impl IncomingMessage {
         self.grouped_id()
     }
 
-    // reply
-
     /// Reply to this message (clientless: requires an embedded client).
     ///
     /// Returns the sent message so you can chain further operations on it.
-    pub async fn reply(&self, text: impl Into<String>) -> Result<IncomingMessage, Error> {
-        let client = self.require_client("reply")?.clone();
-        self.reply_with(&client, text).await
-    }
-
-    /// Reply to this message with a plain string.
+    /// Reply to this message.
     ///
-    /// Returns the sent message so you can chain further operations on it.
-    pub async fn reply_with(
+    /// Accepts a plain `&str`/`String` or a full [`InputMessage`](crate::InputMessage)
+    /// (with keyboard, formatting, media, etc.).  The reply-to header is set automatically.
+    ///
+    /// ```rust,no_run
+    /// // plain text
+    /// msg.reply("Hello!").await?;
+    ///
+    /// // HTML formatting
+    /// msg.reply(InputMessage::html("<b>Bold</b> reply")).await?;
+    ///
+    /// // with keyboard
+    /// msg.reply(InputMessage::text("Choose:").reply_markup(kb)).await?;
+    /// ```
+    pub async fn reply(
         &self,
-        client: &Client,
-        text: impl Into<String>,
+        msg: impl Into<crate::InputMessage>,
     ) -> Result<IncomingMessage, Error> {
-        let peer = match self.peer_id() {
-            Some(p) => p.clone(),
-            None => return Err(Error::Deserialize("cannot reply: unknown peer".into())),
-        };
-        let msg_id = self.id();
-        client
-            .send_message_to_peer_ex(
-                peer,
-                &crate::InputMessage::text(text.into()).reply_to(Some(msg_id)),
-            )
-            .await
+        let client = self.require_client("reply")?.clone();
+        self.reply_with(&client, msg).await
     }
 
-    /// Reply with a full [`InputMessage`](crate::InputMessage) (clientless).
-    pub async fn reply_ex(&self, msg: crate::InputMessage) -> Result<IncomingMessage, Error> {
-        let client = self.require_client("reply_ex")?.clone();
-        self.reply_ex_with(&client, msg).await
-    }
-
-    /// Reply with a full [`InputMessage`](crate::InputMessage).
-    pub async fn reply_ex_with(
+    async fn reply_with(
         &self,
         client: &Client,
-        msg: crate::InputMessage,
+        msg: impl Into<crate::InputMessage>,
     ) -> Result<IncomingMessage, Error> {
         let peer = self
             .peer_id()
             .cloned()
-            .ok_or_else(|| Error::Deserialize("cannot reply_ex: unknown peer".into()))?;
+            .ok_or_else(|| Error::Deserialize("cannot reply: unknown peer".into()))?;
         client
-            .send_message_to_peer_ex(peer, &msg.reply_to(Some(self.id())))
+            .send_message(peer, msg.into().reply_to(Some(self.id())))
             .await
     }
-
-    // respond
-
-    /// Send to the same chat without quoting (clientless).
-    pub async fn respond(&self, text: impl Into<String>) -> Result<IncomingMessage, Error> {
+    /// Send to the same chat without quoting.
+    ///
+    /// Accepts a plain `&str`/`String` or a full [`InputMessage`](crate::InputMessage).
+    pub async fn respond(
+        &self,
+        msg: impl Into<crate::InputMessage>,
+    ) -> Result<IncomingMessage, Error> {
         let client = self.require_client("respond")?.clone();
-        self.respond_with(&client, text).await
+        self.respond_with(&client, msg).await
     }
 
-    /// Send to the same chat without quoting.
-    pub async fn respond_with(
+    async fn respond_with(
         &self,
         client: &Client,
-        text: impl Into<String>,
+        msg: impl Into<crate::InputMessage>,
     ) -> Result<IncomingMessage, Error> {
         let peer = self
             .peer_id()
             .cloned()
             .ok_or_else(|| Error::Deserialize("cannot respond: unknown peer".into()))?;
-        client
-            .send_message_to_peer_ex(peer, &crate::InputMessage::text(text.into()))
-            .await
-    }
-
-    /// Full [`InputMessage`] to the same chat without quoting (clientless).
-    pub async fn respond_ex(&self, msg: crate::InputMessage) -> Result<IncomingMessage, Error> {
-        let client = self.require_client("respond_ex")?.clone();
-        self.respond_ex_with(&client, msg).await
-    }
-
-    /// Full [`InputMessage`] to the same chat without quoting.
-    pub async fn respond_ex_with(
-        &self,
-        client: &Client,
-        msg: crate::InputMessage,
-    ) -> Result<IncomingMessage, Error> {
-        let peer = self
-            .peer_id()
-            .cloned()
-            .ok_or_else(|| Error::Deserialize("cannot respond_ex: unknown peer".into()))?;
-        client.send_message_to_peer_ex(peer, &msg).await
-    }
-
-    // edit
-
-    /// Edit this message (clientless).
-    pub async fn edit(&self, new_text: impl Into<String>) -> Result<(), Error> {
-        let client = self.require_client("edit")?.clone();
-        self.edit_with(&client, new_text).await
+        client.send_message(peer, msg.into()).await
     }
 
     /// Edit this message.
-    pub async fn edit_with(
-        &self,
-        client: &Client,
-        new_text: impl Into<String>,
-    ) -> Result<(), Error> {
+    ///
+    /// Accepts a plain `&str`/`String` or a full [`InputMessage`](crate::InputMessage)
+    /// (for HTML/Markdown formatting, keyboard changes, etc.).
+    ///
+    /// ```rust,no_run
+    /// msg.edit("Updated text").await?;
+    /// msg.edit(InputMessage::html("<b>Updated</b>")).await?;
+    /// ```
+    pub async fn edit(&self, msg: impl Into<crate::InputMessage>) -> Result<(), Error> {
+        let client = self.require_client("edit")?.clone();
         let peer = self
             .peer_id()
             .cloned()
             .ok_or_else(|| Error::Deserialize("cannot edit: unknown peer".into()))?;
-        client
-            .edit_message(peer, self.id(), new_text.into().as_str())
-            .await
+        client.edit_message(peer, self.id(), msg.into()).await
     }
-
-    /// Edit this message with full formatting: HTML, Markdown, or raw entities. Clientless.
-    ///
-    /// Unlike [`edit`] which only accepts plain text, this variant accepts an
-    /// [`InputMessage`] so you can pass `InputMessage::html(...)` or
-    /// `InputMessage::markdown(...)`.
-    pub async fn edit_ex(&self, msg: crate::InputMessage) -> Result<(), Error> {
-        let client = self.require_client("edit_ex")?.clone();
-        self.edit_ex_with(&client, msg).await
-    }
-
-    /// Edit this message with full formatting.
-    pub async fn edit_ex_with(
-        &self,
-        client: &Client,
-        msg: crate::InputMessage,
-    ) -> Result<(), Error> {
-        let peer = self
-            .peer_id()
-            .cloned()
-            .ok_or_else(|| Error::Deserialize("cannot edit_ex: unknown peer".into()))?;
-        client.edit_message_ex(peer, self.id(), msg).await
-    }
-
-    // delete
 
     /// Delete this message (clientless).
     pub async fn delete(&self) -> Result<(), Error> {
@@ -689,11 +617,9 @@ impl IncomingMessage {
                     .await
                     .map(|_: tl::enums::messages::AffectedMessages| ())
             }
-            _ => client.delete_messages(vec![self.id()], true).await,
+            _ => client.delete_messages(&[self.id()], true).await,
         }
     }
-
-    // mark_as_read
 
     /// Mark this message (and all before it) as read (clientless).
     pub async fn mark_as_read(&self) -> Result<(), Error> {
@@ -710,8 +636,6 @@ impl IncomingMessage {
         client.mark_as_read(peer).await
     }
 
-    // pin
-
     /// Pin this message silently (clientless).
     pub async fn pin(&self) -> Result<(), Error> {
         let client = self.require_client("pin")?.clone();
@@ -724,12 +648,8 @@ impl IncomingMessage {
             .peer_id()
             .cloned()
             .ok_or_else(|| Error::Deserialize("cannot pin: unknown peer".into()))?;
-        client
-            .pin_message(peer, self.id(), true, false, false)
-            .await
+        client.pin_message(peer, self.id(), true).await
     }
-
-    // unpin
 
     /// Unpin this message (clientless).
     pub async fn unpin(&self) -> Result<(), Error> {
@@ -745,8 +665,6 @@ impl IncomingMessage {
             .ok_or_else(|| Error::Deserialize("cannot unpin: unknown peer".into()))?;
         client.unpin_message(peer, self.id()).await
     }
-
-    // forward_to
 
     /// Forward this message to another chat (clientless).
     ///
@@ -767,37 +685,17 @@ impl IncomingMessage {
         client: &Client,
         destination: impl Into<crate::PeerRef>,
     ) -> Result<IncomingMessage, Error> {
-        self.forward_to_ex_with(client, destination, crate::ForwardOptions::default())
-            .await
-    }
-
-    /// Forward this message with full options (silent, anonymous, scheduled). Clientless.
-    ///
-    /// Returns the forwarded message in the destination chat.
-    pub async fn forward_to_ex(
-        &self,
-        destination: impl Into<crate::PeerRef>,
-        opts: crate::ForwardOptions,
-    ) -> Result<IncomingMessage, Error> {
-        let client = self.require_client("forward_to_ex")?.clone();
-        self.forward_to_ex_with(&client, destination, opts).await
-    }
-
-    /// Forward this message with full options (silent, anonymous, scheduled).
-    ///
-    /// Returns the forwarded message in the destination chat.
-    pub async fn forward_to_ex_with(
-        &self,
-        client: &Client,
-        destination: impl Into<crate::PeerRef>,
-        opts: crate::ForwardOptions,
-    ) -> Result<IncomingMessage, Error> {
         let src = self
             .peer_id()
             .cloned()
             .ok_or_else(|| Error::Deserialize("cannot forward: unknown source peer".into()))?;
         client
-            .forward_messages_ex(destination, &[self.id()], src, opts)
+            .forward_messages_with(
+                destination,
+                &[self.id()],
+                src,
+                crate::ForwardOptions::default(),
+            )
             .await
             .and_then(|v| {
                 v.into_iter()
@@ -805,149 +703,6 @@ impl IncomingMessage {
                     .ok_or_else(|| Error::Deserialize("forward returned no message".into()))
             })
     }
-
-    // HTML / Markdown convenience shorthands
-
-    /// Reply with an HTML-formatted message (clientless).
-    pub async fn reply_html(&self, html: impl Into<String>) -> Result<IncomingMessage, Error> {
-        self.reply_ex(crate::InputMessage::html(html.into())).await
-    }
-
-    /// Reply with an HTML-formatted message.
-    pub async fn reply_html_with(
-        &self,
-        client: &Client,
-        html: impl Into<String>,
-    ) -> Result<IncomingMessage, Error> {
-        self.reply_ex_with(client, crate::InputMessage::html(html.into()))
-            .await
-    }
-
-    /// Reply with a Markdown-formatted message (clientless).
-    pub async fn reply_markdown(&self, md: impl Into<String>) -> Result<IncomingMessage, Error> {
-        self.reply_ex(crate::InputMessage::markdown(md.into()))
-            .await
-    }
-
-    /// Reply with a Markdown-formatted message.
-    pub async fn reply_markdown_with(
-        &self,
-        client: &Client,
-        md: impl Into<String>,
-    ) -> Result<IncomingMessage, Error> {
-        self.reply_ex_with(client, crate::InputMessage::markdown(md.into()))
-            .await
-    }
-
-    /// Respond with an HTML-formatted message (clientless).
-    pub async fn respond_html(&self, html: impl Into<String>) -> Result<IncomingMessage, Error> {
-        self.respond_ex(crate::InputMessage::html(html.into()))
-            .await
-    }
-
-    /// Respond with an HTML-formatted message.
-    pub async fn respond_html_with(
-        &self,
-        client: &Client,
-        html: impl Into<String>,
-    ) -> Result<IncomingMessage, Error> {
-        self.respond_ex_with(client, crate::InputMessage::html(html.into()))
-            .await
-    }
-
-    /// Respond with a Markdown-formatted message (clientless).
-    pub async fn respond_markdown(&self, md: impl Into<String>) -> Result<IncomingMessage, Error> {
-        self.respond_ex(crate::InputMessage::markdown(md.into()))
-            .await
-    }
-
-    /// Respond with a Markdown-formatted message.
-    pub async fn respond_markdown_with(
-        &self,
-        client: &Client,
-        md: impl Into<String>,
-    ) -> Result<IncomingMessage, Error> {
-        self.respond_ex_with(client, crate::InputMessage::markdown(md.into()))
-            .await
-    }
-
-    /// Edit this message with HTML formatting (clientless).
-    pub async fn edit_html(&self, html: impl Into<String>) -> Result<(), Error> {
-        self.edit_ex(crate::InputMessage::html(html.into())).await
-    }
-
-    /// Edit this message with HTML formatting.
-    pub async fn edit_html_with(
-        &self,
-        client: &Client,
-        html: impl Into<String>,
-    ) -> Result<(), Error> {
-        self.edit_ex_with(client, crate::InputMessage::html(html.into()))
-            .await
-    }
-
-    /// Edit this message with Markdown formatting (clientless).
-    pub async fn edit_markdown(&self, md: impl Into<String>) -> Result<(), Error> {
-        self.edit_ex(crate::InputMessage::markdown(md.into())).await
-    }
-
-    /// Edit this message with Markdown formatting.
-    pub async fn edit_markdown_with(
-        &self,
-        client: &Client,
-        md: impl Into<String>,
-    ) -> Result<(), Error> {
-        self.edit_ex_with(client, crate::InputMessage::markdown(md.into()))
-            .await
-    }
-
-    // File sending helpers
-
-    /// Reply to this message with a media file (clientless).
-    ///
-    /// `msg` controls the caption and formatting; attach the media via
-    /// `InputMessage::text("caption").copy_media(media)` or use `InputMessage::default()`
-    /// for no caption.  The `reply_to` is set automatically to this message.
-    pub async fn reply_with_file(
-        &self,
-        media: tl::enums::InputMedia,
-        msg: crate::InputMessage,
-    ) -> Result<IncomingMessage, Error> {
-        self.respond_ex(msg.copy_media(media).reply_to(Some(self.id())))
-            .await
-    }
-
-    /// Reply to this message with a media file.
-    pub async fn reply_with_file_with(
-        &self,
-        client: &Client,
-        media: tl::enums::InputMedia,
-        msg: crate::InputMessage,
-    ) -> Result<IncomingMessage, Error> {
-        self.respond_ex_with(client, msg.copy_media(media).reply_to(Some(self.id())))
-            .await
-    }
-
-    /// Send a media file to the same chat without replying. Clientless.
-    pub async fn respond_with_file(
-        &self,
-        media: tl::enums::InputMedia,
-        msg: crate::InputMessage,
-    ) -> Result<IncomingMessage, Error> {
-        self.respond_ex(msg.copy_media(media)).await
-    }
-
-    /// Send a media file to the same chat (not as a reply).
-    pub async fn respond_with_file_with(
-        &self,
-        client: &Client,
-        media: tl::enums::InputMedia,
-        msg: crate::InputMessage,
-    ) -> Result<IncomingMessage, Error> {
-        self.respond_ex_with(client, msg.copy_media(media)).await
-    }
-
-    // refetch
 
     /// Re-fetch this message from Telegram (clientless).
     ///
@@ -976,8 +731,6 @@ impl IncomingMessage {
         }
     }
 
-    // download_media
-
     /// Download attached media to `path` (clientless).
     pub async fn download_media(&self, path: impl AsRef<std::path::Path>) -> Result<bool, Error> {
         let client = self.require_client("download_media")?.clone();
@@ -985,7 +738,7 @@ impl IncomingMessage {
     }
 
     /// Download attached media to `path`. Returns `true` if media was found.
-    pub async fn download_media_with(
+    async fn download_media_with(
         &self,
         client: &Client,
         path: impl AsRef<std::path::Path>,
@@ -999,8 +752,6 @@ impl IncomingMessage {
             Ok(false)
         }
     }
-
-    // react
 
     /// Send a reaction (clientless).
     ///
@@ -1033,8 +784,6 @@ impl IncomingMessage {
         client.send_reaction(peer, self.id(), reactions).await
     }
 
-    // get_reply
-
     /// Fetch the message this is a reply to (clientless).
     pub async fn get_reply(&self) -> Result<Option<IncomingMessage>, Error> {
         let client = self.require_client("get_reply")?.clone();
@@ -1045,8 +794,6 @@ impl IncomingMessage {
     pub async fn get_reply_with(&self, client: &Client) -> Result<Option<IncomingMessage>, Error> {
         client.get_reply_to_message(self).await
     }
-
-    // sender helpers
 
     /// The sender's bare user-ID, if this is a user message.
     ///
@@ -1080,9 +827,212 @@ impl IncomingMessage {
         let users = client.get_users_by_id(&[uid]).await?;
         Ok(users.into_iter().next().flatten())
     }
-}
 
-// MessageDeletion
+    fn extract_callback_data(&self, row: usize, col: usize) -> Result<Vec<u8>, Error> {
+        let markup = self.reply_markup().ok_or_else(|| {
+            Error::Deserialize("click_button: message has no reply markup".into())
+        })?;
+        let rows = match markup {
+            tl::enums::ReplyMarkup::ReplyInlineMarkup(kb) => &kb.rows,
+            _ => {
+                return Err(Error::Deserialize(
+                    "click_button: reply markup is not an inline keyboard".into(),
+                ));
+            }
+        };
+        let kb_row = rows.get(row).ok_or_else(|| {
+            Error::Deserialize(format!(
+                "click_button: row {row} out of range (keyboard has {} rows)",
+                rows.len()
+            ))
+        })?;
+        let buttons = match kb_row {
+            tl::enums::KeyboardButtonRow::KeyboardButtonRow(r) => &r.buttons,
+        };
+        let btn = buttons.get(col).ok_or_else(|| {
+            Error::Deserialize(format!(
+                "click_button: col {col} out of range (row has {} buttons)",
+                buttons.len()
+            ))
+        })?;
+        match btn {
+            tl::enums::KeyboardButton::Callback(b) => Ok(b.data.clone()),
+            _ => Err(Error::Deserialize(format!(
+                "click_button: button at ({row}, {col}) is not a callback button"
+            ))),
+        }
+    }
+
+    fn find_callback_data_by_text(&self, text: &str) -> Result<Vec<u8>, Error> {
+        let markup = self.reply_markup().ok_or_else(|| {
+            Error::Deserialize("click_button_by_text: message has no reply markup".into())
+        })?;
+        let rows = match markup {
+            tl::enums::ReplyMarkup::ReplyInlineMarkup(kb) => &kb.rows,
+            _ => {
+                return Err(Error::Deserialize(
+                    "click_button_by_text: reply markup is not an inline keyboard".into(),
+                ));
+            }
+        };
+        for row in rows {
+            let buttons = match row {
+                tl::enums::KeyboardButtonRow::KeyboardButtonRow(r) => &r.buttons,
+            };
+            for btn in buttons {
+                if let tl::enums::KeyboardButton::Callback(b) = btn
+                    && b.text == text
+                {
+                    return Ok(b.data.clone());
+                }
+            }
+        }
+        Err(Error::Deserialize(format!(
+            "click_button_by_text: no callback button with label {text:?}"
+        )))
+    }
+
+    async fn invoke_click(&self, client: &Client, data: Vec<u8>) -> Result<(), Error> {
+        let peer = self
+            .peer_id()
+            .cloned()
+            .ok_or_else(|| Error::Deserialize("click_button: unknown peer".into()))?;
+        let input_peer = client.resolve_to_input_peer(&peer).await?;
+        client
+            .invoke(&tl::functions::messages::GetBotCallbackAnswer {
+                game: false,
+                peer: input_peer,
+                msg_id: self.id(),
+                data: Some(data),
+                password: None,
+            })
+            .await
+            .map(|_: tl::enums::messages::BotCallbackAnswer| ())
+    }
+
+    fn iter_inline_buttons(
+        &self,
+    ) -> impl Iterator<Item = (usize, usize, &tl::enums::KeyboardButton)> {
+        let rows = match self.reply_markup() {
+            Some(tl::enums::ReplyMarkup::ReplyInlineMarkup(kb)) => kb.rows.as_slice(),
+            _ => &[],
+        };
+        rows.iter().enumerate().flat_map(|(r, row)| {
+            let buttons = match row {
+                tl::enums::KeyboardButtonRow::KeyboardButtonRow(rb) => rb.buttons.as_slice(),
+            };
+            buttons.iter().enumerate().map(move |(c, btn)| (r, c, btn))
+        })
+    }
+
+    /// Press the first inline callback button matched by `predicate`.
+    ///
+    /// The closure receives `(text: &str, data: &[u8])` for each callback button.
+    ///
+    /// ```rust,no_run
+    /// msg.click_button_where(|text, _data| text.contains("Confirm")).await?;
+    /// ```
+    pub async fn click_button_where<F>(&self, predicate: F) -> Result<(), Error>
+    where
+        F: Fn(&str, &[u8]) -> bool,
+    {
+        let client = self.require_client("click_button_where")?.clone();
+        self.click_button_where_with(&client, predicate).await
+    }
+
+    /// Press the first inline callback button matched by `predicate`, using an explicit client.
+    async fn click_button_where_with<F>(&self, client: &Client, predicate: F) -> Result<(), Error>
+    where
+        F: Fn(&str, &[u8]) -> bool,
+    {
+        for (_, _, btn) in self.iter_inline_buttons() {
+            if let tl::enums::KeyboardButton::Callback(b) = btn
+                && predicate(&b.text, &b.data)
+            {
+                return self.invoke_click(client, b.data.clone()).await;
+            }
+        }
+        Err(Error::Deserialize(
+            "click_button_where: no callback button matched the predicate".into(),
+        ))
+    }
+
+    /// Find the first inline callback button matching `filter` and return its `(row, col)`.
+    ///
+    /// Use `.is_some()` to check existence.
+    ///
+    /// ```rust,no_run
+    /// msg.find_button(ButtonFilter::Text("OK"));
+    /// msg.find_button(ButtonFilter::Data(b"cb:ping"));
+    /// msg.find_button(ButtonFilter::Pos(0, 0));
+    /// ```
+    pub fn find_button(&self, filter: ButtonFilter<'_>) -> Option<(usize, usize)> {
+        match filter {
+            ButtonFilter::Pos(row, col) => {
+                if self.extract_callback_data(row, col).is_ok() {
+                    Some((row, col))
+                } else {
+                    None
+                }
+            }
+            ButtonFilter::Text(text) => self.iter_inline_buttons().find_map(|(r, c, btn)| {
+                if let tl::enums::KeyboardButton::Callback(b) = btn {
+                    if b.text == text { Some((r, c)) } else { None }
+                } else {
+                    None
+                }
+            }),
+            ButtonFilter::Data(data) => self.iter_inline_buttons().find_map(|(r, c, btn)| {
+                if let tl::enums::KeyboardButton::Callback(b) = btn {
+                    if b.data.as_slice() == data {
+                        Some((r, c))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }),
+        }
+    }
+
+    /// Find the first inline callback button satisfying `predicate` and return `(row, col)`.
+    ///
+    /// The closure receives `(text: &str, data: &[u8])`.
+    pub fn find_button_where<F>(&self, predicate: F) -> Option<(usize, usize)>
+    where
+        F: Fn(&str, &[u8]) -> bool,
+    {
+        self.iter_inline_buttons().find_map(|(r, c, btn)| {
+            if let tl::enums::KeyboardButton::Callback(b) = btn {
+                if predicate(&b.text, &b.data) {
+                    Some((r, c))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Press the inline button matching `filter`.
+    ///
+    /// ```rust,no_run
+    /// msg.click_button(ButtonFilter::Pos(0, 0)).await?;
+    /// msg.click_button(ButtonFilter::Text("OK")).await?;
+    /// msg.click_button(ButtonFilter::Data(b"action:buy")).await?;
+    /// ```
+    pub async fn click_button(&self, filter: ButtonFilter<'_>) -> Result<(), Error> {
+        let client = self.require_client("click_button")?.clone();
+        let data = match filter {
+            ButtonFilter::Pos(row, col) => self.extract_callback_data(row, col)?,
+            ButtonFilter::Text(text) => self.find_callback_data_by_text(text)?,
+            ButtonFilter::Data(data) => data.to_vec(),
+        };
+        self.invoke_click(&client, data).await
+    }
+}
 
 /// One or more messages were deleted.
 #[derive(Debug, Clone)]
@@ -1099,8 +1049,6 @@ impl MessageDeletion {
         self.message_ids
     }
 }
-
-// CallbackQuery
 
 /// A user pressed an inline keyboard button on a bot message.
 #[derive(Debug, Clone)]
@@ -1151,22 +1099,6 @@ impl CallbackQuery {
             _marker: std::marker::PhantomData,
         }
     }
-
-    /// Answer the callback query (flat helper: prefer `answer()` builder).
-    pub async fn answer_flat(&self, client: &Client, text: Option<&str>) -> Result<(), Error> {
-        client
-            .answer_callback_query(self.query_id, text, false)
-            .await
-            .map(|_| ())
-    }
-
-    /// Answer with a popup alert (flat helper: prefer `answer().alert(...)`).
-    pub async fn answer_alert(&self, client: &Client, text: &str) -> Result<(), Error> {
-        client
-            .answer_callback_query(self.query_id, Some(text), true)
-            .await
-            .map(|_| ())
-    }
 }
 
 /// Fluent builder returned by [`CallbackQuery::answer`]. Finalize with `.send(&client).await`.
@@ -1215,11 +1147,9 @@ impl<'a> Answer<'a> {
             url: self.url,
             cache_time: self.cache_time,
         };
-        client.rpc_call_raw_pub(&req).await.map(|_| ())
+        client.rpc_call_raw(&req).await.map(|_| ())
     }
 }
-
-// InlineQuery
 
 /// A user is typing an inline query (`@bot something`).
 #[derive(Debug, Clone)]
@@ -1238,8 +1168,6 @@ impl InlineQuery {
         &self.query
     }
 }
-
-// InlineSend
 
 /// A user chose an inline result and sent it.
 #[derive(Debug, Clone)]
@@ -1294,8 +1222,6 @@ impl InlineSend {
         Ok(!body.is_empty())
     }
 }
-
-// RawUpdate
 
 /// A TL update that has no dedicated high-level variant yet.
 ///
@@ -1604,8 +1530,6 @@ pub enum Update {
     Raw(Box<RawUpdate>),
 }
 
-// MTProto update container IDs
-
 #[allow(dead_code)]
 const ID_UPDATES_TOO_LONG: u32 = 0xe317af7e;
 #[allow(dead_code)]
@@ -1620,8 +1544,6 @@ const ID_UPDATES: u32 = 0x74ae4240;
 const ID_UPDATES_COMBINED: u32 = 0x725b04c3;
 #[allow(dead_code)]
 const ID_UPDATE_SHORT_SENT_MSG: u32 = 0x9015e101;
-
-// Parser
 
 /// Parse raw update container bytes into high-level [`Update`] values.
 #[allow(dead_code)]
@@ -1720,12 +1642,7 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
 }
 
 /// Convert a single `tl::enums::Update` into a `Vec<Update>`.
-pub fn from_single_update_pub(upd: tl::enums::Update) -> Vec<Update> {
-    from_single_update(upd)
-}
-
-/// Convert a single `tl::enums::Update` into a `Vec<Update>`.
-fn from_single_update(upd: tl::enums::Update) -> Vec<Update> {
+pub(crate) fn from_single_update(upd: tl::enums::Update) -> Vec<Update> {
     use tl::enums::Update::*;
     match upd {
         NewMessage(u) => vec![Update::NewMessage(IncomingMessage::from_raw(u.message))],
@@ -2065,8 +1982,6 @@ fn tl_constructor_id(upd: &tl::enums::Update) -> u32 {
         ManagedBot(_) => 0x4880ed9a,
     }
 }
-
-// Short message helpers
 
 pub(crate) fn make_short_dm(m: tl::types::UpdateShortMessage) -> IncomingMessage {
     let msg = tl::types::Message {
