@@ -110,6 +110,13 @@ pub enum InvocationError {
     /// Not returned to callers; present only for internal routing.
     #[doc(hidden)]
     Migrate(i32),
+    /// The cached access hash was rejected by Telegram (`PEER_ID_INVALID`,
+    /// `CHANNEL_INVALID`, `USER_ID_INVALID`, or `CHANNEL_PRIVATE`).
+    ///
+    /// The stale entry has been removed from the peer cache.  Retry the
+    /// operation; the next attempt will re-resolve the peer via RPC.
+    StaleHash,
+
     /// No access hash is cached for this peer.
     ///
     /// The peer has been seen before but its `access_hash` was never stored
@@ -135,6 +142,7 @@ impl fmt::Display for InvocationError {
             Self::Deserialize(s) => write!(f, "deserialize error: {s}"),
             Self::Dropped => write!(f, "request dropped"),
             Self::Migrate(dc) => write!(f, "DC migration to {dc}"),
+            Self::StaleHash => write!(f, "stale access hash; peer cache cleared, retry"),
             Self::PeerNotCached(s) => write!(f, "peer not cached: {s}"),
         }
     }

@@ -1,59 +1,104 @@
-# Peer Types & PeerRef
+# Peer Types
 
-`ferogram` provides typed wrappers over the raw `tl::enums::User` and `tl::enums::Chat` types, plus `PeerRef`: a flexible peer argument accepted by every `Client` method.
+`ferogram` provides typed wrappers over the raw `tl::enums::User` and `tl::enums::Chat` types, and a flexible peer input system that every `Client` method uses automatically.
 
 ---
 
-## `PeerRef`: flexible peer argument
+## Auto-resolution
 
-Every `Client` method that previously required a bare `tl::enums::Peer` now accepts `impl Into<PeerRef>`. That means you can pass:
+Every `Client` method that targets a chat, user, or channel accepts any of the following directly. You never need to pre-resolve anything.
 
 ```rust
-// @username string (with or without @)
+// @username or bare username
 client.send_message("@durov", "hi").await?;
-client.send_message("durov",  "hi").await?;
+client.send_message("durov", "hi").await?;
 
-// "me" / "self": always resolves to the logged-in account
+// "me" or "self": the logged-in account
 client.send_message("me", "Note to self").await?;
 
-// Positive i64: Telegram user ID
+// E.164 phone number
+client.send_message("+12025551234", "hi").await?;
+
+// t.me URL
+client.send_message("https://t.me/telegram", "hi").await?;
+
+// Invite link (must already be a member, otherwise call join_by_invite first)
+client.send_message("https://t.me/+AbCdEfGhIjKl", "hi").await?;
+
+// Positive i64: user ID
 client.send_message(12345678_i64, "hi").await?;
 
-// Negative i64: Bot-API channel ID (-100… prefix)
-client.iter_messages(-1001234567890_i64);
+// Negative i64: Bot-API channel ID (-100... prefix)
+client.get_message_history(-1001234567890_i64, 50, 0).await?;
 
-// Negative i64: Bot-API basic-group ID (small negative)
+// Small negative i64: basic group
 client.mark_as_read(-123456_i64).await?;
 
-// Already-resolved TL peer: zero overhead, no network call
+// Raw TL peer: zero cost, no network call
 use ferogram::tl;
 let peer = tl::enums::Peer::User(tl::types::PeerUser { user_id: 123 });
 client.send_message(peer, "hi").await?;
+
+// Already-resolved InputPeer: hash is used directly
+let ip: tl::enums::InputPeer = get_it_from_somewhere();
+client.send_message(ip, "hi").await?;
 ```
 
-### `PeerRef` variants
+Accepted invite link formats: `https://t.me/+HASH`, `https://t.me/joinchat/HASH`, `tg://join?invite=HASH`.
 
-| Variant | How resolved |
-|---|---|
-| `PeerRef::Username(s)` | `contacts.resolveUsername` RPC (cached after first call) |
-| `PeerRef::Id(i64)` | Decoded from Bot-API encoding: **no network call** |
-| `PeerRef::Peer(tl::enums::Peer)` | Forwarded as-is: **zero cost** |
+Resolution is cache-first. Usernames, phone numbers, and IDs that have been seen before are resolved from memory with no RPC. An RPC is only made on a genuine cache miss.
 
 ### Bot-API ID encoding
 
-| Range | Maps to |
+| Range | Peer type |
 |---|---|
-| `id > 0` | User (`PeerUser { user_id: id }`) |
-| `-1_000_000_000_000 < id < 0` | Basic group (`PeerChat { chat_id: -id }`) |
-| `id ≤ -1_000_000_000_000` | Channel (`channel_id = -id - 1_000_000_000_000`) |
+| `id > 0` | User |
+| `-1_000_000_000_000 < id < 0` | Basic group |
+| `id <= -1_000_000_000_000` | Channel or supergroup |
 
-### Resolving manually
+---
+
+## Manual resolution
+
+Use `client.resolve()` when you need a `Peer` value explicitly. It accepts all the same input types as every other `Client` method:
+
+```rust
+// &str: username, phone, URL, invite link
+let peer = client.resolve("@username").await?;
+let peer = client.resolve("+12025551234").await?;
+let peer = client.resolve("https://t.me/+HASH").await?;
+let peer = client.resolve("me").await?;
+
+// i64 / i32: Bot-API numeric ID
+let peer = client.resolve(12345678_i64).await?;
+let peer = client.resolve(-1001234567890_i64).await?;
+
+// tl::enums::Peer: zero cost, returned as-is
+use ferogram::tl;
+let raw = tl::enums::Peer::User(tl::types::PeerUser { user_id: 123 });
+let peer = client.resolve(raw).await?;
+
+// tl::enums::InputPeer: hash cached, then stripped to Peer
+let ip: tl::enums::InputPeer = get_it_from_somewhere();
+let peer = client.resolve(ip).await?;
+```
+
+`client.resolve_peer(peer: &str)` is the string-only variant; use it when the input is always a `&str`. Use `resolve()` for everything else.
+
+To go from a `Peer` back to an `InputPeer` (with access hash):
+
+```rust
+let input = client.resolve_to_input_peer(&peer).await?;
+```
+
+This returns an error if the peer has not appeared in any prior API response and the access hash is unknown.
+
+Via `PeerRef` directly (same result):
 
 ```rust
 use ferogram::PeerRef;
-
-let peer_ref = PeerRef::from("@someuser");
-let peer: tl::enums::Peer = peer_ref.resolve(&client).await?;
+let peer = PeerRef::from("@username").resolve(&client).await?;
+let peer = PeerRef::from(12345678_i64).resolve(&client).await?;
 ```
 
 ---

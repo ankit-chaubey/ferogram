@@ -422,6 +422,14 @@ pub struct ExperimentalFeatures {
 
 /// Caches access hashes for users and channels so every API call carries the
 /// correct hash without re-resolving peers.
+/// Discriminates the kind of peer stored in `PeerCache::username_to_peer`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PeerType {
+    User,
+    Channel,
+    Chat,
+}
+
 ///
 /// All fields are `pub` so that `save_session` / `connect` can read/write them
 /// directly, and so that advanced callers can inspect the cache.
@@ -442,6 +450,12 @@ pub struct PeerCache {
     /// Min users have an invalid access_hash; they must be referenced via
     /// InputPeerUserFromMessage using the peer and message where they appeared.
     pub min_contexts: HashMap<i64, (i64, i32)>,
+    /// Reverse index: lowercase username → (id, PeerType).
+    /// Populated by cache_user / cache_chat; always overwritten on update
+    /// (usernames can change).
+    pub username_to_peer: HashMap<String, (i64, PeerType)>,
+    /// Reverse index: E.164 phone → user_id.
+    pub phone_to_user: HashMap<String, i64>,
     /// Experimental opt-ins that change error-vs-fallback behaviour.
     experimental: ExperimentalFeatures,
 }
@@ -461,6 +475,8 @@ impl PeerCache {
             chats: HashSet::new(),
             channels_min: HashSet::new(),
             min_contexts: HashMap::new(),
+            username_to_peer: HashMap::new(),
+            phone_to_user: HashMap::new(),
             experimental,
         }
     }
@@ -478,6 +494,14 @@ impl PeerCache {
                 }
                 // Full user always supersedes any min context.
                 self.min_contexts.remove(&u.id);
+            }
+            // Reverse indices (update even for min users so username lookup works)
+            if let Some(ref uname) = u.username {
+                self.username_to_peer
+                    .insert(uname.to_lowercase(), (u.id, PeerType::User));
+            }
+            if let Some(ref phone) = u.phone {
+                self.phone_to_user.insert(phone.clone(), u.id);
             }
         }
     }
@@ -506,6 +530,14 @@ impl PeerCache {
                 }
                 self.min_contexts.remove(&u.id);
             }
+            // Reverse indices
+            if let Some(ref uname) = u.username {
+                self.username_to_peer
+                    .insert(uname.to_lowercase(), (u.id, PeerType::User));
+            }
+            if let Some(ref phone) = u.phone {
+                self.phone_to_user.insert(phone.clone(), u.id);
+            }
         }
     }
 
@@ -527,6 +559,11 @@ impl PeerCache {
                     }
                     // Full channel supersedes any min tracking.
                     self.channels_min.remove(&c.id);
+                }
+                // Reverse username index for channels (update regardless of min)
+                if let Some(ref uname) = c.username {
+                    self.username_to_peer
+                        .insert(uname.to_lowercase(), (c.id, PeerType::Channel));
                 }
             }
             tl::enums::Chat::ChannelForbidden(c) => {
@@ -558,6 +595,79 @@ impl PeerCache {
     fn cache_chats(&mut self, chats: &[tl::enums::Chat]) {
         for c in chats {
             self.cache_chat(c);
+        }
+    }
+
+    /// Store an already-resolved `InputPeer`'s access hash into the cache.
+    ///
+    /// Called when a caller provides a `PeerRef::Input` so that the subsequent
+    /// `peer_to_input` lookup succeeds without an RPC.
+    pub fn cache_input_peer(&mut self, ip: &tl::enums::InputPeer) {
+        match ip {
+            tl::enums::InputPeer::User(u) => {
+                if u.access_hash != 0 {
+                    self.users.insert(u.user_id, u.access_hash);
+                } else {
+                    self.users.entry(u.user_id).or_insert(0);
+                }
+                self.min_contexts.remove(&u.user_id);
+            }
+            tl::enums::InputPeer::Channel(c) => {
+                if c.access_hash != 0 {
+                    self.channels.insert(c.channel_id, c.access_hash);
+                } else {
+                    self.channels.entry(c.channel_id).or_insert(0);
+                }
+                self.channels_min.remove(&c.channel_id);
+            }
+            tl::enums::InputPeer::Chat(c) => {
+                self.chats.insert(c.chat_id);
+            }
+            // UserFromMessage: cache the container peer's hash AND record the
+            // min_context so peer_to_input() can rebuild InputPeerUserFromMessage.
+            tl::enums::InputPeer::UserFromMessage(u) => {
+                // Cache the container peer's access hash
+                self.cache_input_peer(&u.peer);
+                // Extract container peer_id for the min_context entry
+                let container_peer_id = match &u.peer {
+                    tl::enums::InputPeer::Channel(c) => Some(c.channel_id),
+                    tl::enums::InputPeer::Chat(c) => Some(c.chat_id),
+                    tl::enums::InputPeer::User(pu) => Some(pu.user_id),
+                    tl::enums::InputPeer::PeerSelf => Some(0i64),
+                    _ => None,
+                };
+                if let Some(peer_id) = container_peer_id {
+                    // Only set min_context if there is no full hash cached yet.
+                    if !self.users.contains_key(&u.user_id) {
+                        self.min_contexts.insert(u.user_id, (peer_id, u.msg_id));
+                    }
+                }
+            }
+            // ChannelFromMessage: cache the container peer hash and channel entry.
+            tl::enums::InputPeer::ChannelFromMessage(c) => {
+                self.cache_input_peer(&c.peer);
+                // The channel itself has no standalone hash here; mark as known
+                // via channels_min so we don't lose track of it.
+                self.channels_min.insert(c.channel_id);
+            }
+            tl::enums::InputPeer::Empty | tl::enums::InputPeer::PeerSelf => {}
+        }
+    }
+
+    /// Remove stale cache entries when Telegram rejects them with
+    /// `PEER_ID_INVALID`, `CHANNEL_INVALID`, `USER_ID_INVALID`, or
+    /// `CHANNEL_PRIVATE`.  The caller should then retry the operation.
+    pub fn invalidate_peer(&mut self, peer: &tl::enums::Peer) {
+        match peer {
+            tl::enums::Peer::User(u) => {
+                self.users.remove(&u.user_id);
+                self.min_contexts.remove(&u.user_id);
+            }
+            tl::enums::Peer::Channel(c) => {
+                self.channels.remove(&c.channel_id);
+                self.channels_min.remove(&c.channel_id);
+            }
+            tl::enums::Peer::Chat(_) => {} // basic groups have no hash to invalidate
         }
     }
 
@@ -6538,27 +6648,37 @@ impl Client {
 
     // Peer resolution
 
-    /// Resolve a peer string to a [`tl::enums::Peer`].
-    pub async fn resolve_peer(&self, peer: &str) -> Result<tl::enums::Peer, InvocationError> {
-        match peer.trim() {
-            "me" | "self" => Ok(tl::enums::Peer::User(tl::types::PeerUser { user_id: 0 })),
-            username if username.starts_with('@') => self.resolve_username(&username[1..]).await,
-            id_str => {
-                if let Ok(id) = id_str.parse::<i64>() {
-                    Ok(tl::enums::Peer::User(tl::types::PeerUser { user_id: id }))
-                } else {
-                    Err(InvocationError::Deserialize(format!(
-                        "cannot resolve peer: {peer}"
-                    )))
-                }
-            }
-        }
+    /// Resolve any peer reference to a [`tl::enums::Peer`].
+    ///
+    /// Accepts everything [`PeerRef`] accepts:
+    ///
+    /// - `&str` / `String`: `"@username"`, `"me"`, `"self"`, numeric string,
+    ///   `t.me/` URL, invite link, E.164 phone
+    /// - `i64` / `i32`: Bot-API encoded numeric ID
+    /// - [`tl::enums::Peer`]: returned as-is (zero cost)
+    /// - [`tl::enums::InputPeer`]: hash cached, then stripped to `Peer`
+    ///
+    /// Resolution is cache-first; an RPC is only made on a genuine cache miss.
+    pub async fn resolve<P: Into<PeerRef>>(
+        &self,
+        peer: P,
+    ) -> Result<tl::enums::Peer, InvocationError> {
+        peer.into().resolve(self).await
     }
 
-    /// Resolve a Telegram username to a [`tl::enums::Peer`] and cache the access hash.
+    /// Resolve a peer string to a [`tl::enums::Peer`].
     ///
-    /// Also accepts usernames without the leading `@`.
-    pub(crate) async fn resolve_username(
+    /// Accepts: `"me"`, `"self"`, `"@username"`, `"username"`, numeric strings
+    /// (Bot-API encoded), `t.me/` URLs, E.164 phones (`+digits`), and invite
+    /// links.  Cache-first for usernames and phones; RPC only on miss.
+    ///
+    /// Prefer [`Client::resolve`] when the input may not be a string.
+    pub async fn resolve_peer(&self, peer: &str) -> Result<tl::enums::Peer, InvocationError> {
+        PeerRef::from(peer).resolve(self).await
+    }
+
+    /// `contacts.resolveUsername` RPC; called only on cache miss.
+    pub(crate) async fn resolve_username_rpc(
         &self,
         username: &str,
     ) -> Result<tl::enums::Peer, InvocationError> {
@@ -6570,10 +6690,294 @@ impl Client {
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::contacts::ResolvedPeer::ResolvedPeer(resolved) =
             tl::enums::contacts::ResolvedPeer::deserialize(&mut cur)?;
-        // Cache users and chats from the resolution
         self.cache_users_slice(&resolved.users).await;
         self.cache_chats_slice(&resolved.chats).await;
         Ok(resolved.peer)
+    }
+
+    /// RPC fallback for `PeerRef::Id` when the peer is not in the cache.
+    ///
+    /// - `Peer::User`    → `users.getUsers` with `access_hash = 0` (works for
+    ///   contacts and recently-interacted users; may return `UserEmpty` for
+    ///   strangers; falls back to `messages.getPeerDialogs` in that case).
+    /// - `Peer::Channel` → `channels.getChannels` with `access_hash = 0`.
+    ///   This works only for public channels; returns `ChannelEmpty` otherwise.
+    /// - `Peer::Chat`    → basic groups never need a hash; return immediately.
+    ///
+    /// On success the resolved entity is inserted into the peer cache so
+    /// subsequent lookups are free.
+    pub(crate) async fn fetch_by_id_rpc(
+        &self,
+        peer: tl::enums::Peer,
+    ) -> Result<tl::enums::Peer, InvocationError> {
+        match &peer {
+            tl::enums::Peer::Chat(_) => {
+                // Basic groups need no access_hash; always resolvable from ID.
+                Ok(peer)
+            }
+
+            tl::enums::Peer::User(u) => {
+                let req = tl::functions::users::GetUsers {
+                    id: vec![tl::enums::InputUser::InputUser(tl::types::InputUser {
+                        user_id: u.user_id,
+                        access_hash: 0,
+                    })],
+                };
+                let body = self.rpc_call_raw(&req).await?;
+                let mut cur = Cursor::from_slice(&body);
+                let users = Vec::<tl::enums::User>::deserialize(&mut cur)?;
+                // Filter out UserEmpty responses
+                let valid: Vec<_> = users
+                    .into_iter()
+                    .filter(|u| matches!(u, tl::enums::User::User(_)))
+                    .collect();
+                if !valid.is_empty() {
+                    self.cache_users_slice(&valid).await;
+                    return Ok(peer);
+                }
+
+                // Fallback: messages.getPeerDialogs (finds peers you've interacted with)
+                let cache_read = self.inner.peer_cache.read().await;
+                if cache_read.users.contains_key(&match &peer {
+                    tl::enums::Peer::User(u) => u.user_id,
+                    _ => unreachable!(),
+                }) {
+                    drop(cache_read);
+                    return Ok(peer);
+                }
+                drop(cache_read);
+
+                let uid = match &peer {
+                    tl::enums::Peer::User(u) => u.user_id,
+                    _ => unreachable!(),
+                };
+                let req2 = tl::functions::messages::GetPeerDialogs {
+                    peers: vec![tl::enums::InputDialogPeer::InputDialogPeer(
+                        tl::types::InputDialogPeer {
+                            peer: tl::enums::InputPeer::User(tl::types::InputPeerUser {
+                                user_id: uid,
+                                access_hash: 0,
+                            }),
+                        },
+                    )],
+                };
+                let body2 = self.rpc_call_raw(&req2).await;
+                match body2 {
+                    Ok(b) => {
+                        let mut cur2 = Cursor::from_slice(&b);
+                        if let Ok(tl::enums::messages::PeerDialogs::PeerDialogs(pd)) =
+                            tl::enums::messages::PeerDialogs::deserialize(&mut cur2)
+                        {
+                            self.cache_users_and_chats(&pd.users, &pd.chats).await;
+                        }
+                        Ok(peer)
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+
+            tl::enums::Peer::Channel(c) => {
+                let req = tl::functions::channels::GetChannels {
+                    id: vec![tl::enums::InputChannel::InputChannel(
+                        tl::types::InputChannel {
+                            channel_id: c.channel_id,
+                            access_hash: 0,
+                        },
+                    )],
+                };
+                let body = self.rpc_call_raw(&req).await?;
+                let mut cur = Cursor::from_slice(&body);
+                let chats = tl::enums::messages::Chats::deserialize(&mut cur)?;
+                let chats_vec = match chats {
+                    tl::enums::messages::Chats::Chats(c) => c.chats,
+                    tl::enums::messages::Chats::Slice(c) => c.chats,
+                };
+                let non_empty: Vec<_> = chats_vec
+                    .into_iter()
+                    .filter(|ch| !matches!(ch, tl::enums::Chat::Empty(_)))
+                    .collect();
+                if !non_empty.is_empty() {
+                    self.cache_chats_slice(&non_empty).await;
+                    return Ok(peer);
+                }
+
+                // Fallback: getPeerDialogs
+                let cid = c.channel_id;
+                let req2 = tl::functions::messages::GetPeerDialogs {
+                    peers: vec![tl::enums::InputDialogPeer::InputDialogPeer(
+                        tl::types::InputDialogPeer {
+                            peer: tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                                channel_id: cid,
+                                access_hash: 0,
+                            }),
+                        },
+                    )],
+                };
+                let body2 = self.rpc_call_raw(&req2).await;
+                match body2 {
+                    Ok(b) => {
+                        let mut cur2 = Cursor::from_slice(&b);
+                        if let Ok(tl::enums::messages::PeerDialogs::PeerDialogs(pd)) =
+                            tl::enums::messages::PeerDialogs::deserialize(&mut cur2)
+                        {
+                            self.cache_users_and_chats(&pd.users, &pd.chats).await;
+                        }
+                        Ok(peer)
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+        }
+    }
+
+    /// `contacts.importContacts` RPC for phone-based resolution.
+    ///
+    /// Imports the phone as a temporary contact, caches the returned user, and
+    /// returns the resolved Peer.
+    pub(crate) async fn resolve_phone_rpc(
+        &self,
+        phone: &str,
+    ) -> Result<tl::enums::Peer, InvocationError> {
+        let req = tl::functions::contacts::ImportContacts {
+            contacts: vec![tl::enums::InputContact::InputPhoneContact(
+                tl::types::InputPhoneContact {
+                    client_id: 0,
+                    phone: phone.to_string(),
+                    first_name: String::new(),
+                    last_name: String::new(),
+                    note: None,
+                },
+            )],
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::contacts::ImportedContacts::ImportedContacts(result) =
+            tl::enums::contacts::ImportedContacts::deserialize(&mut cur)?;
+        self.cache_users_slice(&result.users).await;
+
+        // Check if the phone is now in the cache reverse index
+        {
+            let cache = self.inner.peer_cache.read().await;
+            if let Some(&uid) = cache.phone_to_user.get(phone) {
+                return Ok(tl::enums::Peer::User(tl::types::PeerUser { user_id: uid }));
+            }
+        }
+
+        // Fall back: first imported contact's user_id
+        result
+            .imported
+            .first()
+            .map(|imp| match imp {
+                tl::enums::ImportedContact::ImportedContact(c) => {
+                    Ok(tl::enums::Peer::User(tl::types::PeerUser {
+                        user_id: c.user_id,
+                    }))
+                }
+            })
+            .unwrap_or_else(|| {
+                Err(InvocationError::Deserialize(format!(
+                    "phone {phone} not found on Telegram"
+                )))
+            })
+    }
+
+    /// `messages.checkChatInvite`; resolves an invite hash to a Peer.
+    ///
+    /// Succeeds only when you are already a member (`chatInviteAlready` or
+    /// `chatInvitePeek`).  Use [`Client::join_by_invite`] to join first.
+    pub(crate) async fn resolve_invite_hash_rpc(
+        &self,
+        hash: &str,
+    ) -> Result<tl::enums::Peer, InvocationError> {
+        let req = tl::functions::messages::CheckChatInvite {
+            hash: hash.to_string(),
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let invite = tl::enums::ChatInvite::deserialize(&mut cur)?;
+
+        match invite {
+            tl::enums::ChatInvite::Already(a) => {
+                let peer = chat_to_peer(&a.chat);
+                self.cache_chats_slice(&[a.chat]).await;
+                peer.ok_or_else(|| {
+                    InvocationError::Deserialize(
+                        "chatInviteAlready: unrecognised chat variant".into(),
+                    )
+                })
+            }
+            tl::enums::ChatInvite::Peek(p) => {
+                let peer = chat_to_peer(&p.chat);
+                self.cache_chats_slice(&[p.chat]).await;
+                peer.ok_or_else(|| {
+                    InvocationError::Deserialize("chatInvitePeek: unrecognised chat variant".into())
+                })
+            }
+            tl::enums::ChatInvite::ChatInvite(_) => Err(InvocationError::Deserialize(
+                "not a member of this chat yet; call client.join_by_invite() first".into(),
+            )),
+        }
+    }
+
+    /// Join a chat by invite link and return its `InputPeer`.
+    ///
+    /// Calls `messages.importChatInvite`, caches all returned entities, and
+    /// returns the `InputPeer` of the joined chat.
+    pub async fn join_by_invite(
+        &self,
+        link: &str,
+    ) -> Result<tl::enums::InputPeer, InvocationError> {
+        let hash = PeerRef::parse_invite_hash(link)
+            .ok_or_else(|| InvocationError::Deserialize(format!("invalid invite link: {link}")))?;
+        let req = tl::functions::messages::ImportChatInvite {
+            hash: hash.to_string(),
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let updates = tl::enums::Updates::deserialize(&mut cur)?;
+
+        // Extract users and chats embedded in the Updates object
+        let (users, chats) = updates_entities(&updates);
+        self.cache_users_and_chats(&users, &chats).await;
+
+        // Return the InputPeer of the first chat from the updates
+        let cache = self.inner.peer_cache.read().await;
+        for chat in &chats {
+            match chat {
+                tl::enums::Chat::Channel(c) if !c.min => {
+                    if let Some(&hash) = cache.channels.get(&c.id) {
+                        return Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                            channel_id: c.id,
+                            access_hash: hash,
+                        }));
+                    }
+                }
+                tl::enums::Chat::Chat(c) => {
+                    return Ok(tl::enums::InputPeer::Chat(tl::types::InputPeerChat {
+                        chat_id: c.id,
+                    }));
+                }
+                _ => {}
+            }
+        }
+
+        Err(InvocationError::Deserialize(
+            "importChatInvite: no chat returned".into(),
+        ))
+    }
+
+    /// Peek at an invite link without joining.
+    ///
+    /// Returns the title and participant count of the chat the link points to.
+    pub async fn check_invite(&self, link: &str) -> Result<tl::enums::ChatInvite, InvocationError> {
+        let hash = PeerRef::parse_invite_hash(link)
+            .ok_or_else(|| InvocationError::Deserialize(format!("invalid invite link: {link}")))?;
+        let req = tl::functions::messages::CheckChatInvite {
+            hash: hash.to_string(),
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        Ok(tl::enums::ChatInvite::deserialize(&mut cur)?)
     }
 
     // Raw invoke
@@ -6660,6 +7064,26 @@ impl Client {
                 Err(InvocationError::Rpc(ref r)) if r.code == 401 => {
                     metrics::counter!("ferogram.rpc_calls_total", "result" => "error").increment(1);
                     return Err(InvocationError::Rpc(r.clone()));
+                }
+                // Stale access hash: evict the bad entry from cache and surface
+                // StaleHash so callers can retry with a fresh resolution.
+                Err(InvocationError::Rpc(ref r))
+                    if matches!(
+                        r.name.as_str(),
+                        "PEER_ID_INVALID"
+                            | "CHANNEL_INVALID"
+                            | "USER_ID_INVALID"
+                            | "CHANNEL_PRIVATE"
+                            | "INPUT_USER_DEACTIVATED"
+                    ) =>
+                {
+                    metrics::counter!("ferogram.rpc_calls_total", "result" => "stale_hash")
+                        .increment(1);
+                    tracing::debug!(
+                        "[ferogram] rpc_call_raw: {} - evicting stale peer from cache",
+                        r.name
+                    );
+                    return Err(InvocationError::StaleHash);
                 }
                 Err(e) => {
                     metrics::counter!("ferogram.rpc_calls_total", "result" => "error").increment(1);
@@ -7819,37 +8243,7 @@ impl Client {
         &self,
         peer: &tl::enums::Peer,
     ) -> Result<tl::enums::InputPeer, InvocationError> {
-        let cache = self.inner.peer_cache.read().await;
-        match peer {
-            tl::enums::Peer::User(u) => {
-                if u.user_id == 0 {
-                    return Ok(tl::enums::InputPeer::PeerSelf);
-                }
-                match cache.users.get(&u.user_id) {
-                    Some(&hash) => Ok(tl::enums::InputPeer::User(tl::types::InputPeerUser {
-                        user_id: u.user_id,
-                        access_hash: hash,
-                    })),
-                    None => Err(InvocationError::Deserialize(format!(
-                        "access_hash unknown for user {}; resolve via username first",
-                        u.user_id
-                    ))),
-                }
-            }
-            tl::enums::Peer::Chat(c) => Ok(tl::enums::InputPeer::Chat(tl::types::InputPeerChat {
-                chat_id: c.chat_id,
-            })),
-            tl::enums::Peer::Channel(c) => match cache.channels.get(&c.channel_id) {
-                Some(&hash) => Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
-                    channel_id: c.channel_id,
-                    access_hash: hash,
-                })),
-                None => Err(InvocationError::Deserialize(format!(
-                    "access_hash unknown for channel {}; resolve via username first",
-                    c.channel_id
-                ))),
-            },
-        }
+        self.inner.peer_cache.read().await.peer_to_input(peer)
     }
 
     /// Invoke a request on a specific DC, using the pool.
@@ -13285,6 +13679,40 @@ fn unwrap_envelope(body: Vec<u8>) -> Result<EnvelopeResult, InvocationError> {
             }
         }
         _ => Ok(EnvelopeResult::Payload(body)),
+    }
+}
+
+/// Extract (users, chats) slices from any `Updates` variant.
+///
+/// Covers `Updates`, `UpdatesCombined`, and `UpdateShortChatMessage` /
+/// `UpdateShortMessage` (which embed no entities; returns empty vecs).
+/// Used to cache entities immediately after any RPC that returns `Updates`.
+fn updates_entities(updates: &tl::enums::Updates) -> (Vec<tl::enums::User>, Vec<tl::enums::Chat>) {
+    match updates {
+        tl::enums::Updates::Updates(u) => (u.users.clone(), u.chats.clone()),
+        tl::enums::Updates::Combined(u) => (u.users.clone(), u.chats.clone()),
+        _ => (Vec::new(), Vec::new()),
+    }
+}
+
+/// Convert a `Chat` enum variant to its corresponding `Peer`.
+fn chat_to_peer(chat: &tl::enums::Chat) -> Option<tl::enums::Peer> {
+    match chat {
+        tl::enums::Chat::Channel(c) => Some(tl::enums::Peer::Channel(tl::types::PeerChannel {
+            channel_id: c.id,
+        })),
+        tl::enums::Chat::ChannelForbidden(c) => {
+            Some(tl::enums::Peer::Channel(tl::types::PeerChannel {
+                channel_id: c.id,
+            }))
+        }
+        tl::enums::Chat::Chat(c) => {
+            Some(tl::enums::Peer::Chat(tl::types::PeerChat { chat_id: c.id }))
+        }
+        tl::enums::Chat::Forbidden(c) => {
+            Some(tl::enums::Peer::Chat(tl::types::PeerChat { chat_id: c.id }))
+        }
+        tl::enums::Chat::Empty(_) => None,
     }
 }
 

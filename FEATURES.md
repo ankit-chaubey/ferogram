@@ -207,6 +207,38 @@ Every received message exposes:
 
 ---
 
+## Peer Resolution
+
+Every `Client` method that targets a peer accepts any of the following directly. No pre-resolution needed:
+
+- `"@username"` or `"username"` (with or without `@`)
+- `"me"` or `"self"` (the logged-in account)
+- E.164 phone number: `"+12025551234"`
+- `t.me/<username>` URL
+- Invite link: `t.me/+HASH`, `t.me/joinchat/HASH`, `tg://join?invite=HASH`
+- `i64` or `i32` numeric ID (Bot-API encoded: positive = user, small negative = group, `<= -1_000_000_000_000` = channel)
+- `tl::enums::Peer` or `tl::enums::InputPeer` (zero-cost, no RPC)
+
+Resolution is cache-first. An RPC is only made on a genuine cache miss. IDs, usernames, and phones seen in any previous update or dialog are resolved from memory.
+
+Manual resolution when needed:
+
+```rust
+// resolve() accepts all peer types
+let peer = client.resolve("@username").await?;
+let peer = client.resolve(12345678_i64).await?;
+let peer = client.resolve(raw_tl_peer).await?;
+let peer = client.resolve(input_peer).await?;
+
+// String-only shorthand
+let peer = client.resolve_peer("+12025551234").await?;
+
+// Get InputPeer (access hash) from a bare Peer
+let input = client.resolve_to_input_peer(&peer).await?;
+```
+
+---
+
 ## Chats and Peers
 
 - `get_me()`: fetch the current user/bot as `User`

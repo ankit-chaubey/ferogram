@@ -57,7 +57,7 @@
 - [ClientBuilder](./api/client-builder.md)
 - [Types Reference](./api/types.md)
 - [InputMessage Builder](./api/input-message.md)
-- [Peer Types & PeerRef](./api/peer-types.md)
+- [Peer Types & Resolution](./api/peer-types.md)
 - [Participants & Members](./api/participants.md)
 - [Admin & Ban Rights](./api/admin-rights.md)
 - [Dialogs & History](./api/dialogs.md)

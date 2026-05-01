@@ -698,17 +698,34 @@ client.send_album(peer, vec![
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.resolve_peer(peer: &str) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
+<span class="api-card-sig">client.resolve&lt;P: Into&lt;PeerRef&gt;&gt;(peer: P) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Resolve a string (<code>"@username"</code>, <code>"+phone"</code>, <code>"me"</code>, numeric ID) to a <code>Peer</code> with cached access hash.</div>
+<div class="api-card-body">
+Resolve any peer reference to a <code>Peer</code>. Accepts all <code>PeerRef</code> input types:
+<ul>
+<li><code>&amp;str</code> / <code>String</code> — <code>"@username"</code>, <code>"me"</code>, <code>"self"</code>, numeric string, <code>t.me/</code> URL, invite link, E.164 phone</li>
+<li><code>i64</code> / <code>i32</code> — Bot-API encoded numeric ID</li>
+<li><code>tl::enums::Peer</code> — returned as-is, zero cost</li>
+<li><code>tl::enums::InputPeer</code> — access hash cached, then stripped to <code>Peer</code></li>
+</ul>
+Resolution is cache-first; an RPC is only made on a cache miss.
+</div>
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.resolve_username(username: &str) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
+<span class="api-card-sig">client.resolve_peer(peer: &str) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Resolve a bare username (without @) to a <code>Peer</code>.</div>
+<div class="api-card-body">String-only variant of <code>resolve()</code>. Accepts <code>"@username"</code>, <code>"+phone"</code>, <code>"me"</code>, numeric string, <code>t.me/</code> URL, and invite links. Prefer <code>resolve()</code> when the input may not be a string.</div>
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.resolve_to_input_peer(peer: &tl::enums::Peer) → Result&lt;tl::enums::InputPeer, InvocationError&gt;</span>
+</div>
+<div class="api-card-body">Convert a bare <code>Peer</code> to an <code>InputPeer</code> with access hash. Returns an error if the peer has not been seen in a prior API call and the hash is unknown.</div>
 </div>
 
 ---
