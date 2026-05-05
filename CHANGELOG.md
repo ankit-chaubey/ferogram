@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.8]: 2026-05-06
+
+Bug fixes
+
+### Changes in 0.3.8
+
+- `send_to_self(msg)` is fixed: it now actually sends to Saved Messages again. In 0.3.7 it was pointing at the wrong function body.
+- `open_mini_app(peer, MiniApp)` is now public. It was accidentally left private in 0.3.7.
+- `get_chat_full(peer)` is now `pub` instead of `pub(crate)`, so you can call it directly from outside the crate.
+- also fixed `download_media_to_file_on_dc` & `set_default_banned_rights_raw`
+
+---
+
 ## [0.3.7]: 2026-05-05
 
 The big story this release is workspace restructuring. Three crates were extracted out of the monolith, the connection stack got its own proper home, and a handful of API rough edges were smoothed out.
