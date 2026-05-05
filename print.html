@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dab26105.js";
+            window.path_to_searchindex_js = "searchindex-b097326d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c671d9b3.js"></script>
@@ -315,6 +315,15 @@ Use it at your own risk. Its future and stability are not yet guaranteed.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="release-history-1"><a class="header" href="#release-history-1">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
+<hr>
+<h2 id="v038"><a class="header" href="#v038">v0.3.8</a></h2>
+<p>Released 2026-05-06. A small patch release fixing two broken APIs from 0.3.7.</p>
+<h3 id="send_to_self-is-fixed"><a class="header" href="#send_to_self-is-fixed"><code>send_to_self</code> is fixed</a></h3>
+<p>In 0.3.7 the function body got swapped during a refactor. Calling <code>send_to_self(msg)</code> was silently hitting the wrong code path. It now correctly sends to your Saved Messages using <code>messages.sendMessage</code> with <code>InputPeer::PeerSelf</code>, and returns the sent message as before.</p>
+<h3 id="open_mini_app-is-now-public"><a class="header" href="#open_mini_app-is-now-public"><code>open_mini_app</code> is now public</a></h3>
+<p><code>open_mini_app(peer, MiniApp)</code> was accidentally left private in 0.3.7. It’s <code>pub</code> now. Supports all four mini-app types: <code>Main</code>, <code>Url</code>, <code>App</code>, and <code>Simple</code>.</p>
+<h3 id="get_chat_full-is-now-public"><a class="header" href="#get_chat_full-is-now-public"><code>get_chat_full</code> is now public</a></h3>
+<p>Was <code>pub(crate)</code> before. Now <code>pub</code>, so you can call it directly if you need the raw full chat info without going through a helper.</p>
 <hr>
 <h2 id="v037"><a class="header" href="#v037">v0.3.7</a></h2>
 <p>Released 2026-05-05. Workspace restructure, three new crates, and a handful of API cleanups.</p>
