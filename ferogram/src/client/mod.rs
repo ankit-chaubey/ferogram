@@ -4039,8 +4039,7 @@ impl Client {
             .with_client(self.clone())
     }
 
-    #[allow(dead_code)]
-    async fn synthetic_sent(
+    pub async fn open_mini_app(
         &self,
         peer: impl Into<PeerRef>,
 
@@ -4137,7 +4136,7 @@ impl Client {
         }
     }
 
-    pub async fn open_mini_app(
+    pub async fn send_to_self(
         &self,
         msg: impl Into<InputMessage>,
     ) -> Result<update::IncomingMessage, InvocationError> {
@@ -4168,32 +4167,6 @@ impl Client {
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let self_peer = tl::enums::Peer::User(tl::types::PeerUser { user_id: 0 });
         Ok(self.parse_send_response(&body, &msg, &self_peer).await)
-    }
-
-    pub async fn send_to_self(
-        &self,
-        peer: impl Into<PeerRef>,
-
-        message_id: i32,
-        msg: impl Into<InputMessage>,
-    ) -> Result<(), InvocationError> {
-        let msg = msg.into();
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let req = tl::functions::messages::EditMessage {
-            no_webpage: msg.no_webpage,
-            invert_media: msg.invert_media,
-            peer: input_peer,
-            id: message_id,
-            message: Some(msg.text),
-            media: msg.media,
-            reply_markup: msg.reply_markup,
-            entities: msg.entities,
-            schedule_date: msg.schedule_date,
-            schedule_repeat_period: None,
-            quick_reply_shortcut_id: None,
-        };
-        self.rpc_write(&req).await
     }
 
     /// Edit the text of an existing message.
@@ -7174,7 +7147,7 @@ impl Client {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn get_chat_full(
+    pub async fn get_chat_full(
         &self,
         peer: impl Into<PeerRef>,
     ) -> Result<tl::enums::messages::ChatFull, InvocationError> {
