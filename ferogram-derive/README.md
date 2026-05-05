@@ -17,14 +17,14 @@ Via the `ferogram` crate (recommended):
 
 ```toml
 [dependencies]
-ferogram = { version = "0.3.7", features = ["derive"] }
+ferogram = { version = "0.3.8", features = ["derive"] }
 ```
 
 Or directly:
 
 ```toml
 [dependencies]
-ferogram-derive = "0.3.7"
+ferogram-derive = "0.3.8"
 ```
 
 ---

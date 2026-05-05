@@ -657,6 +657,14 @@ All implemented from scratch, no external crypto service:
 
 ---
 
+## Changes in 0.3.8
+
+- `send_to_self(msg)` is fixed: it now actually sends to Saved Messages again. In 0.3.7 it was pointing at the wrong function body.
+- `open_mini_app(peer, MiniApp)` is now public. It was accidentally left private in 0.3.7.
+- `get_chat_full(peer)` is now `pub` instead of `pub(crate)`, so you can call it directly from outside the crate.
+
+---
+
 ## Testing and Platform
 
 - `InMemoryBackend` for tests without real credentials

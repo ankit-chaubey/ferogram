@@ -4,6 +4,24 @@ ferogram started as a renamed continuation of [layer](https://github.com/ankit-c
 
 ---
 
+## v0.3.8
+
+Released 2026-05-06. A small patch release fixing two broken APIs from 0.3.7.
+
+### `send_to_self` is fixed
+
+In 0.3.7 the function body got swapped during a refactor. Calling `send_to_self(msg)` was silently hitting the wrong code path. It now correctly sends to your Saved Messages using `messages.sendMessage` with `InputPeer::PeerSelf`, and returns the sent message as before.
+
+### `open_mini_app` is now public
+
+`open_mini_app(peer, MiniApp)` was accidentally left private in 0.3.7. It's `pub` now. Supports all four mini-app types: `Main`, `Url`, `App`, and `Simple`.
+
+### `get_chat_full` is now public
+
+Was `pub(crate)` before. Now `pub`, so you can call it directly if you need the raw full chat info without going through a helper.
+
+---
+
 ## v0.3.7
 
 Released 2026-05-05. Workspace restructure, three new crates, and a handful of API cleanups.

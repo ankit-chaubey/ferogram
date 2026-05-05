@@ -15,7 +15,7 @@ Handles state storage and context for multi-step bot conversations. Used by `fer
 
 ```toml
 [dependencies]
-ferogram-fsm = "0.3.7"
+ferogram-fsm = "0.3.8"
 ```
 
 ## What it does
