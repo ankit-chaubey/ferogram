@@ -1,12 +1,14 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,10 +19,8 @@ use num_bigint::BigUint;
 use sha1::{Digest, Sha1};
 
 // Manual TL serialization helper for PQInnerDataDc
-//
 // Constructor: p_q_inner_data_dc#a9f55f95
 //   pq:string p:string q:string nonce:int128 server_nonce:int128 new_nonce:int256 dc:int
-//
 // TL "string" (bytes) encoding: if len < 254 -> [len_byte, data..., 0-pad to 4-align],
 // else [0xfe, len_lo, len_mid, len_hi, data..., 0-pad to 4-align].
 fn tl_serialize_bytes(v: &[u8]) -> Vec<u8> {

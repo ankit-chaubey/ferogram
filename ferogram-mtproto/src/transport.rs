@@ -1,12 +1,14 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -106,12 +108,18 @@ const FORBIDDEN: &[[u8; 4]] = &[
 /// Drop-in for `AbridgedTransport`: same `send_message` / `recv_message` API.
 ///
 /// ```rust,no_run
+/// # use std::net::TcpStream;
+/// # use std::time::Duration;
+/// # use ferogram_mtproto::transport::ObfuscatedAbridged;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let stream = TcpStream::connect("149.154.167.51:443")?;
 /// stream.set_read_timeout(Some(Duration::from_secs(15)))?;
 /// stream.set_write_timeout(Some(Duration::from_secs(15)))?;
 /// let mut transport = ObfuscatedAbridged::new(stream, 1)?;
+/// # let payload = vec![0u8; 4];
 /// transport.send_message(&payload)?;
 /// let response = transport.recv_message()?;
+/// # Ok(()) }
 /// ```
 pub struct ObfuscatedAbridged {
     stream: TcpStream,

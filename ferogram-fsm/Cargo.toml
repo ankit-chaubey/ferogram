@@ -1,0 +1,16 @@
+[package]
+name        = "ferogram-fsm"
+description = "FSM state management for ferogram bots"
+version.workspace   = true
+edition.workspace   = true
+license.workspace   = true
+authors.workspace   = true
+repository.workspace = true
+homepage.workspace  = true
+
+[dependencies]
+async-trait = "0.1"
+dashmap     = "6"
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+tokio       = { version = "1", features = ["sync", "time"] }

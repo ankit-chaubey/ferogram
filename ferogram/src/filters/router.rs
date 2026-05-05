@@ -1,230 +1,25 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
+
+use crate::filters::core::Filter;
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use super::core::BoxFilter;
 use crate::fsm::{FsmState, StateContext, StateKey, StateKeyStrategy, StateStorage};
 use crate::middleware::{BoxFuture, DispatchResult, Middleware, Next, PanicRecoveryMiddleware};
 use crate::update::{IncomingMessage, Update};
-
-// Filter trait
-
-/// A composable, synchronous predicate over an [`IncomingMessage`].
-///
-/// Use the built-in constructors ([`command`], [`private`], [`text`], …) and
-/// combine them with `&`, `|`, `!` operators rather than implementing this
-/// trait directly. For arbitrary logic use [`custom`].
-pub trait Filter: Send + Sync + 'static {
-    fn check(&self, msg: &IncomingMessage) -> bool;
-}
-
-impl Filter for Arc<dyn Filter> {
-    fn check(&self, msg: &IncomingMessage) -> bool {
-        (**self).check(msg)
-    }
-}
-
-// BoxFilter
-
-/// A heap-allocated, cloneable, composable filter.
-///
-/// Returned by every built-in filter constructor. Supports `&`, `|`, and `!`
-/// operators for building compound expressions.
-#[derive(Clone)]
-pub struct BoxFilter(Arc<dyn Filter>);
-
-impl BoxFilter {
-    fn new<F: Filter>(f: F) -> Self {
-        BoxFilter(Arc::new(f))
-    }
-}
-
-impl Filter for BoxFilter {
-    fn check(&self, msg: &IncomingMessage) -> bool {
-        self.0.check(msg)
-    }
-}
-
-impl std::ops::BitAnd for BoxFilter {
-    type Output = BoxFilter;
-    fn bitand(self, rhs: BoxFilter) -> BoxFilter {
-        BoxFilter::new(AndFilter(self, rhs))
-    }
-}
-
-impl std::ops::BitOr for BoxFilter {
-    type Output = BoxFilter;
-    fn bitor(self, rhs: BoxFilter) -> BoxFilter {
-        BoxFilter::new(OrFilter(self, rhs))
-    }
-}
-
-impl std::ops::Not for BoxFilter {
-    type Output = BoxFilter;
-    fn not(self) -> BoxFilter {
-        BoxFilter::new(NotFilter(self))
-    }
-}
-
-struct AndFilter(BoxFilter, BoxFilter);
-impl Filter for AndFilter {
-    fn check(&self, m: &IncomingMessage) -> bool {
-        self.0.check(m) && self.1.check(m)
-    }
-}
-
-struct OrFilter(BoxFilter, BoxFilter);
-impl Filter for OrFilter {
-    fn check(&self, m: &IncomingMessage) -> bool {
-        self.0.check(m) || self.1.check(m)
-    }
-}
-
-struct NotFilter(BoxFilter);
-impl Filter for NotFilter {
-    fn check(&self, m: &IncomingMessage) -> bool {
-        !self.0.check(m)
-    }
-}
-
-struct FnFilter(Arc<dyn Fn(&IncomingMessage) -> bool + Send + Sync + 'static>);
-impl Filter for FnFilter {
-    fn check(&self, m: &IncomingMessage) -> bool {
-        (self.0)(m)
-    }
-}
-
-fn make<F>(f: F) -> BoxFilter
-where
-    F: Fn(&IncomingMessage) -> bool + Send + Sync + 'static,
-{
-    BoxFilter::new(FnFilter(Arc::new(f)))
-}
-
-// Built-in filter constructors
-
-/// Passes every message (wildcard / fallback handler).
-pub fn all() -> BoxFilter {
-    make(|_| true)
-}
-
-/// Never passes (disabled handler placeholder).
-pub fn none() -> BoxFilter {
-    make(|_| false)
-}
-
-/// Private (1-on-1) chats only.
-pub fn private() -> BoxFilter {
-    make(|m| m.is_private())
-}
-
-/// Basic group chats only.
-pub fn group() -> BoxFilter {
-    make(|m| m.is_group())
-}
-
-/// Channels and supergroups only.
-pub fn channel() -> BoxFilter {
-    make(|m| m.is_channel())
-}
-
-/// Any non-empty text message.
-pub fn text() -> BoxFilter {
-    make(|m| m.text().is_some())
-}
-
-/// Messages with any media attachment.
-pub fn media() -> BoxFilter {
-    make(|m| m.has_media())
-}
-
-/// Messages with a photo.
-pub fn photo() -> BoxFilter {
-    make(|m| m.has_photo())
-}
-
-/// Messages with a document (file, video, audio, sticker …).
-pub fn document() -> BoxFilter {
-    make(|m| m.has_document())
-}
-
-/// Forwarded messages.
-pub fn forwarded() -> BoxFilter {
-    make(|m| m.is_forwarded())
-}
-
-/// Reply messages.
-pub fn reply() -> BoxFilter {
-    make(|m| m.is_reply())
-}
-
-/// Album / grouped-media messages.
-pub fn album() -> BoxFilter {
-    make(|m| m.album_id().is_some())
-}
-
-/// Any bot command (`/something`).
-pub fn any_command() -> BoxFilter {
-    make(|m| m.is_bot_command())
-}
-
-/// A specific bot command (case-insensitive, strips `@BotName` suffix).
-///
-/// # Example
-/// ```rust,no_run
-/// use ferogram::filters::command;
-/// let start = command("start");
-/// let help  = command("help");
-/// ```
-pub fn command(name: impl Into<String>) -> BoxFilter {
-    let name = name.into();
-    make(move |m| m.is_command_named(&name))
-}
-
-/// Text contains a substring (case-sensitive).
-pub fn text_contains(needle: impl Into<String>) -> BoxFilter {
-    let needle = needle.into();
-    make(move |m| m.text().is_some_and(|t| t.contains(needle.as_str())))
-}
-
-/// Text starts with a prefix (case-sensitive).
-pub fn text_starts_with(prefix: impl Into<String>) -> BoxFilter {
-    let prefix = prefix.into();
-    make(move |m| m.text().is_some_and(|t| t.starts_with(prefix.as_str())))
-}
-
-/// Message is from a specific user ID.
-pub fn from_user(id: i64) -> BoxFilter {
-    make(move |m| m.sender_user_id() == Some(id))
-}
-
-/// Message is in a specific chat.
-pub fn in_chat(id: i64) -> BoxFilter {
-    make(move |m| m.chat_id() == id)
-}
-
-/// Filter from an arbitrary closure.
-///
-/// # Example
-/// ```rust,no_run
-/// use ferogram::filters::custom;
-/// let long_text = custom(|msg| msg.text().map_or(false, |t| t.len() > 200));
-/// ```
-pub fn custom<F>(f: F) -> BoxFilter
-where
-    F: Fn(&IncomingMessage) -> bool + Send + Sync + 'static,
-{
-    make(f)
-}
 
 // Internal handler types
 
@@ -262,35 +57,9 @@ pub(crate) struct FsmMessageHandler {
 /// use ferogram::filters::{Router, command, private};
 ///
 /// pub fn user_router() -> Router {
-///     // Handlers only fire in private chats.
 ///     let mut r = Router::new().scope(private());
-///     r.on_message(command("profile"),  |msg| async move { /* … */ });
-///     r.on_message(command("settings"), |msg| async move { /* … */ });
-///     r
-/// }
-/// ```
-///
-/// # Nested routers
-///
-/// ```rust,no_run
-/// use ferogram::filters::{Router, command, private, group};
-///
-/// pub fn root_router() -> Router {
-///     let mut root = Router::new();
-///     root.include(private_router());
-///     root.include(group_router());
-///     root
-/// }
-///
-/// fn private_router() -> Router {
-///     let mut r = Router::new().scope(private());
-///     r.on_message(command("help"), |msg| async move { /* … */ });
-///     r
-/// }
-///
-/// fn group_router() -> Router {
-///     let mut r = Router::new().scope(group());
-///     r.on_message(command("rules"), |msg| async move { /* … */ });
+///     r.on_message(command("profile"),  |msg| async move { /* ... */ });
+///     r.on_message(command("settings"), |msg| async move { /* ... */ });
 ///     r
 /// }
 /// ```
@@ -383,7 +152,7 @@ impl Router {
     }
 
     /// Include a child router. Handlers from the child are merged on
-    /// flattening, with scopes composes correctly.
+    /// flattening, with scopes composed correctly.
     pub fn include(&mut self, router: Router) {
         self.children.push(router);
     }
@@ -486,7 +255,7 @@ pub(crate) struct FlatHandlers {
 /// use std::sync::Arc;
 ///
 /// # async fn example(mut stream: ferogram::UpdateStream) {
-/// let dp = Arc::new(Dispatcher::new()); // populated earlier
+/// let dp = Arc::new(Dispatcher::new());
 ///
 /// while let Some(upd) = stream.next().await {
 ///     let dp = Arc::clone(&dp);
@@ -507,11 +276,6 @@ pub struct Dispatcher {
 impl Dispatcher {
     /// Create an empty dispatcher.
     pub fn new() -> Self {
-        // Install PanicRecoveryMiddleware as the outermost layer by default.
-        // This wraps every handler invocation in a tokio::task::spawn so that
-        // panics (including those across .await points) are caught and logged
-        // rather than killing the reader task or the whole process.
-        // Users can still prepend additional middleware via dp.middleware().
         Self {
             new_msg: Vec::new(),
             edited_msg: Vec::new(),
@@ -523,29 +287,12 @@ impl Dispatcher {
         }
     }
 
-    // Middleware
-
     /// Add a middleware layer. Closures implement [`Middleware`] automatically.
-    ///
-    /// ```rust,no_run
-    /// # use ferogram::filters::Dispatcher;
-    /// # let mut dp = Dispatcher::new();
-    /// dp.middleware(|upd, next| async move {
-    ///     let r = next.run(upd).await;
-    ///     r
-    /// });
-    /// ```
     pub fn middleware(&mut self, mw: impl Middleware) {
         self.middlewares.push(Arc::new(mw));
     }
 
-    // FSM configuration
-
     /// Configure the [`StateStorage`] backend for FSM handlers.
-    ///
-    /// Must be called before any `on_message_fsm` / `on_edit_fsm` registrations
-    /// take effect. Without storage, FSM handlers are silently skipped and a
-    /// `WARN` is emitted at registration time.
     pub fn with_state_storage(&mut self, storage: Arc<dyn StateStorage>) {
         self.state_storage = Some(storage);
     }
@@ -555,17 +302,7 @@ impl Dispatcher {
         self.key_strategy = strategy;
     }
 
-    // Handler registration
-
     /// Register a handler for `NewMessage` updates matching `filter`.
-    ///
-    /// ```rust,no_run
-    /// # use ferogram::filters::{Dispatcher, command};
-    /// # let mut dp = Dispatcher::new();
-    /// dp.on_message(command("start"), |msg| async move {
-    ///     msg.reply("Welcome!").await.ok();
-    /// });
-    /// ```
     pub fn on_message<H, Fut>(&mut self, filter: BoxFilter, handler: H)
     where
         H: Fn(IncomingMessage) -> Fut + Send + Sync + 'static,
@@ -600,53 +337,6 @@ impl Dispatcher {
     ///
     /// FSM handlers shadow regular handlers: if a state match is found, no
     /// regular handlers are checked for that update.
-    ///
-    /// # Panics (at registration)
-    ///
-    /// Emits a `WARN` trace message if called before [`with_state_storage`];
-    /// does not panic.
-    ///
-    /// [`with_state_storage`]: Dispatcher::with_state_storage
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use ferogram::{FsmState, fsm::{StateContext, MemoryStorage}};
-    /// use ferogram::filters::{Dispatcher, command, text};
-    /// use std::sync::Arc;
-    ///
-    /// #[derive(FsmState, Clone, Debug, PartialEq)]
-    /// enum OrderState { WaitingProduct, WaitingQuantity, WaitingAddress }
-    ///
-    /// # async fn example() {
-    /// let mut dp = Dispatcher::new();
-    /// dp.with_state_storage(Arc::new(MemoryStorage::new()));
-    ///
-    /// dp.on_message(command("order"), |msg| async move {
-    ///     msg.reply("Which product?").await.ok();
-    ///     // State is set by the first FSM handler below on next message.
-    /// });
-    ///
-    /// dp.on_message_fsm(text(), OrderState::WaitingProduct, |msg, state| async move {
-    ///     state.set_data("product", msg.text().unwrap()).await.ok();
-    ///     state.transition(OrderState::WaitingQuantity).await.ok();
-    ///     msg.reply("How many?").await.ok();
-    /// });
-    ///
-    /// dp.on_message_fsm(text(), OrderState::WaitingQuantity, |msg, state| async move {
-    ///     state.set_data("qty", msg.text().unwrap()).await.ok();
-    ///     state.transition(OrderState::WaitingAddress).await.ok();
-    ///     msg.reply("Ship to?").await.ok();
-    /// });
-    ///
-    /// dp.on_message_fsm(text(), OrderState::WaitingAddress, |msg, state| async move {
-    ///     let product: Option<String> = state.get_data("product").await.unwrap_or(None);
-    ///     let qty: Option<String>     = state.get_data("qty").await.unwrap_or(None);
-    ///     msg.reply(format!("Order confirmed: {:?} x {:?}", product, qty)).await.ok();
-    ///     state.clear_all().await.ok();
-    /// });
-    /// # }
-    /// ```
     pub fn on_message_fsm<S, H, Fut>(&mut self, filter: BoxFilter, state: S, handler: H)
     where
         S: FsmState,
@@ -690,27 +380,7 @@ impl Dispatcher {
         });
     }
 
-    // Router inclusion
-
     /// Merge a [`Router`] (and all its nested children) into this dispatcher.
-    ///
-    /// Handlers are appended after existing handlers in registration order.
-    /// Router scopes are applied at this point.
-    ///
-    /// ```rust,no_run
-    /// use ferogram::filters::{Dispatcher, Router, command};
-    ///
-    /// fn payment_router() -> Router {
-    ///     let mut r = Router::new();
-    ///     r.on_message(command("pay"), |msg| async move { /* … */ });
-    ///     r
-    /// }
-    ///
-    /// # async fn main_fn() {
-    /// let mut dp = Dispatcher::new();
-    /// dp.include(payment_router());
-    /// # }
-    /// ```
     pub fn include(&mut self, router: Router) {
         let flat = router.flatten(None);
         self.new_msg.extend(flat.new_msg);
@@ -719,32 +389,18 @@ impl Dispatcher {
         self.fsm_edited_msg.extend(flat.fsm_edited_msg);
     }
 
-    // Dispatch
-
     /// Dispatch a single update through the middleware chain and into the first
     /// matching handler.
-    ///
-    /// Errors returned by middleware are logged at `ERROR` level and swallowed
-    /// so that the update loop is never interrupted by a single bad update.
-    ///
-    /// For concurrent per-update processing, wrap the dispatcher in an `Arc`
-    /// and call `tokio::spawn(async move { dp.dispatch(upd).await })`.
     pub async fn dispatch(&self, update: Update) {
-        // Build cheap Arc snapshots of the handler lists.
-        // Each field is a `Vec<T>` where T contains only `Arc`-backed fields,
-        // clone() here only bumps Arc reference counts, no heap allocation.
         let new_msg = Arc::new(self.new_msg.clone());
         let edited_msg = Arc::new(self.edited_msg.clone());
         let fsm_new = Arc::new(self.fsm_new_msg.clone());
         let fsm_edited = Arc::new(self.fsm_edited_msg.clone());
-        let storage = self.state_storage.clone(); // Option<Arc<dyn StateStorage>>
+        let storage = self.state_storage.clone();
         let strategy = self.key_strategy;
 
-        // The endpoint is the final step of the middleware chain: run the
-        // matching handler. It is Arc'd so the chain can share it cheaply.
         let endpoint: Arc<dyn Fn(Update) -> BoxFuture + Send + Sync> =
             Arc::new(move |upd: Update| {
-                // Clone the Arc snapshots.
                 let new_msg = Arc::clone(&new_msg);
                 let edited_msg = Arc::clone(&edited_msg);
                 let fsm_new = Arc::clone(&fsm_new);
@@ -767,7 +423,6 @@ impl Dispatcher {
             });
 
         if self.middlewares.is_empty() {
-            // Fast path: skip chain construction overhead.
             if let Err(e) = (endpoint)(update).await {
                 tracing::error!(error = %e, "dispatch error");
             }
@@ -788,11 +443,7 @@ impl Default for Dispatcher {
     }
 }
 
-// dispatch_to_handlers
-
 /// Route a single update to the first matching handler.
-///
-/// Runs the handler chain for a single update.
 async fn dispatch_to_handlers(
     update: Update,
     new_msg: &[MessageHandler],
@@ -809,9 +460,7 @@ async fn dispatch_to_handlers(
         Update::MessageEdited(msg) => {
             run_message(msg, edited_msg, fsm_edited, storage, strategy).await;
         }
-        _ => {
-            // Future: add per-variant handler lists for CallbackQuery, InlineQuery, …
-        }
+        _ => {}
     }
 }
 
@@ -828,7 +477,6 @@ async fn run_message(
     storage: Option<Arc<dyn StateStorage>>,
     strategy: StateKeyStrategy,
 ) {
-    // Phase 1: FSM handlers.
     if let Some(ref arc_storage) = storage
         && !fsm.is_empty()
     {
@@ -843,8 +491,6 @@ async fn run_message(
         };
 
         if let Some(ref current) = current_state {
-            // Find the first FSM handler whose expected state and filter both match.
-            // We only borrow `msg` here for the filter check; the actual call moves it.
             let matched_idx = fsm
                 .iter()
                 .position(|h| h.expected_state == *current && h.filter.check(&msg));
@@ -857,7 +503,6 @@ async fn run_message(
         }
     }
 
-    // Phase 2: Regular handlers.
     let matched_idx = regular.iter().position(|h| h.filter.check(&msg));
     if let Some(idx) = matched_idx {
         (regular[idx].handler)(msg).await;

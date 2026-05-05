@@ -14,8 +14,8 @@ MTProto 2.0 session management, DH key exchange, and message framing for Rust.
 
 ```toml
 [dependencies]
-ferogram-mtproto  = "0.3.6"
-ferogram-tl-types = { version = "0.3.6", features = ["tl-mtproto"] }
+ferogram-mtproto  = "0.3.7"
+ferogram-tl-types = { version = "0.3.7", features = ["tl-mtproto"] }
 ```
 
 ---
@@ -28,7 +28,7 @@ ferogram-tl-types = { version = "0.3.6", features = ["tl-mtproto"] }
 - `msg_container` and `gzip_packed` unwrapping
 - Error recovery: `bad_msg_notification`, `bad_server_salt`, `msg_resend_req`
 - Acknowledgements via `MsgsAck`
-- Temporary key binding for PFS (`bind_temp_key` module, v0.3.0)
+- Temporary key binding for PFS (`bind_temp_key` module, v0.3.7)
 
 ---
 
@@ -112,7 +112,7 @@ Prefixed by a 32-byte `msg_key` after encryption.
 
 ---
 
-### bind_temp_key (0.3.0)
+### bind_temp_key (0.3.7)
 
 Implements PFS temporary key binding. Used by `ferogram` when connecting to auxiliary DCs.
 

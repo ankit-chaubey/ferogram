@@ -4,6 +4,96 @@ ferogram started as a renamed continuation of [layer](https://github.com/ankit-c
 
 ---
 
+## v0.3.7
+
+Released 2026-05-05. Workspace restructure, three new crates, and a handful of API cleanups.
+
+### New crates
+
+Three crates were extracted this release. The main `ferogram` crate re-exports everything from them, so if you're not doing anything low-level, your code doesn't need to change.
+
+**ferogram-connect** is now a real crate instead of a throwaway demo binary. It owns the raw TCP connection layer, MTProto framing, transport negotiation (Intermediate, Obfuscated, FakeTLS), SOCKS5, and proxy support. Useful if you want to build something that speaks MTProto without pulling in the full client.
+
+**ferogram-fsm** packages the FSM layer (`FsmState`, `StateContext`, `StateStorage`, `MemoryStorage`) as a standalone crate that can be versioned and published on its own.
+
+**ferogram-mtsender** does the same for the sender pool and retry policy. `RetryPolicy`, `AutoSleep`, `CircuitBreaker`, `NoRetries` all live here now.
+
+The old `ferogram-app` and `ferogram-bot` example binaries were removed. They've been replaced by examples inside `ferogram/examples/`.
+
+### Getting a peer's ID with `.bare_id()`
+
+You used to need a full match to pull a numeric ID out of a `tl::enums::Peer`. Now there's `PeerExt`:
+
+```rust
+use ferogram::{PeerExt, OptionPeerExt};
+
+// any Peer variant → i64
+let id = peer.bare_id();
+
+// works on Option<&Peer> too, no .map() needed
+let sender = msg.sender_id().bare_id(); // Option<i64>
+let chat   = msg.peer_id().bare_id();   // Option<i64>
+```
+
+The name `bare_id` is intentional: it gives you the **native** Telegram ID, not the Bot-API-encoded one. A channel with native ID `1234567890` is `-1001234567890` in the Bot API.
+
+### `PeerCache` and `ExperimentalFeatures` are public
+
+`PeerCache` is now in its own file and fully public. It's what handles every peer lookup: user hashes, channel hashes, basic groups, min-users, the username index, the phone index. You can read from it directly if you need low-level access.
+
+`ExperimentalFeatures` lets you opt into behaviours that deviate from strict Telegram spec. The main flag is `allow_zero_hash`, which lets bots skip needing a cached access hash (don't use this on user accounts):
+
+```rust
+Client::builder()
+    .experimental_features(ExperimentalFeatures {
+        allow_zero_hash: true,
+        ..Default::default()
+    })
+    .connect().await?;
+```
+
+### Breaking changes
+
+**`download_media_to_file` is now `download_file`:**
+
+```rust
+// before
+client.download_media_to_file(location, &path).await?;
+
+// now
+client.download_file(location, &path).await?;
+```
+
+**`forward_messages` now takes a fourth argument:**
+
+```rust
+// before
+client.forward_messages(dest, &[id], src).await?;
+
+// now
+client.forward_messages(dest, &[id], src, ForwardOptions::default()).await?;
+```
+
+**`respond_ex` is gone.** `respond` already accepts `InputMessage`, so it was redundant:
+
+```rust
+// before
+msg.respond_ex(InputMessage::html("<b>hi</b>")).await?;
+
+// now
+msg.respond(InputMessage::html("<b>hi</b>")).await?;
+```
+
+### Upgrading from 0.3.6
+
+```toml
+ferogram = "0.3.7"
+```
+
+The three breaking changes above need fixing. The rest is additive.
+
+---
+
 ## v0.3.6
 
 Released 2026-04-30. API stabilization update towards v0.4.0.
@@ -125,7 +215,7 @@ A new `ferogram-derive` crate adds the `#[derive(FsmState)]` proc-macro. Applyin
 
 ### FSM
 
-`ferogram::fsm` provides the full finite state machine layer: the `FsmState` trait, `StateContext`, `StateKey`, `StateKeyStrategy`, and `StateStorage`. The default storage is an in-memory `DashMap`-backed store keyed by peer. Custom backends can be plugged in via an async-trait extension point, so SQLite or Redis-backed stores are straightforward to add. A new `examples/order_bot.rs` walks through a multi-step order flow driven by the FSM.
+`ferogram::fsm` provides the full finite state machine layer: the `FsmState` trait, `StateContext`, `StateKey`, `StateKeyStrategy`, and `StateStorage`. The default storage is an in-memory `DashMap`-backed store keyed by peer. Custom backends can be plugged in via an async-trait extension point, so SQLite or Redis-backed stores are easy to add. A new `examples/order_bot.rs` walks through a multi-step order flow driven by the FSM.
 
 ### Middleware
 

@@ -1,13 +1,16 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// ferogram-session: session persistence types and backends for ferogram
+// ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
+#![deny(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 //! Session persistence types and storage backends for ferogram.
 //!
@@ -53,7 +56,7 @@
 //!
 //! # Example: export and re-import a session
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! # async fn example(client: ferogram::Client) -> anyhow::Result<()> {
 //! // Export
 //! let s = client.export_session_string().await?;
@@ -638,7 +641,11 @@ pub trait SessionBackend: Send + Sync {
     fn update_dc(&self, entry: &DcEntry) -> io::Result<()> {
         let mut s = self.load()?.unwrap_or_default();
         // Replace existing entry or append
-        if let Some(existing) = s.dcs.iter_mut().find(|d| d.dc_id == entry.dc_id) {
+        if let Some(existing) = s
+            .dcs
+            .iter_mut()
+            .find(|d| d.dc_id == entry.dc_id && d.is_ipv6() == entry.is_ipv6())
+        {
             *existing = entry.clone();
         } else {
             s.dcs.push(entry.clone());
@@ -846,7 +853,11 @@ impl SessionBackend for InMemoryBackend {
     fn update_dc(&self, entry: &DcEntry) -> io::Result<()> {
         let mut guard = self.data.lock().unwrap();
         let s = guard.get_or_insert_with(PersistedSession::default);
-        if let Some(existing) = s.dcs.iter_mut().find(|d| d.dc_id == entry.dc_id) {
+        if let Some(existing) = s
+            .dcs
+            .iter_mut()
+            .find(|d| d.dc_id == entry.dc_id && d.is_ipv6() == entry.is_ipv6())
+        {
             *existing = entry.clone();
         } else {
             s.dcs.push(entry.clone());

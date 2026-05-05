@@ -243,8 +243,8 @@ let photos = client
 For quick lookups that don't need date/filter options:
 
 ```rust
-// Per-chat search: returns Vec<IncomingMessage>
-let results = client.search_messages(peer.clone(), "query", 20).await?;
+// Per-chat search via the builder with defaults
+let results = client.search(peer.clone()).query("query").limit(20).collect(&client).await?;
 
 // Global search: returns Vec<IncomingMessage>
 let results = client.search_global("ferogram rust", 10).await?;

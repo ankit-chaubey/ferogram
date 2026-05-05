@@ -7,9 +7,9 @@ Session persistence types and pluggable storage backends for ferogram.
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram--session-5865F2)](https://docs.rs/ferogram-session)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-Session persistence for ferogram. Extracted in v0.3.0 so that session storage can be used, extended, or replaced without pulling in the full client.
+Session persistence for ferogram. Extracted in v0.3.7 so you can swap, extend, or use session storage without pulling in the full client.
 
-`ferogram` re-exports everything from here  existing code needs no changes.
+`ferogram` re-exports everything from here, so existing code needs no changes.
 
 ---
 
@@ -17,7 +17,7 @@ Session persistence for ferogram. Extracted in v0.3.0 so that session storage ca
 
 ```toml
 [dependencies]
-ferogram-session = "0.3.6"
+ferogram-session = "0.3.7"
 ```
 
 ---
@@ -66,7 +66,7 @@ let ipv6  = DcEntry::from_parts(2, "2001:b28:f23d:f001::a", 443, DcFlags::IPV6);
 
 ### BinaryFileBackend
 
-Stores the session as a binary file on disk. Default backend used by `ferogram`.
+Default backend. Saves the session as a binary file on disk.
 
 ```rust
 use ferogram_session::BinaryFileBackend;
@@ -76,7 +76,7 @@ let backend = BinaryFileBackend::new("ferogram.session");
 
 ### InMemoryBackend
 
-Stores the session in memory only. Useful for testing or short-lived bots.
+No persistence, lives only for the process lifetime. Good for tests or quick scripts.
 
 ```rust
 use ferogram_session::InMemoryBackend;
@@ -86,7 +86,7 @@ let backend = InMemoryBackend::new();
 
 ### StringSessionBackend
 
-Stores the session as a base64 string. Useful for deployments where file I/O is unavailable (e.g. environment variable sessions).
+Stores the session as a base64 string. Handy when you can't write to disk, like reading the session from an environment variable in a serverless setup.
 
 ```rust
 use ferogram_session::StringSessionBackend;
@@ -97,7 +97,7 @@ let backend = StringSessionBackend::new(std::env::var("SESSION").unwrap_or_defau
 ### SqliteBackend (feature: `sqlite-session`)
 
 ```toml
-ferogram-session = { version = "0.3.6", features = ["sqlite-session"] }
+ferogram-session = { version = "0.3.7", features = ["sqlite-session"] }
 ```
 
 ```rust
@@ -109,7 +109,7 @@ let backend = SqliteBackend::open("sessions.db")?;
 ### LibSqlBackend (feature: `libsql-session`)
 
 ```toml
-ferogram-session = { version = "0.3.6", features = ["libsql-session"] }
+ferogram-session = { version = "0.3.7", features = ["libsql-session"] }
 ```
 
 ```rust

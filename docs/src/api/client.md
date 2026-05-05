@@ -308,7 +308,7 @@ See <a href="../messaging/reactions.md">Reactions</a> for the full guide.
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_message_reactions(peer: impl Into&lt;PeerRef&gt;, msg_ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.get_reactions(peer: impl Into&lt;PeerRef&gt;, msg_ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Trigger a server push of the current reaction counters for the given message IDs. The server responds with <code>updateMessageReactions</code> updates in the stream.</div>
 </div>
@@ -316,7 +316,7 @@ See <a href="../messaging/reactions.md">Reactions</a> for the full guide.
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_reaction_list(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, reaction: Option&lt;tl::enums::Reaction&gt;, limit: i32, offset: Option&lt;String&gt;) → Result&lt;tl::types::messages::MessageReactionsList, InvocationError&gt;</span>
+<span class="api-card-sig">client.iter_reaction_users(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, reaction: Option&lt;tl::enums::Reaction&gt;, limit: i32, offset: Option&lt;String&gt;) → Result&lt;tl::types::messages::MessageReactionsList, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Get the list of users who reacted to a message. Pass <code>reaction = None</code> for all reactions. <code>limit</code> max 100; use <code>offset</code> from the previous response to paginate.</div>
 </div>
@@ -382,9 +382,9 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.search_messages(peer: Peer, query: &str, limit: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.search(peer: impl Into&lt;PeerRef&gt;) → SearchBuilder</span>
 </div>
-<div class="api-card-body">Simple one-shot search within a peer. For advanced options use <code>client.search()</code>.</div>
+<div class="api-card-body">Build a message search for a peer. Chain <code>.query()</code>, <code>.limit()</code>, <code>.filter()</code>, etc., then call <code>.collect(&client).await?</code> to run it. For a one-shot query, use <code>client.search().query("text").collect(&client).await?</code>.</div>
 </div>
 
 <div class="api-card">
@@ -426,7 +426,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_messages(peer: Peer, limit: i32, offset_id: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_message_history(peer: impl Into&lt;PeerRef&gt;, limit: i32, offset_id: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Fetch a page of messages. Pass the lowest message ID from the previous page as <code>offset_id</code> to paginate.</div>
 </div>
@@ -495,13 +495,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card-body">Manually mark a dialog as unread (<code>true</code>) or read (<code>false</code>). This sets the unread dot without actually having new messages.</div>
 </div>
 
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.count_channels() → Result&lt;usize, InvocationError&gt;</span>
-</div>
-<div class="api-card-body">Count how many channel dialogs the logged-in account is currently in. Iterates all dialogs internally.</div>
-</div>
+
 
 ---
 
@@ -666,9 +660,9 @@ client.send_album(peer, vec![
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.download_media_to_file(location: tl::enums::InputFileLocation, path: impl AsRef&lt;Path&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.download_file(location: tl::enums::InputFileLocation, path: impl AsRef&lt;Path&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Download a media file and write it to <code>path</code>. The <code>path</code> argument accepts anything that implements <code>AsRef&lt;Path&gt;</code> (e.g. <code>&str</code>, <code>String</code>, <code>PathBuf</code>). Uses DC 0 (auto-routed); for explicit DC routing use <code>download_media_to_file_on_dc</code>.</div>
+<div class="api-card-body">Download a media file and write it to <code>path</code>. The <code>path</code> argument accepts anything that implements <code>AsRef&lt;Path&gt;</code> (e.g. <code>&str</code>, <code>String</code>, <code>PathBuf</code>). DC routing is handled automatically.</div>
 </div>
 
 ---
@@ -966,9 +960,9 @@ client.set_chat_reactions(peer.clone(),
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_reply_to_message(message: &IncomingMessage) → Result&lt;Option&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">msg.get_reply() → Option&lt;&amp;IncomingMessage&gt;</span>
 </div>
-<div class="api-card-body">Fetch the message that <code>message</code> replies to. Returns <code>None</code> if it is not a reply or the original message is deleted/inaccessible.</div>
+<div class="api-card-body">Access the message this message replies to. Available directly on <code>IncomingMessage</code>. Returns <code>None</code> if not a reply. To fetch the replied-to message by ID, use <code>client.get_message_by_id(peer, id)</code>.</div>
 </div>
 
 <div class="api-card">
@@ -1152,9 +1146,9 @@ Fetch the admin action log for a channel or supergroup. <code>query</code> filte
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_all_drafts() → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.sync_drafts() → Result&lt;(), InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Trigger a server push of all saved drafts across all chats. The server responds with <code>updateDraftMessage</code> updates in the update stream.</div>
+<div class="api-card-body">Sync all saved drafts from the server. The server responds with <code>updateDraftMessage</code> updates in the update stream.</div>
 </div>
 
 <div class="api-card">

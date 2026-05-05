@@ -1,12 +1,14 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
 use std::sync::Arc;
 
@@ -171,8 +173,8 @@ impl ClientBuilder {
     }
 
     /// Route all connections through a SOCKS5 proxy.
-    pub fn socks5(mut self, proxy: Socks5Config) -> Self {
-        self.socks5 = Some(proxy);
+    pub fn socks5(mut self, addr: impl Into<String>) -> Self {
+        self.socks5 = Some(crate::socks5::Socks5Config::new(addr));
         self
     }
 
@@ -196,10 +198,9 @@ impl ClientBuilder {
         if url.is_empty() {
             return self;
         }
-        if let Some(cfg) = crate::proxy::parse_proxy_link(url) {
-            self.transport = cfg.transport.clone();
-            self.mtproxy = Some(cfg);
-        }
+        let cfg = crate::proxy::parse_proxy_link(url)
+            .unwrap_or_else(|| panic!("invalid MTProxy link: {url:?}"));
+        self.mtproxy = Some(cfg);
         self
     }
 
@@ -294,7 +295,7 @@ impl ClientBuilder {
     /// ```rust,no_run
     /// use ferogram::{Client, ExperimentalFeatures};
     ///
-    /// # #[tokio::main] async fn main() -> anyhow::Result<()> {
+    /// # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let (client, _sd) = Client::builder()
     ///     .api_id(12345)
     ///     .api_hash("abc")

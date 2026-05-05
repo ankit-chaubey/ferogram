@@ -99,13 +99,8 @@ When using `.mtproxy()`, the transport is set automatically. Do not also call `.
 Route connections through a SOCKS5 proxy.
 
 ```rust
-use ferogram::socks5::Socks5Config;
-
 // no auth
-.socks5(Socks5Config::new("127.0.0.1:1080"))
-
-// with auth
-.socks5(Socks5Config::with_auth("proxy.example.com:1080", "user", "pass"))
+.socks5("127.0.0.1:1080")
 ```
 
 ### `mtproxy`

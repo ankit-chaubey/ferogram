@@ -1,26 +1,24 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
 // OVERVIEW
-//
 // This module implements the SINGLE UPDATE AUTHORITY for ferogram.
-//
 // Previously, ferogram scattered update-gap handling across:
 //   - PtsState + PossibleGapBuffer (pts.rs)
 //   - check_and_fill_gap / check_and_fill_channel_gap / check_and_fill_qts_gap (pts.rs)
 //   - check_update_deadline (pts.rs)
 //   - Hard-coded getDifference calls inside dispatch_updates (lib.rs)
-//
 // This caused overlapping recovery paths, races between concurrent diff calls,
 // and PFS bind operations interfering with gap recovery.
-//
 //   - MessageBoxes is a PURE STATE MACHINE (no async, no RPC calls).
 //   - ONE entry point: process_updates().
 //   - The caller checks check_deadlines() to know when to force getDifference.
@@ -32,9 +30,13 @@
 mod adaptor;
 pub mod defs;
 
+#[cfg(test)]
+mod tests;
+
 use std::cmp::Ordering;
 use std::time::Duration;
-use std::time::Instant;
+
+use defs::Instant; // real std::time::Instant under cfg(not(test)), fake_clock::Instant under cfg(test)
 
 use defs::Key;
 pub use defs::{ChannelState, Gap, MessageBoxes, UpdatesLike, UpdatesStateSnap};

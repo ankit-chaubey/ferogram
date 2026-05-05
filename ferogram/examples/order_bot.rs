@@ -1,20 +1,21 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
-use std::sync::Arc;
 use std::time::Duration;
 
-use ferogram::{Client, ClientBuilder, FsmState, UpdateStream};
-use ferogram::filters::{Dispatcher, Router, command, text, private, group};
-use ferogram::fsm::{MemoryStorage, StateContext};
-use ferogram::middleware::{TracingMiddleware, RateLimitMiddleware, PanicRecoveryMiddleware};
+use ferogram::filters::{Dispatcher, Router, command, group, private, text};
+use ferogram::fsm::{MemoryStorage, StateContext, StateStorage};
+use ferogram::middleware::{PanicRecoveryMiddleware, RateLimitMiddleware, TracingMiddleware};
+use ferogram::{ClientBuilder, FsmState, UpdateStream};
 
 // FSM state enum
 
@@ -57,7 +58,7 @@ pub fn order_router() -> Router {
 pub fn info_router() -> Router {
     let mut r = Router::new();
     r.on_message(command("start"), handle_start);
-    r.on_message(command("help"),  handle_help);
+    r.on_message(command("help"), handle_help);
     r
 }
 
@@ -71,11 +72,15 @@ pub fn group_router() -> Router {
 // Handlers
 
 async fn handle_start(msg: ferogram::update::IncomingMessage) {
-    msg.reply("👋 Welcome! Use /order to place an order.").await.ok();
+    msg.reply("👋 Welcome! Use /order to place an order.")
+        .await
+        .ok();
 }
 
 async fn handle_help(msg: ferogram::update::IncomingMessage) {
-    msg.reply("/order - start a new order\n/cancel - cancel current order").await.ok();
+    msg.reply("/order - start a new order\n/cancel - cancel current order")
+        .await
+        .ok();
 }
 
 async fn handle_rules(msg: ferogram::update::IncomingMessage) {
@@ -83,7 +88,9 @@ async fn handle_rules(msg: ferogram::update::IncomingMessage) {
 }
 
 async fn handle_order_start(msg: ferogram::update::IncomingMessage) {
-    msg.reply("🛍 What product would you like to order?").await.ok();
+    msg.reply("🛍 What product would you like to order?")
+        .await
+        .ok();
     // The first on_message_fsm handler fires once we set state.
     // State is set via a StateContext obtained from a prior message.
     // Typically you'd set the initial state here via a storage handle.
@@ -109,7 +116,7 @@ async fn handle_address(msg: ferogram::update::IncomingMessage, state: StateCont
     state.set_data("address", addr).await.ok();
     state.transition(OrderState::Confirm).await.ok();
 
-    let product:  Option<String> = state.get_data("product").await.unwrap_or(None);
+    let product: Option<String> = state.get_data("product").await.unwrap_or(None);
     let quantity: Option<String> = state.get_data("quantity").await.unwrap_or(None);
 
     msg.reply(format!(
@@ -125,9 +132,9 @@ async fn handle_address(msg: ferogram::update::IncomingMessage, state: StateCont
 async fn handle_confirm(msg: ferogram::update::IncomingMessage, state: StateContext) {
     match msg.text().unwrap_or("").to_lowercase().trim() {
         "yes" | "confirm" | "ok" => {
-            let product:  Option<String> = state.get_data("product").await.unwrap_or(None);
+            let product: Option<String> = state.get_data("product").await.unwrap_or(None);
             let quantity: Option<String> = state.get_data("quantity").await.unwrap_or(None);
-            let address:  Option<String> = state.get_data("address").await.unwrap_or(None);
+            let address: Option<String> = state.get_data("address").await.unwrap_or(None);
 
             state.clear_all().await.ok();
 
@@ -141,7 +148,9 @@ async fn handle_confirm(msg: ferogram::update::IncomingMessage, state: StateCont
             .ok();
         }
         _ => {
-            msg.reply("❓ Reply 'yes' to confirm or /cancel to abort.").await.ok();
+            msg.reply("❓ Reply 'yes' to confirm or /cancel to abort.")
+                .await
+                .ok();
         }
     }
 }
@@ -149,12 +158,23 @@ async fn handle_confirm(msg: ferogram::update::IncomingMessage, state: StateCont
 // Main
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let client = ClientBuilder::from_env()?.connect().await?;
+    let api_id: i32 = std::env::var("API_ID")?.parse()?;
+    let api_hash = std::env::var("API_HASH")?;
+    let bot_token = std::env::var("BOT_TOKEN")?;
 
-    let storage = Arc::new(MemoryStorage::new());
+    let (client, _shutdown) = ClientBuilder::default()
+        .api_id(api_id)
+        .api_hash(api_hash)
+        .session("order_bot.session")
+        .connect()
+        .await?;
+
+    client.bot_sign_in(&bot_token).await?;
+
+    let storage: std::sync::Arc<dyn StateStorage> = std::sync::Arc::new(MemoryStorage::new());
 
     let mut dp = Dispatcher::new();
 
@@ -164,7 +184,7 @@ async fn main() -> anyhow::Result<()> {
     dp.middleware(RateLimitMiddleware::new(10, Duration::from_secs(1)));
 
     // FSM backend.
-    dp.with_state_storage(Arc::clone(&storage));
+    dp.with_state_storage(storage);
 
     // Include routers.
     dp.include(info_router());

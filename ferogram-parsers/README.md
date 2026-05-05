@@ -7,9 +7,9 @@ Telegram HTML and Markdown entity parsers for ferogram.
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram--parsers-5865F2)](https://docs.rs/ferogram-parsers)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-Converts Telegram-flavoured Markdown and HTML to and from `MessageEntity` vectors. Extracted in v0.3.0; `ferogram` re-exports everything via `ferogram::parsers`.
+Converts Telegram-flavoured Markdown and HTML to and from `MessageEntity` vectors. Extracted in v0.3.7 and `ferogram` re-exports everything via `ferogram::parsers`.
 
-Can be used standalone by any crate that works with Telegram formatted text.
+You can also use it on its own if you're working with Telegram formatted text outside of the full client.
 
 ---
 
@@ -17,7 +17,7 @@ Can be used standalone by any crate that works with Telegram formatted text.
 
 ```toml
 [dependencies]
-ferogram-parsers = "0.3.6"
+ferogram-parsers = "0.3.7"
 ```
 
 ---
@@ -78,7 +78,7 @@ Supported tags: `<b>`, `<strong>`, `<i>`, `<em>`, `<u>`, `<s>`, `<del>`, `<code>
 By default `parse_html` uses the built-in hand-rolled parser (zero extra dependencies). Enable `html5ever` for strict HTML5 conformance.
 
 ```toml
-ferogram-parsers = { version = "0.3.6", features = ["html5ever"] }
+ferogram-parsers = { version = "0.3.7", features = ["html5ever"] }
 ```
 
 ---

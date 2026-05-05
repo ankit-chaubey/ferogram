@@ -1,12 +1,14 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
 use std::collections::VecDeque;
 
@@ -134,7 +136,7 @@ impl InlineResultIter {
             return Ok(None);
         }
 
-        let raw = self.client.rpc_call_raw(&self.request).await?;
+        let raw: Vec<u8> = self.client.rpc_call_raw(&self.request).await?;
         let mut cur = Cursor::from_slice(&raw);
         let tl::enums::messages::BotResults::BotResults(r) =
             tl::enums::messages::BotResults::deserialize(&mut cur)?;
@@ -207,7 +209,13 @@ impl Client {
         query: &str,
     ) -> Result<InlineResultIter, InvocationError> {
         let input_bot = {
-            match self.inner.peer_cache.read().await.peer_to_input(&bot)? {
+            match {
+                let _g: tokio::sync::RwLockReadGuard<'_, crate::PeerCache> =
+                    self.inner.peer_cache.read().await;
+                _g
+            }
+            .peer_to_input(&bot)?
+            {
                 tl::enums::InputPeer::User(u) => {
                     tl::enums::InputUser::InputUser(tl::types::InputUser {
                         user_id: u.user_id,

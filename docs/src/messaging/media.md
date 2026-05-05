@@ -219,7 +219,7 @@ let bytes: Vec<u8> = client.download_media(&msg_media).await?;
 let bytes = client.download_media_concurrent(&msg_media).await?;
 
 // Stream to file
-client.download_media_to_file(&msg_media, "output.jpg").await?;
+client.download_file(&msg_media, "output.jpg").await?;
 
 // Via Downloadable trait (Photo, Document, Sticker)
 let bytes = client.download(&photo).await?;

@@ -1,15 +1,18 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
+#![deny(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-tl-gen/0.3.5")]
+#![doc(html_root_url = "https://docs.rs/ferogram-tl-gen/0.3.7")]
 //! Build-time code generator from a parsed TL schema to Rust source files.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
@@ -37,9 +40,19 @@
 //!         .collect();
 //!
 //!     let config = Config::default();
-//!     let outputs = generate(&defs, &config).unwrap();
+//!     let mut outputs = Outputs {
+//!         common:    Vec::new(),
+//!         types:     Vec::new(),
+//!         functions: Vec::new(),
+//!         enums:     Vec::new(),
+//!     };
+//!     generate(&defs, &config, &mut outputs).unwrap();
 //!
-//!     fs::write("src/generated.rs", outputs.combined()).unwrap();
+//!     let mut combined = outputs.common;
+//!     combined.extend(outputs.types);
+//!     combined.extend(outputs.functions);
+//!     combined.extend(outputs.enums);
+//!     fs::write("src/generated.rs", combined).unwrap();
 //! }
 //! ```
 //!

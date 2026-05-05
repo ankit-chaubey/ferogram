@@ -1,12 +1,16 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// ferogram-parsers: Telegram text entity parsers for ferogram
+// ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
+
+#![deny(unsafe_code)]
 
 use ferogram_tl_types as tl;
 
@@ -57,7 +61,10 @@ pub fn parse_markdown(text: &str) -> (String, Vec<tl::enums::MessageEntity>) {
             if j + 2 < n {
                 let block: String = chars[start..j].iter().collect();
                 let (lang, code) = if let Some(nl) = block.find('\n') {
-                    (block[..nl].trim().to_string(), block[nl + 1..].to_string())
+                    (
+                        block[..nl].trim().to_string(),
+                        block[nl + 1..].trim_end_matches('\n').to_string(),
+                    )
                 } else {
                     (String::new(), block)
                 };
@@ -288,6 +295,18 @@ pub fn generate_markdown(text: &str, entities: &[tl::enums::MessageEntity]) -> S
     // Pre blocks need a trailing newline before the closing ```.
     let mut insertions: Vec<(i32, bool, String)> = Vec::new();
 
+    // Collect Pre entity ranges so we can suppress escaping inside code blocks.
+    let pre_ranges: Vec<(i32, i32)> = entities
+        .iter()
+        .filter_map(|e| {
+            if let ME::Pre(p) = e {
+                Some((p.offset, p.offset + p.length))
+            } else {
+                None
+            }
+        })
+        .collect();
+
     for ent in entities {
         match ent {
             ME::Bold(e) => {
@@ -356,13 +375,20 @@ pub fn generate_markdown(text: &str, entities: &[tl::enums::MessageEntity]) -> S
             result.push_str(&insertions[ins_idx].2);
             ins_idx += 1;
         }
-        // Escape markdown special chars in plain text.
-        match ch {
-            '*' | '_' | '~' | '|' | '[' | ']' | '(' | ')' | '`' | '\\' | '!' => {
-                result.push('\\');
-                result.push(ch);
+        // Escape markdown special chars in plain text, but not inside Pre blocks.
+        let in_pre = pre_ranges
+            .iter()
+            .any(|(s, e)| utf16_pos >= *s && utf16_pos < *e);
+        if !in_pre {
+            match ch {
+                '*' | '_' | '~' | '|' | '[' | ']' | '(' | ')' | '`' | '\\' | '!' => {
+                    result.push('\\');
+                    result.push(ch);
+                }
+                c => result.push(c),
             }
-            c => result.push(c),
+        } else {
+            result.push(ch);
         }
         utf16_pos += ch.len_utf16() as i32;
     }

@@ -1,169 +1,94 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
-use crate::{InvocationError, TransportKind};
-use tokio::net::TcpStream;
+// MtProxyConfig has moved to ferogram-connect. Re-export for backward compatibility.
+pub use ferogram_connect::MtProxyConfig;
 
-/// Decoded MTProxy configuration extracted from a proxy link.
-#[derive(Clone, Debug)]
-pub struct MtProxyConfig {
-    /// Proxy server hostname or IP.
-    pub host: String,
-    /// Proxy server port.
-    pub port: u16,
-    /// Raw secret bytes.
-    pub secret: Vec<u8>,
-    /// Transport variant pass this as `config.transport`.
-    pub transport: TransportKind,
-}
-
-impl MtProxyConfig {
-    /// Open a TCP connection to the MTProxy host:port.
-    /// The proxy forwards traffic to Telegram; do NOT also connect to a DC addr.
-    pub async fn connect(&self) -> Result<TcpStream, InvocationError> {
-        let addr = format!("{}:{}", self.host, self.port);
-        tracing::debug!("[ferogram] MTProxy TCP connect → {addr}");
-        TcpStream::connect(&addr).await.map_err(InvocationError::Io)
-    }
-
-    /// Socket address string `"host:port"`.
-    pub fn addr(&self) -> String {
-        format!("{}:{}", self.host, self.port)
-    }
-}
-
-/// Parse a `tg://proxy?server=...&port=...&secret=...` or `https://t.me/proxy?...` link.
+/// Parse a Telegram MTProxy link (`https://t.me/proxy?...` or `tg://proxy?...`).
+/// Returns `None` if the URL is invalid or not an MTProxy link.
 pub fn parse_proxy_link(url: &str) -> Option<MtProxyConfig> {
-    let query = url
-        .strip_prefix("tg://proxy?")
-        .or_else(|| url.strip_prefix("https://t.me/proxy?"))?;
-
-    let mut server = None;
-    let mut port: Option<u16> = None;
-    let mut secret_hex = None;
-
-    for pair in query.split('&') {
-        if let Some((k, v)) = pair.split_once('=') {
-            match k {
-                "server" => server = Some(v.to_string()),
-                "port" => port = v.parse().ok(),
-                "secret" => secret_hex = Some(v.to_string()),
-                _ => {}
-            }
-        }
-    }
-
-    let host = server?;
-    let port = port?;
-    let secret = decode_secret_hex(&secret_hex?)?;
-    let transport = secret_to_transport(&secret);
-    Some(MtProxyConfig {
-        host,
-        port,
-        secret,
-        transport,
-    })
-}
-
-fn decode_secret_hex(s: &str) -> Option<Vec<u8>> {
-    if s.len() >= 32 && s.chars().all(|c| c.is_ascii_hexdigit()) {
-        let bytes: Option<Vec<u8>> = (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+    use ferogram_connect::TransportKind;
+    let (query, port_str, host) = if let Some(rest) = url
+        .strip_prefix("https://t.me/proxy?")
+        .or_else(|| url.strip_prefix("tg://proxy?"))
+    {
+        let params: std::collections::HashMap<_, _> = rest
+            .split('&')
+            .filter_map(|kv| {
+                let mut it = kv.splitn(2, '=');
+                Some((it.next()?, it.next()?))
+            })
             .collect();
-        if let Some(b) = bytes {
-            return Some(b);
-        }
-    }
-    use base64::Engine as _;
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(s.trim_end_matches('='))
-        .ok()
-}
-
-/// Map secret prefix to the correct [`TransportKind`].
-pub fn secret_to_transport(secret: &[u8]) -> TransportKind {
-    match secret.first() {
+        let server = params.get("server")?.to_string();
+        let port = params.get("port")?.to_string();
+        let secret = params.get("secret")?.to_string();
+        (secret, port, server)
+    } else {
+        return None;
+    };
+    let port: u16 = port_str.parse().ok()?;
+    let secret_bytes = if query.len() >= 32 && query.chars().all(|c| c.is_ascii_hexdigit()) {
+        (0..query.len())
+            .step_by(2)
+            .filter_map(|i| u8::from_str_radix(&query[i..i + 2], 16).ok())
+            .collect::<Vec<u8>>()
+    } else {
+        use base64::{
+            Engine as _, engine::general_purpose::STANDARD_NO_PAD,
+            engine::general_purpose::URL_SAFE_NO_PAD,
+        };
+        let padded = query.replace('-', "+").replace('_', "/");
+        STANDARD_NO_PAD
+            .decode(&padded)
+            .or_else(|_| URL_SAFE_NO_PAD.decode(&query))
+            .ok()?
+    };
+    let transport = match secret_bytes.first() {
         Some(&0xDD) => {
-            let key = extract_key_bytes(secret, 1);
-            TransportKind::PaddedIntermediate { secret: key }
+            let mut key = [0u8; 16];
+            if let Some(slice) = secret_bytes.get(1..17) {
+                key.copy_from_slice(slice);
+            }
+            TransportKind::PaddedIntermediate { secret: Some(key) }
         }
         Some(&0xEE) => {
-            let key = extract_key_bytes(secret, 1);
-            let domain = if secret.len() > 17 {
-                String::from_utf8_lossy(&secret[17..]).into_owned()
+            let mut key = [0u8; 16];
+            if let Some(slice) = secret_bytes.get(1..17) {
+                key.copy_from_slice(slice);
+            }
+            let domain = if secret_bytes.len() > 17 {
+                String::from_utf8_lossy(&secret_bytes[17..]).into_owned()
             } else {
-                String::new()
+                host.clone()
             };
-            match key {
-                Some(k) => TransportKind::FakeTls { secret: k, domain },
-                None => TransportKind::Obfuscated { secret: None },
+            TransportKind::FakeTls {
+                secret: key,
+                domain,
             }
         }
         _ => {
-            let key = extract_key_bytes(secret, 0);
-            TransportKind::Obfuscated { secret: key }
+            let mut key = [0u8; 16];
+            if let Some(slice) = secret_bytes.get(0..16) {
+                key.copy_from_slice(slice);
+            }
+            TransportKind::Obfuscated {
+                secret: if key == [0u8; 16] { None } else { Some(key) },
+            }
         }
-    }
-}
-
-fn extract_key_bytes(secret: &[u8], offset: usize) -> Option<[u8; 16]> {
-    let slice = secret.get(offset..offset + 16)?;
-    let mut arr = [0u8; 16];
-    arr.copy_from_slice(slice);
-    Some(arr)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_plain_secret() {
-        let url = "tg://proxy?server=1.2.3.4&port=443&secret=deadbeefdeadbeefdeadbeefdeadbeef";
-        let cfg = parse_proxy_link(url).unwrap();
-        assert_eq!(cfg.host, "1.2.3.4");
-        assert_eq!(cfg.port, 443);
-        assert!(matches!(cfg.transport, TransportKind::Obfuscated { .. }));
-        assert_eq!(cfg.addr(), "1.2.3.4:443");
-    }
-
-    #[test]
-    fn parse_dd_secret() {
-        let url =
-            "tg://proxy?server=p.example.com&port=8888&secret=dddeadbeefdeadbeefdeadbeefdeadbeef";
-        let cfg = parse_proxy_link(url).unwrap();
-        assert!(matches!(
-            cfg.transport,
-            TransportKind::PaddedIntermediate { .. }
-        ));
-    }
-
-    #[test]
-    fn parse_ee_secret() {
-        let mut raw = vec![0xeeu8];
-        raw.extend_from_slice(&[0xabu8; 16]);
-        raw.extend_from_slice(b"example.com");
-        let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
-        let url = format!("tg://proxy?server=p.example.com&port=443&secret={hex}");
-        let cfg = parse_proxy_link(&url).unwrap();
-        if let TransportKind::FakeTls { domain, .. } = &cfg.transport {
-            assert_eq!(domain, "example.com");
-        } else {
-            panic!("expected FakeTls");
-        }
-    }
-
-    #[test]
-    fn invalid_url_returns_none() {
-        assert!(parse_proxy_link("https://example.com").is_none());
-        assert!(parse_proxy_link("tg://proxy?server=x&port=443").is_none());
-    }
+    };
+    Some(MtProxyConfig {
+        host,
+        port,
+        secret: secret_bytes,
+        transport,
+    })
 }

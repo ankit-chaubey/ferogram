@@ -12,12 +12,12 @@ members = [
     "ferogram",
     "ferogram-derive",
     "ferogram-connect",
-    "ferogram-app",
-    "ferogram-bot",
+    "ferogram-fsm",
+    "ferogram-mtsender",
 ]
 
 [workspace.package]
-version       = "0.3.6"
+version       = "0.3.7"
 edition       = "2024"
 license       = "MIT OR Apache-2.0"
 readme        = "README.md"
@@ -27,13 +27,16 @@ homepage      = "https://github.com/ankit-chaubey/ferogram"
 documentation = "https://docs.rs/ferogram"
 
 [workspace.dependencies]
-ferogram-derive   = { path = "ferogram-derive",    version = "0.3.6" }
-ferogram-tl-parser  = { path = "ferogram-tl-parser",  version = "0.3.6" }
-ferogram-tl-gen     = { path = "ferogram-tl-gen",     version = "0.3.6" }
-ferogram-tl-types   = { path = "ferogram-tl-types",   version = "0.3.6" }
-ferogram-crypto     = { path = "ferogram-crypto",      version = "0.3.6" }
-ferogram-mtproto    = { path = "ferogram-mtproto",     version = "0.3.6" }
-ferogram-session    = { path = "ferogram-session",     version = "0.3.6" }
-ferogram-parsers    = { path = "ferogram-parsers",     version = "0.3.6" }
-ferogram            = { path = "ferogram",             version = "0.3.6" }
+ferogram-connect    = { path = "ferogram-connect",    version = "0.3.7" }
+ferogram-derive   = { path = "ferogram-derive",    version = "0.3.7" }
+ferogram-fsm        = { path = "ferogram-fsm",         version = "0.3.7" }
+ferogram-mtsender   = { path = "ferogram-mtsender",    version = "0.3.7" }
+ferogram-tl-parser  = { path = "ferogram-tl-parser",  version = "0.3.7" }
+ferogram-tl-gen     = { path = "ferogram-tl-gen",     version = "0.3.7" }
+ferogram-tl-types   = { path = "ferogram-tl-types",   version = "0.3.7" }
+ferogram-crypto     = { path = "ferogram-crypto",      version = "0.3.7" }
+ferogram-mtproto    = { path = "ferogram-mtproto",     version = "0.3.7" }
+ferogram-session    = { path = "ferogram-session",     version = "0.3.7" }
+ferogram-parsers    = { path = "ferogram-parsers",     version = "0.3.7" }
+ferogram            = { path = "ferogram",             version = "0.3.7" }
 tracing            = { version = "0.1", features = ["log"] }

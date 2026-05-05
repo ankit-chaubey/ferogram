@@ -1,12 +1,14 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
 use std::collections::VecDeque;
 
@@ -122,7 +124,7 @@ impl Client {
             limit,
             hash: 0,
         };
-        let body = self.rpc_call_raw(&req).await?;
+        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         let raw = match tl::enums::channels::ChannelParticipants::deserialize(&mut cur)? {
             tl::enums::channels::ChannelParticipants::ChannelParticipants(p) => p,
@@ -180,7 +182,7 @@ impl Client {
         chat_id: i64,
     ) -> Result<Vec<Participant>, InvocationError> {
         let req = tl::functions::messages::GetFullChat { chat_id };
-        let body = self.rpc_call_raw(&req).await?;
+        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::messages::ChatFull::ChatFull(full) =
             tl::enums::messages::ChatFull::deserialize(&mut cur)?;
@@ -588,7 +590,7 @@ impl Client {
             max_id: 0,
             limit,
         };
-        let body = self.rpc_call_raw(&req).await?;
+        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         match tl::enums::photos::Photos::deserialize(&mut cur)? {
             tl::enums::photos::Photos::Photos(p) => Ok(p.photos),
@@ -608,8 +610,8 @@ impl Client {
     /// # Example
     /// ```rust,no_run
     /// # use ferogram::Client;
-    /// # async fn example(client: Client, peer: ferogram::tl::enums::Peer) -> anyhow::Result<()> {
-    /// let mut iter = client.iter_profile_photos(peer, 0);
+    /// # async fn example(client: Client, peer: ferogram::tl::enums::Peer) -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut iter = client.iter_profile_photos(peer, 0).await?;
     /// while let Some(photo) = iter.next().await? {
     /// println!("{photo:?}");
     /// }
@@ -656,7 +658,7 @@ impl Client {
             q: query.to_string(),
             limit: 20,
         };
-        let body = self.rpc_call_raw(&req).await?;
+        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::contacts::Found::Found(found) =
             tl::enums::contacts::Found::deserialize(&mut cur)?;
@@ -676,15 +678,18 @@ impl Client {
     /// Accepts anything that converts to [`InputReactions`]:
     ///
     /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn example(client: Client, peer: ferogram::PeerRef, msg_id: i32) -> Result<(), ferogram::InvocationError> {
     /// // emoji shorthand
-    /// client.send_reaction(peer, msg_id, "👍").await?;
+    /// client.send_reaction(peer.clone(), msg_id, "👍").await?;
     ///
     /// // fluent builder
     /// use ferogram::reactions::InputReactions;
-    /// client.send_reaction(peer, msg_id, InputReactions::custom_emoji(123).big()).await?;
+    /// client.send_reaction(peer.clone(), msg_id, InputReactions::custom_emoji(123).big()).await?;
     ///
     /// // remove all reactions
     /// client.send_reaction(peer, msg_id, InputReactions::remove()).await?;
+    /// # Ok(()) }
     /// ```
     #[doc(hidden)]
     pub async fn send_reaction(
@@ -1162,7 +1167,7 @@ impl Client {
                     limit,
                     hash: 0,
                 };
-                let body = self.rpc_call_raw(&req).await?;
+                let body: Vec<u8> = self.rpc_call_raw(&req).await?;
                 let mut cur = Cursor::from_slice(&body);
                 let raw = match tl::enums::channels::ChannelParticipants::deserialize(&mut cur)? {
                     tl::enums::channels::ChannelParticipants::ChannelParticipants(p) => p,
@@ -1276,7 +1281,7 @@ impl Client {
                 access_hash: user_hash,
             }),
         };
-        let body = self.rpc_call_raw(&req).await?;
+        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         let tl::enums::channels::ChannelParticipant::ChannelParticipant(raw) =
             tl::enums::channels::ChannelParticipant::deserialize(&mut cur)?;
@@ -1359,7 +1364,7 @@ impl Client {
 /// # Example
 /// ```rust,no_run
 /// # use ferogram::Client;
-/// # async fn example(client: Client, peer: ferogram::tl::enums::Peer) -> anyhow::Result<()> {
+/// # async fn example(client: Client, peer: ferogram::tl::enums::Peer) -> Result<(), Box<dyn std::error::Error>> {
 /// let mut iter = client.iter_profile_photos(peer, 0).await?;
 /// while let Some(photo) = iter.next().await? {
 /// println!("{photo:?}");
@@ -1401,7 +1406,7 @@ impl ProfilePhotoIter {
             max_id: 0,
             limit: self.chunk_size,
         };
-        let body = self.client.rpc_call_raw(&req).await?;
+        let body: Vec<u8> = self.client.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
 
         let (photos, total): (Vec<tl::enums::Photo>, Option<i32>) =

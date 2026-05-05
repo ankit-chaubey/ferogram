@@ -84,8 +84,8 @@ let messages = client.get_messages_by_id(peer.clone(), &[100, 101, 102]).await?;
 // Pinned message
 let pinned = client.get_pinned_message(peer.clone()).await?;
 
-// The message a given message replies to
-let parent = client.get_reply_to_message(peer.clone(), msg_id).await?;
+// Fetch the message a reply refers to by ID
+let parent = client.get_message_by_id(peer.clone(), reply_id).await?;
 ```
 
 ---

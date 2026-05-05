@@ -237,6 +237,16 @@ let peer = client.resolve_peer("+12025551234").await?;
 let input = client.resolve_to_input_peer(&peer).await?;
 ```
 
+Extracting a numeric ID from a `tl::enums::Peer` without a `match`:
+
+```rust
+use ferogram::{PeerExt, OptionPeerExt};
+
+let id     = peer.bare_id();              // i64
+let sender = msg.sender_id().bare_id();   // Option<i64>
+let chat   = msg.peer_id().bare_id();     // Option<i64>
+```
+
 ---
 
 ## Chats and Peers

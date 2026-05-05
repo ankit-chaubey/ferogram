@@ -10,6 +10,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.7]: 2026-05-05
+
+The big story this release is workspace restructuring. Three crates were extracted out of the monolith, the connection stack got its own proper home, and a handful of API rough edges were smoothed out.
+
+### New crates
+
+- **ferogram-connect**: the raw TCP/transport layer is now its own publishable crate. It owns the connection, MTProto framing, transport selection (Intermediate, Obfuscated, FakeTLS), SOCKS5, and proxy handling. Previously this code lived inside a throwaway demo binary. If you're doing anything low-level with connections, this is where to look.
+
+- **ferogram-fsm**: FSM state management is now its own crate. Same `FsmState`, `StateContext`, `StateStorage`, and `MemoryStorage` you already use, just extracted so it can be versioned and published independently.
+
+- **ferogram-mtsender**: the MTProto sender pool and retry policy is now its own crate too. `RetryPolicy`, `AutoSleep`, `CircuitBreaker`, `NoRetries` all live here now. The main `ferogram` crate re-exports everything so nothing breaks.
+
+The old `ferogram-app` and `ferogram-bot` standalone example binaries are gone. They've been replaced by proper examples under `ferogram/examples/` (`order_bot`, `showcase_bot`, `userbot`).
+
+### New: `PeerExt` and `OptionPeerExt`
+
+Getting a numeric ID out of a `tl::enums::Peer` used to mean writing a match every time:
+
+```rust
+let id = match peer {
+    tl::enums::Peer::User(u)    => u.user_id,
+    tl::enums::Peer::Chat(c)    => c.chat_id,
+    tl::enums::Peer::Channel(c) => c.channel_id,
+};
+```
+
+Now there's `.bare_id()`:
+
+```rust
+use ferogram::{PeerExt, OptionPeerExt};
+
+let id     = peer.bare_id();
+let sender = msg.sender_id().bare_id(); // Option<i64>
+let chat   = msg.peer_id().bare_id();   // Option<i64>
+```
+
+`bare_id` returns the **native** Telegram ID, not the Bot-API-encoded one. A channel with native ID `1234567890` is `-1001234567890` in the Bot API.
+
+### New: `PeerCache` and `ExperimentalFeatures`
+
+`PeerCache` is now its own file (`peer_cache.rs`) and fully public. It's what backs every peer lookup under the hood: users, channels, basic groups, min-users, username index, phone index.
+
+`ExperimentalFeatures` lets you opt into behaviours that deviate from strict spec:
+
+```rust
+Client::builder()
+    .experimental_features(ExperimentalFeatures {
+        allow_zero_hash: true, // bots only
+        ..Default::default()
+    })
+    .connect().await?;
+```
+
+`allow_zero_hash` is the main one: bots can skip needing a cached access hash. Don't enable it on user accounts.
+
+### Breaking changes
+
+**`download_media_to_file` → `download_file`**
+
+```rust
+// before
+client.download_media_to_file(location, &path).await?;
+
+// now
+client.download_file(location, &path).await?;
+```
+
+**`forward_messages` now requires `ForwardOptions`**
+
+```rust
+// before (3 args)
+client.forward_messages(dest, &[id], src).await?;
+
+// now (4 args)
+client.forward_messages(dest, &[id], src, ForwardOptions::default()).await?;
+```
+
+**`respond_ex` removed**
+
+`respond` already accepts `InputMessage` directly, so `respond_ex` was redundant:
+
+```rust
+// before
+msg.respond_ex(InputMessage::html("<b>hi</b>")).await?;
+
+// now
+msg.respond(InputMessage::html("<b>hi</b>")).await?;
+```
+
+### Internals
+
+The `ferogram/src/lib.rs` monolith has been split up. `client/` is now a proper module directory, `filters` and `middleware` are module directories instead of single files, and `peer_cache` is its own file. No public API changes; just much easier to navigate.
+
+**Full Changelog**: https://github.com/ankit-chaubey/ferogram/compare/v0.3.6...v0.3.7
+
+---
+
 ## [0.3.6]: 2026-04-30
 
 ### API Stabilization (Towards v0.4.0)

@@ -1,13 +1,16 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
+use crate::DcEntry;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
@@ -949,8 +952,8 @@ impl Client {
             allow_paid_stars: None,
             suggested_post: None,
         };
-        let body = self.rpc_call_raw(&req).await?;
-        Ok(self.extract_sent_message(&body, msg, &peer).await)
+        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
+        Ok(self.parse_send_response(&body, msg, &peer).await)
     }
 
     /// Send multiple files as an album.
@@ -960,16 +963,19 @@ impl Client {
     ///
     /// ```rust,no_run
     /// use ferogram::media::AlbumItem;
+    /// # use ferogram::Client;
+    /// # async fn example(client: Client, peer: ferogram::PeerRef, photo_media: ferogram::tl::enums::InputMedia, video_media: ferogram::tl::enums::InputMedia, photo_media2: ferogram::tl::enums::InputMedia) -> Result<(), ferogram::InvocationError> {
     ///
-    /// let msgs = client.send_album(peer, vec![
+    /// let msgs = client.send_album(peer.clone(), vec![
     ///     AlbumItem::new(photo_media).caption_html("<b>First photo</b>"),
     ///     AlbumItem::new(video_media).caption("Second item").reply_to(Some(42)),
     /// ]).await?;
     ///
     /// // Shorthand: legacy tuple API still works via From impl
     /// client.send_album(peer, vec![
-    ///     (photo_media, "caption".to_string()).into(),
+    ///     (photo_media2, "caption".to_string()).into(),
     /// ]).await?;
+    /// # Ok(()) }
     /// ```
     pub async fn send_album(
         &self,
@@ -1027,7 +1033,7 @@ impl Client {
             effect: None,
             allow_paid_stars: None,
         };
-        let body = self.rpc_call_raw(&req).await?;
+        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
 
         // Parse the Updates container and collect all sent messages.
         let mut out = Vec::new();
@@ -1130,7 +1136,10 @@ impl Client {
         // uniform 512 KB is safe and simpler.
         let chunk = 512 * 1024i32;
         let mut worker_dc = if dc_id == 0 {
-            *self.inner.home_dc_id.lock().await
+            {
+                let _g: tokio::sync::MutexGuard<'_, i32> = self.inner.home_dc_id.lock().await;
+                *_g
+            }
         } else {
             dc_id
         };
@@ -1193,7 +1202,10 @@ impl Client {
                     // Evict the cached foreign key so open_worker_conn does a
                     // fresh DH + import instead of reusing the dead key again.
                     {
-                        let mut opts = self.inner.dc_options.lock().await;
+                        let mut opts: tokio::sync::MutexGuard<
+                            '_,
+                            std::collections::HashMap<i32, DcEntry>,
+                        > = self.inner.dc_options.lock().await;
                         if let Some(e) = opts.get_mut(&worker_dc) {
                             e.auth_key = None;
                         }
@@ -1246,7 +1258,10 @@ impl Client {
         // connection (with its own initConnection + bad_server_salt round-trip)
         // adds ~400 ms of unnecessary overhead. Fall through to the sequential
         // path which is equivalent for a single part.
-        let home = *self.inner.home_dc_id.lock().await;
+        let home = {
+            let _g: tokio::sync::MutexGuard<'_, i32> = self.inner.home_dc_id.lock().await;
+            *_g
+        };
         let effective_dc = if dc_id == 0 { home } else { dc_id };
         if n_workers == 1 && effective_dc == home {
             return self.download_media_on_dc(location, dc_id).await;

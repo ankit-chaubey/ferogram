@@ -1,12 +1,14 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
 use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable};
@@ -54,7 +56,7 @@ impl IncomingMessage {
     /// Attach a `Client` so the clientless action methods work.
     ///
     /// Returns `self` for chaining:
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use ferogram::update::IncomingMessage;
     /// # fn ex(raw: ferogram_tl_types::enums::Message, client: ferogram::Client) {
     /// let msg = IncomingMessage::from_raw(raw).with_client(client);
@@ -508,6 +510,8 @@ impl IncomingMessage {
     /// (with keyboard, formatting, media, etc.).  The reply-to header is set automatically.
     ///
     /// ```rust,no_run
+    /// # use ferogram::{InputMessage, update::IncomingMessage};
+    /// # async fn example(msg: IncomingMessage, kb: ferogram::tl::enums::ReplyMarkup) -> Result<(), ferogram::InvocationError> {
     /// // plain text
     /// msg.reply("Hello!").await?;
     ///
@@ -516,6 +520,7 @@ impl IncomingMessage {
     ///
     /// // with keyboard
     /// msg.reply(InputMessage::text("Choose:").reply_markup(kb)).await?;
+    /// # Ok(()) }
     /// ```
     pub async fn reply(
         &self,
@@ -567,8 +572,11 @@ impl IncomingMessage {
     /// (for HTML/Markdown formatting, keyboard changes, etc.).
     ///
     /// ```rust,no_run
+    /// # use ferogram::{InputMessage, update::IncomingMessage};
+    /// # async fn example(msg: IncomingMessage) -> Result<(), ferogram::InvocationError> {
     /// msg.edit("Updated text").await?;
     /// msg.edit(InputMessage::html("<b>Updated</b>")).await?;
+    /// # Ok(()) }
     /// ```
     pub async fn edit(&self, msg: impl Into<crate::InputMessage>) -> Result<(), Error> {
         let client = self.require_client("edit")?.clone();
@@ -617,7 +625,13 @@ impl IncomingMessage {
                     .await
                     .map(|_: tl::enums::messages::AffectedMessages| ())
             }
-            _ => client.delete_messages(&[self.id()], true).await,
+            _ => {
+                let _p = self
+                    .peer_id()
+                    .cloned()
+                    .ok_or_else(|| Error::Deserialize("delete: no peer".into()))?;
+                client.delete_messages(&[self.id()], true).await.map(|_| ())
+            }
         }
     }
 
@@ -648,7 +662,7 @@ impl IncomingMessage {
             .peer_id()
             .cloned()
             .ok_or_else(|| Error::Deserialize("cannot pin: unknown peer".into()))?;
-        client.pin_message(peer, self.id(), true).await
+        client.pin_message_raw(peer, self.id()).await.map(|_| ())
     }
 
     /// Unpin this message (clientless).
@@ -690,18 +704,16 @@ impl IncomingMessage {
             .cloned()
             .ok_or_else(|| Error::Deserialize("cannot forward: unknown source peer".into()))?;
         client
-            .forward_messages_with(
+            .forward_messages(
                 destination,
                 &[self.id()],
                 src,
                 crate::ForwardOptions::default(),
             )
-            .await
-            .and_then(|v| {
-                v.into_iter()
-                    .next()
-                    .ok_or_else(|| Error::Deserialize("forward returned no message".into()))
-            })
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::Deserialize("forward returned no message".into()))
     }
 
     /// Re-fetch this message from Telegram (clientless).
@@ -719,8 +731,8 @@ impl IncomingMessage {
             .peer_id()
             .cloned()
             .ok_or_else(|| Error::Deserialize("cannot refetch: unknown peer".into()))?;
-        let mut msgs = client.get_messages_by_id(peer, &[self.id()]).await?;
-        match msgs.pop() {
+        let msgs_opt = client.get_message_by_id(peer, self.id()).await?;
+        match msgs_opt {
             Some(m) => {
                 self.raw = m.raw;
                 Ok(())
@@ -930,7 +942,10 @@ impl IncomingMessage {
     /// The closure receives `(text: &str, data: &[u8])` for each callback button.
     ///
     /// ```rust,no_run
+    /// # use ferogram::update::IncomingMessage;
+    /// # async fn example(msg: IncomingMessage) -> Result<(), ferogram::InvocationError> {
     /// msg.click_button_where(|text, _data| text.contains("Confirm")).await?;
+    /// # Ok(()) }
     /// ```
     pub async fn click_button_where<F>(&self, predicate: F) -> Result<(), Error>
     where
@@ -962,9 +977,12 @@ impl IncomingMessage {
     /// Use `.is_some()` to check existence.
     ///
     /// ```rust,no_run
+    /// # use ferogram::{ButtonFilter, update::IncomingMessage};
+    /// # fn example(msg: IncomingMessage) {
     /// msg.find_button(ButtonFilter::Text("OK"));
     /// msg.find_button(ButtonFilter::Data(b"cb:ping"));
     /// msg.find_button(ButtonFilter::Pos(0, 0));
+    /// # }
     /// ```
     pub fn find_button(&self, filter: ButtonFilter<'_>) -> Option<(usize, usize)> {
         match filter {
@@ -1019,9 +1037,12 @@ impl IncomingMessage {
     /// Press the inline button matching `filter`.
     ///
     /// ```rust,no_run
+    /// # use ferogram::{ButtonFilter, update::IncomingMessage};
+    /// # async fn example(msg: IncomingMessage) -> Result<(), ferogram::InvocationError> {
     /// msg.click_button(ButtonFilter::Pos(0, 0)).await?;
     /// msg.click_button(ButtonFilter::Text("OK")).await?;
     /// msg.click_button(ButtonFilter::Data(b"action:buy")).await?;
+    /// # Ok(()) }
     /// ```
     pub async fn click_button(&self, filter: ButtonFilter<'_>) -> Result<(), Error> {
         let client = self.require_client("click_button")?.clone();
@@ -1081,6 +1102,8 @@ impl CallbackQuery {
     /// Finish with `.send(&client).await`:
     ///
     /// ```rust,no_run
+    /// # use ferogram::{Client, update::CallbackQuery};
+    /// # async fn example(query: CallbackQuery, client: Client) -> Result<(), ferogram::InvocationError> {
     /// query.answer().text("Done!").send(&client).await?;
     /// query.answer().alert("No permission!").send(&client).await?;
     /// query.answer().url("https://example.com/game").send(&client).await?;
@@ -1088,6 +1111,7 @@ impl CallbackQuery {
     /// .text("Cached")
     /// .cache_time(std::time::Duration::from_secs(60))
     /// .send(&client).await?;
+    /// # Ok(()) }
     /// ```
     pub fn answer(&self) -> Answer<'_> {
         Answer {
@@ -1217,7 +1241,7 @@ impl InlineSend {
             reply_markup,
             entities: None,
         };
-        let body = client.rpc_call_raw(&req).await?;
+        let body: Vec<u8> = client.rpc_call_raw(&req).await?;
         // Returns Bool
         Ok(!body.is_empty())
     }

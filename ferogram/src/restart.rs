@@ -1,12 +1,14 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
 use std::time::Duration;
 
@@ -40,6 +42,7 @@ impl ConnectionRestartPolicy for FixedInterval {
 ///
 /// # Example
 /// ```
+/// # use ferogram::ExponentialBackoff;
 /// let policy = ExponentialBackoff::default(); // 1s base, 60s max, 30% jitter
 /// ```
 pub struct ExponentialBackoff {

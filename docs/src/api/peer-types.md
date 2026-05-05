@@ -259,3 +259,46 @@ if let Some(chat) = Chat::from_raw(raw_tl_chat) {
 | `title()` | `&str` | Name regardless of variant |
 | `as_peer()` | `tl::enums::Peer` | `Peer` variant |
 | `as_input_peer()` | `tl::enums::InputPeer` | `InputPeer` variant |
+
+---
+
+## `PeerExt` / `OptionPeerExt`: extract numeric ID without `match`
+
+When you have a raw `tl::enums::Peer` and just need the `i64` ID, use the `PeerExt` trait instead of writing a full `match` block every time.
+
+```rust
+use ferogram::PeerExt;
+
+// Instead of:
+let id = match peer {
+    tl::enums::Peer::User(u)    => u.user_id,
+    tl::enums::Peer::Chat(c)    => c.chat_id,
+    tl::enums::Peer::Channel(c) => c.channel_id,
+};
+
+// Just write:
+let id = peer.bare_id();
+```
+
+`OptionPeerExt` adds the same `.bare_id()` to `Option<&tl::enums::Peer>`, which is what `IncomingMessage::sender_id()` and `IncomingMessage::peer_id()` return:
+
+```rust
+use ferogram::{PeerExt, OptionPeerExt};
+
+// sender numeric ID: Option<i64>
+let sender: Option<i64> = msg.sender_id().bare_id();
+
+// chat numeric ID: Option<i64>
+let chat: Option<i64> = msg.peer_id().bare_id();
+```
+
+> **Note:** these are native Telegram IDs, not Bot-API-encoded.
+> A channel with native ID `1234567890` is `-1001234567890` in the Bot API.
+> Use [`PeerRef`](./client.md) if you need the Bot-API form.
+
+### Import summary
+
+| Trait | Implemented for | Method | Returns |
+|---|---|---|---|
+| `PeerExt` | `tl::enums::Peer` | `.bare_id()` | `i64` |
+| `OptionPeerExt` | `Option<&tl::enums::Peer>` | `.bare_id()` | `Option<i64>` |

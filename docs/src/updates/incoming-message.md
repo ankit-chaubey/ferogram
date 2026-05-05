@@ -97,11 +97,11 @@ msg.reply_ex_with(&client, input_msg).await?;
 ```rust
 // Send to the same chat without quoting
 msg.respond("Hello everyone!").await?;
-msg.respond_ex(InputMessage::text("...").keyboard(kb)).await?;
+msg.respond(InputMessage::text("...").keyboard(kb)).await?;
 
 // Explicit client variants
 msg.respond_with(&client, "Hi").await?;
-msg.respond_ex_with(&client, input_msg).await?;
+msg.respond_with(&client, input_msg).await?;
 ```
 
 ### Edit
@@ -159,17 +159,15 @@ msg.forward_to_with(&client, peer).await?;
 ```rust
 // Download attached media to a file path, returns true if media existed
 let downloaded = msg.download_media("output.jpg").await?;
-msg.download_media_with(&client, "output.jpg").await?;
 ```
 
 ### Fetch replied-to message
 
 ```rust
-// Get the message this one replies to
+// Get the message this one replies to (attached client required)
 if let Some(parent) = msg.get_reply().await? {
     println!("Replying to: {}", parent.text().unwrap_or(""));
 }
-msg.get_reply_with(&client).await?;
 ```
 
 ### Refetch
@@ -183,8 +181,10 @@ msg.refetch_with(&client).await?;
 ### Reply-to-message (via Client)
 
 ```rust
-// Fetch the replied-to message via client
-let parent = client.get_reply_to_message(peer.clone(), msg.id()).await?;
+// Fetch the replied-to message by ID
+if let Some(reply_id) = msg.reply_to_message_id() {
+    let parent = client.get_message_by_id(msg.peer(), reply_id).await?;
+}
 ```
 
 ---

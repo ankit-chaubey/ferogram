@@ -7,25 +7,13 @@
 ### Without authentication
 
 ```rust
-use ferogram::{Client, socks5::Socks5Config};
-
 let (client, _shutdown) = Client::builder()
     .api_id(12345)
     .api_hash("your_hash")
     .session("bot.session")
-    .socks5(Socks5Config::new("127.0.0.1:1080"))
+    .socks5("127.0.0.1:1080")
     .connect()
     .await?;
-```
-
-### With username/password authentication
-
-```rust
-.socks5(Socks5Config::with_auth(
-    "proxy.example.com:1080",
-    "username",
-    "password",
-))
 ```
 
 ### Tor
@@ -33,7 +21,7 @@ let (client, _shutdown) = Client::builder()
 Point SOCKS5 at `127.0.0.1:9050` (default Tor SOCKS port):
 
 ```rust
-.socks5(Socks5Config::new("127.0.0.1:9050"))
+.socks5("127.0.0.1:9050")
 ```
 
 Tor exit nodes are sometimes blocked by Telegram DCs. If connections fail consistently, try a different circuit or use `TransportKind::Obfuscated` alongside it.

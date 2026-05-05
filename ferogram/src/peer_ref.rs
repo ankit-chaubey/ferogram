@@ -1,8 +1,16 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
+//
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
+// https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
+
+use crate::PeerCache;
 
 use ferogram_tl_types as tl;
 
@@ -70,7 +78,8 @@ impl PeerRef {
 
             PeerRef::Input(ip) => {
                 {
-                    let mut cache = client.inner.peer_cache.write().await;
+                    let mut cache: tokio::sync::RwLockWriteGuard<'_, PeerCache> =
+                        client.inner.peer_cache.write().await;
                     cache.cache_input_peer(&ip);
                 }
                 input_peer_to_peer(ip)
@@ -90,7 +99,8 @@ impl PeerRef {
 
                 // Cache index first.
                 {
-                    let cache = client.inner.peer_cache.read().await;
+                    let cache: tokio::sync::RwLockReadGuard<'_, PeerCache> =
+                        client.inner.peer_cache.read().await;
                     if let Some(&(id, ref ty)) = cache.username_to_peer.get(&s.to_lowercase()) {
                         let peer = match ty {
                             crate::PeerType::User => {
@@ -115,7 +125,8 @@ impl PeerRef {
 
             PeerRef::Phone(phone) => {
                 {
-                    let cache = client.inner.peer_cache.read().await;
+                    let cache: tokio::sync::RwLockReadGuard<'_, PeerCache> =
+                        client.inner.peer_cache.read().await;
                     if let Some(&uid) = cache.phone_to_user.get(&phone)
                         && cache.user_input_peer(uid).is_ok()
                     {
@@ -143,7 +154,8 @@ async fn resolve_id(
     }
 
     {
-        let cache = client.inner.peer_cache.read().await;
+        let cache: tokio::sync::RwLockReadGuard<'_, PeerCache> =
+            client.inner.peer_cache.read().await;
         if cache.peer_to_input(&decoded).is_ok() {
             return Ok(decoded);
         }

@@ -56,7 +56,7 @@ can resolve it from the username once and cache it:
 ```rust
 use ferogram::PeerRef;
 
-let bot = client.resolve_username("MyBotUsername").await?;
+let bot = client.resolve_peer("MyBotUsername").await?;
 let bot_user_id: i64 = match bot {
     PeerRef::UserId(id) => id,
     other => panic!("expected a user, got {:?}", other),
@@ -90,7 +90,7 @@ The bot can extract the param from `message.text.strip_prefix("/start ")`.
   `/start param` twice triggers two separate updates on the bot side.
 - For bots with `allow_zero_hash` disabled (the default), the bot's
   `access_hash` must already be in the peer cache. Call
-  `client.resolve_username()` at least once before `start_bot` to populate
+  `client.resolve_peer()` at least once before `start_bot` to populate
   the cache, or enable
   [`ExperimentalFeatures::allow_zero_hash`](../advanced/experimental-features.md).
 </div>

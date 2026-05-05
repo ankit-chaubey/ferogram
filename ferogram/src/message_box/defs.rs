@@ -1,15 +1,83 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
 use std::time::Duration;
-use std::time::Instant;
+
+// ---------- Instant (real vs test-time fake) ----------
+
+#[cfg(not(test))]
+pub(super) use std::time::Instant;
+
+/// Thread-local fake clock used in tests so we never need `thread::sleep`.
+///
+/// The production code in mod.rs simply calls `Instant::now()`; under
+/// `cfg(test)` that resolves to the controlled fake below.
+#[cfg(test)]
+pub(super) mod fake_clock {
+    use std::cell::RefCell;
+    use std::ops::Add;
+    use std::time::Duration;
+
+    thread_local! {
+        static NOW: RefCell<Duration> = const { RefCell::new(Duration::ZERO) };
+    }
+
+    /// A fake `Instant` backed by a thread-local counter.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub struct Instant(pub Duration);
+
+    impl Instant {
+        pub fn now() -> Self {
+            NOW.with_borrow(|d| Self(*d))
+        }
+
+        /// Helper used only in tests to observe the raw duration.
+        pub fn elapsed_secs(&self) -> u64 {
+            self.0.as_secs()
+        }
+    }
+
+    impl Add<Duration> for Instant {
+        type Output = Instant;
+        fn add(self, rhs: Duration) -> Instant {
+            Instant(self.0 + rhs)
+        }
+    }
+
+    /// Reset the fake clock to zero.  Call at the start of every test.
+    pub fn reset_time() {
+        NOW.with_borrow_mut(|d| *d = Duration::ZERO);
+    }
+
+    /// Advance the fake clock by `dur`.
+    pub fn advance_time_by(dur: Duration) {
+        NOW.with_borrow_mut(|d| *d += dur);
+    }
+}
+
+#[cfg(test)]
+pub(super) use fake_clock::Instant;
+
+// Allow reader_loop code (which calls `check_deadlines().into()`) to compile
+// under `cfg(test)`.  The reader loop never actually runs in unit-tests, so
+// this conversion just returns a reasonable stand-in.
+#[cfg(test)]
+impl From<fake_clock::Instant> for tokio::time::Instant {
+    fn from(i: fake_clock::Instant) -> Self {
+        tokio::time::Instant::now()
+            .checked_add(i.0)
+            .unwrap_or_else(tokio::time::Instant::now)
+    }
+}
 
 use ferogram_tl_types as tl;
 
@@ -129,14 +197,14 @@ pub enum UpdatesLike {
 // Public update state types (for persisting)
 
 /// Per-channel pts snapshot.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelState {
     pub id: i64,
     pub pts: i32,
 }
 
 /// Full snapshot of the update state for session persistence.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UpdatesStateSnap {
     pub pts: i32,
     pub qts: i32,

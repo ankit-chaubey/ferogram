@@ -1,18 +1,27 @@
 [package]
 name        = "ferogram-connect"
-description = "Demo binary: full MTProto auth key generation + encrypted API call"
-version.workspace    = true
-edition.workspace    = true
-license.workspace    = true
-authors.workspace    = true
+description = "Raw TCP connection, MTProto framing and transport for ferogram"
+version.workspace   = true
+edition.workspace   = true
+license.workspace   = true
+authors.workspace   = true
 repository.workspace = true
-homepage.workspace   = true
-publish = false
+homepage.workspace  = true
+
+[dependencies]
+ferogram-tl-types = { workspace = true, features = ["tl-api", "tl-mtproto"] }
+ferogram-mtproto  = { workspace = true }
+ferogram-crypto   = { workspace = true }
+tokio       = { version = "1", features = ["net", "io-util", "sync", "time", "rt"] }
+tokio-socks = "0.5"
+flate2      = "1"
+tracing     = { version = "0.1", features = ["log"] }
+metrics     = "0.24"
+socket2     = { version = "0.5", features = ["all"] }
+getrandom   = "0.2"
+sha2        = "0.10"
+hmac        = "0.12"
 
 [[bin]]
 name = "connect"
-path = "src/main.rs"
-
-[dependencies]
-ferogram-tl-types = { workspace = true, features = ["tl-mtproto"] }
-ferogram-mtproto  = { workspace = true }
+path = "src/bin/connect.rs"

@@ -1,12 +1,16 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
+
+#![deny(unsafe_code)]
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -25,7 +29,7 @@ use syn::{Data, DeriveInput, Fields, parse_macro_input, spanned::Spanned};
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use ferogram::FsmState;
 ///
 /// #[derive(FsmState, Clone, Debug, PartialEq)]

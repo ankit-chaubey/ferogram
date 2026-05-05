@@ -1,12 +1,14 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
 use ferogram_tl_types::{self as tl, Cursor, Deserializable};
 
@@ -142,7 +144,7 @@ impl SearchBuilder {
             min_id: self.min_id,
             hash: 0,
         };
-        let body = client.rpc_call_raw(&req).await?;
+        let body: Vec<u8> = client.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         let msgs = match tl::enums::messages::Messages::deserialize(&mut cur)? {
             tl::enums::messages::Messages::Messages(m) => m.messages,
@@ -273,7 +275,7 @@ impl GlobalSearchBuilder {
             offset_id: self.offset_id,
             limit: self.limit,
         };
-        let body = client.rpc_call_raw(&req).await?;
+        let body: Vec<u8> = client.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         let msgs = match tl::enums::messages::Messages::deserialize(&mut cur)? {
             tl::enums::messages::Messages::Messages(m) => m.messages,

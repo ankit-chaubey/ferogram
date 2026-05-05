@@ -1,12 +1,14 @@
 // Copyright (c) Ankit Chaubey <ankitchaubey.dev@gmail.com>
-// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ferogram: async Telegram MTProto client in Rust
 // https://github.com/ankit-chaubey/ferogram
 //
-// If you use or modify this code, keep this notice at the top of your file
-// and include the LICENSE-MIT or LICENSE-APACHE file from this repository:
+// Licensed under either the MIT License or the Apache License 2.0.
+// See the LICENSE-MIT or LICENSE-APACHE file in this repository:
 // https://github.com/ankit-chaubey/ferogram
+//
+// Feel free to use, modify, and share this code.
+// Please keep this notice when redistributing.
 
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
@@ -37,7 +39,7 @@ async fn main() {
             std::env::set_var("RUST_LOG", "ferogram=warn");
         }
     }
-    env_logger::init();
+    // logging initialized via RUST_LOG env var
     if let Err(e) = run().await {
         eprintln!("\n✗ {e}");
         std::process::exit(1);
@@ -218,7 +220,9 @@ async fn route(
         }
         ".fwd" => {
             if !arg.is_empty() {
-                let _ = client.forward_messages(arg, &[msg_id], peer).await;
+                let _ = client
+                    .forward_messages(arg, &[msg_id], peer, ferogram::ForwardOptions::default())
+                    .await;
             }
         }
         ".help" => cmd_help(client, peer, msg_id).await,

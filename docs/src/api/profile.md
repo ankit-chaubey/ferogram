@@ -9,17 +9,17 @@ Methods for updating your own profile, managing active sessions, and controlling
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Change your display name and/or bio. Pass <code>None</code> for any field you want to leave unchanged. Returns the updated <code>User</code> object.
 
 ```rust
 // Change just the bio
-client.update_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
+client.set_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
 
 // Change full name
-client.update_profile(
+client.set_profile(
     Some("Alice".to_string()),
     Some("Smith".to_string()),
     None,
@@ -31,14 +31,14 @@ client.update_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
 
 ```rust
-client.update_username("my_new_handle").await?;
-client.update_username("").await?;  // remove username
+client.set_username("my_new_handle").await?;
+client.set_username("").await?;  // remove username
 ```
 </div>
 </div>
@@ -46,7 +46,7 @@ client.update_username("").await?;  // remove username
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_status(offline: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_online() / set_offline() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Manually set your online/offline status. Pass <code>offline: false</code> to appear online, <code>true</code> to mark yourself as offline. Telegram resets online status automatically after ~5 minutes of inactivity, so call this periodically if you need a persistent "online" appearance.
@@ -89,17 +89,17 @@ Methods for updating your own profile, managing active sessions, and controlling
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Change your display name and/or bio. Pass <code>None</code> for any field you want to leave unchanged. Returns the updated <code>User</code> object.
 
 ```rust
 // Change just the bio
-client.update_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
+client.set_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
 
 // Change full name
-client.update_profile(
+client.set_profile(
     Some("Alice".to_string()),
     Some("Smith".to_string()),
     None,
@@ -111,14 +111,14 @@ client.update_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
 
 ```rust
-client.update_username("my_new_handle").await?;
-client.update_username("").await?;  // remove username
+client.set_username("my_new_handle").await?;
+client.set_username("").await?;  // remove username
 ```
 </div>
 </div>
@@ -126,7 +126,7 @@ client.update_username("").await?;  // remove username
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_status(offline: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_online() / set_offline() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Manually set your online/offline status. Pass <code>offline: false</code> to appear online, <code>true</code> to mark yourself as offline. Telegram resets online status automatically after ~5 minutes of inactivity.
@@ -267,7 +267,7 @@ for s in sessions {
 
 ```rust
 // Update name and bio at once
-client.update_profile(
+client.set_profile(
     Some("Bot".to_string()),
     Some("Account".to_string()),
     Some("Powered by ferogram 🦀".to_string()),
@@ -279,7 +279,7 @@ let f = client.upload_file(&bytes, "avatar.png", "image/png").await?;
 client.set_profile_photo(f).await?;
 
 // Go offline
-client.update_status(true).await?;
+client.set_offline().await?;
 ```
 
 ---

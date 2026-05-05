@@ -237,18 +237,11 @@ let (client, _shutdown) = Client::builder()
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge">sync</span>
-<span class="api-card-sig">.socks5(proxy: Socks5Config) → ClientBuilder</span>
+<span class="api-card-sig">.socks5(addr: impl Into&lt;String&gt;) → ClientBuilder</span>
 </div>
 <div class="api-card-body">
-Route all connections through a SOCKS5 proxy. Build the config with:
-<pre><code>use ferogram::Socks5Config;
-let proxy = Socks5Config {
-    host: "127.0.0.1".to_string(),
-    port: 1080,
-    user: None,
-    password: None,
-};
-.socks5(proxy)</code></pre>
+Route all connections through a SOCKS5 proxy. Pass a <code>"host:port"</code> string:
+<pre><code>.socks5("127.0.0.1:1080")</code></pre>
 </div>
 </div>
 
