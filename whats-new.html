@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-16409888.js";
+            window.path_to_searchindex_js = "searchindex-dab26105.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-fb96dff5.js"></script>
+        <script src="toc-c671d9b3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,6 +184,73 @@
                         <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
 <hr>
+<h2 id="v037"><a class="header" href="#v037">v0.3.7</a></h2>
+<p>Released 2026-05-05. Workspace restructure, three new crates, and a handful of API cleanups.</p>
+<h3 id="new-crates"><a class="header" href="#new-crates">New crates</a></h3>
+<p>Three crates were extracted this release. The main <code>ferogram</code> crate re-exports everything from them, so if you’re not doing anything low-level, your code doesn’t need to change.</p>
+<p><strong>ferogram-connect</strong> is now a real crate instead of a throwaway demo binary. It owns the raw TCP connection layer, MTProto framing, transport negotiation (Intermediate, Obfuscated, FakeTLS), SOCKS5, and proxy support. Useful if you want to build something that speaks MTProto without pulling in the full client.</p>
+<p><strong>ferogram-fsm</strong> packages the FSM layer (<code>FsmState</code>, <code>StateContext</code>, <code>StateStorage</code>, <code>MemoryStorage</code>) as a standalone crate that can be versioned and published on its own.</p>
+<p><strong>ferogram-mtsender</strong> does the same for the sender pool and retry policy. <code>RetryPolicy</code>, <code>AutoSleep</code>, <code>CircuitBreaker</code>, <code>NoRetries</code> all live here now.</p>
+<p>The old <code>ferogram-app</code> and <code>ferogram-bot</code> example binaries were removed. They’ve been replaced by examples inside <code>ferogram/examples/</code>.</p>
+<h3 id="getting-a-peers-id-with-bare_id"><a class="header" href="#getting-a-peers-id-with-bare_id">Getting a peer’s ID with <code>.bare_id()</code></a></h3>
+<p>You used to need a full match to pull a numeric ID out of a <code>tl::enums::Peer</code>. Now there’s <code>PeerExt</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::{PeerExt, OptionPeerExt};
+
+// any Peer variant → i64
+let id = peer.bare_id();
+
+// works on Option&lt;&amp;Peer&gt; too, no .map() needed
+let sender = msg.sender_id().bare_id(); // Option&lt;i64&gt;
+let chat   = msg.peer_id().bare_id();   // Option&lt;i64&gt;
+<span class="boring">}</span></code></pre>
+<p>The name <code>bare_id</code> is intentional: it gives you the <strong>native</strong> Telegram ID, not the Bot-API-encoded one. A channel with native ID <code>1234567890</code> is <code>-1001234567890</code> in the Bot API.</p>
+<h3 id="peercache-and-experimentalfeatures-are-public"><a class="header" href="#peercache-and-experimentalfeatures-are-public"><code>PeerCache</code> and <code>ExperimentalFeatures</code> are public</a></h3>
+<p><code>PeerCache</code> is now in its own file and fully public. It’s what handles every peer lookup: user hashes, channel hashes, basic groups, min-users, the username index, the phone index. You can read from it directly if you need low-level access.</p>
+<p><code>ExperimentalFeatures</code> lets you opt into behaviours that deviate from strict Telegram spec. The main flag is <code>allow_zero_hash</code>, which lets bots skip needing a cached access hash (don’t use this on user accounts):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Client::builder()
+    .experimental_features(ExperimentalFeatures {
+        allow_zero_hash: true,
+        ..Default::default()
+    })
+    .connect().await?;
+<span class="boring">}</span></code></pre>
+<h3 id="breaking-changes"><a class="header" href="#breaking-changes">Breaking changes</a></h3>
+<p><strong><code>download_media_to_file</code> is now <code>download_file</code>:</strong></p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// before
+client.download_media_to_file(location, &amp;path).await?;
+
+// now
+client.download_file(location, &amp;path).await?;
+<span class="boring">}</span></code></pre>
+<p><strong><code>forward_messages</code> now takes a fourth argument:</strong></p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// before
+client.forward_messages(dest, &amp;[id], src).await?;
+
+// now
+client.forward_messages(dest, &amp;[id], src, ForwardOptions::default()).await?;
+<span class="boring">}</span></code></pre>
+<p><strong><code>respond_ex</code> is gone.</strong> <code>respond</code> already accepts <code>InputMessage</code>, so it was redundant:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// before
+msg.respond_ex(InputMessage::html("&lt;b&gt;hi&lt;/b&gt;")).await?;
+
+// now
+msg.respond(InputMessage::html("&lt;b&gt;hi&lt;/b&gt;")).await?;
+<span class="boring">}</span></code></pre>
+<h3 id="upgrading-from-036"><a class="header" href="#upgrading-from-036">Upgrading from 0.3.6</a></h3>
+<pre><code class="language-toml">ferogram = "0.3.7"
+</code></pre>
+<p>The three breaking changes above need fixing. The rest is additive.</p>
+<hr>
 <h2 id="v036"><a class="header" href="#v036">v0.3.6</a></h2>
 <p>Released 2026-04-30. API stabilization update towards v0.4.0.</p>
 <p>Some APIs have been simplified, merged, or removed where redundant. This may require a one-time migration. The goal is a consistent, predictable API that does not need disruptive changes again.</p>
@@ -259,7 +326,7 @@ See <a href="./advanced/raw-api.html#peer-cache-helpers">Raw API Access</a> for 
 <h3 id="filters"><a class="header" href="#filters">Filters</a></h3>
 <p><code>ferogram::filters</code> provides composable, synchronous predicates over <code>IncomingMessage</code>. Built-in constructors cover the common cases: <code>command</code>, <code>private</code>, <code>text</code>, <code>media</code>, and others. Predicates compose with <code>&amp;</code>, <code>|</code>, and <code>!</code> operators, so you can express things like <code>command("start") &amp; private()</code> directly in the handler registration. Filters also integrate with the FSM via <code>StateContext</code>, letting you gate handlers on the current conversation state.</p>
 <h3 id="fsm"><a class="header" href="#fsm">FSM</a></h3>
-<p><code>ferogram::fsm</code> provides the full finite state machine layer: the <code>FsmState</code> trait, <code>StateContext</code>, <code>StateKey</code>, <code>StateKeyStrategy</code>, and <code>StateStorage</code>. The default storage is an in-memory <code>DashMap</code>-backed store keyed by peer. Custom backends can be plugged in via an async-trait extension point, so SQLite or Redis-backed stores are straightforward to add. A new <code>examples/order_bot.rs</code> walks through a multi-step order flow driven by the FSM.</p>
+<p><code>ferogram::fsm</code> provides the full finite state machine layer: the <code>FsmState</code> trait, <code>StateContext</code>, <code>StateKey</code>, <code>StateKeyStrategy</code>, and <code>StateStorage</code>. The default storage is an in-memory <code>DashMap</code>-backed store keyed by peer. Custom backends can be plugged in via an async-trait extension point, so SQLite or Redis-backed stores are easy to add. A new <code>examples/order_bot.rs</code> walks through a multi-step order flow driven by the FSM.</p>
 <h3 id="middleware"><a class="header" href="#middleware">Middleware</a></h3>
 <p><code>ferogram::middleware</code> adds a <code>Middleware</code> trait and a <code>Next</code> chain that wraps every handler dispatch. The crate ships a ready-to-use rate-limit middleware backed by <code>DashMap</code>. <code>DispatchError</code> and <code>DispatchResult</code> are exported for use in custom middleware.</p>
 <h3 id="conversation"><a class="header" href="#conversation">Conversation</a></h3>

@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-16409888.js";
+            window.path_to_searchindex_js = "../searchindex-dab26105.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-fb96dff5.js"></script>
+        <script src="../toc-c671d9b3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -536,7 +536,7 @@ See <a href="../messaging/reactions.html">Reactions</a> for the full guide.</p>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_message_reactions(peer: impl Into&lt;PeerRef&gt;, msg_ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.get_reactions(peer: impl Into&lt;PeerRef&gt;, msg_ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Trigger a server push of the current reaction counters for the given message IDs. The server responds with <code>updateMessageReactions</code> updates in the stream.</div>
@@ -546,7 +546,7 @@ See <a href="../messaging/reactions.html">Reactions</a> for the full guide.</p>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_reaction_list(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, reaction: Option&lt;tl::enums::Reaction&gt;, limit: i32, offset: Option&lt;String&gt;) → Result&lt;tl::types::messages::MessageReactionsList, InvocationError&gt;</span>
+<span class="api-card-sig">client.iter_reaction_users(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, reaction: Option&lt;tl::enums::Reaction&gt;, limit: i32, offset: Option&lt;String&gt;) → Result&lt;tl::types::messages::MessageReactionsList, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Get the list of users who reacted to a message. Pass <code>reaction = None</code> for all reactions. <code>limit</code> max 100; use <code>offset</code> from the previous response to paginate.</div>
@@ -622,10 +622,10 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.search_messages(peer: Peer, query: &amp;str, limit: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.search(peer: impl Into&lt;PeerRef&gt;) → SearchBuilder</span>
 </div>
 
-<div class="api-card-body">Simple one-shot search within a peer. For advanced options use <code>client.search()</code>.</div>
+<div class="api-card-body">Build a message search for a peer. Chain <code>.query()</code>, <code>.limit()</code>, <code>.filter()</code>, etc., then call <code>.collect(&amp;client).await?</code> to run it. For a one-shot query, use <code>client.search().query("text").collect(&amp;client).await?</code>.</div>
 
 </div>
 
@@ -674,7 +674,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_messages(peer: Peer, limit: i32, offset_id: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_message_history(peer: impl Into&lt;PeerRef&gt;, limit: i32, offset_id: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Fetch a page of messages. Pass the lowest message ID from the previous page as <code>offset_id</code> to paginate.</div>
@@ -758,16 +758,6 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 </div>
 
 <div class="api-card-body">Manually mark a dialog as unread (<code>true</code>) or read (<code>false</code>). This sets the unread dot without actually having new messages.</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.count_channels() → Result&lt;usize, InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">Count how many channel dialogs the logged-in account is currently in. Iterates all dialogs internally.</div>
 
 </div>
 
@@ -964,10 +954,10 @@ client.send_album(peer, vec![
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.download_media_to_file(location: tl::enums::InputFileLocation, path: impl AsRef&lt;Path&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.download_file(location: tl::enums::InputFileLocation, path: impl AsRef&lt;Path&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Download a media file and write it to <code>path</code>. The <code>path</code> argument accepts anything that implements <code>AsRef&lt;Path&gt;</code> (e.g. <code>&amp;str</code>, <code>String</code>, <code>PathBuf</code>). Uses DC 0 (auto-routed); for explicit DC routing use <code>download_media_to_file_on_dc</code>.</div>
+<div class="api-card-body">Download a media file and write it to <code>path</code>. The <code>path</code> argument accepts anything that implements <code>AsRef&lt;Path&gt;</code> (e.g. <code>&amp;str</code>, <code>String</code>, <code>PathBuf</code>). DC routing is handled automatically.</div>
 
 </div>
 
@@ -998,20 +988,44 @@ client.send_album(peer, vec![
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.resolve_peer(peer: &amp;str) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
+<span class="api-card-sig">client.resolve&lt;P: Into&lt;PeerRef&gt;&gt;(peer: P) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Resolve a string (<code>"@username"</code>, <code>"+phone"</code>, <code>"me"</code>, numeric ID) to a <code>Peer</code> with cached access hash.</div>
+<div class="api-card-body">
+Resolve any peer reference to a <code>Peer</code>. Accepts all <code>PeerRef</code> input types:
+<ul>
+<li><code>&amp;str</code> / <code>String</code> — <code>"@username"</code>, <code>"me"</code>, <code>"self"</code>, numeric string, <code>t.me/</code> URL, invite link, E.164 phone</li>
+
+<li><code>i64</code> / <code>i32</code> — Bot-API encoded numeric ID</li>
+
+<li><code>tl::enums::Peer</code> — returned as-is, zero cost</li>
+
+<li><code>tl::enums::InputPeer</code> — access hash cached, then stripped to <code>Peer</code></li>
+
+</ul>
+
+Resolution is cache-first; an RPC is only made on a cache miss.
+</div>
 
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.resolve_username(username: &amp;str) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
+<span class="api-card-sig">client.resolve_peer(peer: &amp;str) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Resolve a bare username (without @) to a <code>Peer</code>.</div>
+<div class="api-card-body">String-only variant of <code>resolve()</code>. Accepts <code>"@username"</code>, <code>"+phone"</code>, <code>"me"</code>, numeric string, <code>t.me/</code> URL, and invite links. Prefer <code>resolve()</code> when the input may not be a string.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.resolve_to_input_peer(peer: &amp;tl::enums::Peer) → Result&lt;tl::enums::InputPeer, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Convert a bare <code>Peer</code> to an <code>InputPeer</code> with access hash. Returns an error if the peer has not been seen in a prior API call and the hash is unknown.</div>
 
 </div>
 
@@ -1296,10 +1310,10 @@ tl::enums::ChatReactions::ChatReactionsNone
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_reply_to_message(message: &amp;IncomingMessage) → Result&lt;Option&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">msg.get_reply() → Option&lt;&amp;IncomingMessage&gt;</span>
 </div>
 
-<div class="api-card-body">Fetch the message that <code>message</code> replies to. Returns <code>None</code> if it is not a reply or the original message is deleted/inaccessible.</div>
+<div class="api-card-body">Access the message this message replies to. Available directly on <code>IncomingMessage</code>. Returns <code>None</code> if not a reply. To fetch the replied-to message by ID, use <code>client.get_message_by_id(peer, id)</code>.</div>
 
 </div>
 
@@ -1518,10 +1532,10 @@ Fetch the admin action log for a channel or supergroup. <code>query</code> filte
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_all_drafts() → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.sync_drafts() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Trigger a server push of all saved drafts across all chats. The server responds with <code>updateDraftMessage</code> updates in the update stream.</div>
+<div class="api-card-body">Sync all saved drafts from the server. The server responds with <code>updateDraftMessage</code> updates in the update stream.</div>
 
 </div>
 

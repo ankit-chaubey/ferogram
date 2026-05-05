@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-16409888.js";
+            window.path_to_searchindex_js = "../searchindex-dab26105.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-fb96dff5.js"></script>
+        <script src="../toc-c671d9b3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -188,7 +188,7 @@
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -196,10 +196,10 @@ Change your display name and/or bio. Pass <code>None</code> for any field you wa
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Change just the bio
-client.update_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
+client.set_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
 
 // Change full name
-client.update_profile(
+client.set_profile(
     Some("Alice".to_string()),
     Some("Smith".to_string()),
     None,
@@ -212,15 +212,15 @@ client.update_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
 Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>client.update_username("my_new_handle").await?;
-client.update_username("").await?;  // remove username
+</span>client.set_username("my_new_handle").await?;
+client.set_username("").await?;  // remove username
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -229,7 +229,7 @@ client.update_username("").await?;  // remove username
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_status(offline: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_online() / set_offline() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -271,7 +271,7 @@ let photo = client.set_profile_photo(uploaded).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -279,10 +279,10 @@ Change your display name and/or bio. Pass <code>None</code> for any field you wa
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Change just the bio
-client.update_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
+client.set_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
 
 // Change full name
-client.update_profile(
+client.set_profile(
     Some("Alice".to_string()),
     Some("Smith".to_string()),
     None,
@@ -295,15 +295,15 @@ client.update_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
 Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>client.update_username("my_new_handle").await?;
-client.update_username("").await?;  // remove username
+</span>client.set_username("my_new_handle").await?;
+client.set_username("").await?;  // remove username
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -312,7 +312,7 @@ client.update_username("").await?;  // remove username
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_status(offline: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_online() / set_offline() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -468,7 +468,7 @@ for s in sessions {
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Update name and bio at once
-client.update_profile(
+client.set_profile(
     Some("Bot".to_string()),
     Some("Account".to_string()),
     Some("Powered by ferogram 🦀".to_string()),
@@ -480,7 +480,7 @@ let f = client.upload_file(&amp;bytes, "avatar.png", "image/png").await?;
 client.set_profile_photo(f).await?;
 
 // Go offline
-client.update_status(true).await?;
+client.set_offline().await?;
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="emoji-status"><a class="header" href="#emoji-status">Emoji status</a></h2>

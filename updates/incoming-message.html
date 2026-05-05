@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-16409888.js";
+            window.path_to_searchindex_js = "../searchindex-dab26105.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-fb96dff5.js"></script>
+        <script src="../toc-c671d9b3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -270,11 +270,11 @@ msg.reply_ex_with(&amp;client, input_msg).await?;
 </span><span class="boring">fn main() {
 </span>// Send to the same chat without quoting
 msg.respond("Hello everyone!").await?;
-msg.respond_ex(InputMessage::text("...").keyboard(kb)).await?;
+msg.respond(InputMessage::text("...").keyboard(kb)).await?;
 
 // Explicit client variants
 msg.respond_with(&amp;client, "Hi").await?;
-msg.respond_ex_with(&amp;client, input_msg).await?;
+msg.respond_with(&amp;client, input_msg).await?;
 <span class="boring">}</span></code></pre>
 <h3 id="edit"><a class="header" href="#edit">Edit</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -325,16 +325,14 @@ msg.forward_to_with(&amp;client, peer).await?;
 </span><span class="boring">fn main() {
 </span>// Download attached media to a file path, returns true if media existed
 let downloaded = msg.download_media("output.jpg").await?;
-msg.download_media_with(&amp;client, "output.jpg").await?;
 <span class="boring">}</span></code></pre>
 <h3 id="fetch-replied-to-message"><a class="header" href="#fetch-replied-to-message">Fetch replied-to message</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Get the message this one replies to
+</span>// Get the message this one replies to (attached client required)
 if let Some(parent) = msg.get_reply().await? {
     println!("Replying to: {}", parent.text().unwrap_or(""));
 }
-msg.get_reply_with(&amp;client).await?;
 <span class="boring">}</span></code></pre>
 <h3 id="refetch"><a class="header" href="#refetch">Refetch</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -346,8 +344,10 @@ msg.refetch_with(&amp;client).await?;
 <h3 id="reply-to-message-via-client"><a class="header" href="#reply-to-message-via-client">Reply-to-message (via Client)</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Fetch the replied-to message via client
-let parent = client.get_reply_to_message(peer.clone(), msg.id()).await?;
+</span>// Fetch the replied-to message by ID
+if let Some(reply_id) = msg.reply_to_message_id() {
+    let parent = client.get_message_by_id(msg.peer(), reply_id).await?;
+}
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="full-handler-example"><a class="header" href="#full-handler-example">Full handler example</a></h2>

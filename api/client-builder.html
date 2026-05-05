@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-16409888.js";
+            window.path_to_searchindex_js = "../searchindex-dab26105.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-fb96dff5.js"></script>
+        <script src="../toc-c671d9b3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -431,19 +431,12 @@ Enable Perfect Forward Secrecy. When set, a temporary DH key bind is performed i
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge">sync</span>
-<span class="api-card-sig">.socks5(proxy: Socks5Config) → ClientBuilder</span>
+<span class="api-card-sig">.socks5(addr: impl Into&lt;String&gt;) → ClientBuilder</span>
 </div>
 
 <div class="api-card-body">
-Route all connections through a SOCKS5 proxy. Build the config with:
-<pre><code>use ferogram::Socks5Config;
-let proxy = Socks5Config {
-    host: "127.0.0.1".to_string(),
-    port: 1080,
-    user: None,
-    password: None,
-};
-.socks5(proxy)</code></pre>
+Route all connections through a SOCKS5 proxy. Pass a <code>"host:port"</code> string:
+<pre><code>.socks5("127.0.0.1:1080")</code></pre>
 
 </div>
 

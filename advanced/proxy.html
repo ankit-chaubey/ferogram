@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-16409888.js";
+            window.path_to_searchindex_js = "../searchindex-dab26105.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-fb96dff5.js"></script>
+        <script src="../toc-c671d9b3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -187,30 +187,19 @@
 <h3 id="without-authentication"><a class="header" href="#without-authentication">Without authentication</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use ferogram::{Client, socks5::Socks5Config};
-
-let (client, _shutdown) = Client::builder()
+</span>let (client, _shutdown) = Client::builder()
     .api_id(12345)
     .api_hash("your_hash")
     .session("bot.session")
-    .socks5(Socks5Config::new("127.0.0.1:1080"))
+    .socks5("127.0.0.1:1080")
     .connect()
     .await?;
-<span class="boring">}</span></code></pre>
-<h3 id="with-usernamepassword-authentication"><a class="header" href="#with-usernamepassword-authentication">With username/password authentication</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>.socks5(Socks5Config::with_auth(
-    "proxy.example.com:1080",
-    "username",
-    "password",
-))
 <span class="boring">}</span></code></pre>
 <h3 id="tor"><a class="header" href="#tor">Tor</a></h3>
 <p>Point SOCKS5 at <code>127.0.0.1:9050</code> (default Tor SOCKS port):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>.socks5(Socks5Config::new("127.0.0.1:9050"))
+</span>.socks5("127.0.0.1:9050")
 <span class="boring">}</span></code></pre>
 <p>Tor exit nodes are sometimes blocked by Telegram DCs. If connections fail consistently, try a different circuit or use <code>TransportKind::Obfuscated</code> alongside it.</p>
 <hr>

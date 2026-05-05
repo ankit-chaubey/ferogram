@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-16409888.js";
+            window.path_to_searchindex_js = "../searchindex-dab26105.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-fb96dff5.js"></script>
+        <script src="../toc-c671d9b3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -276,8 +276,8 @@ let messages = client.get_messages_by_id(peer.clone(), &amp;[100, 101, 102]).awa
 // Pinned message
 let pinned = client.get_pinned_message(peer.clone()).await?;
 
-// The message a given message replies to
-let parent = client.get_reply_to_message(peer.clone(), msg_id).await?;
+// Fetch the message a reply refers to by ID
+let parent = client.get_message_by_id(peer.clone(), reply_id).await?;
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="scheduled-messages"><a class="header" href="#scheduled-messages">Scheduled messages</a></h2>

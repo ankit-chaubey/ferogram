@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-16409888.js";
+            window.path_to_searchindex_js = "searchindex-dab26105.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-fb96dff5.js"></script>
+        <script src="toc-c671d9b3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -316,6 +316,73 @@ Use it at your own risk. Its future and stability are not yet guaranteed.</p>
 <h1 id="release-history-1"><a class="header" href="#release-history-1">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
 <hr>
+<h2 id="v037"><a class="header" href="#v037">v0.3.7</a></h2>
+<p>Released 2026-05-05. Workspace restructure, three new crates, and a handful of API cleanups.</p>
+<h3 id="new-crates"><a class="header" href="#new-crates">New crates</a></h3>
+<p>Three crates were extracted this release. The main <code>ferogram</code> crate re-exports everything from them, so if you’re not doing anything low-level, your code doesn’t need to change.</p>
+<p><strong>ferogram-connect</strong> is now a real crate instead of a throwaway demo binary. It owns the raw TCP connection layer, MTProto framing, transport negotiation (Intermediate, Obfuscated, FakeTLS), SOCKS5, and proxy support. Useful if you want to build something that speaks MTProto without pulling in the full client.</p>
+<p><strong>ferogram-fsm</strong> packages the FSM layer (<code>FsmState</code>, <code>StateContext</code>, <code>StateStorage</code>, <code>MemoryStorage</code>) as a standalone crate that can be versioned and published on its own.</p>
+<p><strong>ferogram-mtsender</strong> does the same for the sender pool and retry policy. <code>RetryPolicy</code>, <code>AutoSleep</code>, <code>CircuitBreaker</code>, <code>NoRetries</code> all live here now.</p>
+<p>The old <code>ferogram-app</code> and <code>ferogram-bot</code> example binaries were removed. They’ve been replaced by examples inside <code>ferogram/examples/</code>.</p>
+<h3 id="getting-a-peers-id-with-bare_id"><a class="header" href="#getting-a-peers-id-with-bare_id">Getting a peer’s ID with <code>.bare_id()</code></a></h3>
+<p>You used to need a full match to pull a numeric ID out of a <code>tl::enums::Peer</code>. Now there’s <code>PeerExt</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::{PeerExt, OptionPeerExt};
+
+// any Peer variant → i64
+let id = peer.bare_id();
+
+// works on Option&lt;&amp;Peer&gt; too, no .map() needed
+let sender = msg.sender_id().bare_id(); // Option&lt;i64&gt;
+let chat   = msg.peer_id().bare_id();   // Option&lt;i64&gt;
+<span class="boring">}</span></code></pre>
+<p>The name <code>bare_id</code> is intentional: it gives you the <strong>native</strong> Telegram ID, not the Bot-API-encoded one. A channel with native ID <code>1234567890</code> is <code>-1001234567890</code> in the Bot API.</p>
+<h3 id="peercache-and-experimentalfeatures-are-public"><a class="header" href="#peercache-and-experimentalfeatures-are-public"><code>PeerCache</code> and <code>ExperimentalFeatures</code> are public</a></h3>
+<p><code>PeerCache</code> is now in its own file and fully public. It’s what handles every peer lookup: user hashes, channel hashes, basic groups, min-users, the username index, the phone index. You can read from it directly if you need low-level access.</p>
+<p><code>ExperimentalFeatures</code> lets you opt into behaviours that deviate from strict Telegram spec. The main flag is <code>allow_zero_hash</code>, which lets bots skip needing a cached access hash (don’t use this on user accounts):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Client::builder()
+    .experimental_features(ExperimentalFeatures {
+        allow_zero_hash: true,
+        ..Default::default()
+    })
+    .connect().await?;
+<span class="boring">}</span></code></pre>
+<h3 id="breaking-changes"><a class="header" href="#breaking-changes">Breaking changes</a></h3>
+<p><strong><code>download_media_to_file</code> is now <code>download_file</code>:</strong></p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// before
+client.download_media_to_file(location, &amp;path).await?;
+
+// now
+client.download_file(location, &amp;path).await?;
+<span class="boring">}</span></code></pre>
+<p><strong><code>forward_messages</code> now takes a fourth argument:</strong></p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// before
+client.forward_messages(dest, &amp;[id], src).await?;
+
+// now
+client.forward_messages(dest, &amp;[id], src, ForwardOptions::default()).await?;
+<span class="boring">}</span></code></pre>
+<p><strong><code>respond_ex</code> is gone.</strong> <code>respond</code> already accepts <code>InputMessage</code>, so it was redundant:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// before
+msg.respond_ex(InputMessage::html("&lt;b&gt;hi&lt;/b&gt;")).await?;
+
+// now
+msg.respond(InputMessage::html("&lt;b&gt;hi&lt;/b&gt;")).await?;
+<span class="boring">}</span></code></pre>
+<h3 id="upgrading-from-036"><a class="header" href="#upgrading-from-036">Upgrading from 0.3.6</a></h3>
+<pre><code class="language-toml">ferogram = "0.3.7"
+</code></pre>
+<p>The three breaking changes above need fixing. The rest is additive.</p>
+<hr>
 <h2 id="v036"><a class="header" href="#v036">v0.3.6</a></h2>
 <p>Released 2026-04-30. API stabilization update towards v0.4.0.</p>
 <p>Some APIs have been simplified, merged, or removed where redundant. This may require a one-time migration. The goal is a consistent, predictable API that does not need disruptive changes again.</p>
@@ -391,7 +458,7 @@ See <a href="#peer-cache-helpers">Raw API Access</a> for usage details.</p>
 <h3 id="filters"><a class="header" href="#filters">Filters</a></h3>
 <p><code>ferogram::filters</code> provides composable, synchronous predicates over <code>IncomingMessage</code>. Built-in constructors cover the common cases: <code>command</code>, <code>private</code>, <code>text</code>, <code>media</code>, and others. Predicates compose with <code>&amp;</code>, <code>|</code>, and <code>!</code> operators, so you can express things like <code>command("start") &amp; private()</code> directly in the handler registration. Filters also integrate with the FSM via <code>StateContext</code>, letting you gate handlers on the current conversation state.</p>
 <h3 id="fsm"><a class="header" href="#fsm">FSM</a></h3>
-<p><code>ferogram::fsm</code> provides the full finite state machine layer: the <code>FsmState</code> trait, <code>StateContext</code>, <code>StateKey</code>, <code>StateKeyStrategy</code>, and <code>StateStorage</code>. The default storage is an in-memory <code>DashMap</code>-backed store keyed by peer. Custom backends can be plugged in via an async-trait extension point, so SQLite or Redis-backed stores are straightforward to add. A new <code>examples/order_bot.rs</code> walks through a multi-step order flow driven by the FSM.</p>
+<p><code>ferogram::fsm</code> provides the full finite state machine layer: the <code>FsmState</code> trait, <code>StateContext</code>, <code>StateKey</code>, <code>StateKeyStrategy</code>, and <code>StateStorage</code>. The default storage is an in-memory <code>DashMap</code>-backed store keyed by peer. Custom backends can be plugged in via an async-trait extension point, so SQLite or Redis-backed stores are easy to add. A new <code>examples/order_bot.rs</code> walks through a multi-step order flow driven by the FSM.</p>
 <h3 id="middleware"><a class="header" href="#middleware">Middleware</a></h3>
 <p><code>ferogram::middleware</code> adds a <code>Middleware</code> trait and a <code>Next</code> chain that wraps every handler dispatch. The crate ships a ready-to-use rate-limit middleware backed by <code>DashMap</code>. <code>DispatchError</code> and <code>DispatchResult</code> are exported for use in custom middleware.</p>
 <h3 id="conversation"><a class="header" href="#conversation">Conversation</a></h3>
@@ -2291,7 +2358,7 @@ let bytes: Vec&lt;u8&gt; = client.download_media(&amp;msg_media).await?;
 let bytes = client.download_media_concurrent(&amp;msg_media).await?;
 
 // Stream to file
-client.download_media_to_file(&amp;msg_media, "output.jpg").await?;
+client.download_file(&amp;msg_media, "output.jpg").await?;
 
 // Via Downloadable trait (Photo, Document, Sticker)
 let bytes = client.download(&amp;photo).await?;
@@ -3090,11 +3157,11 @@ msg.reply_ex_with(&amp;client, input_msg).await?;
 </span><span class="boring">fn main() {
 </span>// Send to the same chat without quoting
 msg.respond("Hello everyone!").await?;
-msg.respond_ex(InputMessage::text("...").keyboard(kb)).await?;
+msg.respond(InputMessage::text("...").keyboard(kb)).await?;
 
 // Explicit client variants
 msg.respond_with(&amp;client, "Hi").await?;
-msg.respond_ex_with(&amp;client, input_msg).await?;
+msg.respond_with(&amp;client, input_msg).await?;
 <span class="boring">}</span></code></pre>
 <h3 id="edit"><a class="header" href="#edit">Edit</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -3145,16 +3212,14 @@ msg.forward_to_with(&amp;client, peer).await?;
 </span><span class="boring">fn main() {
 </span>// Download attached media to a file path, returns true if media existed
 let downloaded = msg.download_media("output.jpg").await?;
-msg.download_media_with(&amp;client, "output.jpg").await?;
 <span class="boring">}</span></code></pre>
 <h3 id="fetch-replied-to-message"><a class="header" href="#fetch-replied-to-message">Fetch replied-to message</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Get the message this one replies to
+</span>// Get the message this one replies to (attached client required)
 if let Some(parent) = msg.get_reply().await? {
     println!("Replying to: {}", parent.text().unwrap_or(""));
 }
-msg.get_reply_with(&amp;client).await?;
 <span class="boring">}</span></code></pre>
 <h3 id="refetch"><a class="header" href="#refetch">Refetch</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -3166,8 +3231,10 @@ msg.refetch_with(&amp;client).await?;
 <h3 id="reply-to-message-via-client"><a class="header" href="#reply-to-message-via-client">Reply-to-message (via Client)</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Fetch the replied-to message via client
-let parent = client.get_reply_to_message(peer.clone(), msg.id()).await?;
+</span>// Fetch the replied-to message by ID
+if let Some(reply_id) = msg.reply_to_message_id() {
+    let parent = client.get_message_by_id(msg.peer(), reply_id).await?;
+}
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="full-handler-example"><a class="header" href="#full-handler-example">Full handler example</a></h2>
@@ -4463,7 +4530,7 @@ See <a href="#reactions">Reactions</a> for the full guide.</p>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_message_reactions(peer: impl Into&lt;PeerRef&gt;, msg_ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.get_reactions(peer: impl Into&lt;PeerRef&gt;, msg_ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Trigger a server push of the current reaction counters for the given message IDs. The server responds with <code>updateMessageReactions</code> updates in the stream.</div>
@@ -4473,7 +4540,7 @@ See <a href="#reactions">Reactions</a> for the full guide.</p>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_reaction_list(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, reaction: Option&lt;tl::enums::Reaction&gt;, limit: i32, offset: Option&lt;String&gt;) → Result&lt;tl::types::messages::MessageReactionsList, InvocationError&gt;</span>
+<span class="api-card-sig">client.iter_reaction_users(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, reaction: Option&lt;tl::enums::Reaction&gt;, limit: i32, offset: Option&lt;String&gt;) → Result&lt;tl::types::messages::MessageReactionsList, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Get the list of users who reacted to a message. Pass <code>reaction = None</code> for all reactions. <code>limit</code> max 100; use <code>offset</code> from the previous response to paginate.</div>
@@ -4549,10 +4616,10 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.search_messages(peer: Peer, query: &amp;str, limit: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.search(peer: impl Into&lt;PeerRef&gt;) → SearchBuilder</span>
 </div>
 
-<div class="api-card-body">Simple one-shot search within a peer. For advanced options use <code>client.search()</code>.</div>
+<div class="api-card-body">Build a message search for a peer. Chain <code>.query()</code>, <code>.limit()</code>, <code>.filter()</code>, etc., then call <code>.collect(&amp;client).await?</code> to run it. For a one-shot query, use <code>client.search().query("text").collect(&amp;client).await?</code>.</div>
 
 </div>
 
@@ -4601,7 +4668,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_messages(peer: Peer, limit: i32, offset_id: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_message_history(peer: impl Into&lt;PeerRef&gt;, limit: i32, offset_id: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Fetch a page of messages. Pass the lowest message ID from the previous page as <code>offset_id</code> to paginate.</div>
@@ -4685,16 +4752,6 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 </div>
 
 <div class="api-card-body">Manually mark a dialog as unread (<code>true</code>) or read (<code>false</code>). This sets the unread dot without actually having new messages.</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.count_channels() → Result&lt;usize, InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">Count how many channel dialogs the logged-in account is currently in. Iterates all dialogs internally.</div>
 
 </div>
 
@@ -4891,10 +4948,10 @@ client.send_album(peer, vec![
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.download_media_to_file(location: tl::enums::InputFileLocation, path: impl AsRef&lt;Path&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.download_file(location: tl::enums::InputFileLocation, path: impl AsRef&lt;Path&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Download a media file and write it to <code>path</code>. The <code>path</code> argument accepts anything that implements <code>AsRef&lt;Path&gt;</code> (e.g. <code>&amp;str</code>, <code>String</code>, <code>PathBuf</code>). Uses DC 0 (auto-routed); for explicit DC routing use <code>download_media_to_file_on_dc</code>.</div>
+<div class="api-card-body">Download a media file and write it to <code>path</code>. The <code>path</code> argument accepts anything that implements <code>AsRef&lt;Path&gt;</code> (e.g. <code>&amp;str</code>, <code>String</code>, <code>PathBuf</code>). DC routing is handled automatically.</div>
 
 </div>
 
@@ -4925,20 +4982,44 @@ client.send_album(peer, vec![
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.resolve_peer(peer: &amp;str) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
+<span class="api-card-sig">client.resolve&lt;P: Into&lt;PeerRef&gt;&gt;(peer: P) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Resolve a string (<code>"@username"</code>, <code>"+phone"</code>, <code>"me"</code>, numeric ID) to a <code>Peer</code> with cached access hash.</div>
+<div class="api-card-body">
+Resolve any peer reference to a <code>Peer</code>. Accepts all <code>PeerRef</code> input types:
+<ul>
+<li><code>&amp;str</code> / <code>String</code> — <code>"@username"</code>, <code>"me"</code>, <code>"self"</code>, numeric string, <code>t.me/</code> URL, invite link, E.164 phone</li>
+
+<li><code>i64</code> / <code>i32</code> — Bot-API encoded numeric ID</li>
+
+<li><code>tl::enums::Peer</code> — returned as-is, zero cost</li>
+
+<li><code>tl::enums::InputPeer</code> — access hash cached, then stripped to <code>Peer</code></li>
+
+</ul>
+
+Resolution is cache-first; an RPC is only made on a cache miss.
+</div>
 
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.resolve_username(username: &amp;str) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
+<span class="api-card-sig">client.resolve_peer(peer: &amp;str) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Resolve a bare username (without @) to a <code>Peer</code>.</div>
+<div class="api-card-body">String-only variant of <code>resolve()</code>. Accepts <code>"@username"</code>, <code>"+phone"</code>, <code>"me"</code>, numeric string, <code>t.me/</code> URL, and invite links. Prefer <code>resolve()</code> when the input may not be a string.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.resolve_to_input_peer(peer: &amp;tl::enums::Peer) → Result&lt;tl::enums::InputPeer, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Convert a bare <code>Peer</code> to an <code>InputPeer</code> with access hash. Returns an error if the peer has not been seen in a prior API call and the hash is unknown.</div>
 
 </div>
 
@@ -5223,10 +5304,10 @@ tl::enums::ChatReactions::ChatReactionsNone
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_reply_to_message(message: &amp;IncomingMessage) → Result&lt;Option&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">msg.get_reply() → Option&lt;&amp;IncomingMessage&gt;</span>
 </div>
 
-<div class="api-card-body">Fetch the message that <code>message</code> replies to. Returns <code>None</code> if it is not a reply or the original message is deleted/inaccessible.</div>
+<div class="api-card-body">Access the message this message replies to. Available directly on <code>IncomingMessage</code>. Returns <code>None</code> if not a reply. To fetch the replied-to message by ID, use <code>client.get_message_by_id(peer, id)</code>.</div>
 
 </div>
 
@@ -5445,10 +5526,10 @@ Fetch the admin action log for a channel or supergroup. <code>query</code> filte
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_all_drafts() → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.sync_drafts() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Trigger a server push of all saved drafts across all chats. The server responds with <code>updateDraftMessage</code> updates in the update stream.</div>
+<div class="api-card-body">Sync all saved drafts from the server. The server responds with <code>updateDraftMessage</code> updates in the update stream.</div>
 
 </div>
 
@@ -5719,19 +5800,12 @@ Enable Perfect Forward Secrecy. When set, a temporary DH key bind is performed i
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge">sync</span>
-<span class="api-card-sig">.socks5(proxy: Socks5Config) → ClientBuilder</span>
+<span class="api-card-sig">.socks5(addr: impl Into&lt;String&gt;) → ClientBuilder</span>
 </div>
 
 <div class="api-card-body">
-Route all connections through a SOCKS5 proxy. Build the config with:
-<pre><code>use ferogram::Socks5Config;
-let proxy = Socks5Config {
-    host: "127.0.0.1".to_string(),
-    port: 1080,
-    user: None,
-    password: None,
-};
-.socks5(proxy)</code></pre>
+Route all connections through a SOCKS5 proxy. Pass a <code>"host:port"</code> string:
+<pre><code>.socks5("127.0.0.1:1080")</code></pre>
 
 </div>
 
@@ -6802,67 +6876,99 @@ let msg = InputMessage::text(text)
 client.send_message(channel_peer, msg).await?;
 <span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="peer-types--peerref"><a class="header" href="#peer-types--peerref">Peer Types &amp; PeerRef</a></h1>
-<p><code>ferogram</code> provides typed wrappers over the raw <code>tl::enums::User</code> and <code>tl::enums::Chat</code> types, plus <code>PeerRef</code>: a flexible peer argument accepted by every <code>Client</code> method.</p>
+<h1 id="peer-types"><a class="header" href="#peer-types">Peer Types</a></h1>
+<p><code>ferogram</code> provides typed wrappers over the raw <code>tl::enums::User</code> and <code>tl::enums::Chat</code> types, and a flexible peer input system that every <code>Client</code> method uses automatically.</p>
 <hr>
-<h2 id="peerref-flexible-peer-argument"><a class="header" href="#peerref-flexible-peer-argument"><code>PeerRef</code>: flexible peer argument</a></h2>
-<p>Every <code>Client</code> method that previously required a bare <code>tl::enums::Peer</code> now accepts <code>impl Into&lt;PeerRef&gt;</code>. That means you can pass:</p>
+<h2 id="auto-resolution"><a class="header" href="#auto-resolution">Auto-resolution</a></h2>
+<p>Every <code>Client</code> method that targets a chat, user, or channel accepts any of the following directly. You never need to pre-resolve anything.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// @username string (with or without @)
+</span>// @username or bare username
 client.send_message("@durov", "hi").await?;
-client.send_message("durov",  "hi").await?;
+client.send_message("durov", "hi").await?;
 
-// "me" / "self": always resolves to the logged-in account
+// "me" or "self": the logged-in account
 client.send_message("me", "Note to self").await?;
 
-// Positive i64: Telegram user ID
+// E.164 phone number
+client.send_message("+12025551234", "hi").await?;
+
+// t.me URL
+client.send_message("https://t.me/telegram", "hi").await?;
+
+// Invite link (must already be a member, otherwise call join_by_invite first)
+client.send_message("https://t.me/+AbCdEfGhIjKl", "hi").await?;
+
+// Positive i64: user ID
 client.send_message(12345678_i64, "hi").await?;
 
-// Negative i64: Bot-API channel ID (-100… prefix)
-client.iter_messages(-1001234567890_i64);
+// Negative i64: Bot-API channel ID (-100... prefix)
+client.get_message_history(-1001234567890_i64, 50, 0).await?;
 
-// Negative i64: Bot-API basic-group ID (small negative)
+// Small negative i64: basic group
 client.mark_as_read(-123456_i64).await?;
 
-// Already-resolved TL peer: zero overhead, no network call
+// Raw TL peer: zero cost, no network call
 use ferogram::tl;
 let peer = tl::enums::Peer::User(tl::types::PeerUser { user_id: 123 });
 client.send_message(peer, "hi").await?;
+
+// Already-resolved InputPeer: hash is used directly
+let ip: tl::enums::InputPeer = get_it_from_somewhere();
+client.send_message(ip, "hi").await?;
 <span class="boring">}</span></code></pre>
-<h3 id="peerref-variants"><a class="header" href="#peerref-variants"><code>PeerRef</code> variants</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Variant</th><th>How resolved</th></tr>
-</thead>
-<tbody>
-<tr><td><code>PeerRef::Username(s)</code></td><td><code>contacts.resolveUsername</code> RPC (cached after first call)</td></tr>
-<tr><td><code>PeerRef::Id(i64)</code></td><td>Decoded from Bot-API encoding: <strong>no network call</strong></td></tr>
-<tr><td><code>PeerRef::Peer(tl::enums::Peer)</code></td><td>Forwarded as-is: <strong>zero cost</strong></td></tr>
-</tbody>
-</table>
-</div>
+<p>Accepted invite link formats: <code>https://t.me/+HASH</code>, <code>https://t.me/joinchat/HASH</code>, <code>tg://join?invite=HASH</code>.</p>
+<p>Resolution is cache-first. Usernames, phone numbers, and IDs that have been seen before are resolved from memory with no RPC. An RPC is only made on a genuine cache miss.</p>
 <h3 id="bot-api-id-encoding"><a class="header" href="#bot-api-id-encoding">Bot-API ID encoding</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Range</th><th>Maps to</th></tr>
+<tr><th>Range</th><th>Peer type</th></tr>
 </thead>
 <tbody>
-<tr><td><code>id &gt; 0</code></td><td>User (<code>PeerUser { user_id: id }</code>)</td></tr>
-<tr><td><code>-1_000_000_000_000 &lt; id &lt; 0</code></td><td>Basic group (<code>PeerChat { chat_id: -id }</code>)</td></tr>
-<tr><td><code>id ≤ -1_000_000_000_000</code></td><td>Channel (<code>channel_id = -id - 1_000_000_000_000</code>)</td></tr>
+<tr><td><code>id &gt; 0</code></td><td>User</td></tr>
+<tr><td><code>-1_000_000_000_000 &lt; id &lt; 0</code></td><td>Basic group</td></tr>
+<tr><td><code>id &lt;= -1_000_000_000_000</code></td><td>Channel or supergroup</td></tr>
 </tbody>
 </table>
 </div>
-<h3 id="resolving-manually"><a class="header" href="#resolving-manually">Resolving manually</a></h3>
+<hr>
+<h2 id="manual-resolution"><a class="header" href="#manual-resolution">Manual resolution</a></h2>
+<p>Use <code>client.resolve()</code> when you need a <code>Peer</code> value explicitly. It accepts all the same input types as every other <code>Client</code> method:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// &amp;str: username, phone, URL, invite link
+let peer = client.resolve("@username").await?;
+let peer = client.resolve("+12025551234").await?;
+let peer = client.resolve("https://t.me/+HASH").await?;
+let peer = client.resolve("me").await?;
+
+// i64 / i32: Bot-API numeric ID
+let peer = client.resolve(12345678_i64).await?;
+let peer = client.resolve(-1001234567890_i64).await?;
+
+// tl::enums::Peer: zero cost, returned as-is
+use ferogram::tl;
+let raw = tl::enums::Peer::User(tl::types::PeerUser { user_id: 123 });
+let peer = client.resolve(raw).await?;
+
+// tl::enums::InputPeer: hash cached, then stripped to Peer
+let ip: tl::enums::InputPeer = get_it_from_somewhere();
+let peer = client.resolve(ip).await?;
+<span class="boring">}</span></code></pre>
+<p><code>client.resolve_peer(peer: &amp;str)</code> is the string-only variant; use it when the input is always a <code>&amp;str</code>. Use <code>resolve()</code> for everything else.</p>
+<p>To go from a <code>Peer</code> back to an <code>InputPeer</code> (with access hash):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let input = client.resolve_to_input_peer(&amp;peer).await?;
+<span class="boring">}</span></code></pre>
+<p>This returns an error if the peer has not appeared in any prior API response and the access hash is unknown.</p>
+<p>Via <code>PeerRef</code> directly (same result):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use ferogram::PeerRef;
-
-let peer_ref = PeerRef::from("@someuser");
-let peer: tl::enums::Peer = peer_ref.resolve(&amp;client).await?;
+let peer = PeerRef::from("@username").resolve(&amp;client).await?;
+let peer = PeerRef::from(12345678_i64).resolve(&amp;client).await?;
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="user-user-account-wrapper"><a class="header" href="#user-user-account-wrapper"><code>User</code>: user account wrapper</a></h2>
@@ -7029,6 +7135,51 @@ if let Some(chat) = Chat::from_raw(raw_tl_chat) {
 <tr><td><code>title()</code></td><td><code>&amp;str</code></td><td>Name regardless of variant</td></tr>
 <tr><td><code>as_peer()</code></td><td><code>tl::enums::Peer</code></td><td><code>Peer</code> variant</td></tr>
 <tr><td><code>as_input_peer()</code></td><td><code>tl::enums::InputPeer</code></td><td><code>InputPeer</code> variant</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="peerext--optionpeerext-extract-numeric-id-without-match"><a class="header" href="#peerext--optionpeerext-extract-numeric-id-without-match"><code>PeerExt</code> / <code>OptionPeerExt</code>: extract numeric ID without <code>match</code></a></h2>
+<p>When you have a raw <code>tl::enums::Peer</code> and just need the <code>i64</code> ID, use the <code>PeerExt</code> trait instead of writing a full <code>match</code> block every time.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::PeerExt;
+
+// Instead of:
+let id = match peer {
+    tl::enums::Peer::User(u)    =&gt; u.user_id,
+    tl::enums::Peer::Chat(c)    =&gt; c.chat_id,
+    tl::enums::Peer::Channel(c) =&gt; c.channel_id,
+};
+
+// Just write:
+let id = peer.bare_id();
+<span class="boring">}</span></code></pre>
+<p><code>OptionPeerExt</code> adds the same <code>.bare_id()</code> to <code>Option&lt;&amp;tl::enums::Peer&gt;</code>, which is what <code>IncomingMessage::sender_id()</code> and <code>IncomingMessage::peer_id()</code> return:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::{PeerExt, OptionPeerExt};
+
+// sender numeric ID: Option&lt;i64&gt;
+let sender: Option&lt;i64&gt; = msg.sender_id().bare_id();
+
+// chat numeric ID: Option&lt;i64&gt;
+let chat: Option&lt;i64&gt; = msg.peer_id().bare_id();
+<span class="boring">}</span></code></pre>
+<blockquote>
+<p><strong>Note:</strong> these are native Telegram IDs, not Bot-API-encoded.
+A channel with native ID <code>1234567890</code> is <code>-1001234567890</code> in the Bot API.
+Use <a href="#client-methods-full-reference"><code>PeerRef</code></a> if you need the Bot-API form.</p>
+</blockquote>
+<h3 id="import-summary"><a class="header" href="#import-summary">Import summary</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Trait</th><th>Implemented for</th><th>Method</th><th>Returns</th></tr>
+</thead>
+<tbody>
+<tr><td><code>PeerExt</code></td><td><code>tl::enums::Peer</code></td><td><code>.bare_id()</code></td><td><code>i64</code></td></tr>
+<tr><td><code>OptionPeerExt</code></td><td><code>Option&lt;&amp;tl::enums::Peer&gt;</code></td><td><code>.bare_id()</code></td><td><code>Option&lt;i64&gt;</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -7611,8 +7762,8 @@ let messages = client.get_messages_by_id(peer.clone(), &amp;[100, 101, 102]).awa
 // Pinned message
 let pinned = client.get_pinned_message(peer.clone()).await?;
 
-// The message a given message replies to
-let parent = client.get_reply_to_message(peer.clone(), msg_id).await?;
+// Fetch the message a reply refers to by ID
+let parent = client.get_message_by_id(peer.clone(), reply_id).await?;
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="scheduled-messages-2"><a class="header" href="#scheduled-messages-2">Scheduled messages</a></h2>
@@ -7926,8 +8077,8 @@ let photos = client
 <p>For quick lookups that don’t need date/filter options:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Per-chat search: returns Vec&lt;IncomingMessage&gt;
-let results = client.search_messages(peer.clone(), "query", 20).await?;
+</span>// Per-chat search via the builder with defaults
+let results = client.search(peer.clone()).query("query").limit(20).collect(&amp;client).await?;
 
 // Global search: returns Vec&lt;IncomingMessage&gt;
 let results = client.search_global("ferogram rust", 10).await?;
@@ -8895,7 +9046,7 @@ loop {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -8903,10 +9054,10 @@ Change your display name and/or bio. Pass <code>None</code> for any field you wa
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Change just the bio
-client.update_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
+client.set_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
 
 // Change full name
-client.update_profile(
+client.set_profile(
     Some("Alice".to_string()),
     Some("Smith".to_string()),
     None,
@@ -8919,15 +9070,15 @@ client.update_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
 Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>client.update_username("my_new_handle").await?;
-client.update_username("").await?;  // remove username
+</span>client.set_username("my_new_handle").await?;
+client.set_username("").await?;  // remove username
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -8936,7 +9087,7 @@ client.update_username("").await?;  // remove username
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_status(offline: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_online() / set_offline() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -8978,7 +9129,7 @@ let photo = client.set_profile_photo(uploaded).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -8986,10 +9137,10 @@ Change your display name and/or bio. Pass <code>None</code> for any field you wa
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Change just the bio
-client.update_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
+client.set_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
 
 // Change full name
-client.update_profile(
+client.set_profile(
     Some("Alice".to_string()),
     Some("Smith".to_string()),
     None,
@@ -9002,15 +9153,15 @@ client.update_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
 Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>client.update_username("my_new_handle").await?;
-client.update_username("").await?;  // remove username
+</span>client.set_username("my_new_handle").await?;
+client.set_username("").await?;  // remove username
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -9019,7 +9170,7 @@ client.update_username("").await?;  // remove username
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.update_status(offline: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_online() / set_offline() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -9175,7 +9326,7 @@ for s in sessions {
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Update name and bio at once
-client.update_profile(
+client.set_profile(
     Some("Bot".to_string()),
     Some("Account".to_string()),
     Some("Powered by ferogram 🦀".to_string()),
@@ -9187,7 +9338,7 @@ let f = client.upload_file(&amp;bytes, "avatar.png", "image/png").await?;
 client.set_profile_photo(f).await?;
 
 // Go offline
-client.update_status(true).await?;
+client.set_offline().await?;
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="emoji-status"><a class="header" href="#emoji-status">Emoji status</a></h2>
@@ -9757,7 +9908,7 @@ can resolve it from the username once and cache it:</p>
 </span><span class="boring">fn main() {
 </span>use ferogram::PeerRef;
 
-let bot = client.resolve_username("MyBotUsername").await?;
+let bot = client.resolve_peer("MyBotUsername").await?;
 let bot_user_id: i64 = match bot {
     PeerRef::UserId(id) =&gt; id,
     other =&gt; panic!("expected a user, got {:?}", other),
@@ -9784,7 +9935,7 @@ characters are not permitted.</li>
 <code>/start param</code> twice triggers two separate updates on the bot side.</li>
 <li>For bots with <code>allow_zero_hash</code> disabled (the default), the bot’s
 <code>access_hash</code> must already be in the peer cache. Call
-<code>client.resolve_username()</code> at least once before <code>start_bot</code> to populate
+<code>client.resolve_peer()</code> at least once before <code>start_bot</code> to populate
 the cache, or enable
 <a href="#experimental-features-1"><code>ExperimentalFeatures::allow_zero_hash</code></a>.</li>
 </ul>
@@ -10723,30 +10874,19 @@ let (client, _shutdown) = Client::connect(Config {
 <h3 id="without-authentication"><a class="header" href="#without-authentication">Without authentication</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use ferogram::{Client, socks5::Socks5Config};
-
-let (client, _shutdown) = Client::builder()
+</span>let (client, _shutdown) = Client::builder()
     .api_id(12345)
     .api_hash("your_hash")
     .session("bot.session")
-    .socks5(Socks5Config::new("127.0.0.1:1080"))
+    .socks5("127.0.0.1:1080")
     .connect()
     .await?;
-<span class="boring">}</span></code></pre>
-<h3 id="with-usernamepassword-authentication"><a class="header" href="#with-usernamepassword-authentication">With username/password authentication</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>.socks5(Socks5Config::with_auth(
-    "proxy.example.com:1080",
-    "username",
-    "password",
-))
 <span class="boring">}</span></code></pre>
 <h3 id="tor"><a class="header" href="#tor">Tor</a></h3>
 <p>Point SOCKS5 at <code>127.0.0.1:9050</code> (default Tor SOCKS port):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>.socks5(Socks5Config::new("127.0.0.1:9050"))
+</span>.socks5("127.0.0.1:9050")
 <span class="boring">}</span></code></pre>
 <p>Tor exit nodes are sometimes blocked by Telegram DCs. If connections fail consistently, try a different circuit or use <code>TransportKind::Obfuscated</code> alongside it.</p>
 <hr>
@@ -11516,13 +11656,8 @@ use ferogram::LibSqlBackend;
 <p>Route connections through a SOCKS5 proxy.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use ferogram::socks5::Socks5Config;
-
-// no auth
-.socks5(Socks5Config::new("127.0.0.1:1080"))
-
-// with auth
-.socks5(Socks5Config::with_auth("proxy.example.com:1080", "user", "pass"))
+</span>// no auth
+.socks5("127.0.0.1:1080")
 <span class="boring">}</span></code></pre>
 <h3 id="mtproxy-1"><a class="header" href="#mtproxy-1"><code>mtproxy</code></a></h3>
 <p>Route connections through an MTProxy relay. The transport is auto-selected from the secret.</p>
