@@ -7103,10 +7103,9 @@ impl Client {
     }
 
     #[allow(dead_code)]
-    async fn get_dialogs_raw(
+    async fn set_default_banned_rights_raw(
         &self,
         peer: impl Into<PeerRef>,
-
         build: impl FnOnce(
             crate::participants::BannedRightsBuilder,
         ) -> crate::participants::BannedRightsBuilder,
@@ -7392,29 +7391,10 @@ impl Client {
 
     pub async fn download_media_to_file(
         &self,
-        peer: impl Into<PeerRef>,
-
-        admin_id: i64,
+        location: tl::enums::InputFileLocation,
+        path: impl AsRef<std::path::Path>,
     ) -> Result<(), InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let admin_hash = self
-            .inner
-            .peer_cache
-            .read()
-            .await
-            .users
-            .get(&admin_id)
-            .copied()
-            .unwrap_or(0);
-        let req = tl::functions::messages::DeleteRevokedExportedChatInvites {
-            peer: input_peer,
-            admin_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
-                user_id: admin_id,
-                access_hash: admin_hash,
-            }),
-        };
-        self.rpc_write(&req).await
+        self.download_media_to_file_on_dc(location, 0, path).await
     }
 
     pub(crate) async fn download_media_to_file_on_dc(
