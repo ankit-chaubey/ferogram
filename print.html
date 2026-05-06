@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b097326d.js";
+            window.path_to_searchindex_js = "searchindex-065304f4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c671d9b3.js"></script>
@@ -179,141 +179,79 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="-ferogram"><a class="header" href="#-ferogram">⚡ ferogram</a></h1>
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="images/ferogram-banner-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="images/ferogram-banner-light.png">
-</picture>
-<div class="hero-banner">
-<h2>A modular, production-grade async Rust implementation of the Telegram MTProto protocol</h2>
-
-<div class="hero-badges">
-<p><a href="https://crates.io/crates/ferogram"><img src="https://img.shields.io/crates/v/ferogram?color=7c6af7&amp;label=ferogram&amp;style=flat-square" alt="Crates.io"></a>
+                        <h1 id="ferogram"><a class="header" href="#ferogram">ferogram</a></h1>
+<p><a href="https://crates.io/crates/ferogram"><img src="https://img.shields.io/crates/v/ferogram?color=fc8d62&amp;label=ferogram&amp;style=flat-square" alt="Crates.io"></a>
 <a href="https://docs.rs/ferogram"><img src="https://img.shields.io/docsrs/ferogram?style=flat-square&amp;color=22c55e" alt="docs.rs"></a>
 <a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-224-8b5cf6?style=flat-square" alt="TL Layer"></a>
-<a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License"></a>
-<a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-2024_edition-f74c00?style=flat-square" alt="Rust"></a></p>
-</div>
-
-</div>
-
-<p><code>ferogram</code> is a hand-written, bottom-up implementation of <a href="https://core.telegram.org/mtproto">Telegram MTProto</a> in pure Rust. Every component: from the <code>.tl</code> schema parser, to AES-IGE encryption, to the Diffie-Hellman key exchange, to the typed async update stream: is owned and understood by this project.</p>
-<p><strong>No black boxes. No magic. Just Rust, all the way down.</strong></p>
-<hr>
-<h2 id="why-ferogram"><a class="header" href="#why-ferogram">Why ferogram?</a></h2>
-<p>Most Telegram libraries are thin wrappers around generated code or ports from Python/JavaScript. <code>ferogram</code> is different: it was built from scratch to understand MTProto at the lowest level, then exposed through a straightforward high-level API.</p>
-<div class="feature-grid">
-<div class="feature-card">
-<div class="fc-icon">🦀</div>
-
-<div class="fc-title">Pure Rust</div>
-
-<div class="fc-desc">No FFI, no unsafe blocks. Fully async with Tokio. Works on Android (Termux), Linux, macOS, Windows.</div>
-
-</div>
-
-<div class="feature-card">
-<div class="fc-icon">⚡</div>
-
-<div class="fc-title">Full MTProto 2.0</div>
-
-<div class="fc-desc">Complete DH handshake, AES-IGE encryption, salt tracking, DC migration: all handled automatically.</div>
-
-</div>
-
-<div class="feature-card">
-<div class="fc-icon">🔐</div>
-
-<div class="fc-title">User + Bot Auth</div>
-
-<div class="fc-desc">Phone login with 2FA SRP, bot token login, session persistence across restarts.</div>
-
-</div>
-
-<div class="feature-card">
-<div class="fc-icon">📡</div>
-
-<div class="fc-title">Typed Update Stream</div>
-
-<div class="fc-desc">NewMessage, MessageEdited, CallbackQuery, InlineQuery, ChatAction, UserStatus: all strongly typed.</div>
-
-</div>
-
-<div class="feature-card">
-<div class="fc-icon">🔧</div>
-
-<div class="fc-title">Raw API Escape Hatch</div>
-
-<div class="fc-desc">Call any of 500+ Telegram API methods directly via <code>client.invoke()</code> with full type safety.</div>
-
-</div>
-
-<div class="feature-card">
-<div class="fc-icon">🏗️</div>
-
-<div class="fc-title">Auto-Generated Types</div>
-
-<div class="fc-desc">All 2,329 Layer 224 constructors generated at build time from the official TL schema.</div>
-
-</div>
-
-</div>
-
-<hr>
-<h2 id="crate-overview"><a class="header" href="#crate-overview">Crate overview</a></h2>
+<a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License"></a></p>
+<p>ferogram is an async Rust library for Telegram’s MTProto protocol. It works for user accounts and bots, and talks to Telegram directly over MTProto with no Bot API HTTP proxy in the middle.</p>
+<p>Everything in the workspace is written from scratch: the <code>.tl</code> schema parser, the TL code generator, AES-IGE crypto, the DH key exchange, MTProto framing, the session layer, and the high-level client on top. Each piece is its own crate so you can pull in just what you need.</p>
+<h2 id="why-it-exists"><a class="header" href="#why-it-exists">Why it exists</a></h2>
+<p>I was already using other MTProto libraries and kept running into cases where I needed things to work a bit differently than they allowed. So I wrote my own.</p>
+<p>The goal was to cover the major use cases first, and it does. If something’s missing for you, drop by <a href="https://t.me/FerogramChat">t.me/FerogramChat</a>. I genuinely like hearing what people are building with it.</p>
+<h2 id="crates"><a class="header" href="#crates">Crates</a></h2>
+<p>Most people only need <code>ferogram</code>. But each crate is independently published if you need a specific layer on its own.</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Crate</th><th>Description</th><th>Typical user</th></tr>
+<tr><th>Crate</th><th>What it does</th></tr>
 </thead>
 <tbody>
-<tr><td><strong><code>ferogram</code></strong></td><td>High-level async client: auth, send, receive, bots</td><td>✅ You</td></tr>
-<tr><td><code>ferogram-tl-types</code></td><td>All Layer 224 constructors, functions, enums</td><td>Raw API calls</td></tr>
-<tr><td><code>ferogram-mtproto</code></td><td>MTProto session, DH, framing, transport</td><td>Library authors</td></tr>
-<tr><td><code>ferogram-crypto</code></td><td>AES-IGE, RSA, SHA, auth key derivation</td><td>Internal</td></tr>
-<tr><td><code>ferogram-session</code></td><td>Session persistence types and pluggable storage backends</td><td>Custom session storage</td></tr>
-<tr><td><code>ferogram-parsers</code></td><td>Telegram HTML and Markdown entity parsers</td><td>Formatted text handling</td></tr>
-<tr><td><code>ferogram-tl-gen</code></td><td>Build-time Rust code generator</td><td>Build tool</td></tr>
-<tr><td><code>ferogram-tl-parser</code></td><td><code>.tl</code> schema → AST parser</td><td>Build tool</td></tr>
+<tr><td><a href="https://docs.rs/ferogram"><code>ferogram</code></a></td><td>High-level client. Auth, messaging, media, dispatcher, FSM, middleware.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-session"><code>ferogram-session</code></a></td><td>Session types and pluggable storage backends (file, memory, SQLite, LibSQL, base64).</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-fsm"><code>ferogram-fsm</code></a></td><td>FSM state storage and context. <code>StateStorage</code> trait, <code>MemoryStorage</code>, <code>StateContext</code>.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-parsers"><code>ferogram-parsers</code></a></td><td>Telegram Markdown and HTML entity parsers.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-derive"><code>ferogram-derive</code></a></td><td><code>#[derive(FsmState)]</code> proc macro.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-mtsender"><code>ferogram-mtsender</code></a></td><td>DC connection pool and retry policy. <code>AutoSleep</code>, <code>NoRetries</code>, <code>CircuitBreaker</code>.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-connect"><code>ferogram-connect</code></a></td><td>Raw TCP, MTProto framing, obfuscation, SOCKS5, MTProxy, gzip.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-mtproto"><code>ferogram-mtproto</code></a></td><td>MTProto 2.0 session, DH key exchange, message framing, PFS key binding.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-crypto"><code>ferogram-crypto</code></a></td><td>AES-IGE, RSA, SHA, Diffie-Hellman, PQ factorization, auth key derivation.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-tl-types"><code>ferogram-tl-types</code></a></td><td>Auto-generated TL types, functions, and enums for Layer 224.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-tl-gen"><code>ferogram-tl-gen</code></a></td><td>Build-time code generator from TL AST to Rust source.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-tl-parser"><code>ferogram-tl-parser</code></a></td><td>Parses <code>.tl</code> schema text into a Definition AST.</td></tr>
 </tbody>
 </table>
 </div>
-<blockquote>
-<p><strong>TIP:</strong> Most users only ever import <code>ferogram</code>. The other crates are either used internally or for advanced raw API calls.</p>
-</blockquote>
-<hr>
+<p>The rough dependency chain:</p>
+<pre><code>ferogram
+└ ferogram-mtsender
+  └ ferogram-connect
+    ├ ferogram-mtproto
+    │ ├ ferogram-tl-types
+    │ │ └ (build) ferogram-tl-gen
+    │ │   └ (build) ferogram-tl-parser
+    │ └ ferogram-crypto
+    └ ferogram-crypto
+</code></pre>
 <h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.3.6"
-tokio        = { version = "1", features = ["full"] }
+ferogram = "0.3.8"
+tokio    = { version = "1", features = ["full"] }
 </code></pre>
-<p>Then head to <a href="#installation">Installation</a> for credentials setup, or jump straight to:</p>
+<p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
+<h2 id="where-to-go-next"><a class="header" href="#where-to-go-next">Where to go next</a></h2>
 <ul>
-<li><a href="#quick-start-user-account">Quick Start: User Account</a>: login, send a message, receive updates</li>
-<li><a href="#quick-start-bot">Quick Start: Bot</a>: bot token login, commands, callbacks</li>
+<li><a href="#installation">Installation</a> covers credentials, optional feature flags, and session backends.</li>
+<li><a href="#quick-start-bot">Quick Start: Bot</a> gets a bot running in about 20 lines.</li>
+<li><a href="#quick-start-user-account">Quick Start: User Account</a> covers phone login and sending your first message.</li>
+<li><a href="#crate-architecture">Crate Architecture</a> if you want to understand how the pieces fit together.</li>
 </ul>
-<hr>
-<h2 id="release-history"><a class="header" href="#release-history">Release history</a></h2>
-<p>See <a href="#release-history-1">What’s New</a> for a full version-by-version breakdown, or the <a href="https://github.com/ankit-chaubey/ferogram/blob/main/CHANGELOG.md">CHANGELOG</a> for the raw diff summary.</p>
-<hr>
-<h2 id="author"><a class="header" href="#author">Author</a></h2>
-<p>Developed by <a href="https://github.com/ankit-chaubey"><strong>Ankit Chaubey</strong></a> out of curiosity to explore.</p>
-<div align="center">
-<p><a href="https://crates.io/crates/ferogram"><img src="https://img.shields.io/crates/v/ferogram?style=flat-square&amp;color=fc8d62&amp;label=ferogram" alt="Crates.io"></a>
-<a href="https://docs.rs/ferogram"><img src="https://img.shields.io/badge/docs.rs-ferogram-5865F2?style=flat-square" alt="docs.rs"></a>
-<a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue?style=flat-square" alt="License"></a>
-<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-224-8b5cf6?style=flat-square" alt="TL Layer"></a>
-<a href="https://t.me/FerogramChat"><img src="https://img.shields.io/badge/chat-%40FerogramChat-2CA5E0?style=flat-square&amp;logo=telegram" alt="Telegram"></a>
-<a href="https://t.me/Ferogram"><img src="https://img.shields.io/badge/channel-%40ferogram-2CA5E0?style=flat-square&amp;logo=telegram" alt="Channel"></a></p>
-</div>
-
-<p>ferogram is developed as part of exploration, learning, and experimentation with the Telegram MTProto protocol.
-Use it at your own risk. Its future and stability are not yet guaranteed.</p>
-<hr>
-<h2 id="terms-of-service"><a class="header" href="#terms-of-service">Terms of Service</a></h2>
-<p>Ensure your usage complies with <a href="https://core.telegram.org/api/terms">Telegram’s Terms of Service</a> and <a href="https://core.telegram.org/api/terms">API Terms of Service</a>. Misuse of the Telegram API, including spam, mass scraping, or automation of normal user accounts, may result in account limitations or permanent bans.</p>
+<h2 id="python"><a class="header" href="#python">Python</a></h2>
+<p>Python support is live via <a href="https://github.com/ankit-chaubey/ferogram-py">ferogram-py</a>. Pre-built wheels, no Rust toolchain needed.</p>
+<pre><code class="language-bash">pip install ferogram
+</code></pre>
+<h2 id="community"><a class="header" href="#community">Community</a></h2>
+<ul>
+<li><strong>Channel</strong> (releases, announcements): <a href="https://t.me/Ferogram">t.me/Ferogram</a></li>
+<li><strong>Chat</strong> (questions, discussion): <a href="https://t.me/FerogramChat">t.me/FerogramChat</a></li>
+<li><strong>API docs</strong>: <a href="https://docs.rs/ferogram">docs.rs/ferogram</a></li>
+<li><strong>GitHub</strong>: <a href="https://github.com/ankit-chaubey/ferogram">github.com/ankit-chaubey/ferogram</a></li>
+</ul>
+<h2 id="license"><a class="header" href="#license">License</a></h2>
+<p>MIT OR Apache-2.0.</p>
+<p>Usage must comply with <a href="https://core.telegram.org/api/terms">Telegram’s API Terms of Service</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="release-history-1"><a class="header" href="#release-history-1">Release History</a></h1>
+<h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
 <hr>
 <h2 id="v038"><a class="header" href="#v038">v0.3.8</a></h2>
@@ -609,7 +547,7 @@ let api_hash = "deadbeef..."; // ← never do this in a public repo
 <h3 id="sqlite-session-storage"><a class="header" href="#sqlite-session-storage">SQLite session storage</a></h3>
 <pre><code class="language-toml">ferogram = { version = "0.3.6", features = ["sqlite-session"] }
 </code></pre>
-<p>Stores session data in a SQLite database instead of a binary file. More robust for long-running servers.</p>
+<p>Stores session data in a SQLite database instead of a binary file. Better choice for long-running servers where crash-corruption of the binary file is a concern.</p>
 <h3 id="libsql--turso-session-storage-new-in-v020"><a class="header" href="#libsql--turso-session-storage-new-in-v020">LibSQL / Turso session storage: New in v0.2.0</a></h3>
 <pre><code class="language-toml">ferogram = { version = "0.3.6", features = ["libsql-session"] }
 </code></pre>
@@ -805,7 +743,7 @@ fn read_line() -&gt; String {
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="quick-start-bot"><a class="header" href="#quick-start-bot">Quick Start: Bot</a></h1>
-<p>A production-ready bot skeleton with commands, callback queries, and inline mode: all handled concurrently.</p>
+<p>A working bot with commands, callback queries, and inline mode. Each update runs in its own task so the loop never blocks.</p>
 <pre class="playground"><code class="language-rust">use ferogram::{Client, InputMessage, parsers::parse_markdown, update::Update};
 use ferogram_tl_types as tl;
 use std::sync::Arc;
@@ -1215,7 +1153,7 @@ let (client, _shutdown) = Client::builder()
 <span class="boring">}</span></code></pre>
 <p>Login is required on every run since nothing persists.</p>
 <hr>
-<h2 id="sqlite-robust-long-running-servers"><a class="header" href="#sqlite-robust-long-running-servers">SQLite (robust, long-running servers)</a></h2>
+<h2 id="sqlite-local-database"><a class="header" href="#sqlite-local-database">SQLite (local database)</a></h2>
 <pre><code class="language-toml">ferogram = { version = "0.3.6", features = ["sqlite-session"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -4019,10 +3957,7 @@ dp.include(order_router());
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="conversation-api"><a class="header" href="#conversation-api">Conversation API</a></h1>
 <p>The <code>Conversation</code> type provides a high-level, blocking-style interface for multi-step bot flows: send a question, wait for the answer, send the next question, and so on - all within a single <code>async fn</code>, without manually tracking state.</p>
-<hr>
-<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
 <p><code>Conversation</code> wraps a mutable reference to an <code>UpdateStream</code> and filters updates to a single peer. Updates from other peers are buffered internally and can be retrieved with <code>drain_buffered()</code>.</p>
-<hr>
 <h2 id="quick-start-1"><a class="header" href="#quick-start-1">Quick start</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -11932,7 +11867,7 @@ Client::builder().retry_policy(Arc::new(NoRetries))
  └ ferogram-tl-parser (build-time TL schema parser)
 </code></pre>
 <hr>
-<h2 id="ferogram"><a class="header" href="#ferogram">ferogram</a></h2>
+<h2 id="ferogram-1"><a class="header" href="#ferogram-1">ferogram</a></h2>
 <p><strong>The high-level async Telegram client.</strong> Import this in your application.</p>
 <h3 id="what-it-provides"><a class="header" href="#what-it-provides">What it provides</a></h3>
 <ul>
@@ -12142,7 +12077,7 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="feature-flags-2"><a class="header" href="#feature-flags-2">Feature Flags</a></h1>
-<h2 id="ferogram-1"><a class="header" href="#ferogram-1">ferogram</a></h2>
+<h2 id="ferogram-2"><a class="header" href="#ferogram-2">ferogram</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>

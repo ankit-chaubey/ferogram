@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b097326d.js";
+            window.path_to_searchindex_js = "../searchindex-065304f4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-c671d9b3.js"></script>
@@ -183,10 +183,7 @@
                     <main>
                         <h1 id="conversation-api"><a class="header" href="#conversation-api">Conversation API</a></h1>
 <p>The <code>Conversation</code> type provides a high-level, blocking-style interface for multi-step bot flows: send a question, wait for the answer, send the next question, and so on - all within a single <code>async fn</code>, without manually tracking state.</p>
-<hr>
-<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
 <p><code>Conversation</code> wraps a mutable reference to an <code>UpdateStream</code> and filters updates to a single peer. Updates from other peers are buffered internally and can be retrieved with <code>drain_buffered()</code>.</p>
-<hr>
 <h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {

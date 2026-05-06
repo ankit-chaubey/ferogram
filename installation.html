@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b097326d.js";
+            window.path_to_searchindex_js = "searchindex-065304f4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c671d9b3.js"></script>
@@ -227,7 +227,7 @@ let api_hash = "deadbeef..."; // ← never do this in a public repo
 <h3 id="sqlite-session-storage"><a class="header" href="#sqlite-session-storage">SQLite session storage</a></h3>
 <pre><code class="language-toml">ferogram = { version = "0.3.6", features = ["sqlite-session"] }
 </code></pre>
-<p>Stores session data in a SQLite database instead of a binary file. More robust for long-running servers.</p>
+<p>Stores session data in a SQLite database instead of a binary file. Better choice for long-running servers where crash-corruption of the binary file is a concern.</p>
 <h3 id="libsql--turso-session-storage-new-in-v020"><a class="header" href="#libsql--turso-session-storage-new-in-v020">LibSQL / Turso session storage: New in v0.2.0</a></h3>
 <pre><code class="language-toml">ferogram = { version = "0.3.6", features = ["libsql-session"] }
 </code></pre>
