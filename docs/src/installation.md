@@ -60,7 +60,7 @@ For bots, additionally get a **bot token** from [@BotFather](https://t.me/BotFat
 ferogram = { version = "0.3.6", features = ["sqlite-session"] }
 ```
 
-Stores session data in a SQLite database instead of a binary file. More robust for long-running servers.
+Stores session data in a SQLite database instead of a binary file. Better choice for long-running servers where crash-corruption of the binary file is a concern.
 
 ### LibSQL / Turso session storage: New in v0.2.0
 

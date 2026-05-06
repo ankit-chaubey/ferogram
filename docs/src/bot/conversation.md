@@ -2,13 +2,7 @@
 
 The `Conversation` type provides a high-level, blocking-style interface for multi-step bot flows: send a question, wait for the answer, send the next question, and so on - all within a single `async fn`, without manually tracking state.
 
----
-
-## Overview
-
 `Conversation` wraps a mutable reference to an `UpdateStream` and filters updates to a single peer. Updates from other peers are buffered internally and can be retrieved with `drain_buffered()`.
-
----
 
 ## Quick start
 

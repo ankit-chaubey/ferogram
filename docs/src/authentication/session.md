@@ -43,7 +43,7 @@ Login is required on every run since nothing persists.
 
 ---
 
-## SQLite (robust, long-running servers)
+## SQLite (local database)
 
 ```toml
 ferogram = { version = "0.3.6", features = ["sqlite-session"] }

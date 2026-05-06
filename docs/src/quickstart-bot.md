@@ -1,6 +1,6 @@
 # Quick Start: Bot
 
-A production-ready bot skeleton with commands, callback queries, and inline mode: all handled concurrently.
+A working bot with commands, callback queries, and inline mode. Each update runs in its own task so the loop never blocks.
 
 ```rust
 use ferogram::{Client, InputMessage, parsers::parse_markdown, update::Update};
