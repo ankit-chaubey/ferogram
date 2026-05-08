@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-52306761.js";
+            window.path_to_searchindex_js = "searchindex-3150803d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-1b0b7965.js"></script>
@@ -225,7 +225,7 @@
 </code></pre>
 <h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.3.8"
+ferogram = "0.4.0"
 tokio    = { version = "1", features = ["full"] }
 </code></pre>
 <p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
@@ -253,6 +253,14 @@ tokio    = { version = "1", features = ["full"] }
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
+<hr>
+<h2 id="040-2026-05-08"><a class="header" href="#040-2026-05-08">[0.4.0]: 2026-05-08</a></h2>
+<p>0.4.0 is the first production-ready release of ferogram. It ships Layer 225 support and a reworked poll API. All users are advised to upgrade to 0.4.0 (or 0.4.x+) as the most recommended and supported version.</p>
+<p>If you run into any bugs, please open an issue on GitHub or reach us at <a href="https://t.me/FerogramChat">@FerogramChat</a>. Thank you for using ferogram!</p>
+<p>For the latest git revision: https://github.com/ankit-chaubey/ferogram</p>
+<blockquote>
+<p><strong>Note:</strong> 0.3.9 was a broken publish. The workspace internal deps were not bumped so crates.io resolved <code>ferogram-tl-types</code> to the old Layer 224 build. 0.4.0 fixes that and is the correct release to use.</p>
+</blockquote>
 <hr>
 <h2 id="v039"><a class="header" href="#v039">v0.3.9</a></h2>
 <p>Released 2026-05-07. Updated to TL Layer 225. Poll builder overhaul, guest-chat support for bots, two new client methods, and full MarkdownV2/HTML spec compliance in the parsers.</p>
@@ -12357,19 +12365,19 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <li><code>ClientBuilder</code>: fluent connection builder</li>
 </ul>
 <pre><code class="language-toml"># SQLite session only
-ferogram = { version = "0.3.6", features = ["sqlite-session"] }
+ferogram = { version = "0.4.0", features = ["sqlite-session"] }
 
 # LibSQL / Turso session (new in 0.2.0)
-ferogram = { version = "0.3.6", features = ["libsql-session"] }
+ferogram = { version = "0.4.0", features = ["libsql-session"] }
 
 # HTML parsing (minimal, no extra deps)
-ferogram = { version = "0.3.6", features = ["html"] }
+ferogram = { version = "0.4.0", features = ["html"] }
 
 # HTML parsing (spec-compliant, adds html5ever dep)
-ferogram = { version = "0.3.6", features = ["html5ever"] }
+ferogram = { version = "0.4.0", features = ["html5ever"] }
 
 # Multiple features at once
-ferogram = { version = "0.3.6", features = ["sqlite-session", "html"] }
+ferogram = { version = "0.4.0", features = ["sqlite-session", "html"] }
 </code></pre>
 <hr>
 <h2 id="ferogram-tl-types-1"><a class="header" href="#ferogram-tl-types-1">ferogram-tl-types</a></h2>
@@ -12391,14 +12399,14 @@ ferogram = { version = "0.3.6", features = ["sqlite-session", "html"] }
 </table>
 </div>
 <h3 id="example-enable-serde"><a class="header" href="#example-enable-serde">Example: enable serde</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.3.6", features = ["tl-api", "impl-serde"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.4.0", features = ["tl-api", "impl-serde"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let json = serde_json::to_string(&amp;some_tl_type)?;
 <span class="boring">}</span></code></pre>
 <h3 id="example-name_for_id-debugging"><a class="header" href="#example-name_for_id-debugging">Example: name_for_id (debugging)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.3.6", features = ["tl-api", "name-for-id"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.4.0", features = ["tl-api", "name-for-id"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -12409,13 +12417,13 @@ if let Some(name) = name_for_id(0x74ae4240) {
 }
 <span class="boring">}</span></code></pre>
 <h3 id="example-minimal-no-debug-no-conversions"><a class="header" href="#example-minimal-no-debug-no-conversions">Example: minimal (no Debug, no conversions)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.3.6", default-features = false, features = ["tl-api"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.4.0", default-features = false, features = ["tl-api"] }
 </code></pre>
 <p>Reduces compile time when you don’t need convenience traits.</p>
 <hr>
 <h2 id="string-session-no-feature-flag-needed"><a class="header" href="#string-session-no-feature-flag-needed">String session: no feature flag needed</a></h2>
 <p><code>StringSessionBackend</code> and <code>export_session_string()</code> are available in the default build: no feature flag required:</p>
-<pre><code class="language-toml">ferogram = "0.3.6"   # already includes StringSessionBackend
+<pre><code class="language-toml">ferogram = "0.4.0"   # already includes StringSessionBackend
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
