@@ -28,7 +28,7 @@ The goal is to eventually support multiple languages from the same Rust core, so
 
 ```toml
 [dependencies]
-ferogram = "0.3.8"
+ferogram = "0.4.0"
 tokio    = { version = "1", features = ["full"] }
 ```
 

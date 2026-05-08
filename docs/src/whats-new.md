@@ -4,6 +4,18 @@ ferogram started as a renamed continuation of [layer](https://github.com/ankit-c
 
 ---
 
+## [0.4.0]: 2026-05-08
+
+0.4.0 is the first production-ready release of ferogram. It ships Layer 225 support and a reworked poll API. All users are advised to upgrade to 0.4.0 (or 0.4.x+) as the most recommended and supported version.
+
+If you run into any bugs, please open an issue on GitHub or reach us at [@FerogramChat](https://t.me/FerogramChat). Thank you for using ferogram!
+
+For the latest git revision: https://github.com/ankit-chaubey/ferogram
+
+> **Note:** 0.3.9 was a broken publish. The workspace internal deps were not bumped so crates.io resolved `ferogram-tl-types` to the old Layer 224 build. 0.4.0 fixes that and is the correct release to use.
+
+---
+
 ## v0.3.9
 
 Released 2026-05-07. Updated to TL Layer 225. Poll builder overhaul, guest-chat support for bots, two new client methods, and full MarkdownV2/HTML spec compliance in the parsers.

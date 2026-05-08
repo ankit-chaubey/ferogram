@@ -5,9 +5,24 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> **Note:** ferogram is the continuation of [layer](https://github.com/ankit-chaubey/layer).
+> For history prior to v0.1.0, see the [layer changelog](https://github.com/ankit-chaubey/layer/blob/main/CHANGELOG.md) (up to layer v0.5.0).
+
 ---
 
-## [0.3.9]: 2026-05-08
+## [0.4.0]: 2026-05-08
+
+0.4.0 is the first production-ready release of ferogram. It ships Layer 225 support. All users are advised to upgrade to 0.4.0 (or 0.4.x+) as the most recommended and supported version.
+
+If you run into any bugs, please open an issue on GitHub or reach us at [@FerogramChat](https://t.me/FerogramChat). Thank you for using ferogram!
+
+For the latest git revision: https://github.com/ankit-chaubey/ferogram
+
+> **Note:** 0.3.9 was a broken publish. The workspace internal deps were not bumped so crates.io resolved `ferogram-tl-types` to the old Layer 224 build. 0.4.0 fixes that and is the correct release to use.
+
+---
+
+## [0.3.9]: 2026-05-07
 
 Updated to TL Layer 225.
 

@@ -313,7 +313,7 @@ let chat   = msg.peer_id().bare_id();     // Option<i64>
 - `promote_participant(peer, user, AdminRights)`: grant admin rights
 - `demote_participant(peer, user)`: revoke admin rights
 - `set_admin_rights(peer, user, AdminRights)`: set admin permissions
-- `set_banned_rights(peer, user, BannedRights)`: set per-user restrictions (fields include `send_reactions` as of 0.3.9)
+- `set_banned_rights(peer, user, BannedRights)`: set per-user restrictions (fields include `send_reactions` as of 0.4.0)
 - `get_permissions(peer, user)`: fetch a participant's current rights
 - `transfer_chat_ownership(peer, user, password)`: transfer group/channel ownership
 - `export_invite_link(peer)`: get or generate primary invite link
