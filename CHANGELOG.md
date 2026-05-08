@@ -5,12 +5,9 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-> **Note:** ferogram is the continuation of [layer](https://github.com/ankit-chaubey/layer).
-> For history prior to v0.1.0, see the [layer changelog](https://github.com/ankit-chaubey/layer/blob/main/CHANGELOG.md) (up to layer v0.5.0).
-
 ---
 
-## [0.3.9]: 2026-05-07
+## [0.3.9]: 2026-05-08
 
 Updated to TL Layer 225.
 
