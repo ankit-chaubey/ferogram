@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-065304f4.js";
+            window.path_to_searchindex_js = "../searchindex-52306761.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c671d9b3.js"></script>
+        <script src="../toc-1b0b7965.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -233,6 +233,19 @@ println!("Posters: {} (prev {})", s.posters.current, s.posters.previous);
 </span>let online = client.get_online_count("@mychannel").await?;
 println!("{online} members are online right now");
 <span class="boring">}</span></code></pre>
+<hr>
+<h2 id="poll-statistics"><a class="header" href="#poll-statistics">Poll statistics</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let stats = client.get_poll_stats(peer.clone(), msg_id).await?;
+<span class="boring">}</span></code></pre>
+<p>Returns <code>tl::types::stats::PollStats</code>. Contains a <code>votes_graph</code> field with a <code>StatsGraph</code> showing vote distribution over time. Use <code>stats.loadAsyncGraph</code> if the graph carries an async token.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let tl::enums::stats::PollStats::PollStats(s) = stats;
+// s.votes_graph: tl::enums::StatsGraph
+<span class="boring">}</span></code></pre>
+<p>Only available for polls in channels that meet Telegram’s stats threshold.</p>
 
                     </main>
 

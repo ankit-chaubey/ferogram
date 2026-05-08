@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-065304f4.js";
+            window.path_to_searchindex_js = "../searchindex-52306761.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c671d9b3.js"></script>
+        <script src="../toc-1b0b7965.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -217,6 +217,9 @@ while let Some(update) = stream.next().await {
         // Boosts
         Update::ChatBoost(cb)         =&gt; { /* ChatBoost */ }
 
+        // Guest chat (bots only)
+        Update::GuestChatQuery(q)     =&gt; { /* GuestChatQuery */ }
+
         // Raw passthrough
         Update::Raw(raw)              =&gt; { /* RawUpdate */ }
 
@@ -381,6 +384,43 @@ is.edit_message(&amp;client, updated_input_msg).await?;
     // cb.boost: boost details
 }
 <span class="boring">}</span></code></pre>
+<hr>
+<h2 id="guestchatquery"><a class="header" href="#guestchatquery"><code>GuestChatQuery</code></a></h2>
+<p>Fires when a user invites the bot into a guest-chat context (<code>updateBotGuestChatQuery</code>). Bots only. <code>GuestChatQuery</code> derefs to <code>IncomingMessage</code> so you can read the message text directly.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Update::GuestChatQuery(q) =&gt; {
+    println!("query_id: {}", q.query_id);
+    println!("message: {}", q.text());
+    println!("qts: {}", q.qts);
+
+    // reference_messages: previous messages for context
+    for ref_msg in &amp;q.reference_messages {
+        println!("  ref: {}", ref_msg.text());
+    }
+
+    // Answer with GuestChatAnswer
+    q.answer()
+        .article("My result")
+        .text("Answer body")
+        .send(&amp;client)
+        .await?;
+}
+<span class="boring">}</span></code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>query_id</code></td><td><code>i64</code></td><td>ID to pass to <code>setBotGuestChatResult</code></td></tr>
+<tr><td><code>message</code></td><td><code>IncomingMessage</code></td><td>The message that triggered the query</td></tr>
+<tr><td><code>reference_messages</code></td><td><code>Vec&lt;IncomingMessage&gt;</code></td><td>Prior context messages, if any</td></tr>
+<tr><td><code>qts</code></td><td><code>i32</code></td><td>QTS sequence number</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>GuestChatAnswer</code> supports all standard inline result kinds: <code>article</code>, <code>photo</code>, <code>document</code>, <code>game</code>, <code>location</code>, <code>venue</code>, <code>contact</code>, <code>webpage</code>, <code>invoice</code>, and <code>raw</code>. Call <code>.send(&amp;client)</code> to submit via <code>messages.setBotGuestChatResult</code>.</p>
 <hr>
 <h2 id="rawupdate"><a class="header" href="#rawupdate"><code>RawUpdate</code></a></h2>
 <p>Any TL update that doesn’t map to a typed variant:</p>

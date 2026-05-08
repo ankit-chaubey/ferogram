@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-065304f4.js";
+            window.path_to_searchindex_js = "../searchindex-52306761.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c671d9b3.js"></script>
+        <script src="../toc-1b0b7965.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -222,23 +222,24 @@ client.send_message(peer, msg).await?;
 <tr><th>Syntax</th><th>Entity</th></tr>
 </thead>
 <tbody>
-<tr><td><code>**text**</code></td><td>Bold</td></tr>
-<tr><td><code>*text*</code></td><td>Bold</td></tr>
+<tr><td><code>**text**</code> or <code>*text*</code></td><td>Bold</td></tr>
 <tr><td><code>_text_</code></td><td>Italic</td></tr>
-<tr><td><code>__text__</code></td><td>Italic</td></tr>
-<tr><td><code>~~text~~</code></td><td>Strikethrough</td></tr>
+<tr><td><code>__text__</code></td><td>Underline</td></tr>
+<tr><td><code>~text~</code></td><td>Strikethrough</td></tr>
+<tr><td><code>||text||</code></td><td>Spoiler</td></tr>
 <tr><td><code>`text`</code></td><td>Code (inline)</td></tr>
 <tr><td><code>```lang\ncode\n```</code></td><td>Pre (code block)</td></tr>
-<tr><td><code>||text||</code></td><td>Spoiler</td></tr>
 <tr><td><code>[label](url)</code></td><td>TextUrl</td></tr>
 <tr><td><code>[label](tg://user?id=123)</code></td><td>MentionName</td></tr>
 <tr><td><code>![text](tg://emoji?id=123)</code></td><td>CustomEmoji</td></tr>
+<tr><td><code>&gt; line</code> at line start</td><td>Blockquote</td></tr>
+<tr><td><code>**&gt; line</code> at line start</td><td>Expandable blockquote</td></tr>
 <tr><td><code>\*</code>, <code>\_</code>, <code>\~</code> …</td><td>Escaped literal character</td></tr>
 </tbody>
 </table>
 </div>
 <blockquote>
-<p><strong>Note:</strong> Underline has no markdown syntax. Use HTML <code>&lt;u&gt;</code> if you need it.</p>
+<p><code>parse_markdown</code> follows the Telegram Bot API MarkdownV2 spec. <code>__text__</code> is Underline, not Italic. For the legacy V1 behaviour call <code>parse_markdown_v1</code> (deprecated, removed in 0.4.0).</p>
 </blockquote>
 <h2 id="html-syntax"><a class="header" href="#html-syntax">HTML syntax</a></h2>
 <p>Supported tags:</p>
@@ -250,11 +251,15 @@ client.send_message(peer, msg).await?;
 <tbody>
 <tr><td><code>&lt;b&gt;</code>, <code>&lt;strong&gt;</code></td><td>Bold</td></tr>
 <tr><td><code>&lt;i&gt;</code>, <code>&lt;em&gt;</code></td><td>Italic</td></tr>
-<tr><td><code>&lt;u&gt;</code></td><td>Underline</td></tr>
+<tr><td><code>&lt;u&gt;</code>, <code>&lt;ins&gt;</code></td><td>Underline</td></tr>
 <tr><td><code>&lt;s&gt;</code>, <code>&lt;del&gt;</code>, <code>&lt;strike&gt;</code></td><td>Strikethrough</td></tr>
+<tr><td><code>&lt;tg-spoiler&gt;</code>, <code>&lt;span class="tg-spoiler"&gt;</code></td><td>Spoiler</td></tr>
 <tr><td><code>&lt;code&gt;</code></td><td>Code (inline)</td></tr>
 <tr><td><code>&lt;pre&gt;</code></td><td>Pre (code block)</td></tr>
-<tr><td><code>&lt;tg-spoiler&gt;</code></td><td>Spoiler</td></tr>
+<tr><td><code>&lt;pre&gt;&lt;code class="language-X"&gt;</code></td><td>Pre with language</td></tr>
+<tr><td><code>&lt;blockquote&gt;</code></td><td>Blockquote</td></tr>
+<tr><td><code>&lt;blockquote expandable&gt;</code></td><td>Expandable (collapsible) blockquote</td></tr>
+<tr><td><code>&lt;tg-time unix="N" format="F"&gt;</code></td><td>FormattedDate</td></tr>
 <tr><td><code>&lt;a href="url"&gt;</code></td><td>TextUrl</td></tr>
 <tr><td><code>&lt;a href="tg://user?id=123"&gt;</code></td><td>MentionName</td></tr>
 <tr><td><code>&lt;tg-emoji emoji-id="123"&gt;</code></td><td>CustomEmoji</td></tr>
@@ -336,7 +341,7 @@ let md  = generate_markdown(plain_text, &amp;entities);
 let htm = generate_html(plain_text, &amp;entities);
 <span class="boring">}</span></code></pre>
 <blockquote>
-<p><code>generate_markdown</code> skips <code>Underline</code> (no unambiguous delimiter). Use <code>generate_html</code> if you need it.</p>
+<p><code>generate_markdown</code> emits full MarkdownV2 syntax including <code>__text__</code> for Underline, <code>~text~</code> for Strike, and <code>&gt; </code> prefix for Blockquote.</p>
 </blockquote>
 <h2 id="all-entity-types"><a class="header" href="#all-entity-types">All entity types</a></h2>
 <div class="table-wrapper">

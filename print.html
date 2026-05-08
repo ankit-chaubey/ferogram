@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-065304f4.js";
+            window.path_to_searchindex_js = "searchindex-52306761.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c671d9b3.js"></script>
+        <script src="toc-1b0b7965.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,7 +182,7 @@
                         <h1 id="ferogram"><a class="header" href="#ferogram">ferogram</a></h1>
 <p><a href="https://crates.io/crates/ferogram"><img src="https://img.shields.io/crates/v/ferogram?color=fc8d62&amp;label=ferogram&amp;style=flat-square" alt="Crates.io"></a>
 <a href="https://docs.rs/ferogram"><img src="https://img.shields.io/docsrs/ferogram?style=flat-square&amp;color=22c55e" alt="docs.rs"></a>
-<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-224-8b5cf6?style=flat-square" alt="TL Layer"></a>
+<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-225-8b5cf6?style=flat-square" alt="TL Layer"></a>
 <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License"></a></p>
 <p>ferogram is an async Rust library for Telegram’s MTProto protocol. It works for user accounts and bots, and talks to Telegram directly over MTProto with no Bot API HTTP proxy in the middle.</p>
 <p>Everything in the workspace is written from scratch: the <code>.tl</code> schema parser, the TL code generator, AES-IGE crypto, the DH key exchange, MTProto framing, the session layer, and the high-level client on top. Each piece is its own crate so you can pull in just what you need.</p>
@@ -206,7 +206,7 @@
 <tr><td><a href="https://docs.rs/ferogram-connect"><code>ferogram-connect</code></a></td><td>Raw TCP, MTProto framing, obfuscation, SOCKS5, MTProxy, gzip.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-mtproto"><code>ferogram-mtproto</code></a></td><td>MTProto 2.0 session, DH key exchange, message framing, PFS key binding.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-crypto"><code>ferogram-crypto</code></a></td><td>AES-IGE, RSA, SHA, Diffie-Hellman, PQ factorization, auth key derivation.</td></tr>
-<tr><td><a href="https://docs.rs/ferogram-tl-types"><code>ferogram-tl-types</code></a></td><td>Auto-generated TL types, functions, and enums for Layer 224.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-tl-types"><code>ferogram-tl-types</code></a></td><td>Auto-generated TL types, functions, and enums for Layer 225.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-tl-gen"><code>ferogram-tl-gen</code></a></td><td>Build-time code generator from TL AST to Rust source.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-tl-parser"><code>ferogram-tl-parser</code></a></td><td>Parses <code>.tl</code> schema text into a Definition AST.</td></tr>
 </tbody>
@@ -253,6 +253,64 @@ tokio    = { version = "1", features = ["full"] }
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
+<hr>
+<h2 id="v039"><a class="header" href="#v039">v0.3.9</a></h2>
+<p>Released 2026-05-07. Updated to TL Layer 225. Poll builder overhaul, guest-chat support for bots, two new client methods, and full MarkdownV2/HTML spec compliance in the parsers.</p>
+<h3 id="send_poll-now-takes-pollbuilder-breaking"><a class="header" href="#send_poll-now-takes-pollbuilder-breaking"><code>send_poll</code> now takes <code>PollBuilder</code> (breaking)</a></h3>
+<p>The old flat signature (<code>question, answers, quiz, correct_index, multiple_choice</code>) is gone. Pass a <code>PollBuilder</code> instead:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::PollBuilder;
+
+client.send_poll(peer,
+    PollBuilder::new("Favourite runtime?")
+        .answers(["Tokio", "async-std", "smol"])
+        .public_voters(true)
+        .close_period(300)
+).await?;
+
+// Quiz with answer explanation
+client.send_poll(peer,
+    PollBuilder::new("Capital of France?")
+        .answers(["Berlin", "Paris", "Rome"])
+        .quiz(true)
+        .correct_index(1)
+        .solution("It's Paris.")
+        .hide_results_until_close(true)
+).await?;
+<span class="boring">}</span></code></pre>
+<p>New fields the old API did not expose: <code>public_voters</code>, <code>shuffle_answers</code>, <code>hide_results_until_close</code>, <code>close_period</code>, <code>close_date</code>, <code>solution</code>, <code>subscribers_only</code>, <code>countries_iso2</code>.</p>
+<h3 id="guest-chat-queries-bots-only"><a class="header" href="#guest-chat-queries-bots-only">Guest-chat queries (bots only)</a></h3>
+<p>A new <code>Update::GuestChatQuery</code> variant handles <code>updateBotGuestChatQuery</code>. Fires when a user invites the bot into a guest-chat context. <code>GuestChatQuery</code> derefs to <code>IncomingMessage</code> and carries <code>query_id</code>, <code>message</code>, <code>reference_messages</code>, and <code>qts</code>.</p>
+<p>Answer with the <code>GuestChatAnswer</code> builder:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if let Update::GuestChatQuery(q) = update {
+    q.answer()
+        .article("My result")
+        .text("The answer")
+        .send(&amp;client)
+        .await?;
+}
+<span class="boring">}</span></code></pre>
+<p>Supported result kinds: <code>article</code>, <code>photo</code>, <code>document</code>, <code>game</code>, <code>location</code>, <code>venue</code>, <code>contact</code>, <code>webpage</code>, <code>invoice</code>, <code>raw</code>. Sends via <code>messages.setBotGuestChatResult</code>.</p>
+<h3 id="new-client-methods"><a class="header" href="#new-client-methods">New client methods</a></h3>
+<p><strong><code>delete_reaction(peer, msg_id, participant)</code></strong> reports and removes a specific user’s reaction on a message. Returns <code>true</code> on success.</p>
+<p><strong><code>get_poll_stats(peer, msg_id)</code></strong> returns detailed vote stats for a poll. Returns <code>tl::types::stats::PollStats</code>.</p>
+<h3 id="bannedrightssend_reactions"><a class="header" href="#bannedrightssend_reactions"><code>BannedRights::send_reactions</code></a></h3>
+<p>New field on the ban-rights builder:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>BannedRights::default().send_reactions(false)
+<span class="boring">}</span></code></pre>
+<h3 id="markdownv2-and-html-parser-update-ferogram-parsers"><a class="header" href="#markdownv2-and-html-parser-update-ferogram-parsers">MarkdownV2 and HTML parser update (<code>ferogram-parsers</code>)</a></h3>
+<p><code>parse_markdown</code> and <code>generate_markdown</code> now implement the full Telegram Bot API MarkdownV2 spec. The main breaking change: <code>__text__</code> is Underline now, not Italic. If you relied on the old behaviour, call <code>parse_markdown_v1</code> explicitly (deprecated, removed in 0.4.0).</p>
+<p>Explicit aliases added: <code>parse_markdown_v2</code>, <code>generate_markdown_v2</code>.</p>
+<p>HTML: added <code>&lt;ins&gt;</code> as underline, <code>&lt;span class="tg-spoiler"&gt;</code> as spoiler, <code>&lt;blockquote&gt;</code>/<code>&lt;blockquote expandable&gt;</code> for block quotes, <code>&lt;tg-time unix="N"&gt;</code> for formatted dates. The <code>&lt;pre&gt;&lt;code class="language-X"&gt;</code> bug that produced two entities instead of one is fixed. <code>generate_html</code> emits all of the above.</p>
+<h3 id="upgrading-from-038"><a class="header" href="#upgrading-from-038">Upgrading from 0.3.8</a></h3>
+<pre><code class="language-toml">ferogram = "0.3.9"
+</code></pre>
+<p>Two things to fix: <code>send_poll</code> call sites (see above), and any markdown that relied on <code>__text__</code> being Italic (change to <code>_text_</code>).</p>
 <hr>
 <h2 id="v038"><a class="header" href="#v038">v0.3.8</a></h2>
 <p>Released 2026-05-06. A small patch release fixing two broken APIs from 0.3.7.</p>
@@ -617,7 +675,7 @@ ferogram = { version = "0.3.6", features = ["html5ever"] }
 
 fn main() {
     println!("Using Telegram API Layer {}", LAYER);
-    // → Using Telegram API Layer 224
+    // → Using Telegram API Layer 225
 }</code></pre>
 <hr>
 <h2 id="platform-notes"><a class="header" href="#platform-notes">Platform notes</a></h2>
@@ -2514,23 +2572,24 @@ client.send_message(peer, msg).await?;
 <tr><th>Syntax</th><th>Entity</th></tr>
 </thead>
 <tbody>
-<tr><td><code>**text**</code></td><td>Bold</td></tr>
-<tr><td><code>*text*</code></td><td>Bold</td></tr>
+<tr><td><code>**text**</code> or <code>*text*</code></td><td>Bold</td></tr>
 <tr><td><code>_text_</code></td><td>Italic</td></tr>
-<tr><td><code>__text__</code></td><td>Italic</td></tr>
-<tr><td><code>~~text~~</code></td><td>Strikethrough</td></tr>
+<tr><td><code>__text__</code></td><td>Underline</td></tr>
+<tr><td><code>~text~</code></td><td>Strikethrough</td></tr>
+<tr><td><code>||text||</code></td><td>Spoiler</td></tr>
 <tr><td><code>`text`</code></td><td>Code (inline)</td></tr>
 <tr><td><code>```lang\ncode\n```</code></td><td>Pre (code block)</td></tr>
-<tr><td><code>||text||</code></td><td>Spoiler</td></tr>
 <tr><td><code>[label](url)</code></td><td>TextUrl</td></tr>
 <tr><td><code>[label](tg://user?id=123)</code></td><td>MentionName</td></tr>
 <tr><td><code>![text](tg://emoji?id=123)</code></td><td>CustomEmoji</td></tr>
+<tr><td><code>&gt; line</code> at line start</td><td>Blockquote</td></tr>
+<tr><td><code>**&gt; line</code> at line start</td><td>Expandable blockquote</td></tr>
 <tr><td><code>\*</code>, <code>\_</code>, <code>\~</code> …</td><td>Escaped literal character</td></tr>
 </tbody>
 </table>
 </div>
 <blockquote>
-<p><strong>Note:</strong> Underline has no markdown syntax. Use HTML <code>&lt;u&gt;</code> if you need it.</p>
+<p><code>parse_markdown</code> follows the Telegram Bot API MarkdownV2 spec. <code>__text__</code> is Underline, not Italic. For the legacy V1 behaviour call <code>parse_markdown_v1</code> (deprecated, removed in 0.4.0).</p>
 </blockquote>
 <h2 id="html-syntax"><a class="header" href="#html-syntax">HTML syntax</a></h2>
 <p>Supported tags:</p>
@@ -2542,11 +2601,15 @@ client.send_message(peer, msg).await?;
 <tbody>
 <tr><td><code>&lt;b&gt;</code>, <code>&lt;strong&gt;</code></td><td>Bold</td></tr>
 <tr><td><code>&lt;i&gt;</code>, <code>&lt;em&gt;</code></td><td>Italic</td></tr>
-<tr><td><code>&lt;u&gt;</code></td><td>Underline</td></tr>
+<tr><td><code>&lt;u&gt;</code>, <code>&lt;ins&gt;</code></td><td>Underline</td></tr>
 <tr><td><code>&lt;s&gt;</code>, <code>&lt;del&gt;</code>, <code>&lt;strike&gt;</code></td><td>Strikethrough</td></tr>
+<tr><td><code>&lt;tg-spoiler&gt;</code>, <code>&lt;span class="tg-spoiler"&gt;</code></td><td>Spoiler</td></tr>
 <tr><td><code>&lt;code&gt;</code></td><td>Code (inline)</td></tr>
 <tr><td><code>&lt;pre&gt;</code></td><td>Pre (code block)</td></tr>
-<tr><td><code>&lt;tg-spoiler&gt;</code></td><td>Spoiler</td></tr>
+<tr><td><code>&lt;pre&gt;&lt;code class="language-X"&gt;</code></td><td>Pre with language</td></tr>
+<tr><td><code>&lt;blockquote&gt;</code></td><td>Blockquote</td></tr>
+<tr><td><code>&lt;blockquote expandable&gt;</code></td><td>Expandable (collapsible) blockquote</td></tr>
+<tr><td><code>&lt;tg-time unix="N" format="F"&gt;</code></td><td>FormattedDate</td></tr>
 <tr><td><code>&lt;a href="url"&gt;</code></td><td>TextUrl</td></tr>
 <tr><td><code>&lt;a href="tg://user?id=123"&gt;</code></td><td>MentionName</td></tr>
 <tr><td><code>&lt;tg-emoji emoji-id="123"&gt;</code></td><td>CustomEmoji</td></tr>
@@ -2628,7 +2691,7 @@ let md  = generate_markdown(plain_text, &amp;entities);
 let htm = generate_html(plain_text, &amp;entities);
 <span class="boring">}</span></code></pre>
 <blockquote>
-<p><code>generate_markdown</code> skips <code>Underline</code> (no unambiguous delimiter). Use <code>generate_html</code> if you need it.</p>
+<p><code>generate_markdown</code> emits full MarkdownV2 syntax including <code>__text__</code> for Underline, <code>~text~</code> for Strike, and <code>&gt; </code> prefix for Blockquote.</p>
 </blockquote>
 <h2 id="all-entity-types"><a class="header" href="#all-entity-types">All entity types</a></h2>
 <div class="table-wrapper">
@@ -2831,6 +2894,9 @@ while let Some(update) = stream.next().await {
         // Boosts
         Update::ChatBoost(cb)         =&gt; { /* ChatBoost */ }
 
+        // Guest chat (bots only)
+        Update::GuestChatQuery(q)     =&gt; { /* GuestChatQuery */ }
+
         // Raw passthrough
         Update::Raw(raw)              =&gt; { /* RawUpdate */ }
 
@@ -2995,6 +3061,43 @@ is.edit_message(&amp;client, updated_input_msg).await?;
     // cb.boost: boost details
 }
 <span class="boring">}</span></code></pre>
+<hr>
+<h2 id="guestchatquery"><a class="header" href="#guestchatquery"><code>GuestChatQuery</code></a></h2>
+<p>Fires when a user invites the bot into a guest-chat context (<code>updateBotGuestChatQuery</code>). Bots only. <code>GuestChatQuery</code> derefs to <code>IncomingMessage</code> so you can read the message text directly.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Update::GuestChatQuery(q) =&gt; {
+    println!("query_id: {}", q.query_id);
+    println!("message: {}", q.text());
+    println!("qts: {}", q.qts);
+
+    // reference_messages: previous messages for context
+    for ref_msg in &amp;q.reference_messages {
+        println!("  ref: {}", ref_msg.text());
+    }
+
+    // Answer with GuestChatAnswer
+    q.answer()
+        .article("My result")
+        .text("Answer body")
+        .send(&amp;client)
+        .await?;
+}
+<span class="boring">}</span></code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>query_id</code></td><td><code>i64</code></td><td>ID to pass to <code>setBotGuestChatResult</code></td></tr>
+<tr><td><code>message</code></td><td><code>IncomingMessage</code></td><td>The message that triggered the query</td></tr>
+<tr><td><code>reference_messages</code></td><td><code>Vec&lt;IncomingMessage&gt;</code></td><td>Prior context messages, if any</td></tr>
+<tr><td><code>qts</code></td><td><code>i32</code></td><td>QTS sequence number</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>GuestChatAnswer</code> supports all standard inline result kinds: <code>article</code>, <code>photo</code>, <code>document</code>, <code>game</code>, <code>location</code>, <code>venue</code>, <code>contact</code>, <code>webpage</code>, <code>invoice</code>, and <code>raw</code>. Call <code>.send(&amp;client)</code> to submit via <code>messages.setBotGuestChatResult</code>.</p>
 <hr>
 <h2 id="rawupdate"><a class="header" href="#rawupdate"><code>RawUpdate</code></a></h2>
 <p>Any TL update that doesn’t map to a typed variant:</p>
@@ -3500,6 +3603,105 @@ while let Some(result) = iter.next().await? {
     None,       // next_offset: Option&lt;String&gt;: for pagination
 ).await?;
 <span class="boring">}</span></code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="guest-chat-queries"><a class="header" href="#guest-chat-queries">Guest Chat Queries</a></h1>
+<p><code>Update::GuestChatQuery</code> fires when a user invites the bot into a guest-chat context (<code>updateBotGuestChatQuery</code>). Bots only.</p>
+<hr>
+<h2 id="receiving-the-update"><a class="header" href="#receiving-the-update">Receiving the update</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::update::Update;
+
+while let Some(update) = stream.next().await {
+    if let Update::GuestChatQuery(q) = update {
+        println!("query_id: {}", q.query_id);
+        println!("from: {:?}", q.message.sender_id());
+        println!("text: {}", q.message.text());
+    }
+}
+<span class="boring">}</span></code></pre>
+<p><code>GuestChatQuery</code> derefs to <code>IncomingMessage</code>, so all the usual accessors (<code>text()</code>, <code>sender_id()</code>, <code>chat_id()</code>, <code>date()</code>, etc.) work directly on <code>q</code>.</p>
+<hr>
+<h2 id="fields"><a class="header" href="#fields">Fields</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>query_id</code></td><td><code>i64</code></td><td>ID used to submit the answer</td></tr>
+<tr><td><code>message</code></td><td><code>IncomingMessage</code></td><td>The message that triggered the query</td></tr>
+<tr><td><code>reference_messages</code></td><td><code>Vec&lt;IncomingMessage&gt;</code></td><td>Prior context messages provided by Telegram, if any</td></tr>
+<tr><td><code>qts</code></td><td><code>i32</code></td><td>QTS sequence number for this update</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="answering"><a class="header" href="#answering">Answering</a></h2>
+<p>Call <code>q.answer()</code> to get a <code>GuestChatAnswer</code> builder, then call <code>.send(&amp;client)</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if let Update::GuestChatQuery(q) = update {
+    q.answer()
+        .article("My result")
+        .text("Answer body")
+        .send(&amp;client)
+        .await?;
+}
+<span class="boring">}</span></code></pre>
+<h3 id="result-kinds"><a class="header" href="#result-kinds">Result kinds</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>.article(title)</code></td><td>Text article result</td></tr>
+<tr><td><code>.photo(input_photo)</code></td><td>Existing photo</td></tr>
+<tr><td><code>.document(input_doc, title)</code></td><td>Existing document</td></tr>
+<tr><td><code>.game(short_name)</code></td><td>Game result</td></tr>
+<tr><td><code>.location(lat, long)</code></td><td>Geographic location</td></tr>
+<tr><td><code>.venue(lat, long, title, address, ...)</code></td><td>Venue</td></tr>
+<tr><td><code>.contact(phone, first_name, last_name)</code></td><td>Contact card</td></tr>
+<tr><td><code>.webpage(url)</code></td><td>Web page preview</td></tr>
+<tr><td><code>.invoice(title, description, ...)</code></td><td>Invoice</td></tr>
+<tr><td><code>.raw(InputBotInlineResult)</code></td><td>Fully constructed TL result</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="message-content"><a class="header" href="#message-content">Message content</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>.text(str)</code></td><td>Text content for the result message</td></tr>
+<tr><td><code>.caption(str)</code></td><td>Caption for media results</td></tr>
+<tr><td><code>.no_webpage(bool)</code></td><td>Disable link preview</td></tr>
+<tr><td><code>.invert_media(bool)</code></td><td>Invert media position</td></tr>
+<tr><td><code>.entities(vec)</code></td><td>Manual <code>MessageEntity</code> list</td></tr>
+<tr><td><code>.reply_markup(markup)</code></td><td>Attach inline keyboard</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="other-builder-methods"><a class="header" href="#other-builder-methods">Other builder methods</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>.id(str)</code></td><td>Custom result ID (auto-generated if omitted)</td></tr>
+<tr><td><code>.description(str)</code></td><td>Short description shown under title</td></tr>
+<tr><td><code>.url(str)</code></td><td>URL for the result</td></tr>
+<tr><td><code>.thumb(InputWebDocument)</code></td><td>Thumbnail</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="checking-if-a-bot-supports-guest-chat"><a class="header" href="#checking-if-a-bot-supports-guest-chat">Checking if a bot supports guest chat</a></h2>
+<p>In the <code>User</code> type, <code>bot_guestchat</code> (<code>flags2.19</code>) is set when the bot has declared guest-chat support. This is a Layer 225 addition.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="middleware--dispatcher"><a class="header" href="#middleware--dispatcher">Middleware &amp; Dispatcher</a></h1>
 <p>ferogram ships a <code>Dispatcher</code> that routes incoming updates to typed handlers, and a middleware chain that intercepts every update before it reaches any handler.</p>
@@ -4932,13 +5134,13 @@ client.send_album(peer, vec![
 <div class="api-card-body">
 Resolve any peer reference to a <code>Peer</code>. Accepts all <code>PeerRef</code> input types:
 <ul>
-<li><code>&amp;str</code> / <code>String</code> — <code>"@username"</code>, <code>"me"</code>, <code>"self"</code>, numeric string, <code>t.me/</code> URL, invite link, E.164 phone</li>
+<li><code>&amp;str</code> / <code>String</code>: <code>"@username"</code>, <code>"me"</code>, <code>"self"</code>, numeric string, <code>t.me/</code> URL, invite link, E.164 phone</li>
 
-<li><code>i64</code> / <code>i32</code> — Bot-API encoded numeric ID</li>
+<li><code>i64</code> / <code>i32</code>: Bot-API encoded numeric ID</li>
 
-<li><code>tl::enums::Peer</code> — returned as-is, zero cost</li>
+<li><code>tl::enums::Peer</code>: returned as-is, zero cost</li>
 
-<li><code>tl::enums::InputPeer</code> — access hash cached, then stripped to <code>Peer</code></li>
+<li><code>tl::enums::InputPeer</code>: access hash cached, then stripped to <code>Peer</code></li>
 
 </ul>
 
@@ -4976,7 +5178,7 @@ Resolution is cache-first; an RPC is only made on a cache miss.
 </div>
 
 <div class="api-card-body">
-Call any Layer 224 API method directly. See <a href="#raw-api-access">Raw API Access</a> for the full guide.
+Call any Layer 225 API method directly. See <a href="#raw-api-access">Raw API Access</a> for the full guide.
 <pre><code>use ferogram_tl_types::functions;
 let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></pre>
 
@@ -7238,6 +7440,7 @@ client
 <tr><td><code>.change_info(bool)</code></td><td>Prevent changing chat info</td></tr>
 <tr><td><code>.invite_users(bool)</code></td><td>Prevent inviting users</td></tr>
 <tr><td><code>.pin_messages(bool)</code></td><td>Prevent pinning messages</td></tr>
+<tr><td><code>.send_reactions(bool)</code></td><td>Prevent sending reactions</td></tr>
 <tr><td><code>.until_date(ts: i32)</code></td><td>Expiry Unix timestamp (<code>0</code> = permanent)</td></tr>
 </tbody>
 </table>
@@ -9490,61 +9693,81 @@ client.send_message(
 <span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="polls--votes"><a class="header" href="#polls--votes">Polls &amp; Votes</a></h1>
-<p>ferogram lets you send polls via <code>InputMessage</code>, vote on them programmatically, and inspect results and per-option vote lists.</p>
+<p>ferogram lets you send polls, vote on them, and inspect results and voter lists.</p>
 <hr>
 <h2 id="sending-a-poll"><a class="header" href="#sending-a-poll">Sending a poll</a></h2>
-<p>Polls are sent as media via <code>InputMessage</code>. Build the poll TL object and attach it:</p>
+<p>Use <code>PollBuilder</code> and pass it to <code>send_poll</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use ferogram::InputMessage;
+</span>use ferogram::{Client, PollBuilder};
 
-let poll = tl::enums::InputMedia::InputMediaPoll(tl::types::InputMediaPoll {
-    poll: tl::enums::Poll::Poll(tl::types::Poll {
-        id: 0,
-        closed: false,
-        public_voters: false,  // anonymous
-        multiple_choice: false,
-        quiz: false,
-        question: tl::enums::TextWithEntities::TextWithEntities(
-            tl::types::TextWithEntities { text: "What is your favourite language?".into(), entities: vec![] }
-        ),
-        answers: vec![
-            tl::enums::PollAnswer::PollAnswer(tl::types::PollAnswer {
-                text: tl::enums::TextWithEntities::TextWithEntities(
-                    tl::types::TextWithEntities { text: "Rust".into(), entities: vec![] }
-                ),
-                option: vec![0],
-            }),
-            tl::enums::PollAnswer::PollAnswer(tl::types::PollAnswer {
-                text: tl::enums::TextWithEntities::TextWithEntities(
-                    tl::types::TextWithEntities { text: "Go".into(), entities: vec![] }
-                ),
-                option: vec![1],
-            }),
-        ],
-        close_period: None,
-        close_date: None,
-    }),
-    correct_answers: None,
-    solution: None,
-    solution_entities: None,
-});
+// Regular anonymous poll
+client.send_poll(peer.clone(),
+    PollBuilder::new("What is your favourite language?")
+        .answers(["Rust", "Go", "C++"])
+).await?;
 
-client.send_message(peer.clone(), InputMessage::text("").copy_media(poll)).await?;
+// Public voters, auto-close after 5 minutes
+client.send_poll(peer.clone(),
+    PollBuilder::new("Vote now")
+        .answers(["Yes", "No"])
+        .public_voters(true)
+        .close_period(300)
+).await?;
+
+// Quiz mode with explanation
+client.send_poll(peer.clone(),
+    PollBuilder::new("Capital of France?")
+        .answers(["Berlin", "Paris", "Rome"])
+        .quiz(true)
+        .correct_index(1)
+        .solution("It's Paris.")
+        .hide_results_until_close(true)
+).await?;
+
+// Multiple choice
+client.send_poll(peer.clone(),
+    PollBuilder::new("Pick your tools")
+        .answers(["vim", "emacs", "VSCode", "Helix"])
+        .multiple_choice(true)
+).await?;
 <span class="boring">}</span></code></pre>
+<h3 id="pollbuilder-methods"><a class="header" href="#pollbuilder-methods"><code>PollBuilder</code> methods</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>PollBuilder::new(question)</code></td><td>Start a builder with a question string</td></tr>
+<tr><td><code>.answers(iter)</code></td><td>Answer strings, in order</td></tr>
+<tr><td><code>.quiz(bool)</code></td><td>Quiz mode (one correct answer)</td></tr>
+<tr><td><code>.correct_index(usize)</code></td><td>Which answer index is correct (quiz only)</td></tr>
+<tr><td><code>.solution(text)</code></td><td>Explanation shown after quiz answer</td></tr>
+<tr><td><code>.multiple_choice(bool)</code></td><td>Allow selecting more than one answer</td></tr>
+<tr><td><code>.public_voters(bool)</code></td><td>Show who voted</td></tr>
+<tr><td><code>.shuffle_answers(bool)</code></td><td>Randomise answer order per viewer</td></tr>
+<tr><td><code>.hide_results_until_close(bool)</code></td><td>Keep results hidden until closed</td></tr>
+<tr><td><code>.close_period(secs: i32)</code></td><td>Auto-close after N seconds (1-600)</td></tr>
+<tr><td><code>.close_date(ts: i32)</code></td><td>Auto-close at Unix timestamp</td></tr>
+<tr><td><code>.subscribers_only(bool)</code></td><td>Only channel subscribers can vote</td></tr>
+<tr><td><code>.countries_iso2(codes)</code></td><td>Restrict voting to ISO 3166-1 alpha-2 country codes</td></tr>
+</tbody>
+</table>
+</div>
 <hr>
 <h2 id="voting"><a class="header" href="#voting">Voting</a></h2>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_vote(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, options: Vec&lt;Vec&lt;u8&gt;&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.send_vote(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, options: Vec&lt;Vec&lt;u8&gt;&gt;) -&gt; Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Cast a vote on a poll message. <code>options</code> is a list of answer byte arrays  -  each matches the <code>option</code> field of a <code>PollAnswer</code>. For single-choice polls pass exactly one option; for multiple-choice polls pass multiple.
+Cast a vote. `options` is a list of answer byte vectors matching the `option` field on each `PollAnswer`. For single-choice polls pass one item; for multiple-choice pass several.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Vote for option 0 (Rust) on message 1234
+</span>// Vote for option 0 on message 1234
 client.send_vote(peer.clone(), 1234, vec![vec![0]]).await?;
 <span class="boring">}</span></code></pre>
 </div>
@@ -9556,12 +9779,11 @@ client.send_vote(peer.clone(), 1234, vec![vec![0]]).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, poll_hash: i64) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.get_poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, poll_hash: i64) -&gt; Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Request a fresh result snapshot from the server. The server responds with an <code>updateMessagePoll</code> in the update stream  -  this method itself returns <code>()</code> after the request is sent. The <code>poll_hash</code> comes from the <code>PollResults.results_hash</code> field on the message.
-<p>Use this to force-refresh results that may be stale in your local cache.</p>
+Request a fresh result snapshot from the server. The server responds with an `updateMessagePoll` in the update stream. `poll_hash` comes from `PollResults.results_hash` on the message.
 </div>
 
 </div>
@@ -9569,19 +9791,18 @@ Request a fresh result snapshot from the server. The server responds with an <co
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_poll_votes(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, option: Option&lt;Vec&lt;u8&gt;&gt;, limit: i32, offset: Option&lt;String&gt;) → Result&lt;tl::types::messages::VotesList, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_poll_votes(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, option: Option&lt;Vec&lt;u8&gt;&gt;, limit: i32, offset: Option&lt;String&gt;) -&gt; Result&lt;tl::types::messages::VotesList, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Fetch the list of users who voted, paginated. Only available for <strong>public voters</strong> polls (<code>public_voters: true</code>).
+Paginated list of who voted. Only works for public-voters polls.
 <ul>
-<li><code>option</code>  -  filter to a specific answer byte vector, or <code>None</code> for all votes.</li>
-<li><code>offset</code>  -  continuation token from a previous page’s <code>next_offset</code> field.</li>
+<li><code>option</code>: filter to a specific answer byte vector, or <code>None</code> for all votes.</li>
+<li><code>offset</code>: continuation token from the previous page’s <code>next_offset</code>.</li>
 </ul>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// First page: who voted for option 1?
-let page = client
+</span>let page = client
     .get_poll_votes(peer.clone(), msg_id, Some(vec![1]), 50, None)
     .await?;
 
@@ -9589,7 +9810,6 @@ for vote in &amp;page.votes {
     println!("User {} voted at {}", vote.user_id, vote.date);
 }
 
-// Next page
 if let Some(next) = page.next_offset {
     let page2 = client
         .get_poll_votes(peer.clone(), msg_id, Some(vec![1]), 50, Some(next))
@@ -9615,32 +9835,47 @@ if let Some(next) = page.next_offset {
 </div>
 
 <hr>
-<h2 id="closing-a-poll"><a class="header" href="#closing-a-poll">Closing a poll</a></h2>
-<p>To close a poll (stop accepting votes), edit the message and set <code>closed: true</code> on the poll:</p>
+<h2 id="poll-stats"><a class="header" href="#poll-stats">Poll stats</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_poll_stats(peer: impl Into&lt;PeerRef&gt;, msg_id: i32) -&gt; Result&lt;tl::types::stats::PollStats, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Fetch detailed vote graph stats for a poll (`stats.getPollStats`). Returns a `PollStats` with a `votes_graph` field containing a `StatsGraph` you can render as a chart.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Get the current poll from the message, then re-send with closed=true
-// You must reconstruct the InputMediaPoll with the same poll ID and closed=true.
-let close_media = tl::enums::InputMedia::InputMediaPoll(tl::types::InputMediaPoll {
+</span>let stats = client.get_poll_stats(peer.clone(), msg_id).await?;
+// stats.votes_graph: tl::enums::StatsGraph
+<span class="boring">}</span></code></pre>
+</div>
+
+</div>
+
+<hr>
+<h2 id="closing-a-poll"><a class="header" href="#closing-a-poll">Closing a poll</a></h2>
+<p>Edit the message and set <code>closed: true</code> on the poll. You need the original poll ID from the message:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let close_media = tl::enums::InputMedia::Poll(Box::new(tl::types::InputMediaPoll {
     poll: tl::enums::Poll::Poll(tl::types::Poll {
         id: existing_poll_id,
-        closed: true,  // &lt;-- close it
-        // ... same options etc.
-<span class="boring">        public_voters: false, multiple_choice: false, quiz: false,
-</span><span class="boring">        question: tl::enums::TextWithEntities::TextWithEntities(tl::types::TextWithEntities { text: "".into(), entities: vec![] }),
-</span><span class="boring">        answers: vec![],
-</span><span class="boring">        close_period: None, close_date: None,
-</span>    }),
+        closed: true,
+        // other fields same as original
+        ..
+    }),
     correct_answers: None,
     solution: None,
     solution_entities: None,
-});
+    solution_media: None,
+}));
 
 client.invoke(&amp;tl::functions::messages::EditMessage {
     peer: input_peer,
     id: msg_id,
     media: Some(close_media),
-    // ...
+    // ..
 }).await?;
 <span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -10254,6 +10489,19 @@ println!("Posters: {} (prev {})", s.posters.current, s.posters.previous);
 </span>let online = client.get_online_count("@mychannel").await?;
 println!("{online} members are online right now");
 <span class="boring">}</span></code></pre>
+<hr>
+<h2 id="poll-statistics"><a class="header" href="#poll-statistics">Poll statistics</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let stats = client.get_poll_stats(peer.clone(), msg_id).await?;
+<span class="boring">}</span></code></pre>
+<p>Returns <code>tl::types::stats::PollStats</code>. Contains a <code>votes_graph</code> field with a <code>StatsGraph</code> showing vote distribution over time. Use <code>stats.loadAsyncGraph</code> if the graph carries an async token.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let tl::enums::stats::PollStats::PollStats(s) = stats;
+// s.votes_graph: tl::enums::StatsGraph
+<span class="boring">}</span></code></pre>
+<p>Only available for polls in channels that meet Telegram’s stats threshold.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="privacy--notifications"><a class="header" href="#privacy--notifications">Privacy &amp; Notifications</a></h1>
 <p>Methods for reading and writing Telegram account privacy rules and per-chat notification settings.</p>
@@ -11286,7 +11534,7 @@ build.rs           (reads api.tl, invokes ferogram-tl-gen)
     │
     ▼
 $OUT_DIR/
-  generated_common.rs     ← pub const LAYER: i32 = 224;
+  generated_common.rs     ← pub const LAYER: i32 = 225;
   generated_types.rs      ← pub mod types { ... }
   generated_enums.rs      ← pub mod enums { ... }
   generated_functions.rs  ← pub mod functions { ... }
@@ -11296,10 +11544,10 @@ $OUT_DIR/
 <pre><code class="language-bash"># Get the new schema from Telegram's official sources
 # (TDLib repository, core.telegram.org, or unofficial mirrors)
 
-cp new-layer-224.tl ferogram-tl-types/tl/api.tl
+cp new-layer-225.tl ferogram-tl-types/tl/api.tl
 </code></pre>
 <p>Make sure the first line of the file is:</p>
-<pre><code>// LAYER 224
+<pre><code>// LAYER 225
 </code></pre>
 <h2 id="step-2-build"><a class="header" href="#step-2-build">Step 2: Build</a></h2>
 <pre><code class="language-bash">cargo build 2&gt;&amp;1 | head -40
@@ -11308,7 +11556,7 @@ cp new-layer-224.tl ferogram-tl-types/tl/api.tl
 <ul>
 <li>Parses the new schema</li>
 <li>Generates updated Rust source</li>
-<li>Patches <code>pub const LAYER: i32 = 224;</code> into <code>generated_common.rs</code></li>
+<li>Patches <code>pub const LAYER: i32 = 225;</code> into <code>generated_common.rs</code></li>
 </ul>
 <p>If there are no breaking type changes in <code>ferogram</code>, it compiles cleanly.</p>
 <h2 id="step-3-fix-compile-errors"><a class="header" href="#step-3-fix-compile-errors">Step 3: Fix compile errors</a></h2>
@@ -11896,7 +12144,7 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <p><strong>All generated Telegram API types.</strong> Auto-regenerated at <code>cargo build</code> from <code>tl/api.tl</code>.</p>
 <h3 id="what-it-provides-1"><a class="header" href="#what-it-provides-1">What it provides</a></h3>
 <ul>
-<li><code>LAYER: i32</code>: the current layer number (224)</li>
+<li><code>LAYER: i32</code>: the current layer number (225)</li>
 <li><code>types::*</code>: 1,200+ concrete structs (<code>types::Message</code>, <code>types::User</code>, etc.)</li>
 <li><code>enums::*</code>: 400+ boxed type enums (<code>enums::Message</code>, <code>enums::Peer</code>, etc.)</li>
 <li><code>functions::*</code>: 500+ RPC function structs implementing <code>RemoteCall</code></li>

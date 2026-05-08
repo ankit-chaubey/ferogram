@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-065304f4.js";
+            window.path_to_searchindex_js = "../searchindex-52306761.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c671d9b3.js"></script>
+        <script src="../toc-1b0b7965.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,61 +182,81 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="polls--votes"><a class="header" href="#polls--votes">Polls &amp; Votes</a></h1>
-<p>ferogram lets you send polls via <code>InputMessage</code>, vote on them programmatically, and inspect results and per-option vote lists.</p>
+<p>ferogram lets you send polls, vote on them, and inspect results and voter lists.</p>
 <hr>
 <h2 id="sending-a-poll"><a class="header" href="#sending-a-poll">Sending a poll</a></h2>
-<p>Polls are sent as media via <code>InputMessage</code>. Build the poll TL object and attach it:</p>
+<p>Use <code>PollBuilder</code> and pass it to <code>send_poll</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use ferogram::InputMessage;
+</span>use ferogram::{Client, PollBuilder};
 
-let poll = tl::enums::InputMedia::InputMediaPoll(tl::types::InputMediaPoll {
-    poll: tl::enums::Poll::Poll(tl::types::Poll {
-        id: 0,
-        closed: false,
-        public_voters: false,  // anonymous
-        multiple_choice: false,
-        quiz: false,
-        question: tl::enums::TextWithEntities::TextWithEntities(
-            tl::types::TextWithEntities { text: "What is your favourite language?".into(), entities: vec![] }
-        ),
-        answers: vec![
-            tl::enums::PollAnswer::PollAnswer(tl::types::PollAnswer {
-                text: tl::enums::TextWithEntities::TextWithEntities(
-                    tl::types::TextWithEntities { text: "Rust".into(), entities: vec![] }
-                ),
-                option: vec![0],
-            }),
-            tl::enums::PollAnswer::PollAnswer(tl::types::PollAnswer {
-                text: tl::enums::TextWithEntities::TextWithEntities(
-                    tl::types::TextWithEntities { text: "Go".into(), entities: vec![] }
-                ),
-                option: vec![1],
-            }),
-        ],
-        close_period: None,
-        close_date: None,
-    }),
-    correct_answers: None,
-    solution: None,
-    solution_entities: None,
-});
+// Regular anonymous poll
+client.send_poll(peer.clone(),
+    PollBuilder::new("What is your favourite language?")
+        .answers(["Rust", "Go", "C++"])
+).await?;
 
-client.send_message(peer.clone(), InputMessage::text("").copy_media(poll)).await?;
+// Public voters, auto-close after 5 minutes
+client.send_poll(peer.clone(),
+    PollBuilder::new("Vote now")
+        .answers(["Yes", "No"])
+        .public_voters(true)
+        .close_period(300)
+).await?;
+
+// Quiz mode with explanation
+client.send_poll(peer.clone(),
+    PollBuilder::new("Capital of France?")
+        .answers(["Berlin", "Paris", "Rome"])
+        .quiz(true)
+        .correct_index(1)
+        .solution("It's Paris.")
+        .hide_results_until_close(true)
+).await?;
+
+// Multiple choice
+client.send_poll(peer.clone(),
+    PollBuilder::new("Pick your tools")
+        .answers(["vim", "emacs", "VSCode", "Helix"])
+        .multiple_choice(true)
+).await?;
 <span class="boring">}</span></code></pre>
+<h3 id="pollbuilder-methods"><a class="header" href="#pollbuilder-methods"><code>PollBuilder</code> methods</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>PollBuilder::new(question)</code></td><td>Start a builder with a question string</td></tr>
+<tr><td><code>.answers(iter)</code></td><td>Answer strings, in order</td></tr>
+<tr><td><code>.quiz(bool)</code></td><td>Quiz mode (one correct answer)</td></tr>
+<tr><td><code>.correct_index(usize)</code></td><td>Which answer index is correct (quiz only)</td></tr>
+<tr><td><code>.solution(text)</code></td><td>Explanation shown after quiz answer</td></tr>
+<tr><td><code>.multiple_choice(bool)</code></td><td>Allow selecting more than one answer</td></tr>
+<tr><td><code>.public_voters(bool)</code></td><td>Show who voted</td></tr>
+<tr><td><code>.shuffle_answers(bool)</code></td><td>Randomise answer order per viewer</td></tr>
+<tr><td><code>.hide_results_until_close(bool)</code></td><td>Keep results hidden until closed</td></tr>
+<tr><td><code>.close_period(secs: i32)</code></td><td>Auto-close after N seconds (1-600)</td></tr>
+<tr><td><code>.close_date(ts: i32)</code></td><td>Auto-close at Unix timestamp</td></tr>
+<tr><td><code>.subscribers_only(bool)</code></td><td>Only channel subscribers can vote</td></tr>
+<tr><td><code>.countries_iso2(codes)</code></td><td>Restrict voting to ISO 3166-1 alpha-2 country codes</td></tr>
+</tbody>
+</table>
+</div>
 <hr>
 <h2 id="voting"><a class="header" href="#voting">Voting</a></h2>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_vote(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, options: Vec&lt;Vec&lt;u8&gt;&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.send_vote(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, options: Vec&lt;Vec&lt;u8&gt;&gt;) -&gt; Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Cast a vote on a poll message. <code>options</code> is a list of answer byte arrays  -  each matches the <code>option</code> field of a <code>PollAnswer</code>. For single-choice polls pass exactly one option; for multiple-choice polls pass multiple.
+Cast a vote. `options` is a list of answer byte vectors matching the `option` field on each `PollAnswer`. For single-choice polls pass one item; for multiple-choice pass several.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Vote for option 0 (Rust) on message 1234
+</span>// Vote for option 0 on message 1234
 client.send_vote(peer.clone(), 1234, vec![vec![0]]).await?;
 <span class="boring">}</span></code></pre>
 </div>
@@ -248,12 +268,11 @@ client.send_vote(peer.clone(), 1234, vec![vec![0]]).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, poll_hash: i64) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.get_poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, poll_hash: i64) -&gt; Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Request a fresh result snapshot from the server. The server responds with an <code>updateMessagePoll</code> in the update stream  -  this method itself returns <code>()</code> after the request is sent. The <code>poll_hash</code> comes from the <code>PollResults.results_hash</code> field on the message.
-<p>Use this to force-refresh results that may be stale in your local cache.</p>
+Request a fresh result snapshot from the server. The server responds with an `updateMessagePoll` in the update stream. `poll_hash` comes from `PollResults.results_hash` on the message.
 </div>
 
 </div>
@@ -261,19 +280,18 @@ Request a fresh result snapshot from the server. The server responds with an <co
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_poll_votes(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, option: Option&lt;Vec&lt;u8&gt;&gt;, limit: i32, offset: Option&lt;String&gt;) → Result&lt;tl::types::messages::VotesList, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_poll_votes(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, option: Option&lt;Vec&lt;u8&gt;&gt;, limit: i32, offset: Option&lt;String&gt;) -&gt; Result&lt;tl::types::messages::VotesList, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Fetch the list of users who voted, paginated. Only available for <strong>public voters</strong> polls (<code>public_voters: true</code>).
+Paginated list of who voted. Only works for public-voters polls.
 <ul>
-<li><code>option</code>  -  filter to a specific answer byte vector, or <code>None</code> for all votes.</li>
-<li><code>offset</code>  -  continuation token from a previous page’s <code>next_offset</code> field.</li>
+<li><code>option</code>: filter to a specific answer byte vector, or <code>None</code> for all votes.</li>
+<li><code>offset</code>: continuation token from the previous page’s <code>next_offset</code>.</li>
 </ul>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// First page: who voted for option 1?
-let page = client
+</span>let page = client
     .get_poll_votes(peer.clone(), msg_id, Some(vec![1]), 50, None)
     .await?;
 
@@ -281,7 +299,6 @@ for vote in &amp;page.votes {
     println!("User {} voted at {}", vote.user_id, vote.date);
 }
 
-// Next page
 if let Some(next) = page.next_offset {
     let page2 = client
         .get_poll_votes(peer.clone(), msg_id, Some(vec![1]), 50, Some(next))
@@ -307,32 +324,47 @@ if let Some(next) = page.next_offset {
 </div>
 
 <hr>
-<h2 id="closing-a-poll"><a class="header" href="#closing-a-poll">Closing a poll</a></h2>
-<p>To close a poll (stop accepting votes), edit the message and set <code>closed: true</code> on the poll:</p>
+<h2 id="poll-stats"><a class="header" href="#poll-stats">Poll stats</a></h2>
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_poll_stats(peer: impl Into&lt;PeerRef&gt;, msg_id: i32) -&gt; Result&lt;tl::types::stats::PollStats, InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">
+Fetch detailed vote graph stats for a poll (`stats.getPollStats`). Returns a `PollStats` with a `votes_graph` field containing a `StatsGraph` you can render as a chart.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Get the current poll from the message, then re-send with closed=true
-// You must reconstruct the InputMediaPoll with the same poll ID and closed=true.
-let close_media = tl::enums::InputMedia::InputMediaPoll(tl::types::InputMediaPoll {
+</span>let stats = client.get_poll_stats(peer.clone(), msg_id).await?;
+// stats.votes_graph: tl::enums::StatsGraph
+<span class="boring">}</span></code></pre>
+</div>
+
+</div>
+
+<hr>
+<h2 id="closing-a-poll"><a class="header" href="#closing-a-poll">Closing a poll</a></h2>
+<p>Edit the message and set <code>closed: true</code> on the poll. You need the original poll ID from the message:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let close_media = tl::enums::InputMedia::Poll(Box::new(tl::types::InputMediaPoll {
     poll: tl::enums::Poll::Poll(tl::types::Poll {
         id: existing_poll_id,
-        closed: true,  // &lt;-- close it
-        // ... same options etc.
-<span class="boring">        public_voters: false, multiple_choice: false, quiz: false,
-</span><span class="boring">        question: tl::enums::TextWithEntities::TextWithEntities(tl::types::TextWithEntities { text: "".into(), entities: vec![] }),
-</span><span class="boring">        answers: vec![],
-</span><span class="boring">        close_period: None, close_date: None,
-</span>    }),
+        closed: true,
+        // other fields same as original
+        ..
+    }),
     correct_answers: None,
     solution: None,
     solution_entities: None,
-});
+    solution_media: None,
+}));
 
 client.invoke(&amp;tl::functions::messages::EditMessage {
     peer: input_peer,
     id: msg_id,
     media: Some(close_media),
-    // ...
+    // ..
 }).await?;
 <span class="boring">}</span></code></pre>
 

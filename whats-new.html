@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-065304f4.js";
+            window.path_to_searchindex_js = "searchindex-52306761.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c671d9b3.js"></script>
+        <script src="toc-1b0b7965.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -183,6 +183,64 @@
                     <main>
                         <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
+<hr>
+<h2 id="v039"><a class="header" href="#v039">v0.3.9</a></h2>
+<p>Released 2026-05-07. Updated to TL Layer 225. Poll builder overhaul, guest-chat support for bots, two new client methods, and full MarkdownV2/HTML spec compliance in the parsers.</p>
+<h3 id="send_poll-now-takes-pollbuilder-breaking"><a class="header" href="#send_poll-now-takes-pollbuilder-breaking"><code>send_poll</code> now takes <code>PollBuilder</code> (breaking)</a></h3>
+<p>The old flat signature (<code>question, answers, quiz, correct_index, multiple_choice</code>) is gone. Pass a <code>PollBuilder</code> instead:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::PollBuilder;
+
+client.send_poll(peer,
+    PollBuilder::new("Favourite runtime?")
+        .answers(["Tokio", "async-std", "smol"])
+        .public_voters(true)
+        .close_period(300)
+).await?;
+
+// Quiz with answer explanation
+client.send_poll(peer,
+    PollBuilder::new("Capital of France?")
+        .answers(["Berlin", "Paris", "Rome"])
+        .quiz(true)
+        .correct_index(1)
+        .solution("It's Paris.")
+        .hide_results_until_close(true)
+).await?;
+<span class="boring">}</span></code></pre>
+<p>New fields the old API did not expose: <code>public_voters</code>, <code>shuffle_answers</code>, <code>hide_results_until_close</code>, <code>close_period</code>, <code>close_date</code>, <code>solution</code>, <code>subscribers_only</code>, <code>countries_iso2</code>.</p>
+<h3 id="guest-chat-queries-bots-only"><a class="header" href="#guest-chat-queries-bots-only">Guest-chat queries (bots only)</a></h3>
+<p>A new <code>Update::GuestChatQuery</code> variant handles <code>updateBotGuestChatQuery</code>. Fires when a user invites the bot into a guest-chat context. <code>GuestChatQuery</code> derefs to <code>IncomingMessage</code> and carries <code>query_id</code>, <code>message</code>, <code>reference_messages</code>, and <code>qts</code>.</p>
+<p>Answer with the <code>GuestChatAnswer</code> builder:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if let Update::GuestChatQuery(q) = update {
+    q.answer()
+        .article("My result")
+        .text("The answer")
+        .send(&amp;client)
+        .await?;
+}
+<span class="boring">}</span></code></pre>
+<p>Supported result kinds: <code>article</code>, <code>photo</code>, <code>document</code>, <code>game</code>, <code>location</code>, <code>venue</code>, <code>contact</code>, <code>webpage</code>, <code>invoice</code>, <code>raw</code>. Sends via <code>messages.setBotGuestChatResult</code>.</p>
+<h3 id="new-client-methods"><a class="header" href="#new-client-methods">New client methods</a></h3>
+<p><strong><code>delete_reaction(peer, msg_id, participant)</code></strong> reports and removes a specific user’s reaction on a message. Returns <code>true</code> on success.</p>
+<p><strong><code>get_poll_stats(peer, msg_id)</code></strong> returns detailed vote stats for a poll. Returns <code>tl::types::stats::PollStats</code>.</p>
+<h3 id="bannedrightssend_reactions"><a class="header" href="#bannedrightssend_reactions"><code>BannedRights::send_reactions</code></a></h3>
+<p>New field on the ban-rights builder:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>BannedRights::default().send_reactions(false)
+<span class="boring">}</span></code></pre>
+<h3 id="markdownv2-and-html-parser-update-ferogram-parsers"><a class="header" href="#markdownv2-and-html-parser-update-ferogram-parsers">MarkdownV2 and HTML parser update (<code>ferogram-parsers</code>)</a></h3>
+<p><code>parse_markdown</code> and <code>generate_markdown</code> now implement the full Telegram Bot API MarkdownV2 spec. The main breaking change: <code>__text__</code> is Underline now, not Italic. If you relied on the old behaviour, call <code>parse_markdown_v1</code> explicitly (deprecated, removed in 0.4.0).</p>
+<p>Explicit aliases added: <code>parse_markdown_v2</code>, <code>generate_markdown_v2</code>.</p>
+<p>HTML: added <code>&lt;ins&gt;</code> as underline, <code>&lt;span class="tg-spoiler"&gt;</code> as spoiler, <code>&lt;blockquote&gt;</code>/<code>&lt;blockquote expandable&gt;</code> for block quotes, <code>&lt;tg-time unix="N"&gt;</code> for formatted dates. The <code>&lt;pre&gt;&lt;code class="language-X"&gt;</code> bug that produced two entities instead of one is fixed. <code>generate_html</code> emits all of the above.</p>
+<h3 id="upgrading-from-038"><a class="header" href="#upgrading-from-038">Upgrading from 0.3.8</a></h3>
+<pre><code class="language-toml">ferogram = "0.3.9"
+</code></pre>
+<p>Two things to fix: <code>send_poll</code> call sites (see above), and any markdown that relied on <code>__text__</code> being Italic (change to <code>_text_</code>).</p>
 <hr>
 <h2 id="v038"><a class="header" href="#v038">v0.3.8</a></h2>
 <p>Released 2026-05-06. A small patch release fixing two broken APIs from 0.3.7.</p>
