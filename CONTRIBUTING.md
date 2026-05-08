@@ -160,7 +160,7 @@ For larger changes:
 feat(client): wrap setMyCommands for bot command registration
 
 Adds `set_my_commands(commands, scope, lang_code)` to Client.
-Wraps `bots::SetBotCommands` from Layer 224.
+Wraps `bots::SetBotCommands` from Layer 225.
 
 Closes #42
 ```

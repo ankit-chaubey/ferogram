@@ -61,3 +61,20 @@ Get the current approximate number of online members in a group or channel:
 let online = client.get_online_count("@mychannel").await?;
 println!("{online} members are online right now");
 ```
+
+---
+
+## Poll statistics
+
+```rust
+let stats = client.get_poll_stats(peer.clone(), msg_id).await?;
+```
+
+Returns `tl::types::stats::PollStats`. Contains a `votes_graph` field with a `StatsGraph` showing vote distribution over time. Use `stats.loadAsyncGraph` if the graph carries an async token.
+
+```rust
+let tl::enums::stats::PollStats::PollStats(s) = stats;
+// s.votes_graph: tl::enums::StatsGraph
+```
+
+Only available for polls in channels that meet Telegram's stats threshold.

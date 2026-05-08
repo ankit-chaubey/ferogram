@@ -43,20 +43,21 @@ client.send_message(peer, msg).await?;
 
 | Syntax | Entity |
 |---|---|
-| `**text**` | Bold |
-| `*text*` | Bold |
+| `**text**` or `*text*` | Bold |
 | `_text_` | Italic |
-| `__text__` | Italic |
-| `~~text~~` | Strikethrough |
+| `__text__` | Underline |
+| `~text~` | Strikethrough |
+| `\|\|text\|\|` | Spoiler |
 | `` `text` `` | Code (inline) |
 | ```` ```lang\ncode\n``` ```` | Pre (code block) |
-| `\|\|text\|\|` | Spoiler |
 | `[label](url)` | TextUrl |
 | `[label](tg://user?id=123)` | MentionName |
 | `![text](tg://emoji?id=123)` | CustomEmoji |
+| `> line` at line start | Blockquote |
+| `**> line` at line start | Expandable blockquote |
 | `\*`, `\_`, `\~` … | Escaped literal character |
 
-> **Note:** Underline has no markdown syntax. Use HTML `<u>` if you need it.
+> `parse_markdown` follows the Telegram Bot API MarkdownV2 spec. `__text__` is Underline, not Italic. For the legacy V1 behaviour call `parse_markdown_v1` (deprecated, removed in 0.4.0).
 
 ## HTML syntax
 
@@ -66,11 +67,15 @@ Supported tags:
 |---|---|
 | `<b>`, `<strong>` | Bold |
 | `<i>`, `<em>` | Italic |
-| `<u>` | Underline |
+| `<u>`, `<ins>` | Underline |
 | `<s>`, `<del>`, `<strike>` | Strikethrough |
+| `<tg-spoiler>`, `<span class="tg-spoiler">` | Spoiler |
 | `<code>` | Code (inline) |
 | `<pre>` | Pre (code block) |
-| `<tg-spoiler>` | Spoiler |
+| `<pre><code class="language-X">` | Pre with language |
+| `<blockquote>` | Blockquote |
+| `<blockquote expandable>` | Expandable (collapsible) blockquote |
+| `<tg-time unix="N" format="F">` | FormattedDate |
 | `<a href="url">` | TextUrl |
 | `<a href="tg://user?id=123">` | MentionName |
 | `<tg-emoji emoji-id="123">` | CustomEmoji |
@@ -159,7 +164,7 @@ let md  = generate_markdown(plain_text, &entities);
 let htm = generate_html(plain_text, &entities);
 ```
 
-> `generate_markdown` skips `Underline` (no unambiguous delimiter). Use `generate_html` if you need it.
+> `generate_markdown` emits full MarkdownV2 syntax including `__text__` for Underline, `~text~` for Strike, and `> ` prefix for Blockquote.
 
 ## All entity types
 

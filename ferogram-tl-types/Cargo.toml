@@ -1,6 +1,6 @@
 [package]
 name        = "ferogram-tl-types"
-description = "Auto-generated Telegram TL types: constructors, functions, enums (Layer 224)"
+description = "Auto-generated Telegram TL types: constructors, functions, enums (Layer 225)"
 readme      = "README.md"
 version.workspace    = true
 edition.workspace    = true

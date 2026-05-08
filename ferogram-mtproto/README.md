@@ -6,7 +6,7 @@ MTProto 2.0 session management, DH key exchange, and message framing for Rust.
 [![Telegram](https://img.shields.io/badge/community-%40FerogramChat-2CA5E0?logo=telegram)](https://t.me/FerogramChat) [![Channel](https://img.shields.io/badge/channel-%40Ferogram-2CA5E0?logo=telegram)](https://t.me/Ferogram)
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram--mtproto-5865F2)](https://docs.rs/ferogram-mtproto)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![TL Layer](https://img.shields.io/badge/TL%20Layer-224-8b5cf6)](https://core.telegram.org/mtproto)
+[![TL Layer](https://img.shields.io/badge/TL%20Layer-225-8b5cf6)](https://core.telegram.org/mtproto)
 
 ---
 

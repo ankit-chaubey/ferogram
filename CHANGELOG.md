@@ -10,6 +10,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.9]: 2026-05-07
+
+Updated to TL Layer 225.
+
+### Breaking changes in 0.3.9
+
+- **`send_poll` signature changed.** Now takes a `PollBuilder` instead of individual positional args:
+
+  ```rust
+  // before
+  client.send_poll(peer, "Best language?", &["Rust", "Go"], false, None, false).await?;
+
+  // now
+  use ferogram::PollBuilder;
+  client.send_poll(peer, PollBuilder::new("Best language?").answers(["Rust", "Go"])).await?;
+  ```
+
+- **`parse_markdown` now implements MarkdownV2** (was a hybrid V1/V2 dialect):
+  - `__text__` produces **Underline** now, not Italic
+  - `~text~` is Strikethrough (single tilde, as Telegram specifies)
+  - `> line` at line start produces Blockquote
+  - `**> line` at line start produces Expandable blockquote
+  - `![](tg://emoji?id=N)` with empty label now parses correctly
+  - Escape set is the strict V2 one: `_ * [ ] ( ) ~ \ \` > # + - = | { } . !`
+- **`generate_markdown` now emits V2 syntax:**
+  - Italic: `_text_`
+  - Underline: `__text__`
+  - Strike: `~text~` (single tilde)
+  - Blockquote: `> ` prefix; expandable: `**> ` prefix
+  - All V2 special chars in plain text are backslash-escaped
+
+### Added in 0.3.9
+
+**`PollBuilder`** is a new fluent builder for `send_poll`. It covers the full `InputMediaPoll` field set:
+
+```rust
+use ferogram::PollBuilder;
+
+client.send_poll(peer,
+    PollBuilder::new("Favourite runtime?")
+        .answers(["Tokio", "async-std", "smol"])
+        .public_voters(true)
+        .close_period(300)
+).await?;
+
+// Quiz with answer explanation
+client.send_poll(peer,
+    PollBuilder::new("Capital of France?")
+        .answers(["Berlin", "Paris", "Rome"])
+        .quiz(true)
+        .correct_index(1)
+        .solution("It's Paris.")
+        .hide_results_until_close(true)
+).await?;
+```
+
+New fields not in the old API: `public_voters`, `shuffle_answers`, `hide_results_until_close`, `close_period`, `close_date`, `solution`, `subscribers_only`, `countries_iso2`.
+
+**`Update::GuestChatQuery`** is a new update variant for bots (`updateBotGuestChatQuery`). It fires when a user invites the bot into a guest-chat context. Carries `query_id`, `message`, `reference_messages`, and `qts`. `GuestChatQuery` derefs to `IncomingMessage`. Answer with `GuestChatAnswer`:
+
+```rust
+if let Update::GuestChatQuery(q) = update {
+    q.answer()
+        .article("Result title")
+        .text("Answer body")
+        .send(&client)
+        .await?;
+}
+```
+
+`GuestChatAnswer` supports all inline result kinds: `article`, `photo`, `document`, `game`, `location`, `venue`, `contact`, `webpage`, `invoice`, `raw`. Sends via `messages.setBotGuestChatResult`.
+
+**`Client::delete_reaction(peer, msg_id, participant)`** reports and removes a specific user's reaction on a message (`messages.reportReaction`). Returns `true` on success.
+
+**`Client::get_poll_stats(peer, msg_id)`** returns detailed vote stats for a poll (`stats.getPollStats`). Returns `tl::types::stats::PollStats`.
+
+**`BannedRights::send_reactions`** is a new field on the ban-rights builder. Controls whether restricted users can add reactions:
+
+```rust
+BannedRights::default().send_reactions(false)
+```
+
+**User ID in builtins** is now resolved for `CallbackQuery`, `InlineQuery`, `InlineSend`, and `GuestChatQuery`, not just message updates.
+
+**Parser additions (`ferogram-parsers`):**
+
+- `parse_markdown_v2()` explicit V2 entry point (same as `parse_markdown`)
+- `generate_markdown_v2()` explicit V2 generator (same as `generate_markdown`)
+- `parse_markdown_v1()` legacy V1 parser, kept for backward compat, now deprecated
+- HTML: `<ins>` accepted as underline alias (same as `<u>`)
+- HTML: `<span class="tg-spoiler">` accepted as spoiler alias
+- HTML: `<blockquote>` produces `MessageEntityBlockquote { collapsed: false }`
+- HTML: `<blockquote expandable>` produces `MessageEntityBlockquote { collapsed: true }`
+- HTML: `<tg-time unix="N" format="F">` produces `MessageEntityFormattedDate`
+- HTML: `<pre><code class="language-X">` now correctly produces one `Pre` entity with the language set, not two separate entities
+- `generate_html` now emits `<blockquote>`, `<blockquote expandable>`, and `<tg-time>`
+- Both `parse_html` backends (hand-rolled and `html5ever`) are at full parity
+
+### Deprecated in 0.3.9
+
+- `parse_markdown_v1` marked `#[deprecated(since = "0.3.9")]`. Will be removed in 0.4.0.
+
 ## [0.3.8]: 2026-05-06
 
 Bug fixes

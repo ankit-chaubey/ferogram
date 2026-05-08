@@ -1,50 +1,65 @@
 # Polls & Votes
 
-ferogram lets you send polls via `InputMessage`, vote on them programmatically, and inspect results and per-option vote lists.
+ferogram lets you send polls, vote on them, and inspect results and voter lists.
 
 ---
 
 ## Sending a poll
 
-Polls are sent as media via `InputMessage`. Build the poll TL object and attach it:
+Use `PollBuilder` and pass it to `send_poll`:
 
 ```rust
-use ferogram::InputMessage;
+use ferogram::{Client, PollBuilder};
 
-let poll = tl::enums::InputMedia::InputMediaPoll(tl::types::InputMediaPoll {
-    poll: tl::enums::Poll::Poll(tl::types::Poll {
-        id: 0,
-        closed: false,
-        public_voters: false,  // anonymous
-        multiple_choice: false,
-        quiz: false,
-        question: tl::enums::TextWithEntities::TextWithEntities(
-            tl::types::TextWithEntities { text: "What is your favourite language?".into(), entities: vec![] }
-        ),
-        answers: vec![
-            tl::enums::PollAnswer::PollAnswer(tl::types::PollAnswer {
-                text: tl::enums::TextWithEntities::TextWithEntities(
-                    tl::types::TextWithEntities { text: "Rust".into(), entities: vec![] }
-                ),
-                option: vec![0],
-            }),
-            tl::enums::PollAnswer::PollAnswer(tl::types::PollAnswer {
-                text: tl::enums::TextWithEntities::TextWithEntities(
-                    tl::types::TextWithEntities { text: "Go".into(), entities: vec![] }
-                ),
-                option: vec![1],
-            }),
-        ],
-        close_period: None,
-        close_date: None,
-    }),
-    correct_answers: None,
-    solution: None,
-    solution_entities: None,
-});
+// Regular anonymous poll
+client.send_poll(peer.clone(),
+    PollBuilder::new("What is your favourite language?")
+        .answers(["Rust", "Go", "C++"])
+).await?;
 
-client.send_message(peer.clone(), InputMessage::text("").copy_media(poll)).await?;
+// Public voters, auto-close after 5 minutes
+client.send_poll(peer.clone(),
+    PollBuilder::new("Vote now")
+        .answers(["Yes", "No"])
+        .public_voters(true)
+        .close_period(300)
+).await?;
+
+// Quiz mode with explanation
+client.send_poll(peer.clone(),
+    PollBuilder::new("Capital of France?")
+        .answers(["Berlin", "Paris", "Rome"])
+        .quiz(true)
+        .correct_index(1)
+        .solution("It's Paris.")
+        .hide_results_until_close(true)
+).await?;
+
+// Multiple choice
+client.send_poll(peer.clone(),
+    PollBuilder::new("Pick your tools")
+        .answers(["vim", "emacs", "VSCode", "Helix"])
+        .multiple_choice(true)
+).await?;
 ```
+
+### `PollBuilder` methods
+
+| Method | Description |
+|---|---|
+| `PollBuilder::new(question)` | Start a builder with a question string |
+| `.answers(iter)` | Answer strings, in order |
+| `.quiz(bool)` | Quiz mode (one correct answer) |
+| `.correct_index(usize)` | Which answer index is correct (quiz only) |
+| `.solution(text)` | Explanation shown after quiz answer |
+| `.multiple_choice(bool)` | Allow selecting more than one answer |
+| `.public_voters(bool)` | Show who voted |
+| `.shuffle_answers(bool)` | Randomise answer order per viewer |
+| `.hide_results_until_close(bool)` | Keep results hidden until closed |
+| `.close_period(secs: i32)` | Auto-close after N seconds (1-600) |
+| `.close_date(ts: i32)` | Auto-close at Unix timestamp |
+| `.subscribers_only(bool)` | Only channel subscribers can vote |
+| `.countries_iso2(codes)` | Restrict voting to ISO 3166-1 alpha-2 country codes |
 
 ---
 
@@ -53,13 +68,13 @@ client.send_message(peer.clone(), InputMessage::text("").copy_media(poll)).await
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_vote(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, options: Vec&lt;Vec&lt;u8&gt;&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.send_vote(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, options: Vec&lt;Vec&lt;u8&gt;&gt;) -> Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Cast a vote on a poll message. <code>options</code> is a list of answer byte arrays  -  each matches the <code>option</code> field of a <code>PollAnswer</code>. For single-choice polls pass exactly one option; for multiple-choice polls pass multiple.
+Cast a vote. `options` is a list of answer byte vectors matching the `option` field on each `PollAnswer`. For single-choice polls pass one item; for multiple-choice pass several.
 
 ```rust
-// Vote for option 0 (Rust) on message 1234
+// Vote for option 0 on message 1234
 client.send_vote(peer.clone(), 1234, vec![vec![0]]).await?;
 ```
 </div>
@@ -72,28 +87,25 @@ client.send_vote(peer.clone(), 1234, vec![vec![0]]).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, poll_hash: i64) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.get_poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, poll_hash: i64) -> Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Request a fresh result snapshot from the server. The server responds with an <code>updateMessagePoll</code> in the update stream  -  this method itself returns <code>()</code> after the request is sent. The <code>poll_hash</code> comes from the <code>PollResults.results_hash</code> field on the message.
-
-Use this to force-refresh results that may be stale in your local cache.
+Request a fresh result snapshot from the server. The server responds with an `updateMessagePoll` in the update stream. `poll_hash` comes from `PollResults.results_hash` on the message.
 </div>
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_poll_votes(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, option: Option&lt;Vec&lt;u8&gt;&gt;, limit: i32, offset: Option&lt;String&gt;) → Result&lt;tl::types::messages::VotesList, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_poll_votes(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, option: Option&lt;Vec&lt;u8&gt;&gt;, limit: i32, offset: Option&lt;String&gt;) -> Result&lt;tl::types::messages::VotesList, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Fetch the list of users who voted, paginated. Only available for <strong>public voters</strong> polls (<code>public_voters: true</code>).
+Paginated list of who voted. Only works for public-voters polls.
 
-- `option`  -  filter to a specific answer byte vector, or `None` for all votes.
-- `offset`  -  continuation token from a previous page's `next_offset` field.
+- `option`: filter to a specific answer byte vector, or `None` for all votes.
+- `offset`: continuation token from the previous page's `next_offset`.
 
 ```rust
-// First page: who voted for option 1?
 let page = client
     .get_poll_votes(peer.clone(), msg_id, Some(vec![1]), 50, None)
     .await?;
@@ -102,7 +114,6 @@ for vote in &page.votes {
     println!("User {} voted at {}", vote.user_id, vote.date);
 }
 
-// Next page
 if let Some(next) = page.next_offset {
     let page2 = client
         .get_poll_votes(peer.clone(), msg_id, Some(vec![1]), 50, Some(next))
@@ -123,32 +134,47 @@ if let Some(next) = page.next_offset {
 
 ---
 
-## Closing a poll
+## Poll stats
 
-To close a poll (stop accepting votes), edit the message and set `closed: true` on the poll:
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.get_poll_stats(peer: impl Into&lt;PeerRef&gt;, msg_id: i32) -> Result&lt;tl::types::stats::PollStats, InvocationError&gt;</span>
+</div>
+<div class="api-card-body">
+Fetch detailed vote graph stats for a poll (`stats.getPollStats`). Returns a `PollStats` with a `votes_graph` field containing a `StatsGraph` you can render as a chart.
 
 ```rust
-// Get the current poll from the message, then re-send with closed=true
-// You must reconstruct the InputMediaPoll with the same poll ID and closed=true.
-let close_media = tl::enums::InputMedia::InputMediaPoll(tl::types::InputMediaPoll {
+let stats = client.get_poll_stats(peer.clone(), msg_id).await?;
+// stats.votes_graph: tl::enums::StatsGraph
+```
+</div>
+</div>
+
+---
+
+## Closing a poll
+
+Edit the message and set `closed: true` on the poll. You need the original poll ID from the message:
+
+```rust
+let close_media = tl::enums::InputMedia::Poll(Box::new(tl::types::InputMediaPoll {
     poll: tl::enums::Poll::Poll(tl::types::Poll {
         id: existing_poll_id,
-        closed: true,  // <-- close it
-        // ... same options etc.
-        # public_voters: false, multiple_choice: false, quiz: false,
-        # question: tl::enums::TextWithEntities::TextWithEntities(tl::types::TextWithEntities { text: "".into(), entities: vec![] }),
-        # answers: vec![],
-        # close_period: None, close_date: None,
+        closed: true,
+        // other fields same as original
+        ..
     }),
     correct_answers: None,
     solution: None,
     solution_entities: None,
-});
+    solution_media: None,
+}));
 
 client.invoke(&tl::functions::messages::EditMessage {
     peer: input_peer,
     id: msg_id,
     media: Some(close_media),
-    // ...
+    // ..
 }).await?;
 ```

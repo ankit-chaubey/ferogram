@@ -40,6 +40,7 @@
 - [IncomingMessage](./updates/incoming-message.md)
 - [Callback Queries](./updates/callbacks.md)
 - [Inline Mode](./updates/inline-mode.md)
+- [Guest Chat Queries](./updates/guest-chat.md)
 
 ---
 

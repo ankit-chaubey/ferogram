@@ -298,6 +298,7 @@ impl Client {
                             send_docs: false,
                             send_plain: false,
                             edit_rank: false,
+                            send_reactions: false,
                             until_date: 0,
                         },
                     ),
@@ -336,6 +337,7 @@ impl Client {
                             send_docs: false,
                             send_plain: false,
                             edit_rank: false,
+                            send_reactions: false,
                             until_date: 0,
                         },
                     ),
@@ -440,6 +442,7 @@ impl Client {
                     send_docs: false,
                     send_plain: false,
                     edit_rank: false,
+                    send_reactions: false,
                     until_date,
                 },
             ),
@@ -757,6 +760,7 @@ pub struct BannedRightsBuilder {
     pub send_inline: bool,
     pub embed_links: bool,
     pub send_polls: bool,
+    pub send_reactions: bool,
     pub change_info: bool,
     pub invite_users: bool,
     pub pin_messages: bool,
@@ -803,6 +807,10 @@ impl BannedRightsBuilder {
         self.send_polls = v;
         self
     }
+    pub fn send_reactions(mut self, v: bool) -> Self {
+        self.send_reactions = v;
+        self
+    }
     pub fn change_info(mut self, v: bool) -> Self {
         self.change_info = v;
         self
@@ -833,6 +841,7 @@ impl BannedRightsBuilder {
             send_inline: true,
             embed_links: true,
             send_polls: true,
+            send_reactions: true,
             change_info: true,
             invite_users: true,
             pin_messages: true,
@@ -863,6 +872,7 @@ impl BannedRightsBuilder {
             send_docs: false,
             send_plain: false,
             edit_rank: false,
+            send_reactions: self.send_reactions,
             until_date: self.until_date,
         })
     }

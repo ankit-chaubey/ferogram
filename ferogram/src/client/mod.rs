@@ -3849,6 +3849,7 @@ impl Client {
                     fwd_from: m.fwd_from,
                     via_bot_id: m.via_bot_id,
                     via_business_bot_id: None,
+                    guestchat_via_from: None,
                     reply_to: m.reply_to,
                     date: m.date,
                     message: m.message,
@@ -3917,6 +3918,7 @@ impl Client {
             fwd_from: None,
             via_bot_id: None,
             via_business_bot_id: None,
+            guestchat_via_from: None,
             reply_to: input.reply_to.map(|id| {
                 tl::enums::MessageReplyHeader::MessageReplyHeader(tl::types::MessageReplyHeader {
                     reply_to_scheduled: false,
@@ -3995,6 +3997,7 @@ impl Client {
             fwd_from: None,
             via_bot_id: None,
             via_business_bot_id: None,
+            guestchat_via_from: None,
             reply_to: input.reply_to.map(|rid| {
                 tl::enums::MessageReplyHeader::MessageReplyHeader(tl::types::MessageReplyHeader {
                     reply_to_scheduled: false,
@@ -6856,66 +6859,11 @@ impl Client {
     pub async fn send_poll(
         &self,
         peer: impl Into<PeerRef>,
-        question: impl Into<String>,
-        answers: &[impl AsRef<str>],
-        quiz: bool,
-        correct_index: Option<usize>,
-        multiple_choice: bool,
+        poll: crate::poll::PollBuilder,
     ) -> Result<(), InvocationError> {
-        use ferogram_tl_types as tl;
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let poll_answers: Vec<tl::enums::PollAnswer> = answers
-            .iter()
-            .enumerate()
-            .map(|(i, a)| {
-                tl::enums::PollAnswer::PollAnswer(tl::types::PollAnswer {
-                    text: tl::enums::TextWithEntities::TextWithEntities(
-                        tl::types::TextWithEntities {
-                            text: a.as_ref().to_owned(),
-                            entities: vec![],
-                        },
-                    ),
-                    option: vec![i as u8],
-                    media: None,
-                    added_by: None,
-                    date: None,
-                })
-            })
-            .collect();
-        let correct_answers: Option<Vec<i32>> = if quiz {
-            correct_index.map(|i| vec![i as i32])
-        } else {
-            None
-        };
-        let poll = tl::enums::Poll::Poll(tl::types::Poll {
-            id: 0,
-            closed: false,
-            public_voters: false,
-            multiple_choice: multiple_choice && !quiz,
-            quiz,
-            open_answers: false,
-            revoting_disabled: false,
-            shuffle_answers: false,
-            hide_results_until_close: false,
-            creator: false,
-            question: tl::enums::TextWithEntities::TextWithEntities(tl::types::TextWithEntities {
-                text: question.into(),
-                entities: vec![],
-            }),
-            answers: poll_answers,
-            close_period: None,
-            close_date: None,
-            hash: 0,
-        });
-        let media = tl::enums::InputMedia::Poll(Box::new(tl::types::InputMediaPoll {
-            poll,
-            correct_answers,
-            attached_media: None,
-            solution: None,
-            solution_entities: None,
-            solution_media: None,
-        }));
+        let media = poll.into_input_media();
         let req = tl::functions::messages::SendMedia {
             silent: false,
             background: false,
@@ -8859,6 +8807,26 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Report (and request removal of) a specific user's reaction on a message.
+    pub async fn delete_reaction(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+        participant: impl Into<PeerRef>,
+    ) -> Result<bool, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let part = participant.into().resolve(self).await?;
+        let reaction_peer = self.inner.peer_cache.read().await.peer_to_input(&part)?;
+        let req = tl::functions::messages::ReportReaction {
+            peer: input_peer,
+            id: msg_id,
+            reaction_peer,
+        };
+        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
+        Ok(body.len() >= 4 && u32::from_le_bytes(body[..4].try_into().unwrap()) == 0x997275b5)
+    }
+
     pub async fn iter_reaction_users(
         &self,
         peer: impl Into<PeerRef>,
@@ -9183,6 +9151,25 @@ impl Client {
             options,
         };
         self.rpc_write(&req).await
+    }
+
+    pub async fn get_poll_stats(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+    ) -> Result<tl::types::stats::PollStats, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let req = tl::functions::stats::GetPollStats {
+            dark: false,
+            peer: input_peer,
+            msg_id,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::stats::PollStats::PollStats(result) =
+            tl::enums::stats::PollStats::deserialize(&mut cur)?;
+        Ok(result)
     }
 
     pub async fn get_poll_results(

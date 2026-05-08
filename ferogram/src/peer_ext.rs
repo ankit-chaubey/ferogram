@@ -7,7 +7,7 @@
 
 use ferogram_tl_types as tl;
 
-/// Convenience extension for [`tl::enums::Peer`] — extract the numeric ID
+/// Convenience extension for [`tl::enums::Peer`]: extract the numeric ID
 /// without writing a `match` every time.
 ///
 /// # Example
@@ -57,7 +57,7 @@ impl PeerExt for tl::enums::Peer {
     }
 }
 
-/// Same convenience for `Option<&tl::enums::Peer>` — lets you write
+/// Same convenience for `Option<&tl::enums::Peer>`: lets you write
 /// `msg.sender_id().bare_id()` instead of `.map(|p| p.bare_id())`.
 pub trait OptionPeerExt {
     fn bare_id(&self) -> Option<i64>;

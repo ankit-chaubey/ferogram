@@ -118,6 +118,7 @@ client
 | `.change_info(bool)` | Prevent changing chat info |
 | `.invite_users(bool)` | Prevent inviting users |
 | `.pin_messages(bool)` | Prevent pinning messages |
+| `.send_reactions(bool)` | Prevent sending reactions |
 | `.until_date(ts: i32)` | Expiry Unix timestamp (`0` = permanent) |
 
 ---

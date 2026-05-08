@@ -123,7 +123,7 @@
 //!
 //! # Raw API
 //!
-//! If something isn't wrapped yet, you can call any Layer 224 TL function directly:
+//! If something isn't wrapped yet, you can call any Layer 225 TL function directly:
 //!
 //! ```rust,ignore
 //! use ferogram::tl;
@@ -202,8 +202,10 @@ pub mod typing_guard;
 
 #[macro_use]
 pub mod macros;
+pub mod guest_chat;
 pub mod peer_ext;
 pub mod peer_ref;
+pub mod poll;
 pub mod reactions;
 
 pub mod dc_migration;
@@ -228,6 +230,7 @@ pub use dialog::{Dialog, DialogIter, MessageIter};
 pub use errors::{InvocationError, LoginToken, PasswordToken, RpcError, SignInError};
 pub use ferogram_connect::TransportKind;
 pub use ferogram_connect::random_i64 as random_i64_pub;
+pub use guest_chat::GuestChatQuery;
 pub use input_message::{ForwardOptions, InputMessage, InvoiceOptions, LinkKind};
 pub use keyboard::{Button, InlineKeyboard, ReplyKeyboard};
 pub use media::{Document, DownloadIter, Downloadable, Photo, Sticker, UploadedFile};
@@ -236,6 +239,7 @@ pub use participants::{Participant, ProfilePhotoIter};
 pub use peer_cache::{ExperimentalFeatures, PeerCache, PeerType};
 pub use peer_ext::{OptionPeerExt, PeerExt};
 pub use peer_ref::PeerRef;
+pub use poll::PollBuilder;
 pub use proxy::{MtProxyConfig, parse_proxy_link};
 pub use restart::{ConnectionRestartPolicy, ExponentialBackoff, FixedInterval, NeverRestart};
 pub use retry::{AutoSleep, CircuitBreaker, NoRetries, RetryContext, RetryPolicy};

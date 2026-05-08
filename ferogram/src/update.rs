@@ -1550,6 +1550,8 @@ pub enum Update {
     PreCheckoutQuery(PreCheckoutQueryUpdate),
     /// A channel was boosted via the bot (bots only).
     ChatBoost(ChatBoostUpdate),
+    /// A bot received a guest-chat inline query (bots only).
+    GuestChatQuery(crate::guest_chat::GuestChatQuery),
     /// A raw TL update not mapped to any of the above variants.
     Raw(Box<RawUpdate>),
 }
@@ -1836,6 +1838,21 @@ pub(crate) fn from_single_update(upd: tl::enums::Update) -> Vec<Update> {
             boost: u.boost,
             qts: u.qts,
         })],
+        BotGuestChatQuery(u) => {
+            let message = IncomingMessage::from_raw(u.message);
+            let reference_messages = u
+                .reference_messages
+                .unwrap_or_default()
+                .into_iter()
+                .map(IncomingMessage::from_raw)
+                .collect();
+            vec![Update::GuestChatQuery(crate::guest_chat::GuestChatQuery {
+                query_id: u.query_id,
+                message,
+                reference_messages,
+                qts: u.qts,
+            })]
+        }
         other => {
             let cid = tl_constructor_id(&other);
             vec![Update::Raw(Box::new(RawUpdate {
@@ -1856,6 +1873,7 @@ fn tl_constructor_id(upd: &tl::enums::Update) -> u32 {
         BotCallbackQuery(_) => 0xb9cfc48d,
         BotChatBoost(_) => 0x904dd49c,
         BotChatInviteRequester(_) => 0x11dfa986,
+        BotGuestChatQuery(_) => 0xcdd4093d,
         BotCommands(_) => 0x4d712f2e,
         BotDeleteBusinessMessage(_) => 0xa02a982e,
         BotEditBusinessMessage(_) => 0x7df587c,
@@ -2004,6 +2022,7 @@ fn tl_constructor_id(upd: &tl::enums::Update) -> u32 {
         WebViewResultSent(_) => 0x1592b79d,
         ChatParticipantRank(_) => 0xbd8367b9,
         ManagedBot(_) => 0x4880ed9a,
+        AiComposeTones => 0x8c0f91fb,
     }
 }
 
@@ -2031,6 +2050,7 @@ pub(crate) fn make_short_dm(m: tl::types::UpdateShortMessage) -> IncomingMessage
         fwd_from: m.fwd_from,
         via_bot_id: m.via_bot_id,
         via_business_bot_id: None,
+        guestchat_via_from: None,
         reply_to: m.reply_to,
         date: m.date,
         message: m.message,
@@ -2089,6 +2109,7 @@ pub(crate) fn make_short_chat(m: tl::types::UpdateShortChatMessage) -> IncomingM
         fwd_from: m.fwd_from,
         via_bot_id: m.via_bot_id,
         via_business_bot_id: None,
+        guestchat_via_from: None,
         reply_to: m.reply_to,
         date: m.date,
         message: m.message,

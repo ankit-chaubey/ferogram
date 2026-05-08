@@ -73,6 +73,7 @@ Typed async update stream via `client.stream_updates()`. All variants:
 - `ShippingQuery`: shipping query from a payment
 - `PreCheckoutQuery`: pre-checkout query from a payment
 - `ChatBoost`: channel boost event
+- `GuestChatQuery`: user invited the bot into a guest-chat context (bots only)
 - `Raw`: raw TL update for anything not wrapped above
 
 Update gap recovery with PTS/QTS/channel PTS tracking. Missed updates fetched via `getDifference` and `getChannelDifference` on reconnect. `catch_up: true` config field replays updates from last known state. 30-second watchdog unblocks a stuck diff fetch.
@@ -312,7 +313,7 @@ let chat   = msg.peer_id().bare_id();     // Option<i64>
 - `promote_participant(peer, user, AdminRights)`: grant admin rights
 - `demote_participant(peer, user)`: revoke admin rights
 - `set_admin_rights(peer, user, AdminRights)`: set admin permissions
-- `set_banned_rights(peer, user, BannedRights)`: set per-user restrictions
+- `set_banned_rights(peer, user, BannedRights)`: set per-user restrictions (fields include `send_reactions` as of 0.3.9)
 - `get_permissions(peer, user)`: fetch a participant's current rights
 - `transfer_chat_ownership(peer, user, password)`: transfer group/channel ownership
 - `export_invite_link(peer)`: get or generate primary invite link
@@ -374,6 +375,7 @@ let chat   = msg.peer_id().bare_id();     // Option<i64>
 - `send_paid_reaction(peer, msg_id, count)`: send paid (Stars) reaction
 - `read_reactions(peer)`: mark reactions as read
 - `clear_recent_reactions()`: clear the recent reactions list
+- `delete_reaction(peer, msg_id, participant)`: report and remove a specific user's reaction (`messages.reportReaction`)
 
 ---
 
@@ -388,10 +390,11 @@ let chat   = msg.peer_id().bare_id();     // Option<i64>
 
 ## Polls
 
-- `send_poll(peer, Poll)`: send a poll via `InputMedia::poll`
+- `send_poll(peer, PollBuilder)`: send a poll using the `PollBuilder` fluent builder
 - `send_vote(peer, msg_id, options)`: cast a vote
 - `get_poll_results(peer, msg_id)`: fetch vote counts and voters
 - `get_poll_votes(peer, msg_id, option, ...)`: paginated voter list per option
+- `get_poll_stats(peer, msg_id)`: detailed vote graph stats (`stats.getPollStats`), returns `tl::types::stats::PollStats`
 
 ---
 
@@ -587,13 +590,13 @@ Keys: last seen, profile photo, phone number, bio, birthday, forwards, calls, vo
 
 - `client.invoke(&req)`: call any TL function against the current DC
 - `client.invoke_on_dc(dc_id, &req)`: call any TL function against a specific DC
-- Full Layer 224 type coverage via `ferogram::tl`: `tl::types`, `tl::enums`, `tl::functions`
+- Full Layer 225 type coverage via `ferogram::tl`: `tl::types`, `tl::enums`, `tl::functions`
 
 ---
 
 ## TL Layer Crates
 
-- `ferogram-tl-types`: 2,329 TL definitions generated at build time from Layer 224; binary TL serialization and deserialization on all types
+- `ferogram-tl-types`: TL definitions generated at build time from Layer 225; binary TL serialization and deserialization on all types
 - `ferogram-tl-gen`: build-time code generator from a TL AST to Rust source
 - `ferogram-tl-parser`: streaming parser for `.tl` schema files; produces a typed `Definition` AST; internal `TlIterator` for low-memory streaming; parse errors include the failing line
 

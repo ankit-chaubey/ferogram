@@ -4,6 +4,87 @@ ferogram started as a renamed continuation of [layer](https://github.com/ankit-c
 
 ---
 
+## v0.3.9
+
+Released 2026-05-07. Updated to TL Layer 225. Poll builder overhaul, guest-chat support for bots, two new client methods, and full MarkdownV2/HTML spec compliance in the parsers.
+
+### `send_poll` now takes `PollBuilder` (breaking)
+
+The old flat signature (`question, answers, quiz, correct_index, multiple_choice`) is gone. Pass a `PollBuilder` instead:
+
+```rust
+use ferogram::PollBuilder;
+
+client.send_poll(peer,
+    PollBuilder::new("Favourite runtime?")
+        .answers(["Tokio", "async-std", "smol"])
+        .public_voters(true)
+        .close_period(300)
+).await?;
+
+// Quiz with answer explanation
+client.send_poll(peer,
+    PollBuilder::new("Capital of France?")
+        .answers(["Berlin", "Paris", "Rome"])
+        .quiz(true)
+        .correct_index(1)
+        .solution("It's Paris.")
+        .hide_results_until_close(true)
+).await?;
+```
+
+New fields the old API did not expose: `public_voters`, `shuffle_answers`, `hide_results_until_close`, `close_period`, `close_date`, `solution`, `subscribers_only`, `countries_iso2`.
+
+### Guest-chat queries (bots only)
+
+A new `Update::GuestChatQuery` variant handles `updateBotGuestChatQuery`. Fires when a user invites the bot into a guest-chat context. `GuestChatQuery` derefs to `IncomingMessage` and carries `query_id`, `message`, `reference_messages`, and `qts`.
+
+Answer with the `GuestChatAnswer` builder:
+
+```rust
+if let Update::GuestChatQuery(q) = update {
+    q.answer()
+        .article("My result")
+        .text("The answer")
+        .send(&client)
+        .await?;
+}
+```
+
+Supported result kinds: `article`, `photo`, `document`, `game`, `location`, `venue`, `contact`, `webpage`, `invoice`, `raw`. Sends via `messages.setBotGuestChatResult`.
+
+### New client methods
+
+**`delete_reaction(peer, msg_id, participant)`** reports and removes a specific user's reaction on a message. Returns `true` on success.
+
+**`get_poll_stats(peer, msg_id)`** returns detailed vote stats for a poll. Returns `tl::types::stats::PollStats`.
+
+### `BannedRights::send_reactions`
+
+New field on the ban-rights builder:
+
+```rust
+BannedRights::default().send_reactions(false)
+```
+
+### MarkdownV2 and HTML parser update (`ferogram-parsers`)
+
+`parse_markdown` and `generate_markdown` now implement the full Telegram Bot API MarkdownV2 spec. The main breaking change: `__text__` is Underline now, not Italic. If you relied on the old behaviour, call `parse_markdown_v1` explicitly (deprecated, removed in 0.4.0).
+
+Explicit aliases added: `parse_markdown_v2`, `generate_markdown_v2`.
+
+HTML: added `<ins>` as underline, `<span class="tg-spoiler">` as spoiler, `<blockquote>`/`<blockquote expandable>` for block quotes, `<tg-time unix="N">` for formatted dates. The `<pre><code class="language-X">` bug that produced two entities instead of one is fixed. `generate_html` emits all of the above.
+
+### Upgrading from 0.3.8
+
+```toml
+ferogram = "0.3.9"
+```
+
+Two things to fix: `send_poll` call sites (see above), and any markdown that relied on `__text__` being Italic (change to `_text_`).
+
+---
+
 ## v0.3.8
 
 Released 2026-05-06. A small patch release fixing two broken APIs from 0.3.7.

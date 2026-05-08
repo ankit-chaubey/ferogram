@@ -82,6 +82,7 @@ fn update_kind(update: &Update) -> &'static str {
         Update::ShippingQuery(_) => "ShippingQuery",
         Update::PreCheckoutQuery(_) => "PreCheckoutQuery",
         Update::ChatBoost(_) => "ChatBoost",
+        Update::GuestChatQuery(_) => "GuestChatQuery",
         Update::Raw(_) => "Raw",
     }
 }
@@ -142,6 +143,10 @@ impl Middleware for RateLimitMiddleware {
         Box::pin(async move {
             let sender_id = match &update {
                 Update::NewMessage(m) | Update::MessageEdited(m) => m.sender_user_id(),
+                Update::CallbackQuery(q) => Some(q.user_id),
+                Update::InlineQuery(q) => Some(q.user_id),
+                Update::InlineSend(s) => Some(s.user_id),
+                Update::GuestChatQuery(q) => q.message.sender_user_id(),
                 _ => return next.run(update).await,
             };
 

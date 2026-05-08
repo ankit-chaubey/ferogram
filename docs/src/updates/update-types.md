@@ -35,6 +35,9 @@ while let Some(update) = stream.next().await {
         // Boosts
         Update::ChatBoost(cb)         => { /* ChatBoost */ }
 
+        // Guest chat (bots only)
+        Update::GuestChatQuery(q)     => { /* GuestChatQuery */ }
+
         // Raw passthrough
         Update::Raw(raw)              => { /* RawUpdate */ }
 
@@ -232,6 +235,41 @@ Update::ChatBoost(cb) => {
     // cb.boost: boost details
 }
 ```
+
+---
+
+## `GuestChatQuery`
+
+Fires when a user invites the bot into a guest-chat context (`updateBotGuestChatQuery`). Bots only. `GuestChatQuery` derefs to `IncomingMessage` so you can read the message text directly.
+
+```rust
+Update::GuestChatQuery(q) => {
+    println!("query_id: {}", q.query_id);
+    println!("message: {}", q.text());
+    println!("qts: {}", q.qts);
+
+    // reference_messages: previous messages for context
+    for ref_msg in &q.reference_messages {
+        println!("  ref: {}", ref_msg.text());
+    }
+
+    // Answer with GuestChatAnswer
+    q.answer()
+        .article("My result")
+        .text("Answer body")
+        .send(&client)
+        .await?;
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `query_id` | `i64` | ID to pass to `setBotGuestChatResult` |
+| `message` | `IncomingMessage` | The message that triggered the query |
+| `reference_messages` | `Vec<IncomingMessage>` | Prior context messages, if any |
+| `qts` | `i32` | QTS sequence number |
+
+`GuestChatAnswer` supports all standard inline result kinds: `article`, `photo`, `document`, `game`, `location`, `venue`, `contact`, `webpage`, `invoice`, and `raw`. Call `.send(&client)` to submit via `messages.setBotGuestChatResult`.
 
 ---
 

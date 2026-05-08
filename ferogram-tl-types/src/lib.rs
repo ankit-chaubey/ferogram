@@ -12,7 +12,7 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc(html_root_url = "https://docs.rs/ferogram-tl-types/0.3.7")]
-//! Auto-generated Telegram API types, functions, and enums for TL Layer 224.
+//! Auto-generated Telegram API types, functions, and enums for TL Layer 225.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
 //! MTProto client built by [Ankit Chaubey](https://github.com/ankit-chaubey).
@@ -52,7 +52,7 @@
 //!
 //! | Flag | Effect |
 //! |---|---|
-//! | `tl-api` | Layer 224 API schema types (default in `ferogram`) |
+//! | `tl-api` | Layer 225 API schema types (default in `ferogram`) |
 //! | `tl-mtproto` | MTProto internal types (DH, transport, etc.) |
 //! | `name-for-id` | `name_for_id(u32) -> &'static str` for debug printing |
 //!
