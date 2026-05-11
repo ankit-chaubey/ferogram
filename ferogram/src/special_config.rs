@@ -445,7 +445,7 @@ fn parse_config_simple(data: &[u8]) -> Result<Vec<ConfigDcOption>, SpecialConfig
             match ip_cid {
                 // ipPort#d433ad73 ipv4:int port:int
                 0xd433ad73 => {
-                    let ipv4_raw = read_u32(data, &mut pos)? as u32;
+                    let ipv4_raw = read_u32(data, &mut pos)?;
                     let port = read_u32(data, &mut pos)? as u16;
                     let ip = format!(
                         "{}.{}.{}.{}",
@@ -458,7 +458,7 @@ fn parse_config_simple(data: &[u8]) -> Result<Vec<ConfigDcOption>, SpecialConfig
                 }
                 // ipPortSecret#37982646 ipv4:int port:int secret:bytes
                 0x37982646 => {
-                    let ipv4_raw = read_u32(data, &mut pos)? as u32;
+                    let ipv4_raw = read_u32(data, &mut pos)?;
                     let port = read_u32(data, &mut pos)? as u16;
                     let _secret = read_tl_bytes(data, &mut pos)?;
                     let ip = format!(

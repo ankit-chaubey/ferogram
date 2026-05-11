@@ -56,6 +56,7 @@
 
 - [Client Methods](./api/client.md)
 - [ClientBuilder](./api/client-builder.md)
+- [quick_connect](./api/quick-connect.md)
 - [Types Reference](./api/types.md)
 - [InputMessage Builder](./api/input-message.md)
 - [Peer Types & Resolution](./api/peer-types.md)

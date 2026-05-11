@@ -2179,40 +2179,38 @@ impl Client {
                     Box::pin(self.route_frame(inflated, msg_id)).await;
                 }
             }
-            ID_BAD_SERVER_SALT => {
+            ID_BAD_SERVER_SALT if body.len() >= 28 => {
                 // bad_server_salt#edab447b bad_msg_id:long bad_msg_seqno:int error_code:int new_server_salt:long
                 // body[0..4]   = constructor
                 // body[4..12]  = bad_msg_id       (long,  8 bytes)
                 // body[12..16] = bad_msg_seqno     (int,   4 bytes)
                 // body[16..20] = error_code        (int,   4 bytes)  ← NOT the salt!
                 // body[20..28] = new_server_salt   (long,  8 bytes)  ← actual salt
-                if body.len() >= 28 {
-                    let bad_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                    let new_salt = i64::from_le_bytes(body[20..28].try_into().unwrap());
+                let bad_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
+                let new_salt = i64::from_le_bytes(body[20..28].try_into().unwrap());
 
-                    // clear the salt pool and insert new_server_salt
-                    // with valid_until=i32::MAX, then updates the active session salt.
-                    {
-                        let mut w = self.inner.writer.lock().await;
-                        w.salts.clear();
-                        w.salts.push(FutureSalt {
-                            valid_since: 0,
-                            valid_until: i32::MAX,
-                            salt: new_salt,
-                        });
-                        w.enc.salt = new_salt;
-                    }
-                    // Propagate to dc_options snapshot so future worker opens see
-                    // the fresh salt immediately (not just after the next reconnect).
-                    {
-                        let home_id = *self.inner.home_dc_id.lock().await;
-                        let mut opts: tokio::sync::MutexGuard<
-                            '_,
-                            std::collections::HashMap<i32, DcEntry>,
-                        > = self.inner.dc_options.lock().await;
-                        if let Some(e) = opts.get_mut(&home_id) {
-                            e.first_salt = new_salt;
-                        }
+                // clear the salt pool and insert new_server_salt
+                // with valid_until=i32::MAX, then updates the active session salt.
+                {
+                    let mut w = self.inner.writer.lock().await;
+                    w.salts.clear();
+                    w.salts.push(FutureSalt {
+                        valid_since: 0,
+                        valid_until: i32::MAX,
+                        salt: new_salt,
+                    });
+                    w.enc.salt = new_salt;
+                }
+                // Propagate to dc_options snapshot so future worker opens see
+                // the fresh salt immediately (not just after the next reconnect).
+                {
+                    let home_id = *self.inner.home_dc_id.lock().await;
+                    let mut opts: tokio::sync::MutexGuard<
+                        '_,
+                        std::collections::HashMap<i32, DcEntry>,
+                    > = self.inner.dc_options.lock().await;
+                    if let Some(e) = opts.get_mut(&home_id) {
+                        e.first_salt = new_salt;
                     }
                     tracing::debug!(
                         "[ferogram] bad_server_salt: bad_msg_id={bad_msg_id} new_salt={new_salt:#x}"
@@ -2279,23 +2277,21 @@ impl Client {
                     self.spawn_salt_fetch_if_needed();
                 }
             }
-            ID_PONG => {
+            ID_PONG if body.len() >= 20 => {
                 // Pong is the server's reply to Ping: NOT inside rpc_result.
                 // pong#347773c5  msg_id:long  ping_id:long
                 // body[4..12] = msg_id of the original Ping -> key in pending map
                 //
                 // pong has odd seq_no (content-related), must ack it.
-                if body.len() >= 20 {
-                    let ping_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                    // Ack the pong frame itself (outer msg_id, not the ping msg_id).
-                    self.inner.writer.lock().await.pending_ack.push(msg_id);
-                    if let Some(tx) = self.inner.pending.lock().await.remove(&ping_msg_id) {
-                        let mut w = self.inner.writer.lock().await;
-                        w.sent_bodies.remove(&ping_msg_id);
-                        w.container_map.retain(|_, inner| *inner != ping_msg_id);
-                        drop(w);
-                        let _ = tx.send(Ok(body));
-                    }
+                let ping_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
+                // Ack the pong frame itself (outer msg_id, not the ping msg_id).
+                self.inner.writer.lock().await.pending_ack.push(msg_id);
+                if let Some(tx) = self.inner.pending.lock().await.remove(&ping_msg_id) {
+                    let mut w = self.inner.writer.lock().await;
+                    w.sent_bodies.remove(&ping_msg_id);
+                    w.container_map.retain(|_, inner| *inner != ping_msg_id);
+                    drop(w);
+                    let _ = tx.send(Ok(body));
                 }
             }
             // FutureSalts: maintain the full server-provided salt pool.
@@ -2418,49 +2414,47 @@ impl Client {
                     }
                 }
             }
-            ID_NEW_SESSION => {
+            ID_NEW_SESSION if body.len() >= 28 => {
                 // new_session_created#9ec20908 first_msg_id:long unique_id:long server_salt:long
                 //   body[4..12]  = first_msg_id  <- msgs with msg_id < this were NOT received
                 //   body[12..20] = unique_id
                 //   body[20..28] = server_salt
-                if body.len() >= 28 {
-                    let first_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                    let server_salt = i64::from_le_bytes(body[20..28].try_into().unwrap());
-                    {
-                        let mut w = self.inner.writer.lock().await;
-                        // new_session_created has odd seq_no -> must ack.
-                        w.pending_ack.push(msg_id);
-                        w.salts.clear();
-                        w.salts.push(FutureSalt {
-                            valid_since: 0,
-                            valid_until: i32::MAX,
-                            salt: server_salt,
-                        });
-                        w.enc.salt = server_salt;
+                let first_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
+                let server_salt = i64::from_le_bytes(body[20..28].try_into().unwrap());
+                {
+                    let mut w = self.inner.writer.lock().await;
+                    // new_session_created has odd seq_no -> must ack.
+                    w.pending_ack.push(msg_id);
+                    w.salts.clear();
+                    w.salts.push(FutureSalt {
+                        valid_since: 0,
+                        valid_until: i32::MAX,
+                        salt: server_salt,
+                    });
+                    w.enc.salt = server_salt;
+                    tracing::debug!(
+                        "[ferogram] new_session_created: salt={server_salt:#x}                              first_msg_id={first_msg_id}"
+                    );
+                    // MTProto: msgs with msg_id < first_msg_id were not received
+                    // by the server and must be re-sent.
+                    let stale_ids: Vec<i64> = w
+                        .sent_bodies
+                        .keys()
+                        .filter(|&&id| id < first_msg_id)
+                        .copied()
+                        .collect();
+                    if !stale_ids.is_empty() {
                         tracing::debug!(
-                            "[ferogram] new_session_created: salt={server_salt:#x}                              first_msg_id={first_msg_id}"
+                            "[ferogram] new_session_created: re-queuing {} stale msg(s)                                  with msg_id < {first_msg_id}",
+                            stale_ids.len()
                         );
-                        // MTProto: msgs with msg_id < first_msg_id were not received
-                        // by the server and must be re-sent.
-                        let stale_ids: Vec<i64> = w
-                            .sent_bodies
-                            .keys()
-                            .filter(|&&id| id < first_msg_id)
-                            .copied()
-                            .collect();
-                        if !stale_ids.is_empty() {
-                            tracing::debug!(
-                                "[ferogram] new_session_created: re-queuing {} stale msg(s)                                  with msg_id < {first_msg_id}",
-                                stale_ids.len()
-                            );
-                        }
-                        for old_id in stale_ids {
-                            if let Some(body_bytes) = w.sent_bodies.remove(&old_id) {
-                                let (wire, new_id) = w.enc.pack_body_with_msg_id(&body_bytes, true);
-                                w.sent_bodies.insert(new_id, body_bytes);
-                                // Defer TCP send to after lock drop.
-                                w.new_session_resend_queue.push((old_id, new_id, wire));
-                            }
+                    }
+                    for old_id in stale_ids {
+                        if let Some(body_bytes) = w.sent_bodies.remove(&old_id) {
+                            let (wire, new_id) = w.enc.pack_body_with_msg_id(&body_bytes, true);
+                            w.sent_bodies.insert(new_id, body_bytes);
+                            // Defer TCP send to after lock drop.
+                            w.new_session_resend_queue.push((old_id, new_id, wire));
                         }
                     }
                     // Ship resends outside the writer lock (no TCP I/O under lock).
@@ -2660,68 +2654,59 @@ impl Client {
                 }
             }
             // MsgDetailedInfo -> ack the answer_msg_id
-            ID_MSG_DETAILED_INFO => {
+            ID_MSG_DETAILED_INFO if body.len() >= 20 => {
                 // msg_detailed_info#276d3ec6 msg_id:long answer_msg_id:long bytes:int status:int
                 // body[4..12]  = msg_id (original request)
                 // body[12..20] = answer_msg_id (what to ack)
-                if body.len() >= 20 {
-                    let answer_msg_id = i64::from_le_bytes(body[12..20].try_into().unwrap());
-                    self.inner
-                        .writer
-                        .lock()
-                        .await
-                        .pending_ack
-                        .push(answer_msg_id);
-                    tracing::trace!(
-                        "[ferogram] MsgDetailedInfo: queued ack for answer_msg_id={answer_msg_id}"
-                    );
-                }
+                let answer_msg_id = i64::from_le_bytes(body[12..20].try_into().unwrap());
+                self.inner
+                    .writer
+                    .lock()
+                    .await
+                    .pending_ack
+                    .push(answer_msg_id);
+                tracing::trace!(
+                    "[ferogram] MsgDetailedInfo: queued ack for answer_msg_id={answer_msg_id}"
+                );
             }
-            ID_MSG_NEW_DETAIL_INFO => {
+            ID_MSG_NEW_DETAIL_INFO if body.len() >= 12 => {
                 // msg_new_detailed_info#809db6df answer_msg_id:long bytes:int status:int
                 // body[4..12] = answer_msg_id
-                if body.len() >= 12 {
-                    let answer_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                    self.inner
-                        .writer
-                        .lock()
-                        .await
-                        .pending_ack
-                        .push(answer_msg_id);
-                    tracing::trace!(
-                        "[ferogram] MsgNewDetailedInfo: queued ack for {answer_msg_id}"
-                    );
-                }
+                let answer_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
+                self.inner
+                    .writer
+                    .lock()
+                    .await
+                    .pending_ack
+                    .push(answer_msg_id);
+                tracing::trace!("[ferogram] MsgNewDetailedInfo: queued ack for {answer_msg_id}");
             }
             // MsgResendReq -> re-send the requested msg_ids
-            ID_MSG_RESEND_REQ => {
+            ID_MSG_RESEND_REQ if body.len() >= 12 => {
                 // msg_resend_req#7d861a08 msg_ids:Vector<long>
                 // body[4..8]   = 0x1cb5c415 (Vector constructor)
                 // body[8..12]  = count
                 // body[12..]   = msg_ids
-                if body.len() >= 12 {
-                    let count = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
-                    let mut resends: Vec<(Vec<u8>, i64, i64)> = Vec::new();
-                    {
-                        let mut w = self.inner.writer.lock().await;
-                        let fk = w.frame_kind.clone();
-                        for i in 0..count {
-                            let off = 12 + i * 8;
-                            if off + 8 > body.len() {
-                                break;
+                let count = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+                let mut resends: Vec<(Vec<u8>, i64, i64)> = Vec::new();
+                {
+                    let mut w = self.inner.writer.lock().await;
+                    let fk = w.frame_kind.clone();
+                    for i in 0..count {
+                        let off = 12 + i * 8;
+                        if off + 8 > body.len() {
+                            break;
+                        }
+                        let resend_id = i64::from_le_bytes(body[off..off + 8].try_into().unwrap());
+                        if let Some(orig_body) = w.sent_bodies.remove(&resend_id) {
+                            let (wire, new_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
+                            let mut pending = self.inner.pending.lock().await;
+                            if let Some(tx) = pending.remove(&resend_id) {
+                                pending.insert(new_id, tx);
                             }
-                            let resend_id =
-                                i64::from_le_bytes(body[off..off + 8].try_into().unwrap());
-                            if let Some(orig_body) = w.sent_bodies.remove(&resend_id) {
-                                let (wire, new_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
-                                let mut pending = self.inner.pending.lock().await;
-                                if let Some(tx) = pending.remove(&resend_id) {
-                                    pending.insert(new_id, tx);
-                                }
-                                drop(pending);
-                                w.sent_bodies.insert(new_id, orig_body);
-                                resends.push((wire, resend_id, new_id));
-                            }
+                            drop(pending);
+                            w.sent_bodies.insert(new_id, orig_body);
+                            resends.push((wire, resend_id, new_id));
                         }
                         let _ = fk; // fk captured above, writer lock drops here
                     }

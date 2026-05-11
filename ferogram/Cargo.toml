@@ -77,6 +77,9 @@ name               = "showcase_bot"
 [[example]]
 name               = "userbot"
 
+[[example]]
+name               = "hello_self"
+
 [package.metadata.docs.rs]
 features     = ["sqlite-session", "serde", "html", "html5ever", "parser", "codegen"]
 rustdoc-args = ["--cfg", "docsrs"]
