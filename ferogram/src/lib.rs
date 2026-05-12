@@ -27,15 +27,12 @@
 //! ```rust,no_run
 //! use ferogram::{Client, update::Update};
 //!
+//! const API_ID: i32 = 0; // from https://my.telegram.org
+//! const API_HASH: &str = ""; // from https://my.telegram.org
+//!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     let (client, _) = Client::builder()
-//!         .api_id(std::env::var("API_ID")?.parse()?)
-//!         .api_hash(std::env::var("API_HASH")?)
-//!         .session("bot.session")
-//!         .connect().await?;
-//!
-//!     client.bot_sign_in(&std::env::var("BOT_TOKEN")?).await?;
+//!     let (client, _) = Client::quick_connect("bot.session", API_ID, API_HASH).await?;
 //!
 //!     let mut stream = client.stream_updates();
 //!     while let Some(upd) = stream.next().await {
@@ -52,28 +49,14 @@
 //! # Quick start: user account
 //!
 //! ```rust,no_run
-//! use ferogram::{Client, SignInError};
-//! # fn read_line() -> String { String::new() }
+//! use ferogram::Client;
+//!
+//! const API_ID: i32 = 0; // from https://my.telegram.org
+//! const API_HASH: &str = ""; // from https://my.telegram.org
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     let (client, _) = Client::builder()
-//!         .api_id(std::env::var("API_ID")?.parse()?)
-//!         .api_hash(std::env::var("API_HASH")?)
-//!         .session("my.session")
-//!         .connect().await?;
-//!
-//!     if !client.is_authorized().await? {
-//!         let token = client.request_login_code("+1234567890").await?;
-//!         match client.sign_in(&token, &read_line()).await {
-//!             Ok(_) => {}
-//!             Err(SignInError::PasswordRequired(t)) => {
-//!                 client.check_password(*t, &read_line()).await?;
-//!             }
-//!             Err(e) => return Err(e.into()),
-//!         }
-//!         client.save_session().await?;
-//!     }
+//!     let (client, _) = Client::quick_connect("my.session", API_ID, API_HASH).await?;
 //!
 //!     client.send_message("me", "Hello from ferogram!").await?;
 //!     Ok(())

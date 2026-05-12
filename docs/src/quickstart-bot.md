@@ -7,20 +7,13 @@ use ferogram::{Client, InputMessage, parsers::parse_markdown, update::Update};
 use ferogram_tl_types as tl;
 use std::sync::Arc;
 
+const API_ID: i32 = 0; // from https://my.telegram.org
+const API_HASH: &str = ""; // from https://my.telegram.org
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (client, _shutdown) = Client::builder()
-        .api_id(std::env::var("API_ID")?.parse()?)
-        .api_hash(std::env::var("API_HASH")?)
-        .session("bot.session")
-        .connect()
-        .await?;
+    let (client, _shutdown) = Client::quick_connect("bot.session", API_ID, API_HASH).await?;
     let client = Arc::new(client);
-
-    if !client.is_authorized().await? {
-        client.bot_sign_in(&std::env::var("BOT_TOKEN")?).await?;
-        client.save_session().await?;
-    }
 
     let me = client.get_me().await?;
     println!("✅ @{} is online", me.username.as_deref().unwrap_or("bot"));

@@ -72,6 +72,11 @@ impl Client {
             sign_in_user(&client, &credential).await?;
         }
 
+        client
+            .save_session()
+            .await
+            .map_err(QuickConnectError::Auth)?;
+
         Ok((client, shutdown))
     }
 }
