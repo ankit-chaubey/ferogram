@@ -2,6 +2,11 @@
 
 User login happens in three steps: request code → submit code → (optional) submit 2FA password.
 
+> **Just want something working?** [`Client::quick_connect`](../api/quick-connect.md)
+> handles all three steps interactively in one call, including 2FA.
+> This page covers the explicit step-by-step flow for non-interactive setups
+> (reading from env vars, config files, custom prompts, etc.).
+
 ## Step 1: Request login code
 
 ```rust

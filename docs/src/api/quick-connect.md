@@ -74,6 +74,36 @@ match Client::quick_connect("my.session", API_ID, API_HASH).await {
 
 ---
 
+## quick_connect vs ClientBuilder
+
+`quick_connect` and `ClientBuilder` connect to the same underlying transport. The difference is how much control you want.
+
+```rust,no_run
+// 99% of users - just works
+let (client, _) = Client::quick_connect("bot.session", API_ID, API_HASH).await?;
+
+// Termux / tiny VPS - memory-constrained environment
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .low_memory_mode(true)
+    .connect().await?;
+
+// Power user with specific needs
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .update_queue_capacity(512)
+    .update_overflow_strategy(OverflowStrategy::DropNewest)
+    .connect().await?;
+```
+
+`quick_connect` is `ClientBuilder` with sensible defaults baked in and the auth flow handled for you. If you start with `quick_connect` and later need an option it doesn't expose, switching to `ClientBuilder` is a straight drop-in: same session file, same API.
+
+---
+
 ## When to use ClientBuilder instead
 
 `quick_connect` is intentionally minimal. Reach for
@@ -85,4 +115,5 @@ match Client::quick_connect("my.session", API_ID, API_HASH).await {
 - Custom session backend (e.g. `LibSqlBackend`)
 - Catch-up on missed updates (`.catch_up(true)`)
 - Custom retry or reconnect policy
+- Low memory mode (`.low_memory_mode(true)`)
 - Non-interactive auth (reading credentials from env vars or a config file)

@@ -3,6 +3,11 @@
 `ClientBuilder` is the fluent, type-safe constructor for a `Client` connection.
 Obtain one via `Client::builder()`.
 
+> **Just getting started?** [`Client::quick_connect`](./quick-connect.md) connects
+> and authenticates in one call with no options to think about. Come back here
+> when you need proxies, custom transports, low memory mode, or anything else
+> the defaults don't cover.
+
 ```rust,no_run
 use ferogram::Client;
 
@@ -22,6 +27,44 @@ async fn main() -> anyhow::Result<()> {
 `connect()` returns `Result<(Client, ShutdownToken), BuilderError>`. The
 `BuilderError` can be `MissingApiId`, `MissingApiHash`, or a network-level
 `Connect(InvocationError)`.
+
+---
+
+## Common patterns
+
+Most people only need a handful of options. Here are the three most common setups:
+
+```rust,no_run
+use ferogram::Client;
+
+// 99% of users - just fill in credentials and go
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .connect().await?;
+
+// Termux / tiny VPS - running on constrained hardware
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .low_memory_mode(true)
+    .connect().await?;
+
+// Power user - custom update queue to handle high-traffic bots
+use ferogram::update_config::OverflowStrategy;
+
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .update_queue_capacity(512)
+    .update_overflow_strategy(OverflowStrategy::DropNewest)
+    .connect().await?;
+```
+
+The full option reference follows below.
 
 ---
 

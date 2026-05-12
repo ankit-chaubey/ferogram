@@ -2,6 +2,11 @@
 
 Bot login is simpler than user login: just a single call with a bot token.
 
+> **Just want something working?** [`Client::quick_connect`](../api/quick-connect.md)
+> prompts for a bot token interactively and handles the full flow in one call.
+> This page covers the explicit `bot_sign_in` path for when you need
+> non-interactive auth or more control.
+
 ## Getting a bot token
 
 1. Open Telegram and start a chat with [@BotFather](https://t.me/BotFather)
