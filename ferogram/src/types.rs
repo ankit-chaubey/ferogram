@@ -173,6 +173,14 @@ impl User {
         self.inner().bot_inline_geo
     }
 
+    /// `true` if this bot supports guest-chat mode (`updateBotGuestChatQuery`).
+    ///
+    /// Bots with this flag can receive guest-chat inline queries and must
+    /// answer them with `messages.setBotGuestChatResult`.
+    pub fn bot_guestchat(&self) -> bool {
+        self.inner().bot_guestchat
+    }
+
     /// `true` if this account belongs to Telegram support staff.
     pub fn support(&self) -> bool {
         self.inner().support

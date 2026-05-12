@@ -42,6 +42,18 @@ impl GuestChatQuery {
             _marker: std::marker::PhantomData,
         }
     }
+
+    /// The peer that originally triggered this guest-chat query, if Telegram
+    /// included it in the message (`guestchat_via_from`).
+    ///
+    /// Present when the bot is acting as an intermediary and Telegram
+    /// wants it to know the original requester.
+    pub fn via_from(&self) -> Option<&tl::enums::Peer> {
+        match &self.message.raw {
+            tl::enums::Message::Message(m) => m.guestchat_via_from.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 impl Deref for GuestChatQuery {
@@ -400,12 +412,17 @@ impl<'a> GuestChatAnswer<'a> {
         self
     }
 
-    pub async fn send(self, client: &Client) -> Result<bool, Error> {
-        let query_id = self.query_id;
-        let result = self.build_result();
-        let req = tl::functions::messages::SetBotGuestChatResult { query_id, result };
-        let body: Vec<u8> = client.rpc_call_raw(&req).await?;
-        Ok(body.len() >= 4 && u32::from_le_bytes(body[..4].try_into().unwrap()) == 0x997275b5)
+    /// Send this answer to Telegram.
+    ///
+    /// On success returns the `InputBotInlineMessageID` of the sent message,
+    /// which you can use later with `messages.editInlineBotMessage` or
+    /// `messages.setInlineGameScore` if needed.
+    pub async fn send(self, client: &Client) -> Result<tl::enums::InputBotInlineMessageId, Error> {
+        let req = tl::functions::messages::SetBotGuestChatResult {
+            query_id: self.query_id,
+            result: self.build_result(),
+        };
+        client.invoke(&req).await
     }
 
     fn build_result(self) -> tl::enums::InputBotInlineResult {
