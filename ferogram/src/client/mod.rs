@@ -2518,7 +2518,9 @@ impl Client {
                 //   body[20..28] = server_salt
                 let first_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
                 let server_salt = i64::from_le_bytes(body[20..28].try_into().unwrap());
-                {
+                // Acquire writer lock, update state, collect resend queue, then drop lock
+                // before any TCP I/O (can't hold the lock across send_frame_write).
+                let resend_queue: Vec<(i64, i64, Vec<u8>)> = {
                     let mut w = self.inner.writer.lock().await;
                     // new_session_created has odd seq_no -> must ack.
                     w.pending_ack.push(msg_id);
@@ -2530,7 +2532,7 @@ impl Client {
                     });
                     w.enc.salt = server_salt;
                     tracing::debug!(
-                        "[ferogram] new_session_created: salt={server_salt:#x}                              first_msg_id={first_msg_id}"
+                        "[ferogram] new_session_created: salt={server_salt:#x} first_msg_id={first_msg_id}"
                     );
                     // MTProto: msgs with msg_id < first_msg_id were not received
                     // by the server and must be re-sent.
@@ -2542,7 +2544,7 @@ impl Client {
                         .collect();
                     if !stale_ids.is_empty() {
                         tracing::debug!(
-                            "[ferogram] new_session_created: re-queuing {} stale msg(s)                                  with msg_id < {first_msg_id}",
+                            "[ferogram] new_session_created: re-queuing {} stale msg(s) with msg_id < {first_msg_id}",
                             stale_ids.len()
                         );
                     }
@@ -2550,66 +2552,55 @@ impl Client {
                         if let Some(body_bytes) = w.sent_bodies.remove(&old_id) {
                             let (wire, new_id) = w.enc.pack_body_with_msg_id(&body_bytes, true);
                             w.sent_bodies.insert(new_id, body_bytes);
-                            // Defer TCP send to after lock drop.
                             w.new_session_resend_queue.push((old_id, new_id, wire));
                         }
                     }
-                    // Ship resends outside the writer lock (no TCP I/O under lock).
-                    let resend_queue: Vec<(i64, i64, Vec<u8>)> = {
-                        let mut w = self.inner.writer.lock().await;
-                        std::mem::take(
-                            &mut w.new_session_resend_queue as &mut Vec<(i64, i64, Vec<u8>)>,
-                        )
-                    };
-                    if !resend_queue.is_empty() {
-                        let fk = self.inner.writer.lock().await.frame_kind.clone();
-                        for (old_id, new_id, wire) in resend_queue {
-                            {
-                                let mut pending = self.inner.pending.lock().await;
-                                if let Some(tx) = pending.remove(&old_id) {
-                                    pending.insert(new_id, tx);
-                                }
-                            }
-                            if let Err(e) = send_frame_write(
-                                &mut *self.inner.write_half.lock().await,
-                                &wire,
-                                &fk,
-                            )
-                            .await
-                            {
-                                tracing::warn!(
-                                    "[ferogram] new_session resend {old_id}->{new_id} failed: {e}"
-                                );
-                                self.inner.writer.lock().await.sent_bodies.remove(&new_id);
-                            } else {
-                                tracing::debug!(
-                                    "[ferogram] new_session resend {old_id}->{new_id} ok"
-                                );
+                    // Take the queue before dropping the lock; TCP I/O runs below.
+                    std::mem::take(&mut w.new_session_resend_queue)
+                }; // writer lock drops here
+                if !resend_queue.is_empty() {
+                    let fk = self.inner.writer.lock().await.frame_kind.clone();
+                    for (old_id, new_id, wire) in resend_queue {
+                        {
+                            let mut pending = self.inner.pending.lock().await;
+                            if let Some(tx) = pending.remove(&old_id) {
+                                pending.insert(new_id, tx);
                             }
                         }
-                    }
-                    // Propagate to dc_options snapshot so future worker opens use
-                    // this session's salt, not the stale pre-session value.
-                    {
-                        let home_id = *self.inner.home_dc_id.lock().await;
-                        let mut opts: tokio::sync::MutexGuard<
-                            '_,
-                            std::collections::HashMap<i32, DcEntry>,
-                        > = self.inner.dc_options.lock().await;
-                        if let Some(e) = opts.get_mut(&home_id) {
-                            e.first_salt = server_salt;
+                        if let Err(e) =
+                            send_frame_write(&mut *self.inner.write_half.lock().await, &wire, &fk)
+                                .await
+                        {
+                            tracing::warn!(
+                                "[ferogram] new_session resend {old_id}->{new_id} failed: {e}"
+                            );
+                            self.inner.writer.lock().await.sent_bodies.remove(&new_id);
+                        } else {
+                            tracing::debug!("[ferogram] new_session resend {old_id}->{new_id} ok");
                         }
                     }
-                    // Signal message_box that the connection closed (gap may exist).
-                    {
-                        let mut mb = self.inner.message_box.lock().await;
-                        let _ = mb.process_updates(message_box::UpdatesLike::ConnectionClosed);
-                    }
-                    let c = self.clone();
-                    let _handle = tokio::spawn(async move {
-                        c.sync_state_after_dh().await;
-                    });
                 }
+                // Propagate to dc_options snapshot so future worker opens use
+                // this session's salt, not the stale pre-session value.
+                {
+                    let home_id = *self.inner.home_dc_id.lock().await;
+                    let mut opts: tokio::sync::MutexGuard<
+                        '_,
+                        std::collections::HashMap<i32, DcEntry>,
+                    > = self.inner.dc_options.lock().await;
+                    if let Some(e) = opts.get_mut(&home_id) {
+                        e.first_salt = server_salt;
+                    }
+                }
+                // Signal message_box that the connection closed (gap may exist).
+                {
+                    let mut mb = self.inner.message_box.lock().await;
+                    let _ = mb.process_updates(message_box::UpdatesLike::ConnectionClosed);
+                }
+                let c = self.clone();
+                let _handle = tokio::spawn(async move {
+                    c.sync_state_after_dh().await;
+                });
             }
             // +: bad_msg_notification
             ID_BAD_MSG_NOTIFY => {
