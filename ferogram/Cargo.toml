@@ -67,18 +67,67 @@ rand                = "0.8"
 anyhow              = "1"
 tracing-subscriber  = { version = "0.3", features = ["env-filter"] }
 
+# basics
 [[example]]
-name               = "order_bot"
-required-features  = ["derive"]
+name = "hello_self"
 
 [[example]]
-name               = "showcase_bot"
+name = "echo_bot"
 
 [[example]]
-name               = "userbot"
+name = "filters_showcase"
+
+# userbot tools
+[[example]]
+name = "dialogs_list"
 
 [[example]]
-name               = "hello_self"
+name = "chat_history"
+
+[[example]]
+name = "search_messages"
+
+[[example]]
+name = "schedule_message"
+
+[[example]]
+name = "download_media"
+
+[[example]]
+name = "get_participants"
+
+[[example]]
+name = "admin_log"
+
+# bots
+[[example]]
+name = "inline_keyboard"
+
+[[example]]
+name = "inline_query_bot"
+
+[[example]]
+name = "poll_bot"
+
+[[example]]
+name = "translate_bot"
+
+[[example]]
+name              = "order_bot"
+required-features = ["derive"]
+
+[[example]]
+name = "showcase_bot"
+
+# session utilities
+[[example]]
+name = "string_session_gen"
+
+[[example]]
+name = "serverless_userbot"
+
+[[example]]
+name = "userbot"
 
 [package.metadata.docs.rs]
 features     = ["sqlite-session", "serde", "html", "html5ever", "parser", "codegen"]

@@ -94,6 +94,21 @@ async fn main() -> anyhow::Result<()> {
 
 ---
 
+## Examples
+
+19 runnable examples covering everything from sending a message to your Saved Messages to a full FSM order bot. Good place to start if you learn by reading code.
+
+```
+cargo run --example hello_self
+cargo run --example echo_bot
+cargo run --example showcase_bot
+# ... and 16 more
+```
+
+See **[examples/README.md](examples/README.md)** for the full list with descriptions, what each one needs, and when to use `quick_connect` vs `Client::builder()`.
+
+---
+
 ## Connecting
 
 ```rust
