@@ -45,6 +45,7 @@ pub struct ClientBuilder {
     resilient_connect: bool,
     experimental_features: ExperimentalFeatures,
     use_pfs: bool,
+    update_config: crate::update_config::UpdateConfig,
 }
 
 impl Default for ClientBuilder {
@@ -71,6 +72,7 @@ impl Default for ClientBuilder {
             resilient_connect: false,
             experimental_features: ExperimentalFeatures::default(),
             use_pfs: false,
+            update_config: crate::update_config::UpdateConfig::default(),
         }
     }
 }
@@ -311,6 +313,98 @@ impl ClientBuilder {
         self
     }
 
+    // Update dispatch configuration
+
+    /// Set the maximum number of updates held in the user-facing dispatch
+    /// buffer.
+    ///
+    /// A smaller value uses less RAM at the cost of more frequent evictions
+    /// under burst load. A larger value absorbs longer bursts before any
+    /// update is dropped.
+    ///
+    /// Internal MTProto state (pts, qts, getDifference) is unaffected: it
+    /// always runs in the reader task regardless of this value.
+    ///
+    /// Default: `2048`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # #[tokio::main] async fn main() -> anyhow::Result<()> {
+    /// let (client, _) = Client::builder()
+    ///     .api_id(12345)
+    ///     .api_hash("abc")
+    ///     .session("bot.session")
+    ///     .update_queue_capacity(512)
+    ///     .connect().await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn update_queue_capacity(mut self, capacity: usize) -> Self {
+        self.update_config.queue_capacity = capacity.max(1);
+        self
+    }
+
+    /// Set what happens when the update buffer is full and a new update arrives.
+    ///
+    /// * [`OverflowStrategy::DropOldest`] (default) - evicts the stalest
+    ///   ephemeral update (typing, online status) first, then the oldest
+    ///   normal update. The incoming update is always buffered.
+    /// * [`OverflowStrategy::DropNewest`] - the incoming update is discarded
+    ///   and the existing queue is untouched.
+    ///
+    /// [`OverflowStrategy::DropOldest`]: crate::update_config::OverflowStrategy::DropOldest
+    /// [`OverflowStrategy::DropNewest`]: crate::update_config::OverflowStrategy::DropNewest
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::{Client, OverflowStrategy};
+    /// # #[tokio::main] async fn main() -> anyhow::Result<()> {
+    /// let (client, _) = Client::builder()
+    ///     .api_id(12345)
+    ///     .api_hash("abc")
+    ///     .session("bot.session")
+    ///     .update_overflow_strategy(OverflowStrategy::DropOldest)
+    ///     .connect().await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn update_overflow_strategy(
+        mut self,
+        strategy: crate::update_config::OverflowStrategy,
+    ) -> Self {
+        self.update_config.overflow_strategy = strategy;
+        self
+    }
+
+    /// Drops the queue to 256 slots and sets `DropOldest` eviction.
+    ///
+    /// Shorthand for
+    /// `.update_queue_capacity(256).update_overflow_strategy(OverflowStrategy::DropOldest)`.
+    ///
+    /// Useful on Termux, small VPS, or any host where RAM is tight.
+    /// When `false` (the default) this is a no-op.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # #[tokio::main] async fn main() -> anyhow::Result<()> {
+    /// let (client, _) = Client::builder()
+    ///     .api_id(12345)
+    ///     .api_hash("abc")
+    ///     .session("bot.session")
+    ///     .low_memory_mode(true)
+    ///     .connect().await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn low_memory_mode(mut self, enable: bool) -> Self {
+        if enable {
+            self.update_config = crate::update_config::UpdateConfig::low_memory();
+        }
+        self
+    }
+
     // Terminal
 
     /// Build the [`Config`] without connecting.
@@ -343,6 +437,7 @@ impl ClientBuilder {
             resilient_connect: self.resilient_connect,
             experimental_features: self.experimental_features,
             use_pfs: self.use_pfs,
+            update_config: self.update_config,
         })
     }
 

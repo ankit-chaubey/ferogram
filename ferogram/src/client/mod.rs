@@ -159,6 +159,15 @@ pub struct Config {
     ///
     /// See [`ExperimentalFeatures`] for per-flag documentation.
     pub experimental_features: ExperimentalFeatures,
+    /// Controls the user-facing update dispatch buffer.
+    ///
+    /// Internal MTProto state (pts, qts, getDifference) is unaffected: it
+    /// always runs inside the reader task regardless of this setting.
+    /// Only the high-level [`Update`] queue your application reads via
+    /// [`Client::stream_updates`] is governed here.
+    ///
+    /// Default: 2048-slot ring buffer with `DropOldest` overflow.
+    pub update_config: crate::update_config::UpdateConfig,
 }
 
 impl Config {
@@ -301,6 +310,7 @@ impl Default for Config {
             resilient_connect: false,
             use_pfs: false,
             experimental_features: ExperimentalFeatures::default(),
+            update_config: crate::update_config::UpdateConfig::default(),
         }
     }
 }
@@ -416,6 +426,9 @@ pub(crate) struct ClientInner {
 
     /// Whether PFS (bindTempAuthKey) is enabled for new connections.
     pfs_enabled: bool,
+    /// Update dispatch buffer configuration: capacity and overflow strategy.
+    /// Stored here so stream_updates() can read it without borrowing Config.
+    pub(crate) update_config: crate::update_config::UpdateConfig,
     /// Guards sync_state_after_dh: the function is a no-op while false so that
     /// reconnect-triggered DH completions don't fire GetState before the client
     /// is actually authorised.
@@ -502,9 +515,10 @@ impl Client {
             ));
         }
 
-        // Capacity: 2048 updates. If the consumer falls behind, excess updates
-        // are dropped with a warning rather than growing RAM without bound.
-        let (update_tx, update_rx) = mpsc::channel(2048);
+        // Internal dispatch channel. Capacity comes from UpdateConfig; default 2048.
+        // If the consumer falls behind, the overflow strategy in stream_updates()
+        // decides whether to drop oldest or newest. Never the internal reader.
+        let (update_tx, update_rx) = mpsc::channel(config.update_config.queue_capacity.max(1));
 
         // Load or fresh-connect
         let socks5 = config.socks5.clone();
@@ -699,6 +713,7 @@ impl Client {
             diff_in_flight: std::sync::atomic::AtomicBool::new(false),
             dh_in_progress: std::sync::atomic::AtomicBool::new(false),
             pfs_enabled: config.use_pfs,
+            update_config: config.update_config,
             signed_in: std::sync::atomic::AtomicBool::new(false),
             dc_connect_gates: parking_lot::Mutex::new(std::collections::HashMap::new()),
             auth_import_gates: parking_lot::Mutex::new(std::collections::HashMap::new()),
@@ -1541,15 +1556,29 @@ impl Client {
 
     /// Return an [`UpdateStream`] that yields incoming [`Update`]s.
     ///
-    /// The reader task (started inside `connect()`) sends all updates to
-    /// `inner.update_tx`. This method proxies those updates into a fresh
-    /// caller-owned channel: typically called once per bot/app loop.
+    /// The reader task sends all updates to `inner.update_tx`.  This method
+    /// proxies those updates into a caller-owned channel, applying the
+    /// overflow strategy from [`UpdateConfig`]:
+    ///
+    /// * **`DropOldest`** (default) - a `VecDeque` ring buffer of
+    ///   `queue_capacity` slots is maintained in the proxy task. When it is
+    ///   full, the stalest *Ephemeral* update (typing, online status) is
+    ///   evicted first; if there are none, the oldest *Normal* update is
+    ///   evicted. The incoming update is always accepted.
+    /// * **`DropNewest`** - the incoming update is dropped if the channel is
+    ///   full (original `try_send` behaviour).
+    ///
+    /// In both cases, internal MTProto state (pts, qts, getDifference) is
+    /// never touched here. It runs exclusively in the reader task.
+    ///
+    /// [`UpdateConfig`]: crate::update_config::UpdateConfig
     pub fn stream_updates(&self) -> UpdateStream {
+        use crate::update_config::{OverflowStrategy, UpdatePriority, update_priority};
+        use std::collections::VecDeque;
+
         // Guard: only one UpdateStream is supported per Client clone group.
-        // A second call would compete with the first for updates, causing
-        // non-deterministic splitting. Log an error and return a closed stream
-        // so the caller's `while let Some(upd) = stream.next().await` exits
-        // immediately rather than panicking the process.
+        // A second call would compete for updates, causing non-deterministic
+        // splitting.  Return a closed stream so the caller's loop exits cleanly.
         if self
             .inner
             .stream_active
@@ -1560,29 +1589,97 @@ impl Client {
                  only one UpdateStream is supported per client. \
                  Returning a closed stream."
             );
-            // Immediately drop the sender so the receiver yields None on first poll.
             let (_dead_tx, rx) = mpsc::channel::<update::Update>(1);
             return UpdateStream { rx };
         }
-        // Bounded at 2048: if the handler is slower than the server sends,
-        // back-pressure propagates to the internal reader instead of OOM-ing.
-        let (caller_tx, rx) = mpsc::channel::<update::Update>(2048);
+
+        let capacity = self.inner.update_config.queue_capacity.max(1);
+        let overflow = self.inner.update_config.overflow_strategy;
         let internal_rx = self._update_rx.clone();
+
+        // The caller-facing channel needs at least `capacity` slots so the
+        // proxy task can drain the ring into it without blocking.
+        let (caller_tx, rx) = mpsc::channel::<update::Update>(capacity);
+
         tokio::spawn(async move {
             let mut guard = internal_rx.lock().await;
-            while let Some(upd) = guard.recv().await {
-                // try_send: if the caller channel is full, drop the update and
-                // log a warning rather than blocking or OOM-ing.
-                if caller_tx.try_send(upd).is_err() {
-                    tracing::warn!(
-                        "[ferogram] update dropped: UpdateStream consumer is too slow \
-                         (channel full at capacity 2048). Consider processing updates \
-                         faster or spawning handlers."
-                    );
-                    metrics::counter!("ferogram.updates_dropped").increment(1);
+
+            match overflow {
+                // DropOldest: priority-aware ring buffer
+                OverflowStrategy::DropOldest => {
+                    // Ring buffer: front = oldest, back = newest.
+                    let mut ring: VecDeque<update::Update> = VecDeque::with_capacity(capacity);
+
+                    while let Some(upd) = guard.recv().await {
+                        // Try to drain the ring into the caller channel first.
+                        while !ring.is_empty() {
+                            match caller_tx.try_send(
+                                // peek then pop; try_send takes ownership
+                                ring.pop_front().expect("just peeked"),
+                            ) {
+                                Ok(()) => {}
+                                Err(tokio::sync::mpsc::error::TrySendError::Full(returned)) => {
+                                    // Caller not keeping up; put it back and stop draining.
+                                    ring.push_front(returned);
+                                    break;
+                                }
+                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                    // Caller dropped the UpdateStream; shut down.
+                                    return;
+                                }
+                            }
+                        }
+
+                        if ring.len() < capacity {
+                            ring.push_back(upd);
+                        } else {
+                            // Ring is full: evict the stalest Ephemeral slot first,
+                            // then fall back to the oldest Normal slot.
+                            let ephemeral_pos = ring
+                                .iter()
+                                .position(|u| update_priority(u) == UpdatePriority::Ephemeral);
+
+                            if let Some(pos) = ephemeral_pos {
+                                ring.remove(pos);
+                            } else {
+                                // No ephemerals; drop the oldest update regardless.
+                                ring.pop_front();
+                            }
+
+                            metrics::counter!("ferogram.updates_dropped").increment(1);
+                            tracing::debug!(
+                                "[ferogram] update queue full (capacity {}): \
+                                 evicted oldest to make room for incoming update.",
+                                capacity
+                            );
+                            ring.push_back(upd);
+                        }
+                    }
+
+                    // Reader task exited (disconnect): flush remaining ring to caller.
+                    for queued in ring {
+                        // Best-effort; ignore send errors (caller may have dropped stream).
+                        let _ = caller_tx.send(queued).await;
+                    }
+                }
+
+                // DropNewest: simple try_send (original behaviour)
+                OverflowStrategy::DropNewest => {
+                    while let Some(upd) = guard.recv().await {
+                        if caller_tx.try_send(upd).is_err() {
+                            tracing::warn!(
+                                "[ferogram] update dropped: UpdateStream consumer is too slow \
+                                 (channel full at capacity {}). Consider processing updates \
+                                 faster or spawning handlers.",
+                                capacity
+                            );
+                            metrics::counter!("ferogram.updates_dropped").increment(1);
+                        }
+                    }
                 }
             }
         });
+
         UpdateStream { rx }
     }
 

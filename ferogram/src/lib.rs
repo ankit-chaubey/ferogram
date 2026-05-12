@@ -214,6 +214,7 @@ pub mod proxy;
 
 pub mod fsm;
 pub mod middleware;
+pub mod update_config;
 pub mod util;
 
 // Re-export FsmState at the crate root for convenience.
@@ -264,6 +265,7 @@ pub use update::{BotStoppedUpdate, MessageReactionUpdate, PollVoteUpdate};
 pub use update::{ButtonFilter, Update};
 pub use update::{ChatActionUpdate, JoinRequestUpdate, ParticipantUpdate, UserStatusUpdate};
 pub use update::{ChatBoostUpdate, PreCheckoutQueryUpdate, ShippingQueryUpdate};
+pub use update_config::{OverflowStrategy, UpdateConfig};
 
 /// Re-export of `ferogram_tl_types`.
 pub use ferogram_tl_types as tl;
