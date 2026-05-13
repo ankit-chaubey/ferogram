@@ -56,11 +56,17 @@ pub struct ExperimentalFeatures {
     /// reject it.  Only useful for debugging / testing.
     pub allow_missing_channel_hash: bool,
 
-    /// *(Reserved  - not yet implemented.)*
+    /// When `access_hash` is missing for a channel during `getChannelDifference`,
+    /// call `channels.getChannels` with `access_hash = 0` to fetch it, cache it,
+    /// and retry the diff in the same loop iteration.
     ///
-    /// When set, a cache miss would automatically call `users.getUsers` /
-    /// `channels.getChannels` to fetch a fresh `access_hash` before
-    /// constructing the `InputPeer`.  Currently has no effect.
+    /// When false (the default), the diff is deferred: the entry stays alive and
+    /// the diff retries naturally once the hash arrives via a future update's
+    /// entity list.
+    ///
+    /// **Bot accounts only** for reliable operation. On user accounts
+    /// `channels.getChannels { access_hash: 0 }` succeeds only for public channels
+    /// and channels you are currently a member of.
     pub auto_resolve_peers: bool,
 }
 
@@ -101,7 +107,7 @@ pub struct PeerCache {
     /// Reverse index: E.164 phone → user_id.
     pub phone_to_user: HashMap<String, i64>,
     /// Experimental opt-ins that change error-vs-fallback behaviour.
-    experimental: ExperimentalFeatures,
+    pub(crate) experimental: ExperimentalFeatures,
 }
 
 impl Default for PeerCache {

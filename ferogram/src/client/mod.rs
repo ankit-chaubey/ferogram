@@ -447,6 +447,15 @@ pub(crate) struct ClientInner {
     /// session-scoped and must be re-established each process run.
     pub(crate) auth_imported: parking_lot::Mutex<std::collections::HashSet<i32>>,
 
+    /// Rolling count of peer-cache misses in the current window.
+    /// Reset when the window expires.
+    peer_cache_miss_count: std::sync::atomic::AtomicU32,
+    /// Start of the current miss-counting window.
+    peer_cache_miss_window_start: parking_lot::Mutex<std::time::Instant>,
+    /// Last time bulk dialog hydration ran.
+    /// Enforces the cooldown between getDialogs calls.
+    last_bulk_hydration: parking_lot::Mutex<Option<std::time::Instant>>,
+
     /// Per-DC connect gate for transfer pool initialisation.
     ///
     /// When multiple tasks race to open the first connection to the same foreign
@@ -718,6 +727,9 @@ impl Client {
             dc_connect_gates: parking_lot::Mutex::new(std::collections::HashMap::new()),
             auth_import_gates: parking_lot::Mutex::new(std::collections::HashMap::new()),
             auth_imported: parking_lot::Mutex::new(std::collections::HashSet::new()),
+            peer_cache_miss_count: std::sync::atomic::AtomicU32::new(0),
+            peer_cache_miss_window_start: parking_lot::Mutex::new(std::time::Instant::now()),
+            last_bulk_hydration: parking_lot::Mutex::new(None),
             // Persistent dedup ring for the main connection reader task.
             seen_msg_ids: ferogram_mtproto::new_seen_msg_ids(),
         });
@@ -3421,15 +3433,74 @@ impl Client {
                     cache.channels.get(&channel_id).copied().unwrap_or(0)
                 };
                 if access_hash == 0 {
-                    tracing::warn!(
-                        "[ferogram] no access_hash for channel {channel_id}; ending diff (Banned)"
-                    );
-                    self.inner
-                        .message_box
-                        .lock()
-                        .await
-                        .end_channel_difference(PrematureEndReason::Banned);
-                    continue;
+                    let auto_resolve = {
+                        let cache = self.inner.peer_cache.read().await;
+                        cache.experimental.auto_resolve_peers
+                    };
+
+                    self.record_peer_cache_miss();
+
+                    if auto_resolve {
+                        let peer = tl::enums::Peer::Channel(tl::types::PeerChannel { channel_id });
+                        match self.fetch_by_id_rpc(peer).await {
+                            Ok(_) => {
+                                let h = self
+                                    .inner
+                                    .peer_cache
+                                    .read()
+                                    .await
+                                    .channels
+                                    .get(&channel_id)
+                                    .copied()
+                                    .unwrap_or(0);
+                                if h != 0 {
+                                    req.channel = tl::enums::InputChannel::InputChannel(
+                                        tl::types::InputChannel {
+                                            channel_id,
+                                            access_hash: h,
+                                        },
+                                    );
+                                    // hash now set; fall through to run the diff
+                                } else {
+                                    tracing::debug!(
+                                        "[ferogram] auto_resolve: channel {channel_id} still no hash; deferring"
+                                    );
+                                    self.inner.message_box.lock().await.end_channel_difference(
+                                        PrematureEndReason::TemporaryServerIssues,
+                                    );
+                                    continue;
+                                }
+                            }
+                            Err(ref e) if e.is("CHANNEL_PRIVATE") => {
+                                tracing::info!(
+                                    "[ferogram] auto_resolve: channel {channel_id} CHANNEL_PRIVATE; deferring"
+                                );
+                                self.inner.message_box.lock().await.end_channel_difference(
+                                    PrematureEndReason::TemporaryServerIssues,
+                                );
+                                continue;
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "[ferogram] auto_resolve: channel {channel_id} fetch failed: {e}; deferring"
+                                );
+                                self.inner.message_box.lock().await.end_channel_difference(
+                                    PrematureEndReason::TemporaryServerIssues,
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        tracing::debug!(
+                            "[ferogram] no access_hash for channel {channel_id}; deferring diff"
+                        );
+                        self.inner
+                            .message_box
+                            .lock()
+                            .await
+                            .end_channel_difference(PrematureEndReason::TemporaryServerIssues);
+                        continue;
+                    }
                 }
                 req.channel = tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
                     channel_id,
@@ -5868,6 +5939,50 @@ impl Client {
     /// layers, causing spurious parse failures that break startup even when the
     /// bot would otherwise work perfectly.  Removing this from the startup path
     /// makes Ferogram resilient to Telegram schema drift - exactly the strategy
+    const MISS_THRESHOLD: u32 = 10;
+    const MISS_WINDOW: std::time::Duration = std::time::Duration::from_secs(30);
+    const BULK_HYDRATION_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+    fn record_peer_cache_miss(&self) {
+        use std::sync::atomic::Ordering;
+        let now = std::time::Instant::now();
+        let mut window_start = self.inner.peer_cache_miss_window_start.lock();
+        if now.duration_since(*window_start) > Self::MISS_WINDOW {
+            *window_start = now;
+            self.inner.peer_cache_miss_count.store(1, Ordering::Relaxed);
+        } else {
+            let prev = self
+                .inner
+                .peer_cache_miss_count
+                .fetch_add(1, Ordering::Relaxed);
+            if prev + 1 >= Self::MISS_THRESHOLD {
+                self.inner.peer_cache_miss_count.store(0, Ordering::Relaxed);
+                drop(window_start);
+                let client = self.clone();
+                tokio::spawn(async move {
+                    client.bulk_peer_hydration().await;
+                });
+            }
+        }
+    }
+
+    async fn bulk_peer_hydration(&self) {
+        {
+            let last = self.inner.last_bulk_hydration.lock();
+            if let Some(t) = *last
+                && t.elapsed() < Self::BULK_HYDRATION_COOLDOWN
+            {
+                tracing::debug!("[ferogram] bulk_peer_hydration: cooldown active; skipping");
+                return;
+            }
+        }
+        *self.inner.last_bulk_hydration.lock() = Some(std::time::Instant::now());
+        tracing::info!("[ferogram] peer cache miss burst; running bulk dialog hydration");
+        if let Err(e) = self.warm_peer_cache_from_dialogs().await {
+            tracing::warn!("[ferogram] bulk_peer_hydration: getDialogs failed: {e}");
+        }
+    }
+
     pub async fn warm_peer_cache_from_dialogs(&self) -> Result<(), InvocationError> {
         let req = tl::functions::messages::GetDialogs {
             exclude_pinned: false,

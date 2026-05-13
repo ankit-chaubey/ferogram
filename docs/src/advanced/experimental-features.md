@@ -87,12 +87,42 @@ ExperimentalFeatures {
 ### `auto_resolve_peers`
 
 **Default:** `false`  
-**Status:** reserved, not yet implemented
+**Safe for:** bot accounts only
 
-When set, a cache miss would automatically call `users.getUsers` /
-`channels.getChannels` to fetch a fresh `access_hash` before constructing the
-`InputPeer`. Currently this flag has no effect. It is reserved for a future
-release that will add automatic peer hydration.
+When `getChannelDifference` runs and no `access_hash` is cached for the target
+channel, this flag controls what happens next.
+
+**`false` (default):** the diff is deferred. The entry stays alive in the
+update state machine with its pts preserved and its deadline reset. The diff
+retries automatically once the hash arrives via a future update's entity list.
+No RPC is fired. At most one diff window is missed.
+
+**`true`:** ferogram immediately calls `channels.getChannels` with
+`access_hash = 0` to fetch the hash, caches the result, and retries the diff
+in the same loop iteration. If the RPC fails or the channel is private, the
+diff falls back to the deferred path rather than dropping the entry.
+
+This flag only affects `getChannelDifference`. It does not change how
+`InputPeer` resolution works for outgoing API calls.
+
+**Bot accounts only.** On user accounts, `channels.getChannels { access_hash: 0 }`
+succeeds only for public channels and channels the account is currently a member
+of. For private channels it returns `CHANNEL_PRIVATE` and the diff is deferred
+regardless.
+
+```rust
+// Bot that needs zero missed updates for channels it joins dynamically.
+ExperimentalFeatures {
+    auto_resolve_peers: true,
+    ..Default::default()
+}
+```
+
+**Burst behaviour:** ferogram tracks peer cache misses in a rolling 30-second
+window. If 10 or more misses occur within that window, a background task calls
+`warm_peer_cache_from_dialogs` to bulk-populate the cache from `messages.getDialogs`.
+A 15-minute cooldown prevents repeated bulk calls. This escalation runs
+regardless of whether `auto_resolve_peers` is set.
 
 ---
 
