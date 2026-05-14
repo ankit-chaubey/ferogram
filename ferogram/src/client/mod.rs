@@ -474,6 +474,10 @@ pub(crate) struct ClientInner {
     /// does the export/import per DC per session.
     auth_import_gates:
         parking_lot::Mutex<std::collections::HashMap<i32, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+
+    /// Set to true after any peer-cache mutation so the full-snapshot periodic
+    /// saver knows a flush to the session backend is needed.
+    session_snapshot_dirty: std::sync::atomic::AtomicBool,
 }
 
 /// The main Telegram client. Cheap to clone: internally Arc-wrapped.
@@ -732,6 +736,7 @@ impl Client {
             last_bulk_hydration: parking_lot::Mutex::new(None),
             // Persistent dedup ring for the main connection reader task.
             seen_msg_ids: ferogram_mtproto::new_seen_msg_ids(),
+            session_snapshot_dirty: std::sync::atomic::AtomicBool::new(false),
         });
 
         let client = Self {
@@ -811,8 +816,48 @@ impl Client {
             });
         }
 
-        // +: Background ack flush task  - drains pending_ack every 500 ms so that
-        // content-message acks are never held indefinitely waiting for an outgoing
+        // Full-session snapshot saver: flushes peers, channel_pts, min_peers, and
+        // DC auth/salt data every 60 seconds whenever the peer cache has been
+        // mutated since the last save. The dirty flag is set by mark_session_snapshot_dirty()
+        // which is called after every peer-cache write. On shutdown a final save runs
+        // unconditionally so no data is lost if the process exits between intervals.
+        {
+            let client_full = client.clone();
+            let shutdown_full = shutdown_token.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(60));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                interval.tick().await;
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = shutdown_full.cancelled() => {
+                            let _ = client_full.save_session().await;
+                            break;
+                        }
+                        _ = interval.tick() => {
+                            if client_full
+                                .inner
+                                .session_snapshot_dirty
+                                .swap(false, std::sync::atomic::Ordering::AcqRel)
+                            {
+                                if let Err(e) = client_full.save_session().await {
+                                    tracing::warn!("[ferogram/persist] full snapshot save failed: {e}");
+                                    client_full
+                                        .inner
+                                        .session_snapshot_dirty
+                                        .store(true, std::sync::atomic::Ordering::Release);
+                                } else {
+                                    tracing::debug!("[ferogram/persist] full snapshot saved");
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // +: Background ack flush task  - drains pending_ack every 500 ms so that        // content-message acks are never held indefinitely waiting for an outgoing
         // RPC.  Without this, a bot that receives update bursts without sending any
         // RPCs will eventually exhaust Telegram's un-acked-message threshold (~512)
         // causing the server to close the connection.
@@ -3167,6 +3212,8 @@ impl Client {
                     cache.channels_min.insert(ch_id);
                 }
             }
+            drop(cache);
+            self.mark_session_snapshot_dirty();
         }
 
         // Use the already-parsed Updates object; never re-deserialize raw bytes.
@@ -3195,6 +3242,8 @@ impl Client {
                         for c in &mb_chats {
                             cache.cache_chat(c);
                         }
+                        drop(cache);
+                        self.mark_session_snapshot_dirty();
                     }
                     // Convert and emit each approved update.
                     for raw in raw_updates {
@@ -3379,6 +3428,8 @@ impl Client {
                                     for c in &chats {
                                         cache.cache_chat(c);
                                     }
+                                    drop(cache);
+                                    self.mark_session_snapshot_dirty();
                                 }
                                 self.emit_raw_updates(updates).await;
                             }
@@ -3533,6 +3584,8 @@ impl Client {
                                     for c in &chats {
                                         cache.cache_chat(c);
                                     }
+                                    drop(cache);
+                                    self.mark_session_snapshot_dirty();
                                 }
                                 self.emit_raw_updates(updates).await;
                             }
@@ -5881,6 +5934,15 @@ impl Client {
         self.inner.shutdown_token.cancel();
     }
 
+    /// Mark the session snapshot as dirty so the periodic full-snapshot saver
+    /// knows a flush is needed on the next interval tick.
+    #[inline]
+    fn mark_session_snapshot_dirty(&self) {
+        self.inner
+            .session_snapshot_dirty
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
     /// Sync the internal pts/qts/seq/date state with the Telegram server.
     ///
     /// Called automatically on `connect()`. Call it manually if you
@@ -5888,18 +5950,23 @@ impl Client {
     /// from a long hibernation.
     async fn cache_user(&self, user: &tl::enums::User) {
         self.inner.peer_cache.write().await.cache_user(user);
+        self.mark_session_snapshot_dirty();
     }
 
     pub(crate) async fn cache_users_slice(&self, users: &[tl::enums::User]) {
         let mut cache: tokio::sync::RwLockWriteGuard<'_, PeerCache> =
             self.inner.peer_cache.write().await;
         cache.cache_users(users);
+        drop(cache);
+        self.mark_session_snapshot_dirty();
     }
 
     pub(crate) async fn cache_chats_slice(&self, chats: &[tl::enums::Chat]) {
         let mut cache: tokio::sync::RwLockWriteGuard<'_, PeerCache> =
             self.inner.peer_cache.write().await;
         cache.cache_chats(chats);
+        drop(cache);
+        self.mark_session_snapshot_dirty();
     }
 
     /// Cache users and chats in a single write-lock acquisition.
@@ -5912,6 +5979,8 @@ impl Client {
             self.inner.peer_cache.write().await;
         cache.cache_users(users);
         cache.cache_chats(chats);
+        drop(cache);
+        self.mark_session_snapshot_dirty();
     }
 
     /// Warm the peer cache with access_hashes by fetching the first page of

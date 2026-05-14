@@ -1231,7 +1231,7 @@ mod tests {
 ///
 /// # Schema
 ///
-/// Five tables are created on first open (idempotent):
+/// Six tables are created on first open (idempotent):
 ///
 /// | Table          | Purpose                                          |
 /// |----------------|--------------------------------------------------|
@@ -1239,7 +1239,8 @@ mod tests {
 /// | `dcs`          | One row per DC (auth key, address, flags, ...)     |
 /// | `update_state` | Single-row pts / qts / date / seq                |
 /// | `channel_pts`  | Per-channel pts                                  |
-/// | `peers`        | Access-hash cache                                |
+/// | `peers`        | Access-hash cache (includes is_chat flag)        |
+/// | `min_peers`    | Min-user message contexts                        |
 ///
 /// # Granular writes
 ///
@@ -1290,7 +1291,14 @@ impl SqliteBackend {
         CREATE TABLE IF NOT EXISTS peers (
             id           INTEGER PRIMARY KEY,
             access_hash  INTEGER NOT NULL,
-            is_channel   INTEGER NOT NULL DEFAULT 0
+            is_channel   INTEGER NOT NULL DEFAULT 0,
+            is_chat      INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS min_peers (
+            user_id INTEGER PRIMARY KEY,
+            peer_id INTEGER NOT NULL,
+            msg_id  INTEGER NOT NULL
         );
     ";
 
@@ -1300,6 +1308,7 @@ impl SqliteBackend {
         let label = path.display().to_string();
         let conn = rusqlite::Connection::open(&path).map_err(io::Error::other)?;
         conn.execute_batch(Self::SCHEMA).map_err(io::Error::other)?;
+        Self::migrate_legacy_sqlite_schema(&conn)?;
         Ok(Self {
             conn: std::sync::Mutex::new(conn),
             label,
@@ -1310,6 +1319,7 @@ impl SqliteBackend {
     pub fn in_memory() -> io::Result<Self> {
         let conn = rusqlite::Connection::open_in_memory().map_err(io::Error::other)?;
         conn.execute_batch(Self::SCHEMA).map_err(io::Error::other)?;
+        Self::migrate_legacy_sqlite_schema(&conn)?;
         Ok(Self {
             conn: std::sync::Mutex::new(conn),
             label: ":memory:".into(),
@@ -1318,6 +1328,38 @@ impl SqliteBackend {
 
     fn map_err(e: rusqlite::Error) -> io::Error {
         io::Error::other(e)
+    }
+
+    /// Migrate an older database that is missing the is_chat column or the
+    /// min_peers table. Safe to call on a fresh database; both operations
+    /// are no-ops if the schema is already current.
+    fn migrate_legacy_sqlite_schema(conn: &rusqlite::Connection) -> io::Result<()> {
+        let mut has_is_chat = false;
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(peers)")
+            .map_err(Self::map_err)?;
+        let cols = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(Self::map_err)?;
+        for col in cols.filter_map(|r| r.ok()) {
+            if col == "is_chat" {
+                has_is_chat = true;
+                break;
+            }
+        }
+        if !has_is_chat {
+            conn.execute_batch("ALTER TABLE peers ADD COLUMN is_chat INTEGER NOT NULL DEFAULT 0;")
+                .map_err(Self::map_err)?;
+        }
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS min_peers (
+                user_id INTEGER PRIMARY KEY,
+                peer_id INTEGER NOT NULL,
+                msg_id  INTEGER NOT NULL
+            );",
+        )
+        .map_err(Self::map_err)?;
+        Ok(())
     }
 
     /// Read the full session out of the database.
@@ -1397,7 +1439,7 @@ impl SqliteBackend {
 
         // peers
         let mut peer_stmt = conn
-            .prepare("SELECT id, access_hash, is_channel FROM peers")
+            .prepare("SELECT id, access_hash, is_channel, is_chat FROM peers")
             .map_err(Self::map_err)?;
         let peers: Vec<CachedPeer> = peer_stmt
             .query_map([], |r| {
@@ -1405,7 +1447,23 @@ impl SqliteBackend {
                     id: r.get(0)?,
                     access_hash: r.get(1)?,
                     is_channel: r.get::<_, i32>(2)? != 0,
-                    is_chat: false,
+                    is_chat: r.get::<_, i32>(3)? != 0,
+                })
+            })
+            .map_err(Self::map_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // min_peers
+        let mut min_stmt = conn
+            .prepare("SELECT user_id, peer_id, msg_id FROM min_peers")
+            .map_err(Self::map_err)?;
+        let min_peers: Vec<CachedMinPeer> = min_stmt
+            .query_map([], |r| {
+                Ok(CachedMinPeer {
+                    user_id: r.get(0)?,
+                    peer_id: r.get(1)?,
+                    msg_id: r.get(2)?,
                 })
             })
             .map_err(Self::map_err)?
@@ -1420,7 +1478,7 @@ impl SqliteBackend {
                 ..updates_state
             },
             peers,
-            min_peers: Vec::new(),
+            min_peers,
         })
     }
 
@@ -1484,8 +1542,19 @@ impl SqliteBackend {
             .map_err(Self::map_err)?;
         for p in &s.peers {
             conn.execute(
-                "INSERT INTO peers (id, access_hash, is_channel) VALUES (?1, ?2, ?3)",
-                rusqlite::params![p.id, p.access_hash, p.is_channel as i32],
+                "INSERT INTO peers (id, access_hash, is_channel, is_chat) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![p.id, p.access_hash, p.is_channel as i32, p.is_chat as i32],
+            )
+            .map_err(Self::map_err)?;
+        }
+
+        // min_peers
+        conn.execute("DELETE FROM min_peers", [])
+            .map_err(Self::map_err)?;
+        for m in &s.min_peers {
+            conn.execute(
+                "INSERT INTO min_peers (user_id, peer_id, msg_id) VALUES (?1, ?2, ?3)",
+                rusqlite::params![m.user_id, m.peer_id, m.msg_id],
             )
             .map_err(Self::map_err)?;
         }
@@ -1522,6 +1591,7 @@ impl SessionBackend for SqliteBackend {
              DELETE FROM update_state;
              DELETE FROM channel_pts;
              DELETE FROM peers;
+             DELETE FROM min_peers;
              COMMIT;",
         )
         .map_err(Self::map_err)
@@ -1621,11 +1691,17 @@ impl SessionBackend for SqliteBackend {
     fn cache_peer(&self, peer: &CachedPeer) -> io::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO peers (id, access_hash, is_channel) VALUES (?1, ?2, ?3)
+            "INSERT INTO peers (id, access_hash, is_channel, is_chat) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(id) DO UPDATE SET
                access_hash = excluded.access_hash,
-               is_channel  = excluded.is_channel",
-            rusqlite::params![peer.id, peer.access_hash, peer.is_channel as i32],
+               is_channel  = excluded.is_channel,
+               is_chat     = excluded.is_chat",
+            rusqlite::params![
+                peer.id,
+                peer.access_hash,
+                peer.is_channel as i32,
+                peer.is_chat as i32
+            ],
         )
         .map(|_| ())
         .map_err(Self::map_err)
@@ -1687,7 +1763,13 @@ impl LibSqlBackend {
         CREATE TABLE IF NOT EXISTS peers (
             id          INTEGER PRIMARY KEY,
             access_hash INTEGER NOT NULL,
-            is_channel  INTEGER NOT NULL DEFAULT 0
+            is_channel  INTEGER NOT NULL DEFAULT 0,
+            is_chat     INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS min_peers (
+            user_id INTEGER PRIMARY KEY,
+            peer_id INTEGER NOT NULL,
+            msg_id  INTEGER NOT NULL
         );
     ";
 
@@ -1850,7 +1932,7 @@ impl LibSqlBackend {
 
         // peers
         let mut peer_rows = conn
-            .query("SELECT id, access_hash, is_channel FROM peers", ())
+            .query("SELECT id, access_hash, is_channel, is_chat FROM peers", ())
             .await?;
         let mut peers = Vec::new();
         while let Some(r) = peer_rows.next().await? {
@@ -1858,7 +1940,20 @@ impl LibSqlBackend {
                 id: r.get(0)?,
                 access_hash: r.get(1)?,
                 is_channel: r.get::<i32>(2)? != 0,
-                is_chat: false,
+                is_chat: r.get::<i32>(3)? != 0,
+            });
+        }
+
+        // min_peers
+        let mut min_rows = conn
+            .query("SELECT user_id, peer_id, msg_id FROM min_peers", ())
+            .await?;
+        let mut min_peers = Vec::new();
+        while let Some(r) = min_rows.next().await? {
+            min_peers.push(CachedMinPeer {
+                user_id: r.get(0)?,
+                peer_id: r.get(1)?,
+                msg_id: r.get(2)?,
             });
         }
 
@@ -1870,7 +1965,7 @@ impl LibSqlBackend {
                 ..updates_state
             },
             peers,
-            min_peers: Vec::new(),
+            min_peers,
         })
     }
 
@@ -1928,8 +2023,17 @@ impl LibSqlBackend {
         conn.execute("DELETE FROM peers", ()).await?;
         for p in &s.peers {
             conn.execute(
-                "INSERT INTO peers (id, access_hash, is_channel) VALUES (?1,?2,?3)",
-                libsql::params![p.id, p.access_hash, p.is_channel as i32],
+                "INSERT INTO peers (id, access_hash, is_channel, is_chat) VALUES (?1,?2,?3,?4)",
+                libsql::params![p.id, p.access_hash, p.is_channel as i32, p.is_chat as i32],
+            )
+            .await?;
+        }
+
+        conn.execute("DELETE FROM min_peers", ()).await?;
+        for m in &s.min_peers {
+            conn.execute(
+                "INSERT INTO min_peers (user_id, peer_id, msg_id) VALUES (?1,?2,?3)",
+                libsql::params![m.user_id, m.peer_id, m.msg_id],
             )
             .await?;
         }
@@ -1978,6 +2082,7 @@ impl SessionBackend for LibSqlBackend {
                  DELETE FROM update_state;
                  DELETE FROM channel_pts;
                  DELETE FROM peers;
+                 DELETE FROM min_peers;
                  COMMIT;",
             )
             .await
@@ -2083,15 +2188,21 @@ impl SessionBackend for LibSqlBackend {
 
     fn cache_peer(&self, peer: &CachedPeer) -> io::Result<()> {
         let conn = self.conn.clone();
-        let (id, hash, is_ch) = (peer.id, peer.access_hash, peer.is_channel as i32);
+        let (id, hash, is_ch, is_ct) = (
+            peer.id,
+            peer.access_hash,
+            peer.is_channel as i32,
+            peer.is_chat as i32,
+        );
         Self::block(async move {
             let conn = conn.lock().await;
             conn.execute(
-                "INSERT INTO peers (id,access_hash,is_channel) VALUES (?1,?2,?3)
+                "INSERT INTO peers (id,access_hash,is_channel,is_chat) VALUES (?1,?2,?3,?4)
                  ON CONFLICT(id) DO UPDATE SET
                    access_hash=excluded.access_hash,
-                   is_channel=excluded.is_channel",
-                libsql::params![id, hash, is_ch],
+                   is_channel=excluded.is_channel,
+                   is_chat=excluded.is_chat",
+                libsql::params![id, hash, is_ch, is_ct],
             )
             .await
             .map(|_| ())
