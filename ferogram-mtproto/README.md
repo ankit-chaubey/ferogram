@@ -14,8 +14,8 @@ MTProto 2.0 session management, DH key exchange, and message framing for Rust.
 
 ```toml
 [dependencies]
-ferogram-mtproto  = "0.4.0"
-ferogram-tl-types = { version = "0.4.0", features = ["tl-mtproto"] }
+ferogram-mtproto  = "0.4.1"
+ferogram-tl-types = { version = "0.4.1", features = ["tl-mtproto"] }
 ```
 
 ---

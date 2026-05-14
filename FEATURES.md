@@ -194,6 +194,10 @@ Every received message exposes:
 - CDN download for large files (transparent, no extra API calls needed)
 - Automatic DC redirect for cross-DC media
 
+**High-speed transfers (not yet published)**
+
+Fastest possible upload and download is already implemented. It involves workarounds that carry some risk, so it will be published under `ExperimentalFeatures` when/if it ships rather than being on by default.
+
 **InputMedia variants**
 
 - `InputMedia::upload_file(path)`: local file
@@ -672,3 +676,33 @@ All implemented from scratch, no external crypto service:
 - Works in Termux (Android) with the native Rust toolchain
 - Async throughout, built on Tokio
 - No blocking mutex in async hot paths
+
+---
+
+## Secret Chats
+
+Fully implemented. Covers the complete Telegram secret chat protocol: E2E encryption, key exchange, perfect forward secrecy, TTL messages, screenshot notifications, and all related features Telegram exposes for secret chats.
+
+Lives in a dedicated crate inside the workspace. Not published to crates.io yet. The plan is to publish once the community is large enough that there is actual demand for it. It is self-contained and will not conflict with the existing public API when it ships.
+
+---
+
+## Voice and Video Calls
+
+**Group audio calls** are fully implemented and stable. Written in Rust from scratch .. not a wrapper .. specifically to keep it lightweight and efficient. Already in active production use by the author.
+
+**Group video calls** are implemented. Stable for most scenarios; there are known issues with some codecs.
+
+**Peer-to-peer calls** are partially implemented and still in active development.
+
+Call support lives in its own workspace crate. It will be published as separate crates when it comes out of the workspace. Python bindings via ferogram-py are also planned for this.
+
+---
+
+## Multi-language Bindings
+
+The goal: access ferogram from any language at native Rust speed, without writing per-language bindings like ferogram-py.
+
+A single-bridge approach is in development. Basic functionality works. Full API coverage is not complete .. most of the surface is still raw.
+
+Not a high priority right now. Most languages already have capable MTProto libraries, and building and maintaining a bridge wide enough to cover the full ferogram API is a large undertaking for a single maintainer. There is no set timeline. Python (`ferogram-py`) remains the actively maintained binding and is not affected by this.

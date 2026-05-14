@@ -4,6 +4,101 @@ ferogram started as a renamed continuation of [layer](https://github.com/ankit-c
 
 ---
 
+## v0.4.1
+
+Released 2026-05-14. Patch on top of 0.4.0: one new API for faster onboarding, a configurable update buffer, session schema improvements, and 15 new examples. No breaking changes.
+
+### `Client::quick_connect`
+
+One call handles the builder, connection, and the full auth flow from stdin. Returns immediately if the session is already authorized.
+
+```rust
+use ferogram::Client;
+
+const API_ID: i32 = 12345;
+const API_HASH: &str = "your_api_hash";
+
+let (client, _shutdown) = Client::quick_connect("bot.session", API_ID, API_HASH).await?;
+```
+
+Bot tokens are detected automatically by their `<digits>:<string>` shape, so the same call works for both bots and users.
+
+If you need an option `quick_connect` does not expose (proxy, PFS, custom transport, catch-up), switch to `Client::builder()`. The session file is compatible.
+
+See [quick_connect reference](./api/quick-connect.md) for the full signature and error table.
+
+### Configurable update buffer
+
+Two new builder methods let you tune the user-facing dispatch queue. Internal MTProto state (pts, qts, getDifference) is unaffected; only the `Update` queue from `stream_updates()` is governed here.
+
+```rust
+use ferogram::{Client, update_config::OverflowStrategy};
+
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .update_queue_capacity(512)
+    .update_overflow_strategy(OverflowStrategy::DropOldest)
+    .connect().await?;
+```
+
+`DropOldest` (default) evicts ephemeral updates (typing, online status) first, then the oldest normal update, keeping the incoming one. `DropNewest` discards the incoming update instead. Default capacity is 2048.
+
+For memory-constrained hosts (Termux, small VPS) there is a shortcut:
+
+```rust
+Client::builder()
+    // ...
+    .low_memory_mode(true)  // 256-slot queue, DropOldest
+    .connect().await?;
+```
+
+### Session schema migration
+
+Two additions to the SQLite/LibSQL schema, applied automatically when the database is opened. Both are no-ops on a fresh database.
+
+- `peers` table gains an `is_chat` column for tracking basic groups.
+- New `min_peers` table stores min-user message contexts needed for `InputPeerUserFromMessage`.
+
+Existing session files migrate automatically.
+
+### Periodic session save
+
+The client now writes a full session snapshot (peers, channel_pts, min_peers, DC auth/salt data) to the session backend every 60 seconds whenever the peer cache has been mutated since the last save. A final save runs unconditionally on shutdown. Previously peers were only written on explicit `save_session()` calls, so a crash between calls could lose recently seen peers.
+
+### Salt expiry fix past 2038
+
+`valid_until` in future salts was stored as `i32`. Telegram sends validity windows that extend into the 2050s. Those values overflow `i32` and wrap negative, making every salt look expired on a signed comparison and causing constant re-fetches. Changed to `u32` throughout.
+
+### `GuestChatAnswer` return type corrected
+
+`GuestChatAnswer::send` now returns `InputBotInlineMessageID` matching the actual TL schema. The `setBotGuestChatResult` constructor ID was also wrong in the previous schema; both are fixed. If you were pattern-matching on the old `bool` return, update your call sites.
+
+### New type and methods
+
+- `ParticipantStatus` is now exported from the crate root.
+- `User::bot_guestchat()` returns `true` if the bot supports guest-chat mode.
+- `GuestChatQuery::via_from()` returns the original requester peer when Telegram includes `guestchat_via_from` in the message.
+
+### 15 new examples
+
+All examples live under `ferogram/examples/`.
+
+**Userbot tools:** `admin_log`, `chat_history`, `dialogs_list`, `download_media`, `get_participants`, `schedule_message`, `search_messages`, `serverless_userbot`, `string_session_gen`.
+
+**Bots:** `echo_bot`, `filters_showcase`, `hello_self`, `inline_keyboard`, `inline_query_bot`, `poll_bot`, `translate_bot`.
+
+### Upgrading from 0.4.0
+
+```toml
+ferogram = "0.4.1"
+```
+
+No API changes required. The session migration is automatic.
+
+---
+
 ## [0.4.0]: 2026-05-08
 
 0.4.0 is the first production-ready release of ferogram. It ships Layer 225 support and a reworked poll API. All users are advised to upgrade to 0.4.0 (or 0.4.x+) as the most recommended and supported version.

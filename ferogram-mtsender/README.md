@@ -15,7 +15,7 @@ Manages DC connections and drives the retry loop for RPC calls. `ferogram` sits 
 
 ```toml
 [dependencies]
-ferogram-mtsender = "0.4.0"
+ferogram-mtsender = "0.4.1"
 ```
 
 ## What it does

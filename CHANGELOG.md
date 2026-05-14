@@ -10,6 +10,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.1]: 2026-05-14
+
+Patch release with one new API, configurable update buffering, session schema improvements, and 15 new examples.
+
+No breaking changes from 0.4.0.
+
+---
+
+### Added
+
+**`Client::quick_connect`**
+
+Connects and authenticates in a single call. Handles the full auth flow from stdin: phone number or bot token, login code, 2FA password if needed. If the session is already authorized the prompt is skipped.
+
+```rust
+use ferogram::Client;
+
+const API_ID: i32 = 12345;
+const API_HASH: &str = "your_api_hash";
+
+let (client, _shutdown) = Client::quick_connect("bot.session", API_ID, API_HASH).await?;
+```
+
+Bot tokens are detected automatically by their `<digits>:<string>` format, so the same prompt works for both bots and users.
+
+For advanced options (proxy, PFS, custom transport, catch-up) use `Client::builder()` instead.
+
+**`UpdateConfig` / `OverflowStrategy`**
+
+Two new types for controlling the user-facing update dispatch buffer. Internal MTProto state (pts, qts, getDifference) is unaffected.
+
+```rust
+use ferogram::{Client, update_config::OverflowStrategy};
+
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .update_queue_capacity(512)
+    .update_overflow_strategy(OverflowStrategy::DropOldest)
+    .connect().await?;
+```
+
+`DropOldest` (default) evicts ephemeral updates (typing, online status) first, then the oldest normal update. The incoming update is always buffered. `DropNewest` discards the incoming update instead. Default capacity is 2048.
+
+**`ClientBuilder::low_memory_mode`**
+
+Drops the dispatch buffer to 256 slots with `DropOldest` eviction. Good for Termux or any host where RAM is tight.
+
+```rust
+Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .low_memory_mode(true)
+    .connect().await?;
+```
+
+**`ParticipantStatus`** is now re-exported from the crate root.
+
+**`User::bot_guestchat()`** returns `true` if the bot supports guest-chat mode (`updateBotGuestChatQuery`).
+
+**`GuestChatQuery::via_from()`** returns the original requester peer when Telegram includes `guestchat_via_from` in the message. Present when the bot is acting as an intermediary.
+
+**Examples**
+
+15 new examples under `ferogram/examples/`:
+
+Userbot tools: `admin_log`, `chat_history`, `dialogs_list`, `download_media`, `get_participants`, `schedule_message`, `search_messages`, `serverless_userbot`, `string_session_gen`.
+
+Bots: `echo_bot`, `filters_showcase`, `hello_self`, `inline_keyboard`, `inline_query_bot`, `poll_bot`, `translate_bot`.
+
+**Docs**
+
+New page: `docs/src/api/quick-connect.md` covering `quick_connect` usage and error handling.
+
+---
+
+### Changed
+
+**Session schema** - two schema additions for existing databases, applied automatically via `migrate_legacy_sqlite_schema` on open. Safe on fresh databases; both operations are no-ops if the schema is already current.
+
+- `peers` table gains an `is_chat` column for basic group tracking.
+- New `min_peers` table stores min-user message contexts (`user_id`, `peer_id`, `msg_id`).
+
+**`allow_missing_channel_hash`** in `ExperimentalFeatures` is now active. When set, a missing access hash during `getChannelDifference` triggers a `channels.getChannels` call with `access_hash = 0` to fetch and cache the hash, then retries the diff in the same loop iteration. Bots only.
+
+**Periodic session snapshot saver** - the client now flushes the full session (peers, channel_pts, min_peers, DC auth/salt data) to the session backend every 60 seconds when the peer cache has been mutated. A final save runs unconditionally on shutdown. Previously peers were only flushed on explicit `save_session()` calls.
+
+---
+
+### Fixed
+
+**Salt `valid_until` overflow** - `valid_until` was stored as `i32`. Telegram sends validity windows extending past 2038 (e.g. `valid_until = 2_751_656_413`, year 2057). Those values overflow `i32` and wrap negative, making every salt look expired on a signed comparison. Changed to `u32`.
+
+**`GuestChatAnswer::send` return type** - was returning `bool`. Now returns `InputBotInlineMessageID` matching the corrected TL schema. The `setBotGuestChatResult` constructor ID was also wrong; both are fixed.
+
+---
+
 ## [0.4.0]: 2026-05-08
 
 0.4.0 is the first production-ready release of ferogram. It ships Layer 225 support. All users are advised to upgrade to 0.4.0 (or 0.4.x+) as the most recommended and supported version.

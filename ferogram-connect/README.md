@@ -15,7 +15,7 @@ Handles everything between a `TcpStream` and a decrypted MTProto message. The `f
 
 ```toml
 [dependencies]
-ferogram-connect = "0.4.0"
+ferogram-connect = "0.4.1"
 ```
 
 ## What it does
