@@ -375,7 +375,7 @@ async fn dispatch(upd: Update, client: Arc<Client>, me: Arc<tl::types::User>, bo
                     ),
                     ia(
                         "3",
-                        "🎲 Random 1–100",
+                        "🎲 Random 1-100",
                         &thread_rng().gen_range(1..=100u32).to_string(),
                     ),
                     ia(

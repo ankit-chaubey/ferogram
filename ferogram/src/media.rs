@@ -142,9 +142,9 @@ const UPLOAD_PART_SIZES: &[usize] = &[32 * 1024, 64 * 1024, 128 * 1024, 256 * 10
 ///
 /// Upload part size table:
 /// - < 1 MB  → 32 KB  (fits in ≤ 32 parts)
-/// - 1–32 MB → 64 KB
-/// - 32–512 MB → 128 KB
-/// - 512 MB–1 GB → 256 KB
+/// - 1-32 MB → 64 KB
+/// - 32-512 MB → 128 KB
+/// - 512 MB-1 GB → 256 KB
 /// - > 1 GB  → 512 KB
 ///
 /// Returns `(part_size_bytes, total_parts)`.
@@ -185,8 +185,8 @@ pub(crate) fn count_workers(n_parts: usize) -> usize {
 /// | File size    | Workers |
 /// |--------------|---------|
 /// | < 10 MB      | 1       |
-/// | 10 – 50 MB   | 2       |
-/// | 50 – 300 MB  | 3       |
+/// | 10 - 50 MB   | 2       |
+/// | 50 - 300 MB  | 3       |
 /// | > 300 MB     | 4       |
 ///
 /// The 300 MB boundary avoids the 199 MB → 3 / 202 MB → 4 cliff that a
@@ -210,8 +210,8 @@ pub fn download_worker_count(file_size: usize) -> usize {
 /// | File size    | Workers |
 /// |--------------|---------|
 /// | < 10 MB      | 1       |
-/// | 10 – 100 MB  | 2       |
-/// | 100 – 500 MB | 3       |
+/// | 10 - 100 MB  | 2       |
+/// | 100 - 500 MB | 3       |
 /// | > 500 MB     | 4       |
 pub fn upload_worker_count(file_size: usize) -> usize {
     if file_size < 10 * 1024 * 1024 {
@@ -579,7 +579,7 @@ impl Client {
     ///
     /// Part size and big-file threshold:
     /// - Part size chosen by [`upload_part_size`]:
-    ///   < 1 MB → 32 KB, 1–32 MB → 64 KB, 32–512 MB → 128 KB, etc.
+    ///   < 1 MB → 32 KB, 1-32 MB → 64 KB, 32-512 MB → 128 KB, etc.
     /// - `upload.saveBigFilePart` used for files > 30 MB (`kUseBigFilesFrom`).
     ///
     /// For files that benefit from parallelism use [`upload_file_concurrent`].

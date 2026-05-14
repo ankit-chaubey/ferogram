@@ -52,7 +52,7 @@ const TTL_MAX: Duration = Duration::from_secs(300);
 const GOOGLE_DOH_URL: &str = "https://dns.google.com/resolve";
 const MOZILLA_DOH_URL: &str = "https://mozilla.cloudflare-dns.com/dns-query";
 
-// Randomised padding range: 13–128 chars.
+// Randomised padding range: 13-128 chars.
 const PAD_MIN: usize = 13;
 const PAD_MAX: usize = 128;
 

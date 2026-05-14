@@ -2350,7 +2350,7 @@ impl Client {
                     w.salts.clear();
                     w.salts.push(FutureSalt {
                         valid_since: 0,
-                        valid_until: i32::MAX,
+                        valid_until: u32::MAX,
                         salt: new_salt,
                     });
                     w.enc.salt = new_salt;
@@ -2489,7 +2489,7 @@ impl Client {
                             valid_since: i32::from_le_bytes(
                                 body[base..base + 4].try_into().unwrap(),
                             ),
-                            valid_until: i32::from_le_bytes(
+                            valid_until: u32::from_le_bytes(
                                 body[base + 4..base + 8].try_into().unwrap(),
                             ),
                             salt: i64::from_le_bytes(body[base + 8..base + 16].try_into().unwrap()),
@@ -2524,7 +2524,7 @@ impl Client {
                                 .rev()
                                 .find(|s| {
                                     s.valid_since + SALT_USE_DELAY <= server_now
-                                        && s.valid_until > server_now
+                                        && s.valid_until > (server_now as u32)
                                 })
                                 .map(|s| s.salt);
                             if let Some(salt) = use_salt {
@@ -2536,8 +2536,9 @@ impl Client {
                                 );
                             } else {
                                 tracing::debug!(
-                                    "[ferogram] FutureSalts: stored {} salts but all \
-                                     expired  - keeping current enc.salt={:#x}",
+                                    "[ferogram] FutureSalts: stored {} salts but none \
+                                     usable yet (valid_since windows not open, valid up to \
+                                     server_now={server_now}) - keeping current enc.salt={:#x}",
                                     w.salts.len(),
                                     w.enc.salt
                                 );
@@ -2584,7 +2585,7 @@ impl Client {
                     w.salts.clear();
                     w.salts.push(FutureSalt {
                         valid_since: 0,
-                        valid_until: i32::MAX,
+                        valid_until: u32::MAX,
                         salt: server_salt,
                     });
                     w.enc.salt = server_salt;
@@ -3469,8 +3470,16 @@ impl Client {
                     Err(e) => {
                         tracing::warn!("[ferogram] getDifference RPC failed: {e}");
                         self.inner.message_box.lock().await.abort_difference();
+                        // IO/transport error means the connection is dead.  Break out
+                        // so the RAII DiffGuard resets diff_in_flight=false immediately,
+                        // allowing the reconnect path to start a fresh diff task.
+                        // Sleeping+looping here would hold diff_in_flight=true across
+                        // reconnects, permanently blocking all future diffs.
+                        if matches!(&e, InvocationError::Io(_)) {
+                            break;
+                        }
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                        continue; // let channel diffs run even when common diff RPC fails
+                        continue; // let channel diffs run even when common diff RPC fails (server-side error)
                     }
                 }
                 continue;
@@ -3647,6 +3656,11 @@ impl Client {
                             .lock()
                             .await
                             .end_channel_difference(PrematureEndReason::TemporaryServerIssues);
+                        // Same as getDifference: IO error means dead connection; break so
+                        // DiffGuard resets diff_in_flight=false and reconnect can retry.
+                        if matches!(&e, InvocationError::Io(_)) {
+                            break;
+                        }
                     }
                 }
                 continue;

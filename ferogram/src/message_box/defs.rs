@@ -159,7 +159,7 @@ pub struct MessageBoxes {
     pub(super) next_deadline: Instant,
 }
 
-// PtsInfo – per-update pts metadata
+// PtsInfo - per-update pts metadata
 
 #[derive(Debug)]
 pub(super) struct PtsInfo {

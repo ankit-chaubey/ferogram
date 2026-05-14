@@ -71,7 +71,11 @@ pub enum FrameKind {
 #[derive(Clone, Debug)]
 pub struct FutureSalt {
     pub valid_since: i32,
-    pub valid_until: i32,
+    /// Stored as `u32` because Telegram sends validity windows that extend
+    /// past 2038 (e.g. valid_until ≈ 2_751_656_413, year 2057).  Those values
+    /// overflow `i32` and wrap negative, making every salt look expired when
+    /// compared against the current server time with a signed comparison.
+    pub valid_until: u32,
     pub salt: i64,
 }
 
@@ -144,7 +148,7 @@ impl ConnectionWriter {
         let now = server_now + start_instant.elapsed().as_secs() as i32;
 
         // Prune expired salts.
-        while self.salts.len() > 1 && now > self.salts[0].valid_until {
+        while self.salts.len() > 1 && (now as u32) > self.salts[0].valid_until {
             let expired = self.salts.remove(0);
             tracing::debug!(
                 "[ferogram] salt {:#x} expired (valid_until={}), pruned",
@@ -163,7 +167,7 @@ impl ConnectionWriter {
                 .salts
                 .iter()
                 .rev()
-                .find(|s| s.valid_since + SALT_USE_DELAY <= now && s.valid_until > now)
+                .find(|s| s.valid_since + SALT_USE_DELAY <= now && s.valid_until > (now as u32))
                 .map(|s| s.salt);
             if let Some(salt) = best
                 && salt != self.enc.salt
@@ -175,12 +179,12 @@ impl ConnectionWriter {
                 );
                 self.enc.salt = salt;
                 // Prune salts whose valid_until has passed.
-                self.salts.retain(|s| s.valid_until > now);
+                self.salts.retain(|s| s.valid_until > (now as u32));
                 if self.salts.is_empty() {
                     // Safety net: keep a sentinel so we never go saltless.
                     self.salts.push(FutureSalt {
                         valid_since: 0,
-                        valid_until: i32::MAX,
+                        valid_until: u32::MAX,
                         salt,
                     });
                 }

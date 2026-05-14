@@ -140,7 +140,7 @@ fn calc_key(auth_key: &AuthKey, msg_key: &[u8; 16], side: Side) -> ([u8; 32], [u
 }
 
 fn padding_len(len: usize) -> usize {
-    // MTProto 2.0 requires 12–1024 bytes of random padding, and the total
+    // MTProto 2.0 requires 12-1024 bytes of random padding, and the total
     // (payload + padding) must be a multiple of 16.
     // Minimum padding = 12; extra bytes to hit the next 16-byte boundary.
     let rem = (len + 12) % 16;

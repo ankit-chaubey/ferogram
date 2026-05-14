@@ -98,7 +98,7 @@ impl PollBuilder {
         self
     }
 
-    /// Auto-close after this many seconds (1–600).
+    /// Auto-close after this many seconds (1-600).
     pub fn close_period(mut self, secs: i32) -> Self {
         self.close_period = Some(secs);
         self

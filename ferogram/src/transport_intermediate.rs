@@ -84,7 +84,7 @@ impl IntermediateTransport {
 /// [MTProto Padded Intermediate] transport framing.
 ///
 /// Init tag: `0xdddddddd` (4 bytes).  Each message is sent as:
-/// `[4-byte LE length of (payload + random padding)][payload][0–15 random bytes]`
+/// `[4-byte LE length of (payload + random padding)][payload][0-15 random bytes]`
 ///
 /// This is the correct framing for `0xDD` MTProxy secrets.
 ///
@@ -114,7 +114,7 @@ impl PaddedIntermediateTransport {
 
     /// Send a message with Padded Intermediate framing.
     ///
-    /// Frame layout: `[total_len: u32 LE][data][random_pad: 0–15 bytes]`
+    /// Frame layout: `[total_len: u32 LE][data][random_pad: 0-15 bytes]`
     /// where `total_len = data.len() + pad_len`.
     pub async fn send(&mut self, data: &[u8]) -> Result<(), InvocationError> {
         if !self.init_sent {

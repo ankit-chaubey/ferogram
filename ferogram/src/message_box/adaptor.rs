@@ -292,7 +292,7 @@ pub(super) fn adapt_channel_difference(
     }
 }
 
-// PtsInfo::from_update – extract pts/count/key from a single tl::enums::Update
+// PtsInfo::from_update - extract pts/count/key from a single tl::enums::Update
 
 fn message_channel_id(message: &tl::enums::Message) -> Option<i64> {
     match message {

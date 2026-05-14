@@ -24,9 +24,9 @@ impl MessageId {
     /// Generate a new message ID using the system clock and the session-local counter.
     ///
     /// MTProto msg_id layout:
-    ///   bits 63–32: Unix timestamp in seconds (upper 32 bits)
-    ///   bits 31–2:  intra-second sequencing counter (lower 30 bits, × 4)
-    ///   bits 1–0:   must be 0b00 for client messages
+    ///   bits 63-32: Unix timestamp in seconds (upper 32 bits)
+    ///   bits 31-2:  intra-second sequencing counter (lower 30 bits, × 4)
+    ///   bits 1-0:   must be 0b00 for client messages
     ///
     /// The previous implementation accepted a `_counter` parameter but silently
     /// ignored it, routing all calls through a process-wide `GLOBAL_MSG_COUNTER`.

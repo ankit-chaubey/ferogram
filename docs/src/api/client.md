@@ -648,7 +648,7 @@ let media = uploaded.as_photo_media();</code></pre>
 <span class="api-card-sig">client.send_album(peer: tl::enums::Peer, items: Vec&lt;AlbumItem&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Send 2–10 media items as a grouped album. Each <code>AlbumItem</code> carries its own caption and optional <code>reply_to</code>. See <a href="../messaging/media.md"><code>AlbumItem</code></a> for builder details.
+Send 2-10 media items as a grouped album. Each <code>AlbumItem</code> carries its own caption and optional <code>reply_to</code>. See <a href="../messaging/media.md"><code>AlbumItem</code></a> for builder details.
 <pre><code>use ferogram::media::AlbumItem;
 client.send_album(peer, vec![
     AlbumItem::new(photo1).caption("First"),

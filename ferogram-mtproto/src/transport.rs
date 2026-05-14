@@ -130,7 +130,7 @@ pub struct ObfuscatedAbridged {
 impl ObfuscatedAbridged {
     /// Create a new [`ObfuscatedAbridged`] transport.
     ///
-    /// `dc_id` is embedded at bytes 60–61 of the encrypted header so that
+    /// `dc_id` is embedded at bytes 60-61 of the encrypted header so that
     /// MTProxy servers can route the connection to the correct DC.
     /// The old `new(stream)` signature omitted `dc_id`, causing MTProxy
     /// to read random bytes and route the client to the wrong DC.
