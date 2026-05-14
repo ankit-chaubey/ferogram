@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-3150803d.js";
+            window.path_to_searchindex_js = "searchindex-a2011a82.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-1b0b7965.js"></script>
+        <script src="toc-6eda89bf.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -187,20 +187,13 @@
 use ferogram_tl_types as tl;
 use std::sync::Arc;
 
+const API_ID: i32 = 0; // from https://my.telegram.org
+const API_HASH: &amp;str = ""; // from https://my.telegram.org
+
 #[tokio::main]
 async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
-    let (client, _shutdown) = Client::builder()
-        .api_id(std::env::var("API_ID")?.parse()?)
-        .api_hash(std::env::var("API_HASH")?)
-        .session("bot.session")
-        .connect()
-        .await?;
+    let (client, _shutdown) = Client::quick_connect("bot.session", API_ID, API_HASH).await?;
     let client = Arc::new(client);
-
-    if !client.is_authorized().await? {
-        client.bot_sign_in(&amp;std::env::var("BOT_TOKEN")?).await?;
-        client.save_session().await?;
-    }
 
     let me = client.get_me().await?;
     println!("✅ @{} is online", me.username.as_deref().unwrap_or("bot"));

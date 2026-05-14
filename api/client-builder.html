@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-3150803d.js";
+            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-1b0b7965.js"></script>
+        <script src="../toc-6eda89bf.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,6 +184,12 @@
                         <h1 id="clientbuilder"><a class="header" href="#clientbuilder">ClientBuilder</a></h1>
 <p><code>ClientBuilder</code> is the fluent, type-safe constructor for a <code>Client</code> connection.
 Obtain one via <code>Client::builder()</code>.</p>
+<blockquote>
+<p><strong>Just getting started?</strong> <a href="./quick-connect.html"><code>Client::quick_connect</code></a> connects
+and authenticates in one call with no options to think about. Come back here
+when you need proxies, custom transports, low memory mode, or anything else
+the defaults don’t cover.</p>
+</blockquote>
 <pre class="playground"><code class="language-rust no_run">use ferogram::Client;
 
 #[tokio::main]
@@ -200,6 +206,40 @@ async fn main() -&gt; anyhow::Result&lt;()&gt; {
 <p><code>connect()</code> returns <code>Result&lt;(Client, ShutdownToken), BuilderError&gt;</code>. The
 <code>BuilderError</code> can be <code>MissingApiId</code>, <code>MissingApiHash</code>, or a network-level
 <code>Connect(InvocationError)</code>.</p>
+<hr>
+<h2 id="common-patterns"><a class="header" href="#common-patterns">Common patterns</a></h2>
+<p>Most people only need a handful of options. Here are the three most common setups:</p>
+<pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::Client;
+
+// 99% of users - just fill in credentials and go
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .connect().await?;
+
+// Termux / tiny VPS - running on constrained hardware
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .low_memory_mode(true)
+    .connect().await?;
+
+// Power user - custom update queue to handle high-traffic bots
+use ferogram::update_config::OverflowStrategy;
+
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .update_queue_capacity(512)
+    .update_overflow_strategy(OverflowStrategy::DropNewest)
+    .connect().await?;
+<span class="boring">}</span></code></pre>
+<p>The full option reference follows below.</p>
 <hr>
 <h2 id="credentials"><a class="header" href="#credentials">Credentials</a></h2>
 <div class="api-card">
@@ -675,7 +715,7 @@ before attempting any network I/O if required fields are absent.
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../api/types.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../api/quick-connect.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -689,7 +729,7 @@ before attempting any network I/O if required fields are absent.
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../api/types.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../api/quick-connect.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-3150803d.js";
+            window.path_to_searchindex_js = "searchindex-a2011a82.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-1b0b7965.js"></script>
+        <script src="toc-6eda89bf.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -253,6 +253,73 @@ tokio    = { version = "1", features = ["full"] }
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
+<hr>
+<h2 id="v041"><a class="header" href="#v041">v0.4.1</a></h2>
+<p>Released 2026-05-14. Patch on top of 0.4.0: one new API for faster onboarding, a configurable update buffer, session schema improvements, and 15 new examples. No breaking changes.</p>
+<h3 id="clientquick_connect"><a class="header" href="#clientquick_connect"><code>Client::quick_connect</code></a></h3>
+<p>One call handles the builder, connection, and the full auth flow from stdin. Returns immediately if the session is already authorized.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::Client;
+
+const API_ID: i32 = 12345;
+const API_HASH: &amp;str = "your_api_hash";
+
+let (client, _shutdown) = Client::quick_connect("bot.session", API_ID, API_HASH).await?;
+<span class="boring">}</span></code></pre>
+<p>Bot tokens are detected automatically by their <code>&lt;digits&gt;:&lt;string&gt;</code> shape, so the same call works for both bots and users.</p>
+<p>If you need an option <code>quick_connect</code> does not expose (proxy, PFS, custom transport, catch-up), switch to <code>Client::builder()</code>. The session file is compatible.</p>
+<p>See <a href="#quick_connect">quick_connect reference</a> for the full signature and error table.</p>
+<h3 id="configurable-update-buffer"><a class="header" href="#configurable-update-buffer">Configurable update buffer</a></h3>
+<p>Two new builder methods let you tune the user-facing dispatch queue. Internal MTProto state (pts, qts, getDifference) is unaffected; only the <code>Update</code> queue from <code>stream_updates()</code> is governed here.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::{Client, update_config::OverflowStrategy};
+
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .update_queue_capacity(512)
+    .update_overflow_strategy(OverflowStrategy::DropOldest)
+    .connect().await?;
+<span class="boring">}</span></code></pre>
+<p><code>DropOldest</code> (default) evicts ephemeral updates (typing, online status) first, then the oldest normal update, keeping the incoming one. <code>DropNewest</code> discards the incoming update instead. Default capacity is 2048.</p>
+<p>For memory-constrained hosts (Termux, small VPS) there is a shortcut:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Client::builder()
+    // ...
+    .low_memory_mode(true)  // 256-slot queue, DropOldest
+    .connect().await?;
+<span class="boring">}</span></code></pre>
+<h3 id="session-schema-migration"><a class="header" href="#session-schema-migration">Session schema migration</a></h3>
+<p>Two additions to the SQLite/LibSQL schema, applied automatically when the database is opened. Both are no-ops on a fresh database.</p>
+<ul>
+<li><code>peers</code> table gains an <code>is_chat</code> column for tracking basic groups.</li>
+<li>New <code>min_peers</code> table stores min-user message contexts needed for <code>InputPeerUserFromMessage</code>.</li>
+</ul>
+<p>Existing session files migrate automatically.</p>
+<h3 id="periodic-session-save"><a class="header" href="#periodic-session-save">Periodic session save</a></h3>
+<p>The client now writes a full session snapshot (peers, channel_pts, min_peers, DC auth/salt data) to the session backend every 60 seconds whenever the peer cache has been mutated since the last save. A final save runs unconditionally on shutdown. Previously peers were only written on explicit <code>save_session()</code> calls, so a crash between calls could lose recently seen peers.</p>
+<h3 id="salt-expiry-fix-past-2038"><a class="header" href="#salt-expiry-fix-past-2038">Salt expiry fix past 2038</a></h3>
+<p><code>valid_until</code> in future salts was stored as <code>i32</code>. Telegram sends validity windows that extend into the 2050s. Those values overflow <code>i32</code> and wrap negative, making every salt look expired on a signed comparison and causing constant re-fetches. Changed to <code>u32</code> throughout.</p>
+<h3 id="guestchatanswer-return-type-corrected"><a class="header" href="#guestchatanswer-return-type-corrected"><code>GuestChatAnswer</code> return type corrected</a></h3>
+<p><code>GuestChatAnswer::send</code> now returns <code>InputBotInlineMessageID</code> matching the actual TL schema. The <code>setBotGuestChatResult</code> constructor ID was also wrong in the previous schema; both are fixed. If you were pattern-matching on the old <code>bool</code> return, update your call sites.</p>
+<h3 id="new-type-and-methods"><a class="header" href="#new-type-and-methods">New type and methods</a></h3>
+<ul>
+<li><code>ParticipantStatus</code> is now exported from the crate root.</li>
+<li><code>User::bot_guestchat()</code> returns <code>true</code> if the bot supports guest-chat mode.</li>
+<li><code>GuestChatQuery::via_from()</code> returns the original requester peer when Telegram includes <code>guestchat_via_from</code> in the message.</li>
+</ul>
+<h3 id="15-new-examples"><a class="header" href="#15-new-examples">15 new examples</a></h3>
+<p>All examples live under <code>ferogram/examples/</code>.</p>
+<p><strong>Userbot tools:</strong> <code>admin_log</code>, <code>chat_history</code>, <code>dialogs_list</code>, <code>download_media</code>, <code>get_participants</code>, <code>schedule_message</code>, <code>search_messages</code>, <code>serverless_userbot</code>, <code>string_session_gen</code>.</p>
+<p><strong>Bots:</strong> <code>echo_bot</code>, <code>filters_showcase</code>, <code>hello_self</code>, <code>inline_keyboard</code>, <code>inline_query_bot</code>, <code>poll_bot</code>, <code>translate_bot</code>.</p>
+<h3 id="upgrading-from-040"><a class="header" href="#upgrading-from-040">Upgrading from 0.4.0</a></h3>
+<pre><code class="language-toml">ferogram = "0.4.1"
+</code></pre>
+<p>No API changes required. The session migration is automatic.</p>
 <hr>
 <h2 id="040-2026-05-08"><a class="header" href="#040-2026-05-08">[0.4.0]: 2026-05-08</a></h2>
 <p>0.4.0 is the first production-ready release of ferogram. It ships Layer 225 support and a reworked poll API. All users are advised to upgrade to 0.4.0 (or 0.4.x+) as the most recommended and supported version.</p>
@@ -704,44 +771,15 @@ fn main() {
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="quick-start-user-account"><a class="header" href="#quick-start-user-account">Quick Start: User Account</a></h1>
 <p>A complete working example: connect, log in, send a message to Saved Messages, and listen for incoming messages.</p>
-<pre class="playground"><code class="language-rust">use ferogram::{Client, Config, SignInError};
+<pre class="playground"><code class="language-rust">use ferogram::Client;
 use ferogram::update::Update;
-use std::io::{self, Write};
+
+const API_ID: i32 = 0; // from https://my.telegram.org
+const API_HASH: &amp;str = ""; // from https://my.telegram.org
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
-    let (client, _shutdown) = Client::builder()
-        .api_id(std::env::var("TG_API_ID")?.parse()?)
-        .api_hash(std::env::var("TG_API_HASH")?)
-        .session("my.session")
-        .connect()
-        .await?;
-
-    // Login (skipped if session file already has valid auth)
-    if !client.is_authorized().await? {
-        print!("Phone number (+1234567890): ");
-        io::stdout().flush()?;
-        let phone = read_line();
-
-        let token = client.request_login_code(&amp;phone).await?;
-
-        print!("Verification code: ");
-        io::stdout().flush()?;
-        let code = read_line();
-
-        match client.sign_in(&amp;token, &amp;code).await {
-            Ok(name) =&gt; println!("✅ Signed in as {name}"),
-            Err(SignInError::PasswordRequired(pw_token)) =&gt; {
-                print!("2FA password: ");
-                io::stdout().flush()?;
-                let pw = read_line();
-                client.check_password(pw_token, &amp;pw).await?;
-                println!("✅ 2FA verified");
-            }
-            Err(e) =&gt; return Err(e.into()),
-        }
-        client.save_session().await?;
-    }
+    let (client, _shutdown) = Client::quick_connect("my.session", API_ID, API_HASH).await?;
 
     // Send a message to yourself
     client.send_to_self("Hello from ferogram! 👋").await?;
@@ -769,18 +807,12 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
     }
 
     Ok(())
-}
-
-fn read_line() -&gt; String {
-    let mut s = String::new();
-    io::stdin().read_line(&amp;mut s).unwrap();
-    s.trim().to_string()
 }</code></pre>
 <hr>
 <h2 id="run-it"><a class="header" href="#run-it">Run it</a></h2>
-<pre><code class="language-bash">TG_API_ID=12345 TG_API_HASH=yourHash cargo run
+<pre><code class="language-bash">cargo run
 </code></pre>
-<p>On first run you’ll be prompted for your phone number and the code Telegram sends. On subsequent runs, the session is reloaded from <code>my.session</code> and login is skipped automatically.</p>
+<p>Fill in <code>API_ID</code> and <code>API_HASH</code> at the top of the file before running. On first run you’ll be prompted for your phone number and the code Telegram sends. On subsequent runs the session is reloaded from <code>my.session</code> and login is skipped automatically.</p>
 <hr>
 <h2 id="what-each-step-does"><a class="header" href="#what-each-step-does">What each step does</a></h2>
 <div class="table-wrapper">
@@ -789,16 +821,12 @@ fn read_line() -&gt; String {
 <tr><th>Step</th><th>Method</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td>Connect</td><td><code>Client::builder().connect()</code></td><td>Opens TCP, performs DH handshake, loads session</td></tr>
-<tr><td>Check auth</td><td><code>is_authorized</code></td><td>Returns <code>true</code> if session has a valid logged-in user</td></tr>
-<tr><td>Request code</td><td><code>request_login_code</code></td><td>Sends SMS/app code to the phone</td></tr>
-<tr><td>Sign in</td><td><code>sign_in</code></td><td>Submits the code. Returns <code>PasswordRequired</code> if 2FA is on</td></tr>
-<tr><td>2FA</td><td><code>check_password</code></td><td>Performs SRP exchange: password never sent in plain text</td></tr>
-<tr><td>Save</td><td><code>save_session</code></td><td>Writes auth key + DC info to disk</td></tr>
+<tr><td>Connect + auth</td><td><code>Client::quick_connect</code></td><td>Opens TCP, DH handshake, loads session, prompts for phone/code/2FA or bot token if not yet authorized, saves session</td></tr>
 <tr><td>Stream</td><td><code>stream_updates</code></td><td>Returns an <code>UpdateStream</code> async iterator</td></tr>
 </tbody>
 </table>
 </div>
+<p>For the full auth flow broken down step by step, see <a href="#user-login">User Login</a>.</p>
 <hr>
 <h2 id="next-steps"><a class="header" href="#next-steps">Next steps</a></h2>
 <ul>
@@ -814,20 +842,13 @@ fn read_line() -&gt; String {
 use ferogram_tl_types as tl;
 use std::sync::Arc;
 
+const API_ID: i32 = 0; // from https://my.telegram.org
+const API_HASH: &amp;str = ""; // from https://my.telegram.org
+
 #[tokio::main]
 async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
-    let (client, _shutdown) = Client::builder()
-        .api_id(std::env::var("API_ID")?.parse()?)
-        .api_hash(std::env::var("API_HASH")?)
-        .session("bot.session")
-        .connect()
-        .await?;
+    let (client, _shutdown) = Client::quick_connect("bot.session", API_ID, API_HASH).await?;
     let client = Arc::new(client);
-
-    if !client.is_authorized().await? {
-        client.bot_sign_in(&amp;std::env::var("BOT_TOKEN")?).await?;
-        client.save_session().await?;
-    }
 
     let me = client.get_me().await?;
     println!("✅ @{} is online", me.username.as_deref().unwrap_or("bot"));
@@ -982,6 +1003,12 @@ fn make_article(id: &amp;str, title: &amp;str, text: &amp;str) -&gt; tl::enums::
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="user-login"><a class="header" href="#user-login">User Login</a></h1>
 <p>User login happens in three steps: request code → submit code → (optional) submit 2FA password.</p>
+<blockquote>
+<p><strong>Just want something working?</strong> <a href="#quick_connect"><code>Client::quick_connect</code></a>
+handles all three steps interactively in one call, including 2FA.
+This page covers the explicit step-by-step flow for non-interactive setups
+(reading from env vars, config files, custom prompts, etc.).</p>
+</blockquote>
 <h2 id="step-1-request-login-code"><a class="header" href="#step-1-request-login-code">Step 1: Request login code</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -1080,6 +1107,12 @@ fn read_line() -&gt; String {
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="bot-login"><a class="header" href="#bot-login">Bot Login</a></h1>
 <p>Bot login is simpler than user login: just a single call with a bot token.</p>
+<blockquote>
+<p><strong>Just want something working?</strong> <a href="#quick_connect"><code>Client::quick_connect</code></a>
+prompts for a bot token interactively and handles the full flow in one call.
+This page covers the explicit <code>bot_sign_in</code> path for when you need
+non-interactive auth or more control.</p>
+</blockquote>
 <h2 id="getting-a-bot-token"><a class="header" href="#getting-a-bot-token">Getting a bot token</a></h2>
 <ol>
 <li>Open Telegram and start a chat with <a href="https://t.me/BotFather">@BotFather</a></li>
@@ -5088,7 +5121,7 @@ let media = uploaded.as_photo_media();</code></pre>
 </div>
 
 <div class="api-card-body">
-Send 2–10 media items as a grouped album. Each <code>AlbumItem</code> carries its own caption and optional <code>reply_to</code>. See <a href="#media--files"><code>AlbumItem</code></a> for builder details.
+Send 2-10 media items as a grouped album. Each <code>AlbumItem</code> carries its own caption and optional <code>reply_to</code>. See <a href="#media--files"><code>AlbumItem</code></a> for builder details.
 <pre><code>use ferogram::media::AlbumItem;
 client.send_album(peer, vec![
     AlbumItem::new(photo1).caption("First"),
@@ -5707,6 +5740,12 @@ Fetch the admin action log for a channel or supergroup. <code>query</code> filte
 <h1 id="clientbuilder"><a class="header" href="#clientbuilder">ClientBuilder</a></h1>
 <p><code>ClientBuilder</code> is the fluent, type-safe constructor for a <code>Client</code> connection.
 Obtain one via <code>Client::builder()</code>.</p>
+<blockquote>
+<p><strong>Just getting started?</strong> <a href="#quick_connect"><code>Client::quick_connect</code></a> connects
+and authenticates in one call with no options to think about. Come back here
+when you need proxies, custom transports, low memory mode, or anything else
+the defaults don’t cover.</p>
+</blockquote>
 <pre class="playground"><code class="language-rust no_run">use ferogram::Client;
 
 #[tokio::main]
@@ -5723,6 +5762,40 @@ async fn main() -&gt; anyhow::Result&lt;()&gt; {
 <p><code>connect()</code> returns <code>Result&lt;(Client, ShutdownToken), BuilderError&gt;</code>. The
 <code>BuilderError</code> can be <code>MissingApiId</code>, <code>MissingApiHash</code>, or a network-level
 <code>Connect(InvocationError)</code>.</p>
+<hr>
+<h2 id="common-patterns"><a class="header" href="#common-patterns">Common patterns</a></h2>
+<p>Most people only need a handful of options. Here are the three most common setups:</p>
+<pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::Client;
+
+// 99% of users - just fill in credentials and go
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .connect().await?;
+
+// Termux / tiny VPS - running on constrained hardware
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .low_memory_mode(true)
+    .connect().await?;
+
+// Power user - custom update queue to handle high-traffic bots
+use ferogram::update_config::OverflowStrategy;
+
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .update_queue_capacity(512)
+    .update_overflow_strategy(OverflowStrategy::DropNewest)
+    .connect().await?;
+<span class="boring">}</span></code></pre>
+<p>The full option reference follows below.</p>
 <hr>
 <h2 id="credentials"><a class="header" href="#credentials">Credentials</a></h2>
 <div class="api-card">
@@ -6189,6 +6262,113 @@ before attempting any network I/O if required fields are absent.
 </code></pre>
 </div>
 </div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="quick_connect"><a class="header" href="#quick_connect">quick_connect</a></h1>
+<p><code>Client::quick_connect</code> connects and authenticates in a single call, handling
+the full auth flow interactively from stdin. If the session is already
+authorized the prompt is skipped entirely.</p>
+<p>For advanced options (proxy, PFS, custom transport, catch-up, etc.) use
+<a href="#clientbuilder"><code>ClientBuilder</code></a> directly.</p>
+<hr>
+<h2 id="signature"><a class="header" href="#signature">Signature</a></h2>
+<pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub async fn quick_connect(
+    session: impl AsRef&lt;Path&gt;,
+    api_id: i32,
+    api_hash: &amp;str,
+) -&gt; Result&lt;(Client, ShutdownToken), QuickConnectError&gt;
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
+<pre class="playground"><code class="language-rust no_run">use ferogram::Client;
+
+const API_ID: i32 = 12345;
+const API_HASH: &amp;str = "your_api_hash";
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    let (client, _shutdown) = Client::quick_connect("my.session", API_ID, API_HASH).await?;
+    // client is ready to use
+    Ok(())
+}</code></pre>
+<p>When run, the prompt sequence looks like this:</p>
+<ul>
+<li>Already signed in: no prompt, returns immediately.</li>
+<li>User account: asks for phone number, then login code, then 2FA password if required.</li>
+<li>Bot: paste a bot token (<code>123456789:AABBcc...</code>) instead of a phone number.</li>
+</ul>
+<p>The bot token is detected automatically by its <code>&lt;digits&gt;:&lt;string&gt;</code> format, so
+the same prompt works for both users and bots.</p>
+<hr>
+<h2 id="error-handling-1"><a class="header" href="#error-handling-1">Error Handling</a></h2>
+<p><code>QuickConnectError</code> covers every failure mode:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>When it fires</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Builder(BuilderError)</code></td><td><code>ClientBuilder::connect</code> failed (bad credentials or network error)</td></tr>
+<tr><td><code>Auth(InvocationError)</code></td><td>An MTProto RPC call during auth failed</td></tr>
+<tr><td><code>InvalidCode</code></td><td>Wrong login code entered</td></tr>
+<tr><td><code>SignUpRequired</code></td><td>Phone number not registered on Telegram</td></tr>
+<tr><td><code>Io(std::io::Error)</code></td><td>Failed to read from stdin</td></tr>
+</tbody>
+</table>
+</div>
+<pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::client::QuickConnectError;
+
+match Client::quick_connect("my.session", API_ID, API_HASH).await {
+    Ok((client, _)) =&gt; { /* use client */ }
+    Err(QuickConnectError::InvalidCode) =&gt; eprintln!("Wrong code, try again"),
+    Err(QuickConnectError::SignUpRequired) =&gt; eprintln!("Phone not registered"),
+    Err(QuickConnectError::Auth(e)) =&gt; eprintln!("Auth error: {e}"),
+    Err(e) =&gt; eprintln!("Connect failed: {e}"),
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="quick_connect-vs-clientbuilder"><a class="header" href="#quick_connect-vs-clientbuilder">quick_connect vs ClientBuilder</a></h2>
+<p><code>quick_connect</code> and <code>ClientBuilder</code> connect to the same underlying transport. The difference is how much control you want.</p>
+<pre class="playground"><code class="language-rust no_run"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// 99% of users - just works
+let (client, _) = Client::quick_connect("bot.session", API_ID, API_HASH).await?;
+
+// Termux / tiny VPS - memory-constrained environment
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .low_memory_mode(true)
+    .connect().await?;
+
+// Power user with specific needs
+let (client, _) = Client::builder()
+    .api_id(API_ID)
+    .api_hash(API_HASH)
+    .session("bot.session")
+    .update_queue_capacity(512)
+    .update_overflow_strategy(OverflowStrategy::DropNewest)
+    .connect().await?;
+<span class="boring">}</span></code></pre>
+<p><code>quick_connect</code> is <code>ClientBuilder</code> with sensible defaults baked in and the auth flow handled for you. If you start with <code>quick_connect</code> and later need an option it doesn’t expose, switching to <code>ClientBuilder</code> is a straight drop-in: same session file, same API.</p>
+<hr>
+<h2 id="when-to-use-clientbuilder-instead"><a class="header" href="#when-to-use-clientbuilder-instead">When to use ClientBuilder instead</a></h2>
+<p><code>quick_connect</code> is intentionally minimal. Reach for
+<a href="#clientbuilder"><code>ClientBuilder</code></a> when you need any of the following:</p>
+<ul>
+<li>SOCKS5 or MTProxy</li>
+<li>Perfect Forward Secrecy (<code>.pfs(true)</code>)</li>
+<li>Transport probing or resilient connect</li>
+<li>Custom session backend (e.g. <code>LibSqlBackend</code>)</li>
+<li>Catch-up on missed updates (<code>.catch_up(true)</code>)</li>
+<li>Custom retry or reconnect policy</li>
+<li>Low memory mode (<code>.low_memory_mode(true)</code>)</li>
+<li>Non-interactive auth (reading credentials from env vars or a config file)</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="types-reference"><a class="header" href="#types-reference">Types Reference</a></h1>
 <p>ferogram wraps the raw TL layer’s <code>tl::enums::User</code> and <code>tl::enums::Chat</code>
@@ -11490,11 +11670,36 @@ without triggering the cache-miss guard.</p>
 <p><strong>Do not enable</strong> in production.</p>
 <hr>
 <h3 id="auto_resolve_peers"><a class="header" href="#auto_resolve_peers"><code>auto_resolve_peers</code></a></h3>
-<p><strong>Default:</strong> <code>false</code><br><strong>Status:</strong> reserved, not yet implemented</p>
-<p>When set, a cache miss would automatically call <code>users.getUsers</code> /
-<code>channels.getChannels</code> to fetch a fresh <code>access_hash</code> before constructing the
-<code>InputPeer</code>. Currently this flag has no effect. It is reserved for a future
-release that will add automatic peer hydration.</p>
+<p><strong>Default:</strong> <code>false</code><br><strong>Safe for:</strong> bot accounts only</p>
+<p>When <code>getChannelDifference</code> runs and no <code>access_hash</code> is cached for the target
+channel, this flag controls what happens next.</p>
+<p><strong><code>false</code> (default):</strong> the diff is deferred. The entry stays alive in the
+update state machine with its pts preserved and its deadline reset. The diff
+retries automatically once the hash arrives via a future update’s entity list.
+No RPC is fired. At most one diff window is missed.</p>
+<p><strong><code>true</code>:</strong> ferogram immediately calls <code>channels.getChannels</code> with
+<code>access_hash = 0</code> to fetch the hash, caches the result, and retries the diff
+in the same loop iteration. If the RPC fails or the channel is private, the
+diff falls back to the deferred path rather than dropping the entry.</p>
+<p>This flag only affects <code>getChannelDifference</code>. It does not change how
+<code>InputPeer</code> resolution works for outgoing API calls.</p>
+<p><strong>Bot accounts only.</strong> On user accounts, <code>channels.getChannels { access_hash: 0 }</code>
+succeeds only for public channels and channels the account is currently a member
+of. For private channels it returns <code>CHANNEL_PRIVATE</code> and the diff is deferred
+regardless.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Bot that needs zero missed updates for channels it joins dynamically.
+ExperimentalFeatures {
+    auto_resolve_peers: true,
+    ..Default::default()
+}
+<span class="boring">}</span></code></pre>
+<p><strong>Burst behaviour:</strong> ferogram tracks peer cache misses in a rolling 30-second
+window. If 10 or more misses occur within that window, a background task calls
+<code>warm_peer_cache_from_dialogs</code> to bulk-populate the cache from <code>messages.getDialogs</code>.
+A 15-minute cooldown prevents repeated bulk calls. This escalation runs
+regardless of whether <code>auto_resolve_peers</code> is set.</p>
 <hr>
 <h2 id="combining-flags"><a class="header" href="#combining-flags">Combining flags</a></h2>
 <p>All flags are independent. Use <code>..Default::default()</code> to leave the rest at

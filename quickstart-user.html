@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-3150803d.js";
+            window.path_to_searchindex_js = "searchindex-a2011a82.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-1b0b7965.js"></script>
+        <script src="toc-6eda89bf.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -183,44 +183,15 @@
                     <main>
                         <h1 id="quick-start-user-account"><a class="header" href="#quick-start-user-account">Quick Start: User Account</a></h1>
 <p>A complete working example: connect, log in, send a message to Saved Messages, and listen for incoming messages.</p>
-<pre class="playground"><code class="language-rust">use ferogram::{Client, Config, SignInError};
+<pre class="playground"><code class="language-rust">use ferogram::Client;
 use ferogram::update::Update;
-use std::io::{self, Write};
+
+const API_ID: i32 = 0; // from https://my.telegram.org
+const API_HASH: &amp;str = ""; // from https://my.telegram.org
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
-    let (client, _shutdown) = Client::builder()
-        .api_id(std::env::var("TG_API_ID")?.parse()?)
-        .api_hash(std::env::var("TG_API_HASH")?)
-        .session("my.session")
-        .connect()
-        .await?;
-
-    // Login (skipped if session file already has valid auth)
-    if !client.is_authorized().await? {
-        print!("Phone number (+1234567890): ");
-        io::stdout().flush()?;
-        let phone = read_line();
-
-        let token = client.request_login_code(&amp;phone).await?;
-
-        print!("Verification code: ");
-        io::stdout().flush()?;
-        let code = read_line();
-
-        match client.sign_in(&amp;token, &amp;code).await {
-            Ok(name) =&gt; println!("✅ Signed in as {name}"),
-            Err(SignInError::PasswordRequired(pw_token)) =&gt; {
-                print!("2FA password: ");
-                io::stdout().flush()?;
-                let pw = read_line();
-                client.check_password(pw_token, &amp;pw).await?;
-                println!("✅ 2FA verified");
-            }
-            Err(e) =&gt; return Err(e.into()),
-        }
-        client.save_session().await?;
-    }
+    let (client, _shutdown) = Client::quick_connect("my.session", API_ID, API_HASH).await?;
 
     // Send a message to yourself
     client.send_to_self("Hello from ferogram! 👋").await?;
@@ -248,18 +219,12 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
     }
 
     Ok(())
-}
-
-fn read_line() -&gt; String {
-    let mut s = String::new();
-    io::stdin().read_line(&amp;mut s).unwrap();
-    s.trim().to_string()
 }</code></pre>
 <hr>
 <h2 id="run-it"><a class="header" href="#run-it">Run it</a></h2>
-<pre><code class="language-bash">TG_API_ID=12345 TG_API_HASH=yourHash cargo run
+<pre><code class="language-bash">cargo run
 </code></pre>
-<p>On first run you’ll be prompted for your phone number and the code Telegram sends. On subsequent runs, the session is reloaded from <code>my.session</code> and login is skipped automatically.</p>
+<p>Fill in <code>API_ID</code> and <code>API_HASH</code> at the top of the file before running. On first run you’ll be prompted for your phone number and the code Telegram sends. On subsequent runs the session is reloaded from <code>my.session</code> and login is skipped automatically.</p>
 <hr>
 <h2 id="what-each-step-does"><a class="header" href="#what-each-step-does">What each step does</a></h2>
 <div class="table-wrapper">
@@ -268,16 +233,12 @@ fn read_line() -&gt; String {
 <tr><th>Step</th><th>Method</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td>Connect</td><td><code>Client::builder().connect()</code></td><td>Opens TCP, performs DH handshake, loads session</td></tr>
-<tr><td>Check auth</td><td><code>is_authorized</code></td><td>Returns <code>true</code> if session has a valid logged-in user</td></tr>
-<tr><td>Request code</td><td><code>request_login_code</code></td><td>Sends SMS/app code to the phone</td></tr>
-<tr><td>Sign in</td><td><code>sign_in</code></td><td>Submits the code. Returns <code>PasswordRequired</code> if 2FA is on</td></tr>
-<tr><td>2FA</td><td><code>check_password</code></td><td>Performs SRP exchange: password never sent in plain text</td></tr>
-<tr><td>Save</td><td><code>save_session</code></td><td>Writes auth key + DC info to disk</td></tr>
+<tr><td>Connect + auth</td><td><code>Client::quick_connect</code></td><td>Opens TCP, DH handshake, loads session, prompts for phone/code/2FA or bot token if not yet authorized, saves session</td></tr>
 <tr><td>Stream</td><td><code>stream_updates</code></td><td>Returns an <code>UpdateStream</code> async iterator</td></tr>
 </tbody>
 </table>
 </div>
+<p>For the full auth flow broken down step by step, see <a href="./authentication/user-login.html">User Login</a>.</p>
 <hr>
 <h2 id="next-steps"><a class="header" href="#next-steps">Next steps</a></h2>
 <ul>

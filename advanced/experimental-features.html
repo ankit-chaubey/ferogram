@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-3150803d.js";
+            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-1b0b7965.js"></script>
+        <script src="../toc-6eda89bf.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -248,11 +248,36 @@ without triggering the cache-miss guard.</p>
 <p><strong>Do not enable</strong> in production.</p>
 <hr>
 <h3 id="auto_resolve_peers"><a class="header" href="#auto_resolve_peers"><code>auto_resolve_peers</code></a></h3>
-<p><strong>Default:</strong> <code>false</code><br><strong>Status:</strong> reserved, not yet implemented</p>
-<p>When set, a cache miss would automatically call <code>users.getUsers</code> /
-<code>channels.getChannels</code> to fetch a fresh <code>access_hash</code> before constructing the
-<code>InputPeer</code>. Currently this flag has no effect. It is reserved for a future
-release that will add automatic peer hydration.</p>
+<p><strong>Default:</strong> <code>false</code><br><strong>Safe for:</strong> bot accounts only</p>
+<p>When <code>getChannelDifference</code> runs and no <code>access_hash</code> is cached for the target
+channel, this flag controls what happens next.</p>
+<p><strong><code>false</code> (default):</strong> the diff is deferred. The entry stays alive in the
+update state machine with its pts preserved and its deadline reset. The diff
+retries automatically once the hash arrives via a future update’s entity list.
+No RPC is fired. At most one diff window is missed.</p>
+<p><strong><code>true</code>:</strong> ferogram immediately calls <code>channels.getChannels</code> with
+<code>access_hash = 0</code> to fetch the hash, caches the result, and retries the diff
+in the same loop iteration. If the RPC fails or the channel is private, the
+diff falls back to the deferred path rather than dropping the entry.</p>
+<p>This flag only affects <code>getChannelDifference</code>. It does not change how
+<code>InputPeer</code> resolution works for outgoing API calls.</p>
+<p><strong>Bot accounts only.</strong> On user accounts, <code>channels.getChannels { access_hash: 0 }</code>
+succeeds only for public channels and channels the account is currently a member
+of. For private channels it returns <code>CHANNEL_PRIVATE</code> and the diff is deferred
+regardless.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Bot that needs zero missed updates for channels it joins dynamically.
+ExperimentalFeatures {
+    auto_resolve_peers: true,
+    ..Default::default()
+}
+<span class="boring">}</span></code></pre>
+<p><strong>Burst behaviour:</strong> ferogram tracks peer cache misses in a rolling 30-second
+window. If 10 or more misses occur within that window, a background task calls
+<code>warm_peer_cache_from_dialogs</code> to bulk-populate the cache from <code>messages.getDialogs</code>.
+A 15-minute cooldown prevents repeated bulk calls. This escalation runs
+regardless of whether <code>auto_resolve_peers</code> is set.</p>
 <hr>
 <h2 id="combining-flags"><a class="header" href="#combining-flags">Combining flags</a></h2>
 <p>All flags are independent. Use <code>..Default::default()</code> to leave the rest at
