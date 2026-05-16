@@ -70,7 +70,7 @@ msg.pin().await?;
 msg.unpin().await?;
 
 // Mark as read
-msg.mark_as_read().await?;
+msg.mark_read().await?;
 
 // Reload from server
 msg.refetch().await?;
@@ -140,14 +140,14 @@ client.delete_messages(&[msg_id_1, msg_id_2], true).await?;
 
 // Pin / unpin
 client.pin_message("@peer", msg_id).await?;
-client.unpin_message("@peer", msg_id).await?;
+client.pin_message("@peer", msg_id, false).await?;
 client.unpin_all_messages("@peer").await?;
 
 // Get pinned message
 let pinned = client.get_pinned_message("@peer").await?;
 
 // Mark as read
-client.mark_as_read("@peer").await?;
+client.mark_read("@peer").await?;
 
 // Export a permanent message link
 let link = client.export_message_link("@peer", msg_id).await?;

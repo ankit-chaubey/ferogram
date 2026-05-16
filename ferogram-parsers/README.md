@@ -17,7 +17,7 @@ You can also use it on its own if you're working with Telegram formatted text ou
 
 ```toml
 [dependencies]
-ferogram-parsers = "0.4.1"
+ferogram-parsers = "0.5.0"
 ```
 
 ---
@@ -78,7 +78,7 @@ Supported tags: `<b>`, `<strong>`, `<i>`, `<em>`, `<u>`, `<s>`, `<del>`, `<code>
 By default `parse_html` uses the built-in hand-rolled parser (zero extra dependencies). Enable `html5ever` for strict HTML5 conformance.
 
 ```toml
-ferogram-parsers = { version = "0.4.1", features = ["html5ever"] }
+ferogram-parsers = { version = "0.5.0", features = ["html5ever"] }
 ```
 
 ---

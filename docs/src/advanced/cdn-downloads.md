@@ -2,7 +2,7 @@
 
 Large files on Telegram are often served from **CDN DCs**  -  lightweight edge data-centres that don't participate in the normal MTProto auth flow. ferogram exposes the full CDN download path via `CdnDownloader` in `ferogram::cdn_download`.
 
-In normal usage you never need to interact with `CdnDownloader` directly  -  `download_media`, `download_media_concurrent`, and `iter_download` handle CDN redirects transparently. This page is for advanced use-cases where you need explicit control.
+In normal usage you never need to interact with `CdnDownloader` directly  -  `client.download`, `client.download_file`, and `iter_download` handle CDN redirects transparently. This page is for advanced use-cases where you need explicit control.
 
 ---
 

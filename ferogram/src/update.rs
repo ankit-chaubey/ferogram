@@ -68,7 +68,7 @@ impl IncomingMessage {
     }
 
     /// Returns an error when no client is embedded.
-    fn require_client(&self, method: &str) -> Result<&Client, Error> {
+    pub(crate) fn require_client(&self, method: &str) -> Result<&Client, Error> {
         self.client.as_ref().ok_or_else(|| {
             Error::Deserialize(format!(
                 "{method}: this IncomingMessage has no embedded client: \
@@ -636,18 +636,18 @@ impl IncomingMessage {
     }
 
     /// Mark this message (and all before it) as read (clientless).
-    pub async fn mark_as_read(&self) -> Result<(), Error> {
-        let client = self.require_client("mark_as_read")?.clone();
-        self.mark_as_read_with(&client).await
+    pub async fn mark_read(&self) -> Result<(), Error> {
+        let client = self.require_client("mark_read")?.clone();
+        self.mark_read_with(&client).await
     }
 
     /// Mark this message (and all before it) as read.
-    pub async fn mark_as_read_with(&self, client: &Client) -> Result<(), Error> {
+    pub async fn mark_read_with(&self, client: &Client) -> Result<(), Error> {
         let peer = self
             .peer_id()
             .cloned()
-            .ok_or_else(|| Error::Deserialize("cannot mark_as_read: unknown peer".into()))?;
-        client.mark_as_read(peer).await
+            .ok_or_else(|| Error::Deserialize("cannot mark_read: unknown peer".into()))?;
+        client.mark_read(peer).await
     }
 
     /// Pin this message silently (clientless).
@@ -677,7 +677,7 @@ impl IncomingMessage {
             .peer_id()
             .cloned()
             .ok_or_else(|| Error::Deserialize("cannot unpin: unknown peer".into()))?;
-        client.unpin_message(peer, self.id()).await
+        client.pin_message(peer, self.id(), false).await
     }
 
     /// Forward this message to another chat (clientless).
@@ -731,7 +731,11 @@ impl IncomingMessage {
             .peer_id()
             .cloned()
             .ok_or_else(|| Error::Deserialize("cannot refetch: unknown peer".into()))?;
-        let msgs_opt = client.get_message_by_id(peer, self.id()).await?;
+        let msgs_opt = client
+            .get_messages(peer, &[self.id()])
+            .await
+            .ok()
+            .and_then(|v| v.into_iter().next());
         match msgs_opt {
             Some(m) => {
                 self.raw = m.raw;
@@ -744,12 +748,14 @@ impl IncomingMessage {
     }
 
     /// Download attached media to `path` (clientless).
+    #[allow(dead_code)]
     pub async fn download_media(&self, path: impl AsRef<std::path::Path>) -> Result<bool, Error> {
         let client = self.require_client("download_media")?.clone();
         self.download_media_with(&client, path).await
     }
 
     /// Download attached media to `path`. Returns `true` if media was found.
+    #[allow(dead_code)]
     async fn download_media_with(
         &self,
         client: &Client,

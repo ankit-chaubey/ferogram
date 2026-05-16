@@ -10,6 +10,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0]: 2026-05-16
+
+API consolidation release. Paired functions that differed only by a single boolean condition have been merged into one. Download and upload paths were redesigned around `AsyncRead`/`AsyncWrite`. No new protocol or behavioural changes.
+
+### Breaking changes
+
+**Merged paired functions**
+
+| Removed | Replacement |
+|---------|-------------|
+| `set_online()` / `set_offline()` | `set_presence(online: bool)` |
+| `block_user(peer)` / `unblock_user(peer)` | `block(peer, true/false)` |
+| `pin_dialog(peer)` / `unpin_dialog(peer)` | `pin_dialog(peer, true/false)` |
+| `archive_chat(peer)` / `unarchive_chat(peer)` | `archive(peer, true/false)` |
+| `pin_message(peer, id, silent)` / `unpin_message(peer, id)` | `pin_message(peer, id, true/false)` |
+| `delete_channel(peer)` / `delete_chat(id)` | `delete_chat(peer)` (dispatches by peer type) |
+| `install_sticker_set(set, archived)` / `uninstall_sticker_set(set)` | `toggle_stickers(set, true/false)` |
+| `get_broadcast_stats(peer)` / `get_megagroup_stats(peer)` | `stats(peer) -> ChannelStats` |
+| `get_poll_stats(peer, id)` / `get_poll_results(peer, id)` | `poll_results(peer, id)` |
+| `promote_participant` / `demote_participant` | `set_admin(peer, user, rights)` |
+| `ban_participant(peer, user)` / `ban_participant_until(peer, user, ts)` | `ban(peer, user, until: Option<i32>)` |
+| `kick_participant(peer, user)` | `kick(peer, user)` |
+| `set_banned_rights(peer, user, rights)` | `restrict(peer, user, rights)` |
+| `set_admin_rights(peer, user, rights)` | `set_admin(peer, user, rights)` |
+| `set_profile(first, last, about)` / `set_username(u)` / `set_emoji_status(id, until)` / `edit_chat_title` / `edit_chat_about` / `edit_chat_photo` | `set_profile(peer) -> SetProfileBuilder` |
+| `get_message_by_id(peer, id)` / `get_messages_by_id(peer, ids)` | `get_messages(peer, ids)` |
+| `mark_as_read(peer)` / `mark_dialog_read(peer)` | `mark_read(peer)` |
+| `resolve_peer(str)` | `resolve(str)` |
+| `accept_invite_link(link)` | `join_link(link)` |
+
+**Download and upload API redesigned**
+
+Old API passed raw `InputFileLocation` handles. New API works directly with `&MessageMedia`:
+
+```rust
+// download to any AsyncWrite sink
+client.download(msg.media().unwrap(), &mut file).await?;
+
+// download to disk
+client.download_file(msg.media().unwrap(), "photo.jpg").await?;
+
+// lazy chunk iterator
+let mut iter = client.iter_download(msg.media().unwrap()).unwrap();
+while let Some(chunk) = iter.next().await? { ... }
+
+// upload from any AsyncRead
+let uploaded = client.upload(reader, "file.jpg").await?;
+
+// upload from path
+let uploaded = client.upload_file_from_path("photo.jpg").await?;
+```
+
+`IncomingMessage` gains two convenience methods:
+
+```rust
+msg.download(&mut buf).await?;   // stream to AsyncWrite
+let bytes = msg.bytes().await?;  // into Vec<u8>
+```
+
+**`set_profile` is now a builder**
+
+```rust
+// user
+client.set_profile("me").name("Alice", "").bio("Hello!").send().await?;
+
+// channel / group
+client.set_profile("@mychannel").title("New Name").bio("About text").send().await?;
+```
+
+**`stats` returns `ChannelStats`**
+
+```rust
+match client.stats("@mychannel").await? {
+    ChannelStats::Broadcast(s) => { /* channel */ }
+    ChannelStats::Megagroup(s) => { /* supergroup */ }
+}
+```
+
+**Upload part-size table revised**
+
+Five tiers keyed on file size (< 1 MB, 1-32 MB, 32-512 MB, 512 MB-1 GB, > 1 GB) replace the old two-tier heuristic.
+
+---
+
 ## [0.4.1]: 2026-05-14
 
 Patch release with one new API, configurable update buffering, session schema improvements, and 15 new examples.

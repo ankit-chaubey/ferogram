@@ -149,7 +149,7 @@ impl Client {
     }
 
     /// Mark all messages in a chat as read.
-    pub async fn mark_as_read(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+    pub async fn mark_read(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         match &input_peer {
@@ -214,16 +214,6 @@ impl Client {
             }
         }
         Ok(())
-    }
-
-    /// Accept and join via an invite link.
-    pub async fn accept_invite_link(&self, link: &str) -> Result<(), InvocationError> {
-        let hash = Self::parse_invite_hash(link)
-            .ok_or_else(|| InvocationError::Deserialize(format!("invalid invite link: {link}")))?;
-        let req = tl::functions::messages::ImportChatInvite {
-            hash: hash.to_string(),
-        };
-        self.rpc_write(&req).await
     }
 
     /// Extract hash from `https://t.me/+HASH` or `https://t.me/joinchat/HASH`.
@@ -300,12 +290,16 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    /// Pin a dialog to the top of the dialog list.
-    pub async fn pin_dialog(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+    /// Pin or unpin a dialog. `pin: true` pins, `pin: false` unpins.
+    pub async fn pin_dialog(
+        &self,
+        peer: impl Into<PeerRef>,
+        pin: bool,
+    ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::ToggleDialogPin {
-            pinned: true,
+            pinned: pin,
             peer: tl::enums::InputDialogPeer::InputDialogPeer(tl::types::InputDialogPeer {
                 peer: input_peer,
             }),
@@ -313,69 +307,22 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    /// Unpin a previously pinned dialog.
-    pub async fn unpin_dialog(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let req = tl::functions::messages::ToggleDialogPin {
-            pinned: false,
-            peer: tl::enums::InputDialogPeer::InputDialogPeer(tl::types::InputDialogPeer {
-                peer: input_peer,
-            }),
-        };
-        self.rpc_write(&req).await
-    }
-
-    /// Archive a dialog (move it to folder 1).
-    ///
-    /// Archived chats are hidden from the main dialog list.
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// # use ferogram::Client;
-    /// # async fn ex(client: Client) -> Result<(), Box<dyn std::error::Error>> {
-    /// client.archive_chat("@somebot").await?;
-    /// # Ok(()) }
-    /// ```
-    pub async fn archive_chat(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+    /// Archive or unarchive a dialog. `archive: true` moves to folder 1 (archive), `false` moves back to folder 0.
+    pub async fn archive(
+        &self,
+        peer: impl Into<PeerRef>,
+        archive: bool,
+    ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::folders::EditPeerFolders {
             folder_peers: vec![tl::enums::InputFolderPeer::InputFolderPeer(
                 tl::types::InputFolderPeer {
                     peer: input_peer,
-                    folder_id: 1,
+                    folder_id: if archive { 1 } else { 0 },
                 },
             )],
         };
         self.rpc_write(&req).await
-    }
-
-    /// Unarchive a dialog (move it back to folder 0 - the main list).
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// # use ferogram::Client;
-    /// # async fn ex(client: Client) -> Result<(), Box<dyn std::error::Error>> {
-    /// client.unarchive_chat("@somebot").await?;
-    /// # Ok(()) }
-    /// ```
-    pub async fn unarchive_chat(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let req = tl::functions::folders::EditPeerFolders {
-            folder_peers: vec![tl::enums::InputFolderPeer::InputFolderPeer(
-                tl::types::InputFolderPeer {
-                    peer: input_peer,
-                    folder_id: 0,
-                },
-            )],
-        };
-        self.rpc_write(&req).await
-    }
-
-    /// Mark a dialog as read (clears the unread mark).
-    pub async fn mark_dialog_read(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
-        self.set_dialog_unread_flag(peer, false).await
     }
 }

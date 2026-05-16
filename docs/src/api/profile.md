@@ -31,14 +31,14 @@ client.set_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
 
 ```rust
-client.set_username("my_new_handle").await?;
-client.set_username("").await?;  // remove username
+client.set_profile("me").username("my_new_handle").send().await?;
+client.set_profile("me").username("").send().await?;  // remove username
 ```
 </div>
 </div>
@@ -46,7 +46,7 @@ client.set_username("").await?;  // remove username
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_online() / set_offline() → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_presence(true) / set_presence(false) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Manually set your online/offline status. Pass <code>offline: false</code> to appear online, <code>true</code> to mark yourself as offline. Telegram resets online status automatically after ~5 minutes of inactivity, so call this periodically if you need a persistent "online" appearance.
@@ -60,15 +60,15 @@ Manually set your online/offline status. Pass <code>offline: false</code> to app
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile_photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Set or add a new profile photo. Upload the image with <code>upload_file</code> first.
+Set or add a new profile photo. Upload the image with <code>upload_file(path)</code> first.
 
 ```rust
 let bytes = tokio::fs::read("avatar.jpg").await?;
-let uploaded = client.upload_file(&bytes, "avatar.jpg", "image/jpeg").await?;
-let photo = client.set_profile_photo(uploaded).await?;
+let uploaded = client.upload_file("avatar.jpg").await?;
+let photo = client.set_profile("me").photo(uploaded).send().await?;
 ```
 </div>
 </div>
@@ -111,14 +111,14 @@ client.set_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
 
 ```rust
-client.set_username("my_new_handle").await?;
-client.set_username("").await?;  // remove username
+client.set_profile("me").username("my_new_handle").send().await?;
+client.set_profile("me").username("").send().await?;  // remove username
 ```
 </div>
 </div>
@@ -126,7 +126,7 @@ client.set_username("").await?;  // remove username
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_online() / set_offline() → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_presence(true) / set_presence(false) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Manually set your online/offline status. Pass <code>offline: false</code> to appear online, <code>true</code> to mark yourself as offline. Telegram resets online status automatically after ~5 minutes of inactivity.
@@ -179,15 +179,15 @@ while let Some(photo) = iter.next(&client).await? {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile_photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Set or add a new profile photo. Upload the image with <code>upload_file</code> first. Returns the new <code>Photo</code> object.
+Set or add a new profile photo. Upload the image with <code>upload_file(path)</code> first. Returns the new <code>Photo</code> object.
 
 ```rust
 let bytes = tokio::fs::read("avatar.jpg").await?;
-let uploaded = client.upload_file(&bytes, "avatar.jpg", "image/jpeg").await?;
-let photo = client.set_profile_photo(uploaded).await?;
+let uploaded = client.upload_file("avatar.jpg").await?;
+let photo = client.set_profile("me").photo(uploaded).send().await?;
 ```
 </div>
 </div>
@@ -275,11 +275,11 @@ client.set_profile(
 
 // Set a new avatar
 let bytes = tokio::fs::read("new_avatar.png").await?;
-let f = client.upload_file(&bytes, "avatar.png", "image/png").await?;
-client.set_profile_photo(f).await?;
+let f = client.upload_file("avatar.png").await?;
+client.set_profile("me").photo(f).send().await?;
 
 // Go offline
-client.set_offline().await?;
+client.set_presence(false).await?;
 ```
 
 ---
@@ -291,13 +291,13 @@ Set or clear the animated emoji shown next to the logged-in user's name (Telegra
 ```rust
 // Set an emoji status using a custom emoji document ID
 // (obtain IDs from sticker sets via client.get_sticker_set)
-client.set_emoji_status(Some(5260885697911948121), None).await?;
+client.set_profile("me").emoji_status(Some(5260885697911948121), None).send().await?;
 
 // Set with an expiry (Unix timestamp)
-client.set_emoji_status(Some(5260885697911948121), Some(1_800_000_000)).await?;
+client.set_profile("me").emoji_status(Some(5260885697911948121), Some(1_800_000_000)).send().await?;
 
 // Clear the current emoji status
-client.set_emoji_status(None, None).await?;
+client.set_profile("me").emoji_status(None, None).send().await?;
 ```
 
 `document_id` is the `id` field from a `tl::types::Document` belonging to a custom-emoji sticker. Pass `None` to remove the status. `until` is an optional Unix timestamp after which the status expires automatically; pass `None` for no expiry.

@@ -39,7 +39,7 @@ for doc in &set.documents {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.install_sticker_set(stickerset: tl::enums::InputStickerSet, archived: bool) → Result&lt;tl::enums::messages::StickerSetInstallResult, InvocationError&gt;</span>
+<span class="api-card-sig">client.toggle_stickers(stickerset: tl::enums::InputStickerSet, archived: bool) → Result&lt;tl::enums::messages::StickerSetInstallResult, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Install a sticker set for the current account. Pass <code>archived: true</code> to add it to the archive instead of the active set list.
@@ -47,7 +47,7 @@ Install a sticker set for the current account. Pass <code>archived: true</code> 
 The return value is <code>StickerSetInstallResult::Success</code> on a clean install, or <code>StickerSetInstallResult::Archive</code> when older sets were moved to the archive to make room.
 
 ```rust
-let result = client.install_sticker_set(
+let result = client.toggle_stickers(
     tl::enums::InputStickerSet::InputStickerSetShortName(
         tl::types::InputStickerSetShortName { short_name: "Animals".into() }
     ),
@@ -60,7 +60,7 @@ let result = client.install_sticker_set(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.uninstall_sticker_set(stickerset: tl::enums::InputStickerSet) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.untoggle_stickers(stickerset: tl::enums::InputStickerSet) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Remove a sticker set from the account's installed sets.

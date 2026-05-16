@@ -122,8 +122,8 @@ msg.delete_with(&client).await?;
 ### Mark as read
 
 ```rust
-msg.mark_as_read().await?;
-msg.mark_as_read_with(&client).await?;
+msg.mark_read().await?;
+msg.mark_read_with(&client).await?;
 ```
 
 ### Pin / Unpin
@@ -158,7 +158,10 @@ msg.forward_to_with(&client, peer).await?;
 
 ```rust
 // Download attached media to a file path, returns true if media existed
-let downloaded = msg.download_media("output.jpg").await?;
+// to disk
+client.download_file(msg.media().unwrap(), "output.jpg").await?;
+// to memory
+let bytes = msg.bytes().await?;
 ```
 
 ### Fetch replied-to message
@@ -183,7 +186,7 @@ msg.refetch_with(&client).await?;
 ```rust
 // Fetch the replied-to message by ID
 if let Some(reply_id) = msg.reply_to_message_id() {
-    let parent = client.get_message_by_id(msg.peer(), reply_id).await?;
+    let parent = client.get_messages(msg.peer(), &[reply_id]).await.ok().and_then(|mut v| v.into_iter().next()).await?;
 }
 ```
 
@@ -214,7 +217,7 @@ while let Some(update) = stream.next().await {
 
             } else if let Some(media) = msg.media() {
                 msg.reply("Downloading…").await.ok();
-                msg.download_media("received_file").await.ok();
+                msg.bytes().await.ok();
                 msg.react("✅").await.ok();
             }
         }

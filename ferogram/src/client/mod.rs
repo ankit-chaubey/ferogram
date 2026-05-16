@@ -4530,46 +4530,7 @@ impl Client {
     }
 
     /// Fetch a single message by ID.
-    pub async fn get_message_by_id(
-        &self,
-        peer: impl Into<PeerRef>,
-        id: i32,
-    ) -> Result<Option<update::IncomingMessage>, InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let ids = vec![tl::enums::InputMessage::Id(tl::types::InputMessageId {
-            id,
-        })];
-        let body: Vec<u8> = match &input_peer {
-            tl::enums::InputPeer::Channel(c) => {
-                let req = tl::functions::channels::GetMessages {
-                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
-                        channel_id: c.channel_id,
-                        access_hash: c.access_hash,
-                    }),
-                    id: ids,
-                };
-                self.rpc_call_raw(&req).await?
-            }
-            _ => {
-                let req = tl::functions::messages::GetMessages { id: ids };
-                self.rpc_call_raw(&req).await?
-            }
-        };
-        let mut cur = Cursor::from_slice(&body);
-        let msgs = match tl::enums::messages::Messages::deserialize(&mut cur) {
-            Ok(tl::enums::messages::Messages::Messages(m)) => m.messages,
-            Ok(tl::enums::messages::Messages::Slice(m)) => m.messages,
-            Ok(tl::enums::messages::Messages::ChannelMessages(m)) => m.messages,
-            _ => return Ok(None),
-        };
-        Ok(msgs
-            .into_iter()
-            .next()
-            .map(|m| update::IncomingMessage::from_raw(m).with_client(self.clone())))
-    }
-
-    pub async fn get_messages_by_id(
+    pub async fn get_messages(
         &self,
         peer: impl Into<PeerRef>,
         ids: &[i32],
@@ -4646,13 +4607,14 @@ impl Client {
             .map(|m| update::IncomingMessage::from_raw(m).with_client(self.clone())))
     }
 
+    /// Pin or unpin a message. `pin: true` pins, `pin: false` unpins.
     pub async fn pin_message(
         &self,
         peer: impl Into<PeerRef>,
-        message_id: i32,
-        silent: bool,
+        id: i32,
+        pin: bool,
     ) -> Result<(), InvocationError> {
-        self.update_pinned_message(peer, message_id, silent, false, false)
+        self.update_pinned_message(peer, id, true, !pin, false)
             .await
     }
 
@@ -4744,15 +4706,6 @@ impl Client {
             .into_iter()
             .next()
             .map(|m| update::IncomingMessage::from_raw(m).with_client(self.clone())))
-    }
-
-    pub async fn unpin_message(
-        &self,
-        peer: impl Into<PeerRef>,
-        message_id: i32,
-    ) -> Result<(), InvocationError> {
-        self.update_pinned_message(peer, message_id, true, true, false)
-            .await
     }
 
     pub async fn unpin_all_messages(
@@ -5081,27 +5034,117 @@ impl Client {
             .collect())
     }
 
-    pub async fn download_file(
+    /// Download message media to any [`AsyncWrite`] sink (file, socket, in-memory buffer…).
+    ///
+    /// Returns total bytes written. Uses the sequential streaming path so the
+    /// entire file is never buffered in memory.
+    ///
+    /// [`AsyncWrite`]: tokio::io::AsyncWrite
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client; use ferogram_tl_types as tl;
+    /// # async fn ex(client: Client, msg: ferogram::update::IncomingMessage) {
+    /// // to memory
+    /// let mut buf = Vec::new();
+    /// client.download(msg.media().unwrap(), &mut buf).await.unwrap();
+    ///
+    /// // to file
+    /// let mut file = tokio::fs::File::create("photo.jpg").await.unwrap();
+    /// client.download(msg.media().unwrap(), &mut file).await.unwrap();
+    /// # }
+    /// ```
+    pub async fn download(
         &self,
-        location: tl::enums::InputFileLocation,
-
-        path: impl AsRef<std::path::Path>,
-    ) -> Result<(), InvocationError> {
-        self.download_media_to_file_on_dc(location, 0, path).await
+        media: &tl::enums::MessageMedia,
+        mut dest: impl tokio::io::AsyncWrite + Unpin,
+    ) -> Result<u64, InvocationError> {
+        let (loc, dc) = crate::media::location_from_media(media).ok_or_else(|| {
+            InvocationError::Deserialize("media has no downloadable location".into())
+        })?;
+        self.download_streaming_on_dc(loc, dc, &mut dest).await
     }
 
-    pub async fn download_file_to_path(
+    /// Download message media directly to a file at `path`. Returns bytes written.
+    ///
+    /// Creates (or truncates) the file. Streams directly to disk.
+    pub async fn download_file(
         &self,
-        location: tl::enums::InputFileLocation,
-
-        dc_id: i32,
+        media: &tl::enums::MessageMedia,
         path: impl AsRef<std::path::Path>,
-    ) -> Result<(), InvocationError> {
-        let bytes = self.download_media_on_dc(location, dc_id).await?;
-        tokio::fs::write(path, &bytes)
+    ) -> Result<u64, InvocationError> {
+        let mut file = tokio::fs::File::create(path)
             .await
             .map_err(InvocationError::Io)?;
-        Ok(())
+        self.download(media, &mut file).await
+    }
+
+    /// Return a lazy chunk iterator for `media`.
+    ///
+    /// Call [`DownloadIter::next`] until it returns `Ok(None)`. Each chunk is
+    /// a [`bytes::Bytes`] slice - zero-copy where possible.
+    ///
+    /// Returns `None` if `media` has no downloadable location.
+    pub fn iter_download(
+        &self,
+        media: &tl::enums::MessageMedia,
+    ) -> Option<crate::media::DownloadIter> {
+        let (loc, dc) = crate::media::location_from_media(media)?;
+        Some(crate::media::DownloadIter::new(self.clone(), loc, dc))
+    }
+
+    /// Upload from any [`AsyncRead`] source.
+    ///
+    /// Buffers the stream to determine size, then uploads using the optimal
+    /// part size and worker count. Use [`upload_file`] when you have a path
+    /// it avoids the double-buffer.
+    ///
+    /// [`AsyncRead`]: tokio::io::AsyncRead
+    /// [`upload_file`]: Client::upload_file
+    pub async fn upload(
+        &self,
+        mut source: impl tokio::io::AsyncRead + Unpin + Send,
+        name: &str,
+    ) -> Result<crate::media::UploadedFile, InvocationError> {
+        use tokio::io::AsyncReadExt;
+        let mut data = Vec::new();
+        source
+            .read_to_end(&mut data)
+            .await
+            .map_err(InvocationError::Io)?;
+        if data.len() > crate::media::BIG_FILE_THRESHOLD {
+            self.upload_file_concurrent(std::sync::Arc::new(data), name, "")
+                .await
+        } else {
+            self.upload_file(&data, name, "").await
+        }
+    }
+
+    /// Upload a file from disk by path.
+    ///
+    /// Stats the file first (for optimal part sizing), then streams in chunks.
+    pub async fn upload_file_from_path(
+        &self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<crate::media::UploadedFile, InvocationError> {
+        use tokio::io::AsyncReadExt;
+        let path = path.as_ref();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+        let mut file = tokio::fs::File::open(path)
+            .await
+            .map_err(InvocationError::Io)?;
+        let meta = file.metadata().await.map_err(InvocationError::Io)?;
+        let size = meta.len() as usize;
+        let mut data = Vec::with_capacity(size);
+        file.read_to_end(&mut data)
+            .await
+            .map_err(InvocationError::Io)?;
+        if data.len() > crate::media::BIG_FILE_THRESHOLD {
+            self.upload_file_concurrent(std::sync::Arc::new(data), name, "")
+                .await
+        } else {
+            self.upload_file(&data, name, "").await
+        }
     }
 
     pub async fn send_chat_action(
@@ -5163,17 +5206,6 @@ impl Client {
         peer: P,
     ) -> Result<tl::enums::Peer, InvocationError> {
         peer.into().resolve(self).await
-    }
-
-    /// Resolve a peer string to a [`tl::enums::Peer`].
-    ///
-    /// Accepts: `"me"`, `"self"`, `"@username"`, `"username"`, numeric strings
-    /// (Bot-API encoded), `t.me/` URLs, E.164 phones (`+digits`), and invite
-    /// links.  Cache-first for usernames and phones; RPC only on miss.
-    ///
-    /// Prefer [`Client::resolve`] when the input may not be a string.
-    pub async fn resolve_peer(&self, peer: &str) -> Result<tl::enums::Peer, InvocationError> {
-        PeerRef::from(peer).resolve(self).await
     }
 
     /// `contacts.resolveUsername` RPC; called only on cache miss.
@@ -5424,10 +5456,8 @@ impl Client {
     ///
     /// Calls `messages.importChatInvite`, caches all returned entities, and
     /// returns the `InputPeer` of the joined chat.
-    pub async fn join_by_invite(
-        &self,
-        link: &str,
-    ) -> Result<tl::enums::InputPeer, InvocationError> {
+    /// Join a chat or channel via an invite link.
+    pub async fn join_link(&self, link: &str) -> Result<tl::enums::InputPeer, InvocationError> {
         let hash = PeerRef::parse_invite_hash(link)
             .ok_or_else(|| InvocationError::Deserialize(format!("invalid invite link: {link}")))?;
         let req = tl::functions::messages::ImportChatInvite {
@@ -7199,15 +7229,60 @@ impl Client {
         Ok(is_bool_true(&body))
     }
 
+    /// Set bot profile info.
+    ///
+    /// `bot`: pass the bot's peer when calling from a userbot that owns the
+    /// bot. Pass `None` when calling from the bot session itself.
+    ///
+    /// All text fields are optional; only the ones you supply are changed.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn f(client: ferogram::Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// // From a bot session: edit self.
+    /// client.set_bot_info(None::<&str>, Some("My Bot"), Some("Short about."), Some("Start page text."), "en").await?;
+    ///
+    /// // From a userbot: edit an owned bot.
+    /// client.set_bot_info(Some("@MyBot"), Some("My Bot"), None, None, "en").await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn set_bot_info(
         &self,
+        bot: Option<impl Into<PeerRef>>,
         name: Option<&str>,
         about: Option<&str>,
         description: Option<&str>,
         lang_code: &str,
     ) -> Result<bool, InvocationError> {
+        let bot_input = if let Some(peer) = bot {
+            let resolved = peer.into().resolve(self).await?;
+            let input_peer = self
+                .inner
+                .peer_cache
+                .read()
+                .await
+                .peer_to_input(&resolved)?;
+            let input_user = match input_peer {
+                tl::enums::InputPeer::User(u) => {
+                    tl::enums::InputUser::InputUser(tl::types::InputUser {
+                        user_id: u.user_id,
+                        access_hash: u.access_hash,
+                    })
+                }
+                tl::enums::InputPeer::PeerSelf => tl::enums::InputUser::UserSelf,
+                _ => {
+                    return Err(InvocationError::Deserialize(
+                        "peer must resolve to a user (bot)".into(),
+                    ));
+                }
+            };
+            Some(input_user)
+        } else {
+            None
+        };
         let req = tl::functions::bots::SetBotInfo {
-            bot: None,
+            bot: bot_input,
             lang_code: lang_code.to_string(),
             name: name.map(|s| s.to_string()),
             about: about.map(|s| s.to_string()),
@@ -7217,13 +7292,44 @@ impl Client {
         Ok(is_bool_true(&body))
     }
 
+    /// Get bot profile info.
+    ///
+    /// `bot`: pass the bot's peer when calling from a userbot. Pass `None`
+    /// when calling from the bot session itself.
     pub async fn get_bot_info(
         &self,
+        bot: Option<impl Into<PeerRef>>,
         lang_code: &str,
     ) -> Result<tl::types::bots::BotInfo, InvocationError> {
         use ferogram_tl_types::{Cursor, Deserializable};
+        let bot_input = if let Some(peer) = bot {
+            let resolved = peer.into().resolve(self).await?;
+            let input_peer = self
+                .inner
+                .peer_cache
+                .read()
+                .await
+                .peer_to_input(&resolved)?;
+            let input_user = match input_peer {
+                tl::enums::InputPeer::User(u) => {
+                    tl::enums::InputUser::InputUser(tl::types::InputUser {
+                        user_id: u.user_id,
+                        access_hash: u.access_hash,
+                    })
+                }
+                tl::enums::InputPeer::PeerSelf => tl::enums::InputUser::UserSelf,
+                _ => {
+                    return Err(InvocationError::Deserialize(
+                        "peer must resolve to a user (bot)".into(),
+                    ));
+                }
+            };
+            Some(input_user)
+        } else {
+            None
+        };
         let req = tl::functions::bots::GetBotInfo {
-            bot: None,
+            bot: bot_input,
             lang_code: lang_code.to_string(),
         };
         let body = self.rpc_call_raw(&req).await?;
@@ -7608,14 +7714,7 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    pub async fn download_media_to_file(
-        &self,
-        location: tl::enums::InputFileLocation,
-        path: impl AsRef<std::path::Path>,
-    ) -> Result<(), InvocationError> {
-        self.download_media_to_file_on_dc(location, 0, path).await
-    }
-
+    #[allow(dead_code)]
     pub(crate) async fn download_media_to_file_on_dc(
         &self,
         location: tl::enums::InputFileLocation,
@@ -7867,83 +7966,6 @@ impl Client {
         })
     }
 
-    pub async fn edit_chat_title(
-        &self,
-        peer: impl Into<PeerRef>,
-        title: impl Into<String>,
-    ) -> Result<(), InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let title = title.into();
-        match &input_peer {
-            tl::enums::InputPeer::Channel(c) => {
-                let req = tl::functions::channels::EditTitle {
-                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
-                        channel_id: c.channel_id,
-                        access_hash: c.access_hash,
-                    }),
-                    title,
-                };
-                self.rpc_write(&req).await
-            }
-            tl::enums::InputPeer::Chat(c) => {
-                let req = tl::functions::messages::EditChatTitle {
-                    chat_id: c.chat_id,
-                    title,
-                };
-                self.rpc_write(&req).await
-            }
-            _ => Err(InvocationError::Deserialize(
-                "edit_chat_title: peer must be a chat or channel".into(),
-            )),
-        }
-    }
-
-    pub async fn edit_chat_about(
-        &self,
-        peer: impl Into<PeerRef>,
-        about: impl Into<String>,
-    ) -> Result<(), InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let req = tl::functions::messages::EditChatAbout {
-            peer: input_peer,
-            about: about.into(),
-        };
-        self.rpc_write(&req).await
-    }
-
-    pub async fn edit_chat_photo(
-        &self,
-        peer: impl Into<PeerRef>,
-        photo: tl::enums::InputChatPhoto,
-    ) -> Result<(), InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        match &input_peer {
-            tl::enums::InputPeer::Channel(c) => {
-                let req = tl::functions::channels::EditPhoto {
-                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
-                        channel_id: c.channel_id,
-                        access_hash: c.access_hash,
-                    }),
-                    photo,
-                };
-                self.rpc_write(&req).await
-            }
-            tl::enums::InputPeer::Chat(c) => {
-                let req = tl::functions::messages::EditChatPhoto {
-                    chat_id: c.chat_id,
-                    photo,
-                };
-                self.rpc_write(&req).await
-            }
-            _ => Err(InvocationError::Deserialize(
-                "edit_chat_photo: peer must be a chat or channel".into(),
-            )),
-        }
-    }
-
     pub async fn edit_chat_default_banned_rights(
         &self,
         peer: impl Into<PeerRef>,
@@ -7959,25 +7981,6 @@ impl Client {
             banned_rights: rights,
         };
         self.rpc_write(&req).await
-    }
-
-    pub async fn upload_profile_photo(
-        &self,
-        file: crate::media::UploadedFile,
-    ) -> Result<tl::enums::Photo, InvocationError> {
-        let req = tl::functions::photos::UploadProfilePhoto {
-            fallback: false,
-            bot: None,
-            file: Some(file.inner),
-            video: None,
-            video_start_ts: None,
-            video_emoji_markup: None,
-        };
-        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        let tl::enums::photos::Photo::Photo(result) =
-            tl::enums::photos::Photo::deserialize(&mut cur)?;
-        Ok(result.photo)
     }
 
     pub async fn invite_users(
@@ -8751,25 +8754,6 @@ impl Client {
         Ok(peers)
     }
 
-    pub async fn set_profile_photo(
-        &self,
-        file: crate::media::UploadedFile,
-    ) -> Result<tl::enums::Photo, InvocationError> {
-        let req = tl::functions::photos::UploadProfilePhoto {
-            fallback: false,
-            bot: None,
-            file: Some(file.inner),
-            video: None,
-            video_start_ts: None,
-            video_emoji_markup: None,
-        };
-        let body = self.rpc_call_raw(&req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        let tl::enums::photos::Photo::Photo(result) =
-            tl::enums::photos::Photo::deserialize(&mut cur)?;
-        Ok(result.photo)
-    }
-
     pub async fn delete_profile_photos(
         &self,
         photo_ids: Vec<(i64, i64, Vec<u8>)>,
@@ -8792,32 +8776,19 @@ impl Client {
         Ok(v)
     }
 
-    pub async fn set_profile(
-        &self,
-        first_name: Option<String>,
-        last_name: Option<String>,
-        about: Option<String>,
-    ) -> Result<tl::enums::User, InvocationError> {
-        let req = tl::functions::account::UpdateProfile {
-            first_name,
-            last_name,
-            about,
-        };
-        let body = self.rpc_call_raw(&req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        Ok(tl::enums::User::deserialize(&mut cur)?)
-    }
-
-    pub async fn set_username(
-        &self,
-        username: impl Into<String>,
-    ) -> Result<tl::enums::User, InvocationError> {
-        let req = tl::functions::account::UpdateUsername {
-            username: username.into(),
-        };
-        let body = self.rpc_call_raw(&req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        Ok(tl::enums::User::deserialize(&mut cur)?)
+    /// Update user or chat profile fields via a builder.
+    ///
+    /// Call `.send().await` to apply. Unset fields are left unchanged.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client) {
+    /// client.set_profile("me").name("Alice", "").bio("Hello!").send().await.unwrap();
+    /// # }
+    /// ```
+    pub fn set_profile(&self, peer: impl Into<PeerRef>) -> crate::SetProfileBuilder {
+        crate::SetProfileBuilder::new(self.clone(), peer.into())
     }
 
     pub async fn get_authorizations(
@@ -8867,27 +8838,14 @@ impl Client {
         Ok(full_user)
     }
 
-    pub async fn set_emoji_status(
-        &self,
-        document_id: Option<i64>,
-        until: Option<i32>,
-    ) -> Result<(), InvocationError> {
-        use ferogram_tl_types as tl;
-        let emoji_status = match document_id {
-            None => tl::enums::EmojiStatus::Empty,
-            Some(id) => tl::enums::EmojiStatus::EmojiStatus(tl::types::EmojiStatus {
-                document_id: id,
-                until,
-            }),
-        };
-        let req = tl::functions::account::UpdateEmojiStatus { emoji_status };
-        self.rpc_write(&req).await
-    }
-
-    pub async fn get_broadcast_stats(
+    /// Retrieve channel or supergroup statistics.
+    ///
+    /// Auto-dispatches to `stats.getBroadcastStats` for channels and
+    /// `stats.getMegagroupStats` for supergroups.
+    pub async fn stats(
         &self,
         peer: impl Into<PeerRef>,
-    ) -> Result<tl::enums::stats::BroadcastStats, InvocationError> {
+    ) -> Result<crate::ChannelStats, InvocationError> {
         use ferogram_tl_types as tl;
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
@@ -8900,46 +8858,30 @@ impl Client {
             }
             _ => {
                 return Err(InvocationError::Deserialize(
-                    "get_broadcast_stats: peer must be a channel".into(),
+                    "stats: peer must be a channel or supergroup".into(),
                 ));
             }
         };
-        let req = tl::functions::stats::GetBroadcastStats {
+        // Try broadcast stats first; fall back to megagroup stats on error.
+        let broadcast_req = tl::functions::stats::GetBroadcastStats {
+            dark: false,
+            channel: channel.clone(),
+        };
+        if let Ok(body) = self.rpc_call_raw(&broadcast_req).await {
+            let mut cur = Cursor::from_slice(&body);
+            if let Ok(s) = tl::enums::stats::BroadcastStats::deserialize(&mut cur) {
+                return Ok(crate::ChannelStats::Broadcast(s));
+            }
+        }
+        let meg_req = tl::functions::stats::GetMegagroupStats {
             dark: false,
             channel,
         };
-        let body = self.rpc_call_raw(&req).await?;
+        let body = self.rpc_call_raw(&meg_req).await?;
         let mut cur = Cursor::from_slice(&body);
-        Ok(tl::enums::stats::BroadcastStats::deserialize(&mut cur)?)
-    }
-
-    pub async fn get_megagroup_stats(
-        &self,
-        peer: impl Into<PeerRef>,
-    ) -> Result<tl::enums::stats::MegagroupStats, InvocationError> {
-        use ferogram_tl_types as tl;
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let channel = match &input_peer {
-            tl::enums::InputPeer::Channel(c) => {
-                tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
-                    channel_id: c.channel_id,
-                    access_hash: c.access_hash,
-                })
-            }
-            _ => {
-                return Err(InvocationError::Deserialize(
-                    "get_megagroup_stats: peer must be a supergroup".into(),
-                ));
-            }
-        };
-        let req = tl::functions::stats::GetMegagroupStats {
-            dark: false,
-            channel,
-        };
-        let body = self.rpc_call_raw(&req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        Ok(tl::enums::stats::MegagroupStats::deserialize(&mut cur)?)
+        Ok(crate::ChannelStats::Megagroup(
+            tl::enums::stats::MegagroupStats::deserialize(&mut cur)?,
+        ))
     }
 
     pub async fn send_scheduled_now(
@@ -9424,7 +9366,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    pub async fn get_poll_stats(
+    /// Get statistics for a poll message.
+    pub async fn poll_results(
         &self,
         peer: impl Into<PeerRef>,
         msg_id: i32,
@@ -9441,22 +9384,6 @@ impl Client {
         let tl::enums::stats::PollStats::PollStats(result) =
             tl::enums::stats::PollStats::deserialize(&mut cur)?;
         Ok(result)
-    }
-
-    pub async fn get_poll_results(
-        &self,
-        peer: impl Into<PeerRef>,
-        msg_id: i32,
-        poll_hash: i64,
-    ) -> Result<(), InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let req = tl::functions::messages::GetPollResults {
-            peer: input_peer,
-            msg_id,
-            poll_hash,
-        };
-        self.rpc_write(&req).await
     }
 
     pub async fn get_poll_votes(
@@ -9505,29 +9432,27 @@ impl Client {
         Ok(result)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn install_sticker_set(
+    /// Install or uninstall a sticker set. `install: true` installs, `install: false` uninstalls.
+    pub async fn toggle_stickers(
         &self,
         stickerset: tl::enums::InputStickerSet,
-        archived: bool,
-    ) -> Result<tl::enums::messages::StickerSetInstallResult, InvocationError> {
-        let req = tl::functions::messages::InstallStickerSet {
-            stickerset,
-            archived,
-        };
-        let body = self.rpc_call_raw(&req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        Ok(tl::enums::messages::StickerSetInstallResult::deserialize(
-            &mut cur,
-        )?)
-    }
-
-    pub async fn uninstall_sticker_set(
-        &self,
-        stickerset: tl::enums::InputStickerSet,
-    ) -> Result<(), InvocationError> {
-        let req = tl::functions::messages::UninstallStickerSet { stickerset };
-        self.rpc_write(&req).await
+        install: bool,
+    ) -> Result<Option<tl::enums::messages::StickerSetInstallResult>, InvocationError> {
+        if install {
+            let req = tl::functions::messages::InstallStickerSet {
+                stickerset,
+                archived: false,
+            };
+            let body = self.rpc_call_raw(&req).await?;
+            let mut cur = Cursor::from_slice(&body);
+            Ok(Some(
+                tl::enums::messages::StickerSetInstallResult::deserialize(&mut cur)?,
+            ))
+        } else {
+            let req = tl::functions::messages::UninstallStickerSet { stickerset };
+            self.rpc_write(&req).await?;
+            Ok(None)
+        }
     }
 
     pub async fn get_all_stickers(

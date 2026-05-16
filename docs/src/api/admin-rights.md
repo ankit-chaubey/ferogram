@@ -11,7 +11,7 @@ use ferogram::participants::BannedRightsBuilder;
 
 // Permanent full ban
 client
-    .ban_participant(peer.clone(), user_id, BannedRightsBuilder::full_ban())
+    .ban(peer.clone(), user_id, None)
     .await?;
 
 // Partial restriction (no media, expires in 24 h)
@@ -19,7 +19,7 @@ let tomorrow = (std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 86400) as i32;
 
 client
-    .ban_participant(
+    .ban(
         peer.clone(), user_id,
         BannedRightsBuilder::new()
             .send_media(true)
@@ -32,7 +32,7 @@ client
 // Unban
 // Passing an empty builder restores full permissions
 client
-    .ban_participant(peer.clone(), user_id, BannedRightsBuilder::new())
+    .ban(peer.clone(), user_id, None)
     .await?;
 ```
 
@@ -67,7 +67,7 @@ use ferogram::participants::AdminRightsBuilder;
 
 // Custom moderator
 client
-    .promote_participant(
+    .set_admin(
         peer.clone(), user_id,
         AdminRightsBuilder::new()
             .delete_messages(true)
@@ -80,12 +80,12 @@ client
 
 // Full admin (all standard rights)
 client
-    .promote_participant(peer.clone(), user_id, AdminRightsBuilder::full_admin())
+    .set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin())
     .await?;
 
 // Demote (remove all admin rights)
 client
-    .promote_participant(peer.clone(), user_id, AdminRightsBuilder::new())
+    .set_admin(peer.clone(), user_id, AdminRightsBuilder::new())
     .await?;
 ```
 
@@ -145,12 +145,12 @@ let perms: ParticipantPermissions = client
 ```rust
 // Temporarily mute: no messages for 1 hour
 let in_1h = (chrono::Utc::now().timestamp() + 3600) as i32;
-client.ban_participant(peer.clone(), uid,
+client.ban(peer.clone(), uid,
     BannedRightsBuilder::new().send_messages(true).until_date(in_1h)
 ).await?;
 
 // Promote to channel editor
-client.promote_participant(peer.clone(), uid,
+client.set_admin(peer.clone(), uid,
     AdminRightsBuilder::new()
         .post_messages(true)
         .edit_messages(true)
@@ -160,6 +160,6 @@ client.promote_participant(peer.clone(), uid,
 // Check before acting
 let perms = client.get_permissions(peer.clone(), uid).await?;
 if !perms.is_admin() && !perms.is_banned() {
-    client.ban_participant(peer.clone(), uid, BannedRightsBuilder::full_ban()).await?;
+    client.ban(peer.clone(), uid, BannedRightsBuilder::full_ban()).await?;
 }
 ```

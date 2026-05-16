@@ -163,7 +163,7 @@ async fn send_document(
     // Show "uploading document…" while the upload runs
     let _guard = client.uploading_document(peer.clone()).await?;
 
-    let uploaded = client.upload_file(filename, &bytes).await?;
+    let uploaded = client.upload_file(filename).await?;
 
     drop(_guard); // cancel the indicator before sending
 

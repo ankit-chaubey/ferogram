@@ -52,7 +52,7 @@ ferogram
 
 ```toml
 [dependencies]
-ferogram = "0.4.0"
+ferogram = "0.5.0"
 tokio    = { version = "1", features = ["full"] }
 ```
 

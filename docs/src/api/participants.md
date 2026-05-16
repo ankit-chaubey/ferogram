@@ -58,38 +58,38 @@ p.is_member()   // bool: active member (not banned, not left)
 
 ```rust
 // Removes the user from a basic group by chat_id (i64)
-// For channels/supergroups, use ban_participant instead
-client.kick_participant(chat_id, user_id).await?;
+// For channels/supergroups, use ban instead
+client.kick(chat_id, user_id).await?;
 ```
 
-> **Note:** `kick_participant` takes a `chat_id: i64`, not a `PeerRef`. Use the raw numeric ID of the basic group.
+> **Note:** `kick` takes a `chat_id: i64`, not a `PeerRef`. Use the raw numeric ID of the basic group.
 
 ---
 
 ## Ban participant
 
-`ban_participant` takes a Unix timestamp for `until_date`. For granular per-permission restrictions use `set_banned_rights` with `BannedRightsBuilder`.
+`ban` takes a Unix timestamp for `until_date`. For granular per-permission restrictions use `restrict` with `BannedRightsBuilder`.
 
 ```rust
 // Permanent full ban (until_date = 0)
-client.ban_participant(peer.clone(), user_id, 0).await?;
+client.ban(peer.clone(), user_id, None).await?;
 
 // Timed ban: expires in 24 h
 let expires = (std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 86400) as i32;
-client.ban_participant(peer.clone(), user_id, expires).await?;
+client.ban(peer.clone(), user_id, Some(expires)).await?;
 
 // Unban: set a past timestamp (e.g. 1) to lift the ban
-client.ban_participant(peer.clone(), user_id, 1).await?;
+client.ban(peer.clone(), user_id, Some(1)).await?;
 ```
 
-For per-permission restrictions (no media, no stickers, etc.) use `set_banned_rights` with `BannedRightsBuilder`:
+For per-permission restrictions (no media, no stickers, etc.) use `restrict` with `BannedRightsBuilder`:
 
 ```rust
 use ferogram::participants::BannedRightsBuilder;
 
 client
-    .set_banned_rights(
+    .restrict(
         peer.clone(),
         user_input_peer,
         BannedRightsBuilder::new()
@@ -123,26 +123,26 @@ client
 
 ---
 
-## Promote admin: `promote_participant` and `AdminRightsBuilder`
+## Promote admin: `set_admin` and `AdminRightsBuilder`
 
-`promote_participant` is a boolean shorthand  -  `true` grants all standard rights, `false` demotes:
+`set_admin` is a boolean shorthand  -  `true` grants all standard rights, `false` demotes:
 
 ```rust
 // Quick promote (all standard rights except add_admins)
-client.promote_participant(peer.clone(), user_id, true).await?;
+client.set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin()).await?;
 
 // Demote back to regular member
-client.promote_participant(peer.clone(), user_id, false).await?;
+client.set_admin(peer.clone(), user_id, AdminRightsBuilder::new()).await?;
 ```
 
-For fine-grained control, use `set_admin_rights` with `AdminRightsBuilder`:
+For fine-grained control, use `set_admin` with `AdminRightsBuilder`:
 
 ```rust
 use ferogram::participants::AdminRightsBuilder;
 
 // Promote with specific rights and a custom title
 client
-    .promote_participant(
+    .set_admin(
         peer.clone(),
         user_id,
         AdminRightsBuilder::new()
@@ -157,12 +157,12 @@ client
 
 // Full admin (all standard rights except add_admins)
 client
-    .promote_participant(peer.clone(), user_id, AdminRightsBuilder::full_admin())
+    .set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin())
     .await?;
 
 // Demote: pass an empty builder to remove all admin rights
 client
-    .promote_participant(peer.clone(), user_id, AdminRightsBuilder::new())
+    .set_admin(peer.clone(), user_id, AdminRightsBuilder::new())
     .await?;
 ```
 
@@ -245,7 +245,7 @@ while let Some(photo) = iter.next().await? {
 client.join_chat("@somegroup").await?;
 
 // Accept a private invite link
-client.accept_invite_link("https://t.me/joinchat/AbCdEfG").await?;
+client.join_link("https://t.me/joinchat/AbCdEfG").await?;
 
 // Parse invite hash from any link format
 let hash = Client::parse_invite_hash("https://t.me/+AbCdEfG12345");
@@ -299,18 +299,18 @@ let all_photos = iter.collect().await?;
 
 ## Low-level rights setters
 
-For advanced use cases, `set_banned_rights` and `set_admin_rights` give direct access to the TL layer:
+For advanced use cases, `restrict` and `set_admin` give direct access to the TL layer:
 
 ```rust
 // Set banned rights directly (channel/supergroup only)
-client.set_banned_rights(
+client.restrict(
     peer.clone(),
     user_input_peer,
     BannedRightsBuilder::new().send_media(true),
 ).await?;
 
 // Set admin rights directly
-client.set_admin_rights(
+client.set_admin(
     peer.clone(),
     user_input_peer,
     AdminRightsBuilder::new().delete_messages(true),

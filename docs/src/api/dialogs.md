@@ -78,14 +78,14 @@ while let Some(msg) = iter.next(&client).await? {
 let messages = client.get_message_history(peer.clone(), 20).await?;
 
 // Specific message IDs
-let messages = client.get_messages_by_id(peer.clone(), &[100, 101, 102]).await?;
+let messages = client.get_messages(peer.clone(), &[100, 101, 102]).await?;
 // Returns Vec<Option<tl::enums::Message>>: None if not found
 
 // Pinned message
 let pinned = client.get_pinned_message(peer.clone()).await?;
 
 // Fetch the message a reply refers to by ID
-let parent = client.get_message_by_id(peer.clone(), reply_id).await?;
+let parent = client.get_messages(peer.clone(), &[reply_id]).await?.into_iter().next();
 ```
 
 ---
@@ -109,7 +109,7 @@ client.delete_scheduled_messages(peer.clone(), &[scheduled_id]).await?;
 
 ```rust
 // Mark all messages as read
-client.mark_as_read(peer.clone()).await?;
+client.mark_read(peer.clone()).await?;
 
 // Clear @mention badges
 client.clear_mentions(peer.clone()).await?;
@@ -119,7 +119,7 @@ client.delete_dialog(peer.clone()).await?;
 
 // Pin / unpin a dialog
 client.pin_dialog(peer.clone()).await?;
-client.unpin_dialog(peer.clone()).await?;
+client.pin_dialog(peer.clone(), false).await?;
 
 // Get pinned dialogs (folder_id: 0 = main, 1 = archived)
 let pinned = client.get_pinned_dialogs(0).await?;
@@ -128,13 +128,13 @@ let pinned = client.get_pinned_dialogs(0).await?;
 client.mark_dialog_unread(peer.clone(), true).await?;
 
 // Clear the manual unread flag
-client.mark_dialog_read(peer.clone()).await?;
+client.mark_read(peer.clone()).await?;
 
 // Join a public group/channel
 client.join_chat("@somegroup").await?;
 
 // Accept a private invite link
-client.accept_invite_link("https://t.me/joinchat/AbCdEfG").await?;
+client.join_link("https://t.me/joinchat/AbCdEfG").await?;
 
 // Parse invite hash from any link format
 let hash = Client::parse_invite_hash("https://t.me/+AbCdEfG12345");
@@ -148,10 +148,10 @@ Move a dialog into the Telegram archive (folder 1) or back to the main list (fol
 
 ```rust
 // Move to archive - chat disappears from the main dialog list
-client.archive_chat("@somebot").await?;
+client.archive("@somebot").await?;
 
 // Move back to main list
-client.unarchive_chat("@somebot").await?;
+client.archive("@somebot").await?;
 ```
 
 Archived chats still receive messages; they are simply hidden from the main list and muted by default until the user opens them.

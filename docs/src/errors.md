@@ -41,7 +41,7 @@ match client.send_message("@peer", "Hello").await {
 | `InvocationError::Io(io::Error)` | Network or socket error |
 | `InvocationError::Deserialize(e)` | Failed to decode server response |
 | `InvocationError::Dropped` | Request dropped (sender task shut down) |
-| `InvocationError::PeerNotCached(String)` | Peer seen before but its `access_hash` was never stored; resolve via `client.resolve_peer()` first |
+| `InvocationError::PeerNotCached(String)` | Peer seen before but its `access_hash` was never stored; resolve via `client.resolve()` first |
 
 ### `InvocationError` methods
 

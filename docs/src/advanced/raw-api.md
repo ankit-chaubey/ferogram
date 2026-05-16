@@ -148,11 +148,11 @@ let valid = client.invoke(&functions::messages::CheckUrlAuthMatchCode {
 
 ## Access hashes
 
-Many raw API calls need an `access_hash` alongside user/channel IDs. The internal peer cache is populated by `resolve_peer`, `get_participants`, `get_dialogs`, etc.:
+Many raw API calls need an `access_hash` alongside user/channel IDs. The internal peer cache is populated by `resolve`, `get_participants`, `get_dialogs`, etc.:
 
 ```rust
 // This populates the peer cache
-let peer = client.resolve_peer("@username").await?;
+let peer = client.resolve("@username").await?;
 
 // For users
 let user_hash = client.inner_peer_cache_users().get(&user_id).copied().unwrap_or(0);

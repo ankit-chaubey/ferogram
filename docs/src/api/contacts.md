@@ -95,7 +95,7 @@ for user in &result.users {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.block_user(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.block(peer: impl Into&lt;PeerRef&gt;, block: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Block a user. Blocked users cannot send you messages, see your phone number, or add you to groups. The block also suppresses their stories from your feed.
@@ -105,7 +105,7 @@ Block a user. Blocked users cannot send you messages, see your phone number, or 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.unblock_user(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+<!-- removed: use block(peer, false) --> → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Remove a user from your block list.
@@ -142,7 +142,7 @@ loop {
 // Find and block all users named "Spammer"
 let results = client.search_contacts("Spammer", 50).await?;
 for peer in results {
-    client.block_user(peer).await?;
+    client.block(peer, true).await?;
     println!("Blocked {peer:?}");
 }
 

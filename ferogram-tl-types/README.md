@@ -16,10 +16,10 @@ Auto-generated Rust types for all Telegram API Layer 225 constructors, functions
 
 ```toml
 [dependencies]
-ferogram-tl-types = "0.4.1"
+ferogram-tl-types = "0.5.0"
 
 # With MTProto low-level types (required by ferogram-mtproto):
-ferogram-tl-types = { version = "0.4.1", features = ["tl-mtproto"] }
+ferogram-tl-types = { version = "0.5.0", features = ["tl-mtproto"] }
 ```
 
 ---

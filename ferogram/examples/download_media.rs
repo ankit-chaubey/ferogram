@@ -79,16 +79,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let dest = downloads.join(&file_name);
             let dest_str = dest.to_string_lossy().into_owned();
 
-            match msg.download_media(&dest_str).await {
-                Ok(true) => {
-                    let size = tokio::fs::metadata(&dest_str)
-                        .await
-                        .map(|m| m.len())
-                        .unwrap_or(0);
-                    println!("Saved: {dest_str}  ({} KB)", size / 1024);
-                }
-                Ok(false) => {
-                    println!("Skipped msg {msg_id}: no download location.");
+            match msg
+                .download(&mut tokio::fs::File::create(&dest).await.unwrap())
+                .await
+            {
+                Ok(bytes) => {
+                    println!("Saved: {dest_str}  ({} KB)", bytes / 1024);
                 }
                 Err(e) => {
                     println!("Error downloading msg {msg_id}: {e}");

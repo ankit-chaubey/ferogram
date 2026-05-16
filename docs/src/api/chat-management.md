@@ -19,7 +19,7 @@ For invite link management see [Invite Links](./invite-links.md). For forum topi
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.accept_invite_link(link: &str) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.join_link(link: &str) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Accept a <code>t.me/+hash</code> or <code>t.me/joinchat/hash</code> invite link and join the chat.</div>
 </div>
@@ -29,7 +29,7 @@ For invite link management see [Invite Links](./invite-links.md). For forum topi
 <span class="api-badge api-badge-async">async</span>
 <span class="api-card-sig">client.leave_chat(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Leave a channel or supergroup. For basic groups, use <code>kick_participant</code> on yourself or <code>delete_dialog</code> to hide it.</div>
+<div class="api-card-body">Leave a channel or supergroup. For basic groups, use <code>kick</code> on yourself or <code>delete_dialog</code> to hide it.</div>
 </div>
 
 ---
@@ -73,7 +73,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.delete_channel(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.delete_chat(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Permanently delete a channel or supergroup. Only the creator can do this. Irreversible  -  all messages are lost.</div>
 </div>
@@ -83,7 +83,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <span class="api-badge api-badge-async">async</span>
 <span class="api-card-sig">client.delete_chat(chat_id: i64) → Result&lt;(), InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Delete a legacy basic group by its raw numeric chat ID. Only the creator can do this. For supergroups and channels use <code>delete_channel</code>.</div>
+<div class="api-card-body">Delete a legacy basic group by its raw numeric chat ID. Only the creator can do this. For supergroups and channels use <code>delete_chat</code>.</div>
 </div>
 
 <div class="api-card">
@@ -101,7 +101,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.edit_chat_title(peer: impl Into&lt;PeerRef&gt;, title: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).title(: impl Into&lt;PeerRef&gt;, title: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Rename a chat, group, channel, or supergroup.</div>
 </div>
@@ -109,7 +109,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.edit_chat_about(peer: impl Into&lt;PeerRef&gt;, about: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).bio(: impl Into&lt;PeerRef&gt;, about: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Set or update the description/about text. Works for all chat types.</div>
 </div>
@@ -117,14 +117,14 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.edit_chat_photo(peer: impl Into&lt;PeerRef&gt;, photo: tl::enums::InputChatPhoto) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).chat_photo(peer: impl Into&lt;PeerRef&gt;, photo: tl::enums::InputChatPhoto) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Change the group/channel photo. Pass <code>InputChatPhoto::Empty</code> to remove it.
 
 ```rust
 // Set a new photo (upload first)
-let uploaded = client.upload_file(&bytes, "photo.jpg", "image/jpeg").await?;
-client.edit_chat_photo(
+let uploaded = client.upload_file("photo.jpg").await?;
+client.set_profile(peer).chat_photo(
     peer.clone(),
     tl::enums::InputChatPhoto::InputChatUploadedPhoto(
         tl::types::InputChatUploadedPhoto {
@@ -135,7 +135,7 @@ client.edit_chat_photo(
 ).await?;
 
 // Remove photo
-client.edit_chat_photo(peer.clone(), tl::enums::InputChatPhoto::Empty).await?;
+client.set_profile(peer).chat_photo(peer.clone(), tl::enums::InputChatPhoto::Empty).await?;
 ```
 </div>
 </div>
@@ -253,7 +253,7 @@ let chat = client.create_channel("My Group", "Welcome!", false).await?;
 client.invite_users(chat.clone(), vec![user_a, user_b]).await?;
 
 // 3. Set description and lock down media for all
-client.edit_chat_about(chat.clone(), "Read the rules before posting.").await?;
+client.set_profile(chat.clone()).bio("Read the rules before posting.").send().await?;
 client.edit_chat_default_banned_rights(chat.clone(), |b| {
     b.send_media(true).send_polls(true)
 }).await?;

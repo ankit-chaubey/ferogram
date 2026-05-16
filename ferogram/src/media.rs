@@ -149,18 +149,34 @@ const UPLOAD_PART_SIZES: &[usize] = &[32 * 1024, 64 * 1024, 128 * 1024, 256 * 10
 ///
 /// Returns `(part_size_bytes, total_parts)`.
 pub fn upload_part_size(file_size: usize) -> (usize, i32) {
-    // Enforce Telegram's hard 4000-part limit.
-    // For files beyond ~1.95 GB (ceil(1.95 GB / 512 KB) > 4000), grow part size
-    // so total_parts stays ≤ 4000; round up to 512-byte boundary (protocol requirement).
+    // Five-tier part-size table matching Telegram's kDocumentUploadPartSize constants.
+    // Each boundary keeps total_parts well below the 4000-part hard limit while
+    // minimising per-chunk overhead for small files.
+    //
+    // | File size        | Part size | Max parts |
+    // |------------------|-----------|-----------|
+    // | < 1 MB           | 32 KB     | 32        |
+    // | 1 MB  – 32 MB    | 64 KB     | 512       |
+    // | 32 MB – 512 MB   | 128 KB    | 4000      |
+    // | 512 MB – 1 GB    | 256 KB    | 4000      |
+    // | > 1 GB           | 512 KB    | ≤ 4000    |
     const MAX_PARTS: usize = 4000;
-    let mut ps: usize = if file_size < 512 * 1024 {
-        32 * 1024
+    let mut ps: usize = if file_size < 1024 * 1024 {
+        32 * 1024 // < 1 MB   → 32 KB
+    } else if file_size < 32 * 1024 * 1024 {
+        64 * 1024 // < 32 MB  → 64 KB
+    } else if file_size < 512 * 1024 * 1024 {
+        128 * 1024 // < 512 MB → 128 KB
+    } else if file_size < 1024 * 1024 * 1024 {
+        256 * 1024 // < 1 GB   → 256 KB
     } else {
-        512 * 1024
+        512 * 1024 // ≥ 1 GB   → 512 KB
     };
+    // Safety: if the chosen tier still exceeds 4000 parts (files > ~1.95 GB with 512 KB
+    // parts are impossible, but guard anyway), grow to the minimum that fits.
     if file_size.div_ceil(ps) > MAX_PARTS {
         ps = file_size.div_ceil(MAX_PARTS);
-        ps = ps.div_ceil(512); // round up to 512-byte boundary
+        ps = ps.div_ceil(512) * 512; // round up to 512-byte boundary (protocol requirement)
     }
     (ps, file_size.div_ceil(ps) as i32)
 }
@@ -522,6 +538,21 @@ pub struct DownloadIter {
 }
 
 impl DownloadIter {
+    pub(crate) fn new(client: Client, location: tl::enums::InputFileLocation, dc_id: i32) -> Self {
+        Self {
+            client,
+            done: false,
+            dc_id,
+            request: Some(tl::functions::upload::GetFile {
+                precise: false,
+                cdn_supported: false,
+                location,
+                offset: 0,
+                limit: 512 * 1024,
+            }),
+        }
+    }
+
     /// Set a custom chunk size (must be multiple of 4096, max 524288).
     pub fn chunk_size(mut self, size: i32) -> Self {
         if let Some(r) = &mut self.request {
@@ -1081,12 +1112,14 @@ impl Client {
     ///
     /// `dc_id` must be the DC that stores the file (`Document::dc_id()` /
     /// `Photo::dc_id()`). Pass `0` to use the home DC (bots only).
-    pub fn iter_download(&self, location: tl::enums::InputFileLocation) -> DownloadIter {
+    #[allow(dead_code)]
+    pub(crate) fn iter_download_raw(&self, location: tl::enums::InputFileLocation) -> DownloadIter {
         self.iter_download_on_dc(location, 0)
     }
 
-    /// Like [`iter_download`] but routes to a specific DC.
-    pub fn iter_download_on_dc(
+    /// Like [`iter_download_raw`] but routes to a specific DC.
+    #[allow(dead_code)]
+    pub(crate) fn iter_download_on_dc(
         &self,
         location: tl::enums::InputFileLocation,
         dc_id: i32,
@@ -1110,7 +1143,8 @@ impl Client {
     }
 
     /// Download all bytes of a media attachment at once (sequential).
-    pub async fn download_media(
+    #[allow(dead_code)]
+    pub(crate) async fn download_media(
         &self,
         location: tl::enums::InputFileLocation,
     ) -> Result<Vec<u8>, InvocationError> {
@@ -1125,7 +1159,8 @@ impl Client {
     ///
     /// Full AUTH_KEY_UNREGISTERED + FILE_MIGRATE recovery,
     /// the resilience of the concurrent worker path.
-    pub async fn download_media_on_dc(
+    #[allow(dead_code)]
+    pub(crate) async fn download_media_on_dc(
         &self,
         location: tl::enums::InputFileLocation,
         dc_id: i32,
@@ -1219,12 +1254,95 @@ impl Client {
         Ok(bytes)
     }
 
+    /// Stream-download sequential path: writes chunks directly to `writer` without
+    /// buffering the whole file. Returns total bytes written.
+    ///
+    /// All retry / DC-migration logic mirrors [`download_media_on_dc`].
+    pub(crate) async fn download_streaming_on_dc<W: tokio::io::AsyncWrite + Unpin>(
+        &self,
+        location: tl::enums::InputFileLocation,
+        dc_id: i32,
+        writer: &mut W,
+    ) -> Result<u64, InvocationError> {
+        use tokio::io::AsyncWriteExt;
+        let chunk = 512 * 1024i32;
+        let mut worker_dc = if dc_id == 0 {
+            let _g = self.inner.home_dc_id.lock().await;
+            *_g
+        } else {
+            dc_id
+        };
+        let mut conn = self.open_worker_conn(worker_dc).await?;
+        let mut offset = 0i64;
+        let mut total_written = 0u64;
+        let mut reopen_attempts = 0u8;
+        const MAX_REOPEN: u8 = 3;
+
+        loop {
+            let req = tl::functions::upload::GetFile {
+                precise: true,
+                cdn_supported: false,
+                location: location.clone(),
+                offset,
+                limit: chunk,
+            };
+            match conn.rpc_call(&req).await {
+                Ok(raw) => {
+                    let mut cur = Cursor::from_slice(&raw);
+                    match tl::enums::upload::File::deserialize(&mut cur)? {
+                        tl::enums::upload::File::File(f) => {
+                            reopen_attempts = 0;
+                            let done = (f.bytes.len() as i32) < chunk;
+                            writer
+                                .write_all(&f.bytes)
+                                .await
+                                .map_err(InvocationError::Io)?;
+                            total_written += f.bytes.len() as u64;
+                            if done {
+                                break;
+                            }
+                            offset += chunk as i64;
+                        }
+                        tl::enums::upload::File::CdnRedirect(_) => break,
+                    }
+                }
+                Err(InvocationError::Rpc(ref rpc))
+                    if rpc.name == "FILE_MIGRATE" || rpc.name == "FILE_MIGRATE_X" =>
+                {
+                    let new_dc = rpc.value.unwrap_or(0) as i32;
+                    if new_dc == 0 || new_dc == worker_dc {
+                        return Err(InvocationError::Rpc(rpc.clone()));
+                    }
+                    worker_dc = new_dc;
+                    conn = self.open_worker_conn(worker_dc).await?;
+                }
+                Err(InvocationError::Rpc(ref rpc)) if rpc.name == "AUTH_KEY_UNREGISTERED" => {
+                    reopen_attempts += 1;
+                    if reopen_attempts > MAX_REOPEN {
+                        return Err(InvocationError::Rpc(rpc.clone()));
+                    }
+                    {
+                        let mut opts = self.inner.dc_options.lock().await;
+                        if let Some(e) = opts.get_mut(&worker_dc) {
+                            e.auth_key = None;
+                        }
+                    }
+                    conn = self.open_worker_conn(worker_dc).await?;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        writer.flush().await.map_err(InvocationError::Io)?;
+        Ok(total_written)
+    }
+
     /// Download a file using parallel sessions.
     ///
     /// `size` must be the exact byte size of the file.
     ///
     /// Returns the full file bytes in order.
-    pub async fn download_media_concurrent(
+    #[allow(dead_code)]
+    pub(crate) async fn download_media_concurrent(
         &self,
         location: tl::enums::InputFileLocation,
         size: usize,
@@ -1236,7 +1354,8 @@ impl Client {
     /// Like [`download_media_concurrent`] but routes `GetFile` to `dc_id`.
     ///
     /// Parallel download using per-worker connections. Worker count scales with file size.
-    pub async fn download_media_concurrent_on_dc(
+    #[allow(dead_code)]
+    pub(crate) async fn download_media_concurrent_on_dc(
         &self,
         location: tl::enums::InputFileLocation,
         size: usize,
@@ -1538,11 +1657,14 @@ impl Client {
         Ok(out)
     }
 
-    /// Download any [`Downloadable`] item.
+    /// Download any [`Downloadable`] item (internal).
     ///
-    /// Uses concurrent mode for files > 30 MB (`kUseBigFilesFrom`),
-    /// sequential for smaller files.
-    pub async fn download<D: Downloadable>(&self, item: &D) -> Result<Vec<u8>, InvocationError> {
+    /// Public API: use [`Client::download`] with `&MessageMedia`.
+    #[allow(dead_code)]
+    pub(crate) async fn download_item<D: Downloadable>(
+        &self,
+        item: &D,
+    ) -> Result<Vec<u8>, InvocationError> {
         let loc = item
             .to_input_location()
             .ok_or_else(|| InvocationError::Deserialize("item has no download location".into()))?;
@@ -1588,6 +1710,50 @@ impl crate::update::IncomingMessage {
             return Some((photo.to_input_location()?, photo.dc_id()));
         }
         None
+    }
+
+    /// Download this message's media to any [`AsyncWrite`] sink. Returns bytes written.
+    ///
+    /// Requires the message to have an attached client (i.e. it came from a handler).
+    ///
+    /// [`AsyncWrite`]: tokio::io::AsyncWrite
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::update::IncomingMessage;
+    /// # async fn ex(msg: IncomingMessage) {
+    /// let mut buf = Vec::new();
+    /// msg.download(&mut buf).await.unwrap();
+    /// # }
+    /// ```
+    pub async fn download(
+        &self,
+        dest: impl tokio::io::AsyncWrite + Unpin,
+    ) -> Result<u64, crate::InvocationError> {
+        let client = self.require_client("download")?.clone();
+        let media = match &self.raw {
+            tl::enums::Message::Message(m) => m.media.as_ref().ok_or_else(|| {
+                crate::InvocationError::Deserialize("message has no media".into())
+            })?,
+            _ => {
+                return Err(crate::InvocationError::Deserialize(
+                    "not a regular message".into(),
+                ));
+            }
+        };
+        client.download(media, dest).await
+    }
+
+    /// Download this message's media into memory and return the raw bytes.
+    ///
+    /// Convenience wrapper over [`download`] for small files. For large files
+    /// prefer [`download`] with a [`tokio::fs::File`] to avoid memory pressure.
+    ///
+    /// [`download`]: IncomingMessage::download
+    pub async fn bytes(&self) -> Result<Vec<u8>, crate::InvocationError> {
+        let mut buf = Vec::new();
+        self.download(&mut buf).await?;
+        Ok(buf)
     }
 }
 
@@ -1636,4 +1802,19 @@ fn make_input_file(
             md5_checksum,
         })
     }
+}
+
+/// Resolve a [`tl::enums::MessageMedia`] to its download location + DC.
+///
+/// Returns `None` if the media variant has no downloadable file.
+pub fn location_from_media(
+    media: &tl::enums::MessageMedia,
+) -> Option<(tl::enums::InputFileLocation, i32)> {
+    if let Some(doc) = Document::from_media(media) {
+        return Some((doc.to_input_location()?, doc.dc_id()));
+    }
+    if let Some(photo) = Photo::from_media(media) {
+        return Some((photo.to_input_location()?, photo.dc_id()));
+    }
+    None
 }

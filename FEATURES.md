@@ -91,17 +91,17 @@ Update gap recovery with PTS/QTS/channel PTS tracking. Missed updates fetched vi
 - `msg.delete()` / `msg.delete_with(client)`: delete the message
 - `msg.pin()` / `msg.pin_with(client)`: pin the message
 - `msg.unpin()` / `msg.unpin_with(client)`: unpin the message
-- `msg.mark_as_read()` / `msg.mark_as_read_with(client)`: mark as read
+- `msg.mark_read()` / `msg.mark_read_with(client)`: mark as read
 - `msg.refetch()` / `msg.refetch_with(client)`: reload message from server
 - `msg.get_reply()` / `msg.get_reply_with(client)`: fetch the message being replied to
 - Edit message: `edit_message(peer, id, InputMessage)`
 - Forward messages: `forward_messages(from_peer, ids, to_peer)`
 - Delete messages: `delete_messages(peer, ids)`
 - Pin message: `pin_message(peer, id)`
-- Unpin message: `unpin_message(peer, id)`
+- Unpin message: `pin_message(peer, id, false)`
 - Unpin all: `unpin_all_messages(peer)`
 - Get pinned message: `get_pinned_message(peer)`
-- Mark as read: `mark_as_read(peer)`
+- Mark as read: `mark_read(peer)`
 - Export message link: `export_message_link(peer, id)`
 - Get message read participants: `get_message_read_participants(peer, id)`
 - Click inline button: `msg.click_button(ButtonFilter)`: by position, label, or callback data
@@ -175,8 +175,7 @@ Every received message exposes:
 **Uploading**
 
 - `upload_file(path)`: sequential upload
-- `upload_file_concurrent(path, workers)`: parallel chunked upload
-- `upload_stream(reader, file_name, size)`: upload from `AsyncRead`
+- `upload(source, name)`: upload from any `AsyncRead`
 - `upload_media(peer, InputMedia)`: upload and get a reusable `InputMedia`
 - Automatic part size selection based on file size
 - Automatic worker count scaling based on file size
@@ -185,23 +184,19 @@ Every received message exposes:
 
 - `send_file(peer, InputMedia, caption)`: send any media type
 - `send_album(peer, Vec<InputMedia>)`: grouped media album
-- `msg.download_media(path)`: download directly from a message
+- `msg.download(dest)` / `msg.bytes()`: download from a message
 
 **Downloading**
 
-- `download_media(media, path)`: download to file
-- `download_media_concurrent(media, path)`: parallel chunked download
+- `client.download(media, dest)`: stream to any `AsyncWrite`
+- `client.download_file(media, path)`: stream to disk
 - CDN download for large files (transparent, no extra API calls needed)
 - Automatic DC redirect for cross-DC media
-
-**High-speed transfers (not yet published)**
-
-Fastest possible upload and download is already implemented. It involves workarounds that carry some risk, so it will be published under `ExperimentalFeatures` when/if it ships rather than being on by default.
 
 **InputMedia variants**
 
 - `InputMedia::upload_file(path)`: local file
-- `InputMedia::upload_stream(...)`: stream
+- `client.upload(source, name)`: upload from `AsyncRead`
 - `InputMedia::document(attributes)`: generic document with custom attributes
 - `InputMedia::photo(id, access_hash, ...)`: existing photo by ID
 - `InputMedia::geo(lat, long)`: location
@@ -236,7 +231,7 @@ let peer = client.resolve(raw_tl_peer).await?;
 let peer = client.resolve(input_peer).await?;
 
 // String-only shorthand
-let peer = client.resolve_peer("+12025551234").await?;
+let peer = client.resolve("+12025551234").await?;
 
 // Get InputPeer (access hash) from a bare Peer
 let input = client.resolve_to_input_peer(&peer).await?;
@@ -261,24 +256,24 @@ let chat   = msg.peer_id().bare_id();     // Option<i64>
 - `get_user_full(user)`: full user info
 - `get_common_chats(user)`: mutual groups with another user
 - `set_profile(first_name, last_name, about)`: edit own profile
-- `set_username(username)`: change own username
-- `set_profile_photo(media)`: set profile photo
+- `set_profile("me").username(username)`: change own username
+- `set_profile("me").photo(media)`: set profile photo
 - `delete_profile_photos(photo_ids)`: remove one or more profile photos
-- `set_online()` / `set_offline()`: set online presence
-- `set_emoji_status(status)`: set an emoji status
+- `set_presence(true)` / `set_presence(false)`: set online presence
+- `set_profile("me").emoji_status(doc_id, until).send()`: set emoji status
 - `create_group(title, users)`: create a basic group
 - `create_channel(title, about)`: create a supergroup or channel
-- `delete_channel(peer)`: delete a channel or supergroup
+- `delete_chat(peer)`: delete a channel or supergroup
 - `delete_chat(chat_id)`: delete a basic group (creator only)
-- `edit_chat_title(peer, title)`: rename a chat
-- `edit_chat_about(peer, about)`: update description
-- `edit_chat_photo(peer, media)`: update chat photo
+- `set_profile(peer).title(, title)`: rename a chat
+- `set_profile(peer).bio(, about)`: update description
+- `set_profile(peer).chat_photo(peer, media)`: update chat photo
 - `edit_chat_default_banned_rights(peer, rights)`: set group-wide default permissions
 - `migrate_chat(peer)`: upgrade a basic group to supergroup
 - `leave_chat(peer)`: leave a group or channel
 - `join_chat(peer)`: join a chat by username or invite
-- `accept_invite_link(link)`: join via invite link
-- `archive_chat(peer)` / `unarchive_chat(peer)`: archive control
+- `join_link(link)`: join via invite link
+- `archive(peer, true)` / `archive(peer, false)`: archive or unarchive a dialog
 - `delete_chat_history(peer, ...)`: delete own message history in a chat
 - `set_history_ttl(peer, seconds)`: set auto-delete timer
 - `toggle_no_forwards(peer, enabled)`: restrict forwarding in a chat
@@ -298,7 +293,7 @@ let chat   = msg.peer_id().bare_id();     // Option<i64>
 - `add_contact(user, first_name, last_name, phone)`: add a contact
 - `delete_contacts(users)`: remove contacts
 - `import_contacts(contacts)`: bulk import
-- `block_user(user)` / `unblock_user(user)`: block/unblock
+- `block(user, true/false)`: block or unblock
 - `get_blocked_users(...)`: paginated blocked list
 - `search_contacts(query)`: local contact search
 
@@ -312,12 +307,12 @@ let chat   = msg.peer_id().bare_id();     // Option<i64>
 - `get_chat_administrators(peer)`: list of current admins
 - `get_admins_with_invites(peer)`: admins who have active invite links
 - `invite_users(peer, users)`: add users to a group
-- `kick_participant(peer, user)`: remove a user from a group
-- `ban_participant(peer, user)`: ban a user; `ban_participant_until(peer, user, ts)` with expiry
-- `promote_participant(peer, user, AdminRights)`: grant admin rights
-- `demote_participant(peer, user)`: revoke admin rights
-- `set_admin_rights(peer, user, AdminRights)`: set admin permissions
-- `set_banned_rights(peer, user, BannedRights)`: set per-user restrictions (fields include `send_reactions` as of 0.4.0)
+- `kick(peer, user)`: remove a user from a group
+- `ban(peer, user, until)`: ban permanently (`None`) or until timestamp (`Some(ts)`)
+- `set_admin(peer, user, AdminRightsBuilder::full_admin())`: grant admin rights
+- `set_admin(peer, user, AdminRightsBuilder::new())`: revoke admin rights
+- `set_admin(peer, user, AdminRights)`: set admin permissions
+- `restrict(peer, user, BannedRights)`: set per-user restrictions (fields include `send_reactions` as of 0.4.0)
 - `get_permissions(peer, user)`: fetch a participant's current rights
 - `transfer_chat_ownership(peer, user, password)`: transfer group/channel ownership
 - `export_invite_link(peer)`: get or generate primary invite link
@@ -338,7 +333,7 @@ let chat   = msg.peer_id().bare_id();     // Option<i64>
 - `search(peer, query)`: returns a `SearchBuilder` for searching within a chat; supports filter, offset, limit
 - `search_global(query)`: returns a `GlobalSearchBuilder` for searching across all chats
 - `get_message_history(peer, ...)`: paginated message history
-- `get_messages_by_id(peer, ids)`: fetch specific messages by ID
+- `get_messages(peer, ids)`: fetch specific messages by ID
 - `get_replies(peer, msg_id, ...)`: fetch comments under a channel post
 - `iter_messages(peer)`: lazy iterator over message history
 
@@ -388,7 +383,7 @@ let chat   = msg.peer_id().bare_id();     // Option<i64>
 - `get_sticker_set(short_name)`: fetch a sticker set by short name
 - `get_all_stickers(hash)`: all installed sticker sets
 - `get_custom_emoji_documents(ids)`: fetch documents for custom emoji IDs
-- `install_sticker_set(set, archived)` / `uninstall_sticker_set(set)`: manage installed sets
+- `toggle_stickers(set, true)` / `toggle_stickers(set, false)`: install or uninstall a sticker set
 
 ---
 
@@ -396,9 +391,9 @@ let chat   = msg.peer_id().bare_id();     // Option<i64>
 
 - `send_poll(peer, PollBuilder)`: send a poll using the `PollBuilder` fluent builder
 - `send_vote(peer, msg_id, options)`: cast a vote
-- `get_poll_results(peer, msg_id)`: fetch vote counts and voters
+- `poll_results(peer, msg_id)`: fetch vote counts and voters
 - `get_poll_votes(peer, msg_id, option, ...)`: paginated voter list per option
-- `get_poll_stats(peer, msg_id)`: detailed vote graph stats (`stats.getPollStats`), returns `tl::types::stats::PollStats`
+- `poll_results(peer, msg_id)`: detailed vote graph stats (`stats.getPollStats`), returns `tl::types::stats::PollStats`
 
 ---
 
@@ -433,9 +428,9 @@ let chat   = msg.peer_id().bare_id();     // Option<i64>
 - `get_dialogs(limit)`: fetch dialog list
 - `iter_dialogs()`: lazy iterator over all dialogs
 - `get_pinned_dialogs(folder_id)`: pinned chats list
-- `pin_dialog(peer)` / `unpin_dialog(peer)`: pin/unpin in dialog list
+- `pin_dialog(peer, true)` / `pin_dialog(peer, false)`: pin/unpin in dialog list
 - `mark_dialog_unread(peer, unread)`: manual unread flag
-- `mark_dialog_read(peer)`: clear unread flag
+- `mark_read(peer)`: mark as read
 - `delete_dialog(peer)`: remove a dialog from the list
 
 ---
@@ -560,8 +555,8 @@ Keys: last seen, profile photo, phone number, bio, birthday, forwards, calls, vo
 
 ## Statistics
 
-- `get_broadcast_stats(peer)`: channel stats: followers, views, shares, message activity
-- `get_megagroup_stats(peer)`: supergroup stats: growth, languages, member activity
+- `stats(peer)`: channel stats: followers, views, shares, message activity
+- `stats(peer)`: supergroup stats: growth, languages, member activity
 
 ---
 

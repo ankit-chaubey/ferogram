@@ -9,14 +9,37 @@ the data comes from.
 
 | Method | Input | Best for |
 |---|---|---|
-| `upload_file` | `&[u8]` | Small files already in memory (under ~10 MB) |
-| `upload_file_concurrent` | `Arc<Vec<u8>>` | Large files already in memory (10 MB+), parallel chunks |
-| `upload_stream` | `impl AsyncRead` | Files on disk or any async reader |
+| `upload_file(path)` | path on disk | Any file - stat → chunked upload |
+| `upload(source, name)` | `impl AsyncRead` | In-memory bytes or any async reader |
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_file(name: &str, data: &[u8]) → Result&lt;UploadedFile, InvocationError&gt;</span>
+<span class="api-card-sig">client.upload_file(path: impl AsRef&lt;Path&gt;) → Result&lt;UploadedFile, InvocationError&gt;</span>
+
+Upload a file from disk. Stats the file for optimal part sizing, then uploads in chunks. Automatically uses parallel workers and `saveBigFilePart` for files over 10 MB.
+
+```rust
+let uploaded = client.upload_file("/tmp/photo.jpg").await?;
+client.send_media(peer, InputMessage::media(uploaded.as_photo_media())).await?;
+```
+
+---
+
+<span class="api-card-sig">client.upload(source: impl AsyncRead + Unpin + Send, name: &str) → Result&lt;UploadedFile, InvocationError&gt;</span>
+
+Upload from any `AsyncRead` source (in-memory `Cursor`, network stream, etc.). Buffers the stream to determine size, then uploads with optimal part sizing.
+
+```rust
+// from a Vec<u8>
+use std::io::Cursor;
+let uploaded = client.upload(Cursor::new(bytes), "photo.jpg").await?;
+
+// from a tokio File
+let f = tokio::fs::File::open("video.mp4").await?;
+let uploaded = client.upload(f, "video.mp4").await?;
+```
+
 </div>
 <div class="api-card-body">
 Upload a byte slice sequentially. Uses a single worker and sends chunks one at
@@ -24,111 +47,8 @@ a time. Suitable for files under ~10 MB or when parallelism is not needed.
 
 ```rust
 let bytes: Vec<u8> = std::fs::read("photo.jpg")?;
-let uploaded = client.upload_file("photo.jpg", &bytes).await?;
+let uploaded = client.upload_file("/tmp/photo.jpg").await?;
 ```
-</div>
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_file_concurrent(name: &str, data: Arc&lt;Vec&lt;u8&gt;&gt;, mime_type: &str) → Result&lt;UploadedFile, InvocationError&gt;</span>
-</div>
-<div class="api-card-body">
-Upload using a parallel worker pool. Takes <code>Arc&lt;Vec&lt;u8&gt;&gt;</code> for
-zero-copy sharing across worker tasks. Significantly faster for large files
-(video, large documents) because multiple chunks are in flight simultaneously.
-
-```rust
-use std::sync::Arc;
-
-let bytes = Arc::new(std::fs::read("video.mp4")?);
-let uploaded = client
-    .upload_file_concurrent("video.mp4", bytes, "video/mp4")
-    .await?;
-```
-</div>
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_stream&lt;R: AsyncRead + Unpin&gt;(reader: &amp;mut R, name: &str, mime_type: &str) → Result&lt;UploadedFile, InvocationError&gt;</span>
-</div>
-<div class="api-card-body">
-Upload from any type that implements <code>tokio::io::AsyncRead</code>. Reads
-the entire reader into memory, then automatically delegates to
-<code>upload_file_concurrent</code> for large data or <code>upload_file</code>
-for small data based on a built-in threshold.
-
-This is the most convenient method when working with files on disk, network
-streams, or in-memory cursors.
-
-### Parameters
-
-| Param | Type | Description |
-|---|---|---|
-| `reader` | `&mut impl AsyncRead + Unpin` | Any async reader: `tokio::fs::File`, `tokio::io::BufReader`, `std::io::Cursor`, etc. |
-| `name` | `&str` | Filename that Telegram stores and shows to recipients. |
-| `mime_type` | `&str` | MIME type. Pass `""` to auto-detect from the file extension in `name`. |
-
-### Examples
-
-```rust
-// Upload from a file on disk
-use tokio::fs::File;
-
-let mut f = File::open("document.pdf").await?;
-let uploaded = client
-    .upload_stream(&mut f, "document.pdf", "application/pdf")
-    .await?;
-```
-
-```rust
-// Auto-detect MIME type from the filename extension
-let mut f = File::open("photo.jpg").await?;
-let uploaded = client
-    .upload_stream(&mut f, "photo.jpg", "")   // "" -> auto-detects image/jpeg
-    .await?;
-```
-
-```rust
-// Upload from an in-memory buffer via std::io::Cursor
-use std::io::Cursor;
-use tokio::io::BufReader;
-
-let data: Vec<u8> = generate_pdf_bytes();
-let mut reader = BufReader::new(Cursor::new(data));
-let uploaded = client
-    .upload_stream(&mut reader, "report.pdf", "application/pdf")
-    .await?;
-```
-
-```rust
-// Upload a file produced by an async process (e.g. compression)
-use tokio::io::AsyncWriteExt;
-
-let (reader, mut writer) = tokio::io::duplex(64 * 1024);
-tokio::spawn(async move {
-    // write compressed data to writer ...
-    writer.shutdown().await.unwrap();
-});
-
-let mut r = reader;
-let uploaded = client
-    .upload_stream(&mut r, "archive.gz", "application/gzip")
-    .await?;
-```
-
-### Notes
-
-- `upload_stream` reads the entire reader to completion before uploading.
-  There is no true streaming upload to Telegram; the data must fit in memory.
-- For data already in memory as `Vec<u8>`, prefer `upload_file` or
-  `upload_file_concurrent` to avoid the extra `read_to_end` allocation.
-- The MIME type is used by Telegram clients to decide how to display the file
-  (inline image preview, audio player, generic document, etc.). Passing `""`
-  enables built-in MIME detection from the file extension.
 </div>
 </div>
 
@@ -213,120 +133,44 @@ client.send_album(peer.clone(), items).await?;
 
 ```rust
 // To bytes: sequential
-let bytes: Vec<u8> = client.download_media(&msg_media).await?;
-
-// To bytes: parallel chunks
-let bytes = client.download_media_concurrent(&msg_media).await?;
-
-// Stream to file
-client.download_file(&msg_media, "output.jpg").await?;
-
-// Via Downloadable trait (Photo, Document, Sticker)
-let bytes = client.download(&photo).await?;
-```
-
-### `DownloadIter`: streaming chunks
-
 ```rust
-let location = msg.raw.download_location().unwrap();
-let mut iter = client.iter_download(location);
-iter = iter.chunk_size(128 * 1024); // 128 KB chunks
+let mut buf = Vec::new();
+client.download(msg.media().unwrap(), &mut buf).await?;
 
-while let Some(chunk) = iter.next().await? {
-    file.write_all(&chunk).await?;
+client.download_file(msg.media().unwrap(), "/tmp/output.jpg").await?;
+
+let bytes = msg.bytes().await?;                        // → Vec<u8>
+
+let mut file = tokio::fs::File::create("out.mp4").await?;
+msg.download(&mut file).await?;                        // stream to file
+
+if let Some(mut iter) = client.iter_download(msg.media().unwrap()) {
+    while let Some(chunk) = iter.next().await? {
+        // chunk: bytes::Bytes - zero-copy slice
+        process(&chunk);
+    }
 }
 ```
 
-| Method | Description |
-|---|---|
-| `client.iter_download(location)` | Create a lazy chunk iterator |
-| `iter.chunk_size(bytes)` | Set download chunk size |
-| `iter.next()` | `async → Option<Vec<u8>>` |
-
----
-
-## `Photo` type
-
-```rust
-use ferogram::media::Photo;
-
-let photo = Photo::from_media(&msg.raw).unwrap();
-// or
-let photo = msg.photo().unwrap();
-
-photo.id()                // i64
-photo.access_hash()       // i64
-photo.date()              // i32: Unix timestamp
-photo.has_stickers()      // bool
-photo.largest_thumb_type() // &str: e.g. "y", "x", "s"
-
-let bytes = client.download(&photo).await?;
-```
-
-| Constructor | Description |
-|---|---|
-| `Photo::from_raw(tl::types::Photo)` | Wrap raw TL photo |
-| `Photo::from_media(&MessageMedia)` | Extract from message media |
-
----
-
-## `Document` type
-
-```rust
-use ferogram::media::Document;
-
-let doc = Document::from_media(&msg.raw).unwrap();
-// or
-let doc = msg.document().unwrap();
-
-doc.id()              // i64
-doc.access_hash()     // i64
-doc.date()            // i32
-doc.mime_type()       // &str
-doc.size()            // i64: bytes
-doc.file_name()       // Option<&str>
-doc.is_animated()     // bool: animated GIF or sticker
-
-let bytes = client.download(&doc).await?;
-```
-
-| Constructor | Description |
-|---|---|
-| `Document::from_raw(tl::types::Document)` | Wrap raw TL document |
-| `Document::from_media(&MessageMedia)` | Extract from message media |
-
----
-
-## `Sticker` type
-
-```rust
-use ferogram::media::Sticker;
-
-let sticker = Sticker::from_media(&msg.raw).unwrap();
-
-sticker.id()          // i64
-sticker.mime_type()   // &str: "image/webp" or "video/webm"
-sticker.emoji()       // Option<&str>: associated emoji
-sticker.is_video()    // bool: animated video sticker
-
-let bytes = client.download(&sticker).await?;
-```
-
-| Constructor | Description |
-|---|---|
-| `Sticker::from_document(Document)` | Wrap a document as a sticker |
-| `Sticker::from_media(&MessageMedia)` | Extract sticker from message |
-
----
+| Method | Dest | Returns |
+|--------|------|---------|
+| `client.download(media, dest)` | any `AsyncWrite` | `u64` bytes written |
+| `client.download_file(media, path)` | file on disk | `u64` bytes written |
+| `client.iter_download(media)` | caller-driven | `Option<DownloadIter>` |
+| `msg.download(dest)` | any `AsyncWrite` | `u64` bytes written |
+| `msg.bytes()` | in-memory `Vec<u8>` | `Vec<u8>` |
 
 ## `Downloadable` trait
+## `Downloadable` trait
 
-`Photo`, `Document`, and `Sticker` all implement `Downloadable`, so you can use `client.download(&item)` on any of them uniformly.
+`Photo`, `Document`, and `Sticker` all implement `Downloadable`, so you can use `client.download_item(&item)` (internal) on any of them uniformly.
+For the public API, pass `msg.media()` to `client.download`.
 
 ```rust
 use ferogram::media::Downloadable;
 
 async fn save_any<D: Downloadable>(client: &Client, item: &D) -> Vec<u8> {
+    // internal method - public API uses client.download(media, dest)
     client.download(item).await.unwrap()
 }
 ```
@@ -339,12 +183,10 @@ async fn save_any<D: Downloadable>(client: &Client, item: &D) -> Vec<u8> {
 // Get an InputFileLocation from the raw message
 use ferogram::media::download_location_from_media;
 
-if let Some(loc) = download_location_from_media(&msg.raw) {
-    let bytes = client.download_media(&loc).await?;
-}
+// use msg.bytes() or client.download(msg.media().unwrap(), &mut buf) instead
 
 // Or via IncomingMessage convenience:
-msg.download_media("output.jpg").await?;
+client.download_file(msg.media().unwrap(), "output.jpg").await?;
 ```
 
 ---

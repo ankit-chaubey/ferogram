@@ -56,37 +56,32 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    /// Block a user or peer so they can no longer send you messages.
-    pub async fn block_user(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+    /// Block or unblock a user or peer. `block: true` blocks, `block: false` unblocks.
+    pub async fn block(
+        &self,
+        peer: impl Into<PeerRef>,
+        block: bool,
+    ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let req = tl::functions::contacts::Block {
-            my_stories_from: false,
-            id: input_peer,
-        };
-        self.rpc_write(&req).await
+        if block {
+            let req = tl::functions::contacts::Block {
+                my_stories_from: false,
+                id: input_peer,
+            };
+            self.rpc_write(&req).await
+        } else {
+            let req = tl::functions::contacts::Unblock {
+                my_stories_from: false,
+                id: input_peer,
+            };
+            self.rpc_write(&req).await
+        }
     }
 
-    /// Unblock a previously blocked user or peer.
-    pub async fn unblock_user(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let req = tl::functions::contacts::Unblock {
-            my_stories_from: false,
-            id: input_peer,
-        };
-        self.rpc_write(&req).await
-    }
-
-    /// Appear online to other users.
-    pub async fn set_online(&self) -> Result<(), InvocationError> {
-        let req = tl::functions::account::UpdateStatus { offline: false };
-        self.rpc_write(&req).await
-    }
-
-    /// Appear offline immediately.
-    pub async fn set_offline(&self) -> Result<(), InvocationError> {
-        let req = tl::functions::account::UpdateStatus { offline: true };
+    /// Set presence status. `online: true` appears online, `online: false` appears offline.
+    pub async fn set_presence(&self, online: bool) -> Result<(), InvocationError> {
+        let req = tl::functions::account::UpdateStatus { offline: !online };
         self.rpc_write(&req).await
     }
 

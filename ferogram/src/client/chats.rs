@@ -20,40 +20,36 @@ use crate::{
 use ferogram_tl_types::{Cursor, Deserializable};
 
 impl Client {
-    /// Permanently delete a channel or supergroup.
+    /// Delete a chat or channel. Dispatches to `channels.deleteChannel` for channels/supergroups
+    /// and `messages.deleteChat` for legacy basic groups.
     ///
-    /// Only the creator can delete a channel. This action is irreversible.
-    pub async fn delete_channel(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
+    /// Only the creator can delete. This action is irreversible.
+    pub async fn delete_chat(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let channel = match &input_peer {
+        match &input_peer {
             tl::enums::InputPeer::Channel(c) => {
-                tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
-                    channel_id: c.channel_id,
-                    access_hash: c.access_hash,
-                })
+                let req = tl::functions::channels::DeleteChannel {
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id: c.channel_id,
+                        access_hash: c.access_hash,
+                    }),
+                };
+                self.rpc_write(&req).await
             }
-            _ => {
-                return Err(InvocationError::Deserialize(
-                    "delete_channel: peer must be a channel or supergroup".into(),
-                ));
+            tl::enums::InputPeer::Chat(c) => {
+                let req = tl::functions::messages::DeleteChat { chat_id: c.chat_id };
+                self.rpc_write(&req).await
             }
-        };
-        let req = tl::functions::channels::DeleteChannel { channel };
-        self.rpc_write(&req).await
-    }
-
-    /// Delete a legacy group chat (basic group).
-    ///
-    /// Only the creator can delete the chat. For channels use [`delete_channel`].
-    pub async fn delete_chat(&self, chat_id: i64) -> Result<(), InvocationError> {
-        let req = tl::functions::messages::DeleteChat { chat_id };
-        self.rpc_write(&req).await
+            _ => Err(InvocationError::Deserialize(
+                "delete_chat: peer must be a chat or channel".into(),
+            )),
+        }
     }
 
     /// Leave a channel or supergroup.
     ///
-    /// For basic groups, kick yourself with [`kick_participant`] or use
+    /// For basic groups, kick yourself or use
     /// [`delete_dialog`] to just hide it.
     pub async fn leave_chat(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;

@@ -87,7 +87,7 @@ client.send_vote(peer.clone(), 1234, vec![vec![0]]).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, poll_hash: i64) -> Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, poll_hash: i64) -> Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Request a fresh result snapshot from the server. The server responds with an `updateMessagePoll` in the update stream. `poll_hash` comes from `PollResults.results_hash` on the message.
@@ -139,13 +139,13 @@ if let Some(next) = page.next_offset {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_poll_stats(peer: impl Into&lt;PeerRef&gt;, msg_id: i32) -> Result&lt;tl::types::stats::PollStats, InvocationError&gt;</span>
+<span class="api-card-sig">client.poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32) -> Result&lt;tl::types::stats::PollStats, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Fetch detailed vote graph stats for a poll (`stats.getPollStats`). Returns a `PollStats` with a `votes_graph` field containing a `StatsGraph` you can render as a chart.
 
 ```rust
-let stats = client.get_poll_stats(peer.clone(), msg_id).await?;
+let stats = client.poll_results(peer.clone(), msg_id).await?;
 // stats.votes_graph: tl::enums::StatsGraph
 ```
 </div>

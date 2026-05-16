@@ -187,7 +187,7 @@ async fn route(
         ".time" => cmd_time(client, peer, msg_id).await,
         ".whois" => cmd_whois(client, peer.clone(), msg_id, sender, &peer).await,
         ".read" => {
-            let _ = client.mark_as_read(peer).await;
+            let _ = client.mark_read(peer).await;
         }
         ".del" => {
             let _ = client.delete_messages(&[msg_id], true).await;
@@ -196,7 +196,7 @@ async fn route(
             let _ = client.pin_message(peer, msg_id, true).await;
         }
         ".unpin" => {
-            let _ = client.unpin_message(peer, msg_id).await;
+            let _ = client.pin_message(peer, msg_id, false).await;
         }
         ".typing" => {
             let _ = client

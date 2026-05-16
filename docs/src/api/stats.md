@@ -9,7 +9,7 @@ ferogram exposes Telegram's channel and supergroup statistics endpoints.
 ## Broadcast channel statistics
 
 ```rust
-let stats = client.get_broadcast_stats("@mychannel", false).await?;
+let stats = client.stats("@mychannel").await?;
 // dark=true requests dark-themed graph images
 ```
 
@@ -35,7 +35,7 @@ println!("Shares/post: {} (prev {})", s.shares_per_post.current, s.shares_per_po
 ## Supergroup (megagroup) statistics
 
 ```rust
-let stats = client.get_megagroup_stats("@mysupergroup", false).await?;
+let stats = client.stats("@mysupergroup").await?;
 ```
 
 Returns `tl::enums::stats::MegagroupStats`. Key fields:
@@ -67,7 +67,7 @@ println!("{online} members are online right now");
 ## Poll statistics
 
 ```rust
-let stats = client.get_poll_stats(peer.clone(), msg_id).await?;
+let stats = client.poll_results(peer.clone(), msg_id).await?;
 ```
 
 Returns `tl::types::stats::PollStats`. Contains a `votes_graph` field with a `StatsGraph` showing vote distribution over time. Use `stats.loadAsyncGraph` if the graph carries an async token.

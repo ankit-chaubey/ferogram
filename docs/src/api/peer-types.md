@@ -22,7 +22,7 @@ client.send_message("+12025551234", "hi").await?;
 // t.me URL
 client.send_message("https://t.me/telegram", "hi").await?;
 
-// Invite link (must already be a member, otherwise call join_by_invite first)
+// Invite link (must already be a member, otherwise call join_link first)
 client.send_message("https://t.me/+AbCdEfGhIjKl", "hi").await?;
 
 // Positive i64: user ID
@@ -32,7 +32,7 @@ client.send_message(12345678_i64, "hi").await?;
 client.get_message_history(-1001234567890_i64, 50, 0).await?;
 
 // Small negative i64: basic group
-client.mark_as_read(-123456_i64).await?;
+client.mark_read(-123456_i64).await?;
 
 // Raw TL peer: zero cost, no network call
 use ferogram::tl;
@@ -83,7 +83,7 @@ let ip: tl::enums::InputPeer = get_it_from_somewhere();
 let peer = client.resolve(ip).await?;
 ```
 
-`client.resolve_peer(peer: &str)` is the string-only variant; use it when the input is always a `&str`. Use `resolve()` for everything else.
+`client.resolve(peer: &str)` is the string-only variant; use it when the input is always a `&str`. Use `resolve()` for everything else.
 
 To go from a `Peer` back to an `InputPeer` (with access hash):
 

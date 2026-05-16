@@ -24,14 +24,11 @@ ferogram-parsers   = { workspace = true }
 ferogram-derive    = { workspace = true, optional = true }
 ferogram-tl-parser = { workspace = true, optional = true }
 ferogram-tl-gen    = { workspace = true, optional = true }
-async-trait    = "0.1"
 tokio          = { version = "1",   features = ["net", "io-util", "sync", "time", "rt", "rt-multi-thread", "macros", "fs"] }
-tokio-util     = { version = "0.7", features = ["rt"] }
+tokio-util     = "0.7"
 parking_lot    = "0.12"
 dashmap        = "6"
-moka           = { version = "0.12", features = ["sync"] }
 getrandom      = "0.2"
-flate2         = "1"
 md5            = "0.7"
 num-bigint     = "0.4"
 num-traits     = "0.2"
@@ -40,12 +37,10 @@ hmac           = "0.12"
 pbkdf2         = "0.12"
 metrics        = "0.24"
 tracing        = { version = "0.1", features = ["log"] }
-serde          = { version = "1", features = ["derive"] }
+serde          = "1"
 mime_guess     = "2"
 base64         = "0.22"
 chrono         = { version = "0.4", features = ["clock"] }
-tokio-socks    = "0.5"
-socket2        = { version = "0.5", features = ["all"] }
 reqwest        = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde_json     = "1"
 

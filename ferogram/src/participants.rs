@@ -236,7 +236,7 @@ impl Client {
     ///
     /// For basic groups, this removes the user immediately.
     /// For channels and supergroups, it bans then unbans them (a Telegram kick).
-    pub async fn kick_participant(
+    pub async fn kick(
         &self,
         peer: impl Into<PeerRef>,
         user_id: i64,
@@ -346,32 +346,24 @@ impl Client {
             }
             _ => {
                 return Err(InvocationError::Deserialize(
-                    "kick_participant: peer must be a chat or channel".into(),
+                    "kick: peer must be a chat or channel".into(),
                 ));
             }
         }
         Ok(())
     }
 
-    /// Permanently ban a user from a channel or supergroup.
-    pub async fn ban_participant(
-        &self,
-        channel: impl Into<PeerRef>,
-        user_id: i64,
-    ) -> Result<(), InvocationError> {
-        self.ban_participant_raw(channel, user_id, 0).await
-    }
-
-    /// Ban a user from a channel or supergroup until `until_ts` (Unix timestamp).
+    /// Ban a user from a channel or supergroup.
     ///
-    /// Use [`ban_participant`] for a permanent ban.
-    pub async fn ban_participant_until(
+    /// `until: None` is a permanent ban; `until: Some(ts)` bans until the Unix timestamp.
+    pub async fn ban(
         &self,
         channel: impl Into<PeerRef>,
         user_id: i64,
-        until_ts: i32,
+        until: Option<i32>,
     ) -> Result<(), InvocationError> {
-        self.ban_participant_raw(channel, user_id, until_ts).await
+        self.ban_participant_raw(channel, user_id, until.unwrap_or(0))
+            .await
     }
 
     async fn ban_participant_raw(
@@ -451,24 +443,7 @@ impl Client {
         Ok(())
     }
 
-    /// Promote a user to admin in a channel or supergroup with default admin rights.
-    pub async fn promote_participant(
-        &self,
-        channel: impl Into<PeerRef>,
-        user_id: i64,
-    ) -> Result<(), InvocationError> {
-        self.set_participant_admin(channel, user_id, true).await
-    }
-
-    /// Remove admin rights from a user in a channel or supergroup.
-    pub async fn demote_participant(
-        &self,
-        channel: impl Into<PeerRef>,
-        user_id: i64,
-    ) -> Result<(), InvocationError> {
-        self.set_participant_admin(channel, user_id, false).await
-    }
-
+    #[allow(dead_code)]
     async fn set_participant_admin(
         &self,
         channel: impl Into<PeerRef>,
@@ -742,7 +717,7 @@ impl PeerUserIdExt for tl::enums::Peer {
 ///
 /// ```rust,no_run
 /// # async fn f(client: ferogram::Client, channel: ferogram_tl_types::enums::Peer) -> Result<(), Box<dyn std::error::Error>> {
-/// client.set_banned_rights(channel, 12345678, |b| b
+/// client.edit_chat_default_banned_rights(channel, |b| b
 /// .send_messages(true)
 /// .send_media(true)
 /// .until_date(0))
@@ -1031,7 +1006,7 @@ impl Client {
     /// Apply granular ban rights to a user in a channel or supergroup.
     ///
     /// Use [`BannedRightsBuilder`] to specify which rights to restrict.
-    pub async fn set_banned_rights(
+    pub async fn restrict(
         &self,
         channel: impl Into<PeerRef>,
         user_id: i64,
@@ -1054,7 +1029,7 @@ impl Client {
             }
             _ => {
                 return Err(InvocationError::Deserialize(
-                    "set_banned_rights: must be a channel".into(),
+                    "restrict: must be a channel".into(),
                 ));
             }
         };
@@ -1082,12 +1057,10 @@ impl Client {
         Ok(())
     }
 
-    // set_admin_rights
-
     /// Apply granular admin rights to a user in a channel or supergroup.
     ///
     /// Use [`AdminRightsBuilder`] to specify which rights to grant.
-    pub async fn set_admin_rights(
+    pub async fn set_admin(
         &self,
         channel: impl Into<PeerRef>,
         user_id: i64,
@@ -1112,7 +1085,7 @@ impl Client {
             }
             _ => {
                 return Err(InvocationError::Deserialize(
-                    "set_admin_rights: must be a channel".into(),
+                    "set_admin: must be a channel".into(),
                 ));
             }
         };
