@@ -16,7 +16,7 @@ categories    = ["api-bindings", "network-programming", "asynchronous"]
 ferogram-fsm       = { workspace = true }
 ferogram-connect   = { workspace = true }
 ferogram-mtsender  = { workspace = true }
-ferogram-tl-types  = { workspace = true, features = ["tl-api", "tl-mtproto"] }
+ferogram-tl-types  = { workspace = true, features = ["tl-api", "tl-mtproto", "deserializable-functions"] }
 ferogram-mtproto   = { workspace = true }
 ferogram-crypto    = { workspace = true }
 ferogram-session   = { workspace = true }

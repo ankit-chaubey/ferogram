@@ -13,6 +13,7 @@
 // so that the MessageBoxes state-machine has one uniform input type.
 
 use ferogram_tl_types as tl;
+use ferogram_tl_types::Deserializable;
 
 use super::defs::{Gap, Key, NO_PTS, NO_SEQ, PtsInfo, UpdatesLike};
 
@@ -235,6 +236,142 @@ pub(super) fn adapt(updates: UpdatesLike) -> Result<tl::types::UpdatesCombined, 
             affected,
             channel_id,
         } => Ok(affected_channel_messages_to_combined(affected, channel_id)),
+        UpdatesLike::SentMessage {
+            pts,
+            pts_count,
+            request_body,
+            update,
+        } => {
+            if let Some(body) = request_body {
+                if let Ok(req) = tl::functions::messages::SendMessage::from_bytes(&body) {
+                    fn peer_from_input(p: &tl::enums::InputPeer) -> tl::enums::Peer {
+                        match p {
+                            tl::enums::InputPeer::Empty => {
+                                tl::enums::Peer::User(tl::types::PeerUser { user_id: 0 })
+                            }
+                            tl::enums::InputPeer::PeerSelf => {
+                                tl::enums::Peer::User(tl::types::PeerUser { user_id: 0 })
+                            }
+                            tl::enums::InputPeer::User(u) => {
+                                tl::enums::Peer::User(tl::types::PeerUser { user_id: u.user_id })
+                            }
+                            tl::enums::InputPeer::Chat(c) => {
+                                tl::enums::Peer::Chat(tl::types::PeerChat { chat_id: c.chat_id })
+                            }
+                            tl::enums::InputPeer::Channel(c) => {
+                                tl::enums::Peer::Channel(tl::types::PeerChannel {
+                                    channel_id: c.channel_id,
+                                })
+                            }
+                            tl::enums::InputPeer::UserFromMessage(u) => {
+                                tl::enums::Peer::User(tl::types::PeerUser { user_id: u.user_id })
+                            }
+                            tl::enums::InputPeer::ChannelFromMessage(c) => {
+                                tl::enums::Peer::Channel(tl::types::PeerChannel {
+                                    channel_id: c.channel_id,
+                                })
+                            }
+                        }
+                    }
+                    let reply_to = req.reply_to.and_then(|r| match r {
+                        tl::enums::InputReplyTo::Message(i) => {
+                            Some(tl::enums::MessageReplyHeader::MessageReplyHeader(
+                                tl::types::MessageReplyHeader {
+                                    reply_to_scheduled: false,
+                                    forum_topic: false,
+                                    quote: i.quote_offset.is_some(),
+                                    reply_to_msg_id: Some(i.reply_to_msg_id),
+                                    reply_to_peer_id: i
+                                        .reply_to_peer_id
+                                        .as_ref()
+                                        .map(peer_from_input),
+                                    reply_from: None,
+                                    reply_media: None,
+                                    reply_to_top_id: i.top_msg_id,
+                                    quote_text: i.quote_text,
+                                    quote_entities: i.quote_entities,
+                                    quote_offset: i.quote_offset,
+                                    todo_item_id: None,
+                                    poll_option: None,
+                                },
+                            ))
+                        }
+                        tl::enums::InputReplyTo::Story(i) => {
+                            Some(tl::enums::MessageReplyHeader::MessageReplyStoryHeader(
+                                tl::types::MessageReplyStoryHeader {
+                                    peer: peer_from_input(&i.peer),
+                                    story_id: i.story_id,
+                                },
+                            ))
+                        }
+                        tl::enums::InputReplyTo::MonoForum(_) => None,
+                    });
+                    let msg = tl::types::Message {
+                        out: update.out,
+                        mentioned: false,
+                        media_unread: false,
+                        silent: req.silent,
+                        post: false,
+                        from_scheduled: false,
+                        legacy: false,
+                        edit_hide: false,
+                        pinned: false,
+                        noforwards: req.noforwards,
+                        invert_media: req.invert_media,
+                        offline: false,
+                        video_processing_pending: false,
+                        paid_suggested_post_stars: false,
+                        paid_suggested_post_ton: false,
+                        id: update.id,
+                        from_id: req.send_as.as_ref().map(peer_from_input),
+                        from_boosts_applied: None,
+                        from_rank: None,
+                        peer_id: peer_from_input(&req.peer),
+                        saved_peer_id: None,
+                        fwd_from: None,
+                        via_bot_id: None,
+                        via_business_bot_id: None,
+                        guestchat_via_from: None,
+                        reply_to,
+                        date: update.date,
+                        message: req.message,
+                        media: update.media,
+                        reply_markup: req.reply_markup,
+                        entities: update.entities.or(req.entities),
+                        views: None,
+                        forwards: None,
+                        replies: None,
+                        edit_date: None,
+                        post_author: None,
+                        grouped_id: None,
+                        reactions: None,
+                        restriction_reason: None,
+                        ttl_period: update.ttl_period,
+                        quick_reply_shortcut_id: None,
+                        effect: req.effect,
+                        factcheck: None,
+                        report_delivery_until_date: None,
+                        paid_message_stars: None,
+                        suggested_post: None,
+                        schedule_repeat_period: None,
+                        summary_from_language: None,
+                    };
+                    return Ok(wrap_short(tl::types::UpdateShort {
+                        update: tl::types::UpdateNewMessage {
+                            message: msg.into(),
+                            pts,
+                            pts_count,
+                        }
+                        .into(),
+                        date: update.date,
+                    }));
+                }
+            }
+            // no body or not a SendMessage; advance pts silently.
+            Ok(affected_messages_to_combined(
+                tl::types::messages::AffectedMessages { pts, pts_count },
+            ))
+        }
     }
 }
 

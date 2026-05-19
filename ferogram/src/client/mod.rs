@@ -1687,7 +1687,19 @@ impl Client {
                             }
                         }
 
-                        if ring.len() < capacity {
+                        // Deliver directly when ring is empty; buffering here causes one-update lag.
+                        if ring.is_empty() {
+                            match caller_tx.try_send(upd) {
+                                Ok(()) => {}
+                                Err(tokio::sync::mpsc::error::TrySendError::Full(returned)) => {
+                                    ring.push_back(returned);
+                                }
+                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                    return;
+                                }
+                            }
+                        } else if ring.len() < capacity {
+                            // Ring still has backlog; preserve ordering.
                             ring.push_back(upd);
                         } else {
                             // Ring is full: evict the stalest Ephemeral slot first,
@@ -2229,6 +2241,14 @@ impl Client {
                 self.inner.writer.lock().await.pending_ack.push(msg_id);
                 let result = unwrap_envelope(inner);
                 if let Some(tx) = self.inner.pending.lock().await.remove(&req_msg_id) {
+                    let sent_body = self
+                        .inner
+                        .writer
+                        .lock()
+                        .await
+                        .sent_bodies
+                        .get(&req_msg_id)
+                        .cloned();
                     // request resolved: remove from sent_bodies and container_map
                     self.inner
                         .writer
@@ -2260,18 +2280,18 @@ impl Client {
                             });
                             Ok(caller_body)
                         }
-                        Ok(EnvelopeResult::Pts(_pts, _pts_count)) => {
-                            // updateShortSentMessage as RPC response: signal message_box
-                            // that state may have advanced and let getDifference reconcile.
+                        Ok(EnvelopeResult::SentMessage(update)) => {
                             let c = self.clone();
+                            let pts = update.pts;
+                            let pts_count = update.pts_count;
                             tokio::spawn(async move {
-                                {
-                                    let mut mb = c.inner.message_box.lock().await;
-                                    let _ = mb.process_updates(
-                                        message_box::UpdatesLike::ConnectionClosed,
-                                    );
-                                }
-                                c.run_pending_differences().await;
+                                let mut mb = c.inner.message_box.lock().await;
+                                let _ = mb.process_updates(message_box::UpdatesLike::SentMessage {
+                                    pts,
+                                    pts_count,
+                                    request_body: sent_body,
+                                    update,
+                                });
                             });
                             Ok(vec![])
                         }

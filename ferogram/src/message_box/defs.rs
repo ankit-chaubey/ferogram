@@ -192,6 +192,14 @@ pub enum UpdatesLike {
         affected: tl::types::messages::AffectedMessages,
         channel_id: i64,
     },
+    /// updateShortSentMessage confirmed; request_body used to reconstruct the outgoing message.
+    /// If body is None or not a SendMessage, advances pts silently.
+    SentMessage {
+        pts: i32,
+        pts_count: i32,
+        request_body: Option<Vec<u8>>,
+        update: tl::types::UpdateShortSentMessage,
+    },
 }
 
 // Public update state types (for persisting)
