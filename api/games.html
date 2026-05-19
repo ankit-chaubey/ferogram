@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -238,7 +238,7 @@ can resolve it from the username once and cache it:</p>
 </span><span class="boring">fn main() {
 </span>use ferogram::PeerRef;
 
-let bot = client.resolve_peer("MyBotUsername").await?;
+let bot = client.resolve("MyBotUsername").await?;
 let bot_user_id: i64 = match bot {
     PeerRef::UserId(id) =&gt; id,
     other =&gt; panic!("expected a user, got {:?}", other),
@@ -265,7 +265,7 @@ characters are not permitted.</li>
 <code>/start param</code> twice triggers two separate updates on the bot side.</li>
 <li>For bots with <code>allow_zero_hash</code> disabled (the default), the bot’s
 <code>access_hash</code> must already be in the peer cache. Call
-<code>client.resolve_peer()</code> at least once before <code>start_bot</code> to populate
+<code>client.resolve()</code> at least once before <code>start_bot</code> to populate
 the cache, or enable
 <a href="../advanced/experimental-features.html"><code>ExperimentalFeatures::allow_zero_hash</code></a>.</li>
 </ul>

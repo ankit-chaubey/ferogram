@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -268,7 +268,7 @@ client.send_vote(peer.clone(), 1234, vec![vec![0]]).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, poll_hash: i64) -&gt; Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, poll_hash: i64) -&gt; Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -328,14 +328,14 @@ if let Some(next) = page.next_offset {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_poll_stats(peer: impl Into&lt;PeerRef&gt;, msg_id: i32) -&gt; Result&lt;tl::types::stats::PollStats, InvocationError&gt;</span>
+<span class="api-card-sig">client.poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32) -&gt; Result&lt;tl::types::stats::PollStats, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
 Fetch detailed vote graph stats for a poll (`stats.getPollStats`). Returns a `PollStats` with a `votes_graph` field containing a `StatsGraph` you can render as a chart.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let stats = client.get_poll_stats(peer.clone(), msg_id).await?;
+</span>let stats = client.poll_results(peer.clone(), msg_id).await?;
 // stats.votes_graph: tl::enums::StatsGraph
 <span class="boring">}</span></code></pre>
 </div>

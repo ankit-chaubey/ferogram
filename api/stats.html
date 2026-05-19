@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -190,7 +190,7 @@
 <h2 id="broadcast-channel-statistics"><a class="header" href="#broadcast-channel-statistics">Broadcast channel statistics</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let stats = client.get_broadcast_stats("@mychannel", false).await?;
+</span>let stats = client.stats("@mychannel").await?;
 // dark=true requests dark-themed graph images
 <span class="boring">}</span></code></pre>
 <p>Returns <code>tl::enums::stats::BroadcastStats</code>. Key fields:</p>
@@ -212,7 +212,7 @@ println!("Shares/post: {} (prev {})", s.shares_per_post.current, s.shares_per_po
 <h2 id="supergroup-megagroup-statistics"><a class="header" href="#supergroup-megagroup-statistics">Supergroup (megagroup) statistics</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let stats = client.get_megagroup_stats("@mysupergroup", false).await?;
+</span>let stats = client.stats("@mysupergroup").await?;
 <span class="boring">}</span></code></pre>
 <p>Returns <code>tl::enums::stats::MegagroupStats</code>. Key fields:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -237,7 +237,7 @@ println!("{online} members are online right now");
 <h2 id="poll-statistics"><a class="header" href="#poll-statistics">Poll statistics</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let stats = client.get_poll_stats(peer.clone(), msg_id).await?;
+</span>let stats = client.poll_results(peer.clone(), msg_id).await?;
 <span class="boring">}</span></code></pre>
 <p>Returns <code>tl::types::stats::PollStats</code>. Contains a <code>votes_graph</code> field with a <code>StatsGraph</code> showing vote distribution over time. Use <code>stats.loadAsyncGraph</code> if the graph carries an async token.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]

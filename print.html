@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6eda89bf.js"></script>
@@ -225,7 +225,7 @@
 </code></pre>
 <h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.4.0"
+ferogram = "0.5.0"
 tokio    = { version = "1", features = ["full"] }
 </code></pre>
 <p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
@@ -253,6 +253,88 @@ tokio    = { version = "1", features = ["full"] }
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
+<hr>
+<h2 id="v050"><a class="header" href="#v050">v0.5.0</a></h2>
+<p>Released 2026-05-16. API consolidation release. Paired functions that differed only by a single boolean condition have been merged into one. Download and upload paths were redesigned around <code>AsyncRead</code>/<code>AsyncWrite</code>. No new protocol or behavioural changes.</p>
+<h3 id="breaking-changes"><a class="header" href="#breaking-changes">Breaking changes</a></h3>
+<p><strong>Merged paired functions into one</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Removed</th><th>Replacement</th></tr>
+</thead>
+<tbody>
+<tr><td><code>set_online()</code> / <code>set_offline()</code></td><td><code>set_presence(online: bool)</code></td></tr>
+<tr><td><code>block_user(peer)</code> / <code>unblock_user(peer)</code></td><td><code>block(peer, true/false)</code></td></tr>
+<tr><td><code>pin_dialog(peer)</code> / <code>unpin_dialog(peer)</code></td><td><code>pin_dialog(peer, true/false)</code></td></tr>
+<tr><td><code>archive_chat(peer)</code> / <code>unarchive_chat(peer)</code></td><td><code>archive(peer, true/false)</code></td></tr>
+<tr><td><code>pin_message(peer, id, silent)</code> / <code>unpin_message(peer, id)</code></td><td><code>pin_message(peer, id, true/false)</code></td></tr>
+<tr><td><code>delete_channel(peer)</code> / <code>delete_chat(id)</code></td><td><code>delete_chat(peer)</code> (dispatches by peer type)</td></tr>
+<tr><td><code>install_sticker_set(set, archived)</code> / <code>uninstall_sticker_set(set)</code></td><td><code>toggle_stickers(set, true/false)</code></td></tr>
+<tr><td><code>get_broadcast_stats(peer)</code> / <code>get_megagroup_stats(peer)</code></td><td><code>stats(peer) -&gt; ChannelStats</code></td></tr>
+<tr><td><code>get_poll_stats(peer, id)</code> / <code>get_poll_results(peer, id)</code></td><td><code>poll_results(peer, id)</code></td></tr>
+<tr><td><code>promote_participant</code> / <code>demote_participant</code></td><td><code>set_admin(peer, user, rights)</code></td></tr>
+<tr><td><code>ban_participant(peer, user)</code> / <code>ban_participant_until(peer, user, ts)</code></td><td><code>ban(peer, user, until: Option&lt;i32&gt;)</code></td></tr>
+<tr><td><code>kick_participant(peer, user)</code></td><td><code>kick(peer, user)</code></td></tr>
+<tr><td><code>set_banned_rights(peer, user, rights)</code></td><td><code>restrict(peer, user, rights)</code></td></tr>
+<tr><td><code>set_admin_rights(peer, user, rights)</code></td><td><code>set_admin(peer, user, rights)</code></td></tr>
+<tr><td><code>set_profile(first, last, about)</code> / <code>set_username(u)</code> / <code>set_emoji_status(id, until)</code> / <code>edit_chat_title</code> / <code>edit_chat_about</code> / <code>edit_chat_photo</code></td><td><code>set_profile(peer) -&gt; SetProfileBuilder</code></td></tr>
+<tr><td><code>get_message_by_id(peer, id)</code> / <code>get_messages_by_id(peer, ids)</code></td><td><code>get_messages(peer, ids)</code></td></tr>
+<tr><td><code>mark_as_read(peer)</code> / <code>mark_dialog_read(peer)</code></td><td><code>mark_read(peer)</code></td></tr>
+<tr><td><code>resolve_peer(str)</code></td><td><code>resolve(str)</code> (or pass peer string directly via <code>PeerRef</code>)</td></tr>
+<tr><td><code>accept_invite_link(link)</code></td><td><code>join_link(link)</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Download and upload API redesigned</strong></p>
+<p>Old API passed raw <code>InputFileLocation</code> handles. New API works directly with <code>&amp;MessageMedia</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// download to any AsyncWrite sink
+client.download(msg.media().unwrap(), &amp;mut file).await?;
+
+// download to disk
+client.download_file(msg.media().unwrap(), "photo.jpg").await?;
+
+// lazy chunk iterator
+let mut iter = client.iter_download(msg.media().unwrap()).unwrap();
+while let Some(chunk) = iter.next().await? { ... }
+
+// upload from any AsyncRead
+let uploaded = client.upload(reader, "file.jpg").await?;
+
+// upload from path (stats file, streams to upload)
+let uploaded = client.upload_file_from_path("photo.jpg").await?;
+<span class="boring">}</span></code></pre>
+<p><code>IncomingMessage</code> also gains two convenience methods:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>msg.download(&amp;mut buf).await?;   // stream to AsyncWrite
+let bytes = msg.bytes().await?;  // into Vec&lt;u8&gt;
+<span class="boring">}</span></code></pre>
+<p><strong><code>set_profile</code> is now a builder</strong></p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// user
+client.set_profile("me").name("Alice", "").bio("Hello!").send().await?;
+
+// channel / group
+client.set_profile("@mychannel").title("New Name").bio("About text").send().await?;
+<span class="boring">}</span></code></pre>
+<p><strong><code>stats</code> returns <code>ChannelStats</code></strong></p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>match client.stats("@mychannel").await? {
+    ChannelStats::Broadcast(s) =&gt; { /* channel */ }
+    ChannelStats::Megagroup(s) =&gt; { /* supergroup */ }
+}
+<span class="boring">}</span></code></pre>
+<p><strong>Upload part-size table revised</strong></p>
+<p>Five tiers keyed on file size (&lt; 1 MB, 1-32 MB, 32-512 MB, 512 MB-1 GB, &gt; 1 GB) replace the old two-tier heuristic. This reduces per-chunk overhead for small files and stays safely below the 4000-part hard limit for large ones.</p>
+<h3 id="upgrading-from-041"><a class="header" href="#upgrading-from-041">Upgrading from 0.4.1</a></h3>
+<pre><code class="language-toml">ferogram = "0.5.0"
+</code></pre>
+<p>Rename call sites per the table above. The session format, feature flags, and all other APIs are unchanged.</p>
 <hr>
 <h2 id="v041"><a class="header" href="#v041">v0.4.1</a></h2>
 <p>Released 2026-05-14. Patch on top of 0.4.0: one new API for faster onboarding, a configurable update buffer, session schema improvements, and 15 new examples. No breaking changes.</p>
@@ -430,7 +512,7 @@ let chat   = msg.peer_id().bare_id();   // Option&lt;i64&gt;
     })
     .connect().await?;
 <span class="boring">}</span></code></pre>
-<h3 id="breaking-changes"><a class="header" href="#breaking-changes">Breaking changes</a></h3>
+<h3 id="breaking-changes-1"><a class="header" href="#breaking-changes-1">Breaking changes</a></h3>
 <p><strong><code>download_media_to_file</code> is now <code>download_file</code>:</strong></p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -637,7 +719,7 @@ See <a href="#peer-cache-helpers">Raw API Access</a> for usage details.</p>
 <h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
 <h2 id="add-to-cargotoml"><a class="header" href="#add-to-cargotoml">Add to Cargo.toml</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.3.6"
+ferogram = "0.5.0"
 tokio        = { version = "1", features = ["full"] }
 </code></pre>
 <p><code>ferogram</code> re-exports everything you need for both user clients and bots.</p>
@@ -678,11 +760,11 @@ let api_hash = "deadbeef..."; // ← never do this in a public repo
 <hr>
 <h2 id="optional-features"><a class="header" href="#optional-features">Optional features</a></h2>
 <h3 id="sqlite-session-storage"><a class="header" href="#sqlite-session-storage">SQLite session storage</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.3.6", features = ["sqlite-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.5.0", features = ["sqlite-session"] }
 </code></pre>
 <p>Stores session data in a SQLite database instead of a binary file. Better choice for long-running servers where crash-corruption of the binary file is a concern.</p>
 <h3 id="libsql--turso-session-storage-new-in-v020"><a class="header" href="#libsql--turso-session-storage-new-in-v020">LibSQL / Turso session storage: New in v0.2.0</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.3.6", features = ["libsql-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.5.0", features = ["libsql-session"] }
 </code></pre>
 <p>Backed by <a href="https://github.com/tursodatabase/libsql">libsql</a>: supports local embedded databases and remote Turso cloud databases. Ideal for serverless or distributed deployments.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -716,10 +798,10 @@ let (client, _shutdown) = Client::builder()
 <p>See <a href="#session-backends-1">Session Backends</a> for the full guide.</p>
 <h3 id="html-entity-parsing"><a class="header" href="#html-entity-parsing">HTML entity parsing</a></h3>
 <pre><code class="language-toml"># Built-in hand-rolled HTML parser (no extra deps)
-ferogram = { version = "0.3.6", features = ["html"] }
+ferogram = { version = "0.5.0", features = ["html"] }
 
 # OR: spec-compliant html5ever tokenizer (overrides built-in)
-ferogram = { version = "0.3.6", features = ["html5ever"] }
+ferogram = { version = "0.5.0", features = ["html5ever"] }
 </code></pre>
 <div class="table-wrapper">
 <table>
@@ -734,7 +816,7 @@ ferogram = { version = "0.3.6", features = ["html5ever"] }
 </div>
 <h3 id="raw-type-system-features-ferogram-tl-types"><a class="header" href="#raw-type-system-features-ferogram-tl-types">Raw type system features (<code>ferogram-tl-types</code>)</a></h3>
 <p>If you use <code>ferogram-tl-types</code> directly for raw API access:</p>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.3.6", features = [
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.5.0", features = [
     "tl-api",          # Telegram API types (required)
     "tl-mtproto",      # Low-level MTProto types
     "impl-debug",      # Debug trait on all types (default ON)
@@ -1664,7 +1746,7 @@ msg.pin().await?;
 msg.unpin().await?;
 
 // Mark as read
-msg.mark_as_read().await?;
+msg.mark_read().await?;
 
 // Reload from server
 msg.refetch().await?;
@@ -1725,14 +1807,14 @@ client.delete_messages(&amp;[msg_id_1, msg_id_2], true).await?;
 
 // Pin / unpin
 client.pin_message("@peer", msg_id).await?;
-client.unpin_message("@peer", msg_id).await?;
+client.pin_message("@peer", msg_id, false).await?;
 client.unpin_all_messages("@peer").await?;
 
 // Get pinned message
 let pinned = client.get_pinned_message("@peer").await?;
 
 // Mark as read
-client.mark_as_read("@peer").await?;
+client.mark_read("@peer").await?;
 
 // Export a permanent message link
 let link = client.export_message_link("@peer", msg_id).await?;
@@ -2180,16 +2262,34 @@ the data comes from.</p>
 <tr><th>Method</th><th>Input</th><th>Best for</th></tr>
 </thead>
 <tbody>
-<tr><td><code>upload_file</code></td><td><code>&amp;[u8]</code></td><td>Small files already in memory (under ~10 MB)</td></tr>
-<tr><td><code>upload_file_concurrent</code></td><td><code>Arc&lt;Vec&lt;u8&gt;&gt;</code></td><td>Large files already in memory (10 MB+), parallel chunks</td></tr>
-<tr><td><code>upload_stream</code></td><td><code>impl AsyncRead</code></td><td>Files on disk or any async reader</td></tr>
+<tr><td><code>upload_file(path)</code></td><td>path on disk</td><td>Any file - stat → chunked upload</td></tr>
+<tr><td><code>upload(source, name)</code></td><td><code>impl AsyncRead</code></td><td>In-memory bytes or any async reader</td></tr>
 </tbody>
 </table>
 </div>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_file(name: &amp;str, data: &amp;[u8]) → Result&lt;UploadedFile, InvocationError&gt;</span>
+<span class="api-card-sig">client.upload_file(path: impl AsRef&lt;Path&gt;) → Result&lt;UploadedFile, InvocationError&gt;</span>
+<p>Upload a file from disk. Stats the file for optimal part sizing, then uploads in chunks. Automatically uses parallel workers and <code>saveBigFilePart</code> for files over 10 MB.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let uploaded = client.upload_file("/tmp/photo.jpg").await?;
+client.send_media(peer, InputMessage::media(uploaded.as_photo_media())).await?;
+<span class="boring">}</span></code></pre>
+<hr>
+<p><span class="api-card-sig">client.upload(source: impl AsyncRead + Unpin + Send, name: &amp;str) → Result&lt;UploadedFile, InvocationError&gt;</span></p>
+<p>Upload from any <code>AsyncRead</code> source (in-memory <code>Cursor</code>, network stream, etc.). Buffers the stream to determine size, then uploads with optimal part sizing.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// from a Vec&lt;u8&gt;
+use std::io::Cursor;
+let uploaded = client.upload(Cursor::new(bytes), "photo.jpg").await?;
+
+// from a tokio File
+let f = tokio::fs::File::open("video.mp4").await?;
+let uploaded = client.upload(f, "video.mp4").await?;
+<span class="boring">}</span></code></pre>
 </div>
 
 <div class="api-card-body">
@@ -2198,118 +2298,8 @@ a time. Suitable for files under ~10 MB or when parallelism is not needed.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let bytes: Vec&lt;u8&gt; = std::fs::read("photo.jpg")?;
-let uploaded = client.upload_file("photo.jpg", &amp;bytes).await?;
+let uploaded = client.upload_file("/tmp/photo.jpg").await?;
 <span class="boring">}</span></code></pre>
-</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_file_concurrent(name: &amp;str, data: Arc&lt;Vec&lt;u8&gt;&gt;, mime_type: &amp;str) → Result&lt;UploadedFile, InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">
-Upload using a parallel worker pool. Takes <code>Arc&lt;Vec&lt;u8&gt;&gt;</code> for
-zero-copy sharing across worker tasks. Significantly faster for large files
-(video, large documents) because multiple chunks are in flight simultaneously.
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use std::sync::Arc;
-
-let bytes = Arc::new(std::fs::read("video.mp4")?);
-let uploaded = client
-    .upload_file_concurrent("video.mp4", bytes, "video/mp4")
-    .await?;
-<span class="boring">}</span></code></pre>
-</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_stream&lt;R: AsyncRead + Unpin&gt;(reader: &amp;mut R, name: &amp;str, mime_type: &amp;str) → Result&lt;UploadedFile, InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">
-Upload from any type that implements <code>tokio::io::AsyncRead</code>. Reads
-the entire reader into memory, then automatically delegates to
-<code>upload_file_concurrent</code> for large data or <code>upload_file</code>
-for small data based on a built-in threshold.
-<p>This is the most convenient method when working with files on disk, network
-streams, or in-memory cursors.</p>
-<h3 id="parameters"><a class="header" href="#parameters">Parameters</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Param</th><th>Type</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>reader</code></td><td><code>&amp;mut impl AsyncRead + Unpin</code></td><td>Any async reader: <code>tokio::fs::File</code>, <code>tokio::io::BufReader</code>, <code>std::io::Cursor</code>, etc.</td></tr>
-<tr><td><code>name</code></td><td><code>&amp;str</code></td><td>Filename that Telegram stores and shows to recipients.</td></tr>
-<tr><td><code>mime_type</code></td><td><code>&amp;str</code></td><td>MIME type. Pass <code>""</code> to auto-detect from the file extension in <code>name</code>.</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="examples"><a class="header" href="#examples">Examples</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Upload from a file on disk
-use tokio::fs::File;
-
-let mut f = File::open("document.pdf").await?;
-let uploaded = client
-    .upload_stream(&amp;mut f, "document.pdf", "application/pdf")
-    .await?;
-<span class="boring">}</span></code></pre>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Auto-detect MIME type from the filename extension
-let mut f = File::open("photo.jpg").await?;
-let uploaded = client
-    .upload_stream(&amp;mut f, "photo.jpg", "")   // "" -&gt; auto-detects image/jpeg
-    .await?;
-<span class="boring">}</span></code></pre>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Upload from an in-memory buffer via std::io::Cursor
-use std::io::Cursor;
-use tokio::io::BufReader;
-
-let data: Vec&lt;u8&gt; = generate_pdf_bytes();
-let mut reader = BufReader::new(Cursor::new(data));
-let uploaded = client
-    .upload_stream(&amp;mut reader, "report.pdf", "application/pdf")
-    .await?;
-<span class="boring">}</span></code></pre>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Upload a file produced by an async process (e.g. compression)
-use tokio::io::AsyncWriteExt;
-
-let (reader, mut writer) = tokio::io::duplex(64 * 1024);
-tokio::spawn(async move {
-    // write compressed data to writer ...
-    writer.shutdown().await.unwrap();
-});
-
-let mut r = reader;
-let uploaded = client
-    .upload_stream(&amp;mut r, "archive.gz", "application/gzip")
-    .await?;
-<span class="boring">}</span></code></pre>
-<h3 id="notes"><a class="header" href="#notes">Notes</a></h3>
-<ul>
-<li><code>upload_stream</code> reads the entire reader to completion before uploading.
-There is no true streaming upload to Telegram; the data must fit in memory.</li>
-<li>For data already in memory as <code>Vec&lt;u8&gt;</code>, prefer <code>upload_file</code> or
-<code>upload_file_concurrent</code> to avoid the extra <code>read_to_end</code> allocation.</li>
-<li>The MIME type is used by Telegram clients to decide how to display the file
-(inline image preview, audio player, generic document, etc.). Passing <code>""</code>
-enables built-in MIME detection from the file extension.</li>
-</ul>
 </div>
 
 </div>
@@ -2398,134 +2388,48 @@ client.send_album(peer.clone(), items).await?;
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// To bytes: sequential
-let bytes: Vec&lt;u8&gt; = client.download_media(&amp;msg_media).await?;
+```rust
+let mut buf = Vec::new();
+client.download(msg.media().unwrap(), &amp;mut buf).await?;
 
-// To bytes: parallel chunks
-let bytes = client.download_media_concurrent(&amp;msg_media).await?;
+client.download_file(msg.media().unwrap(), "/tmp/output.jpg").await?;
 
-// Stream to file
-client.download_file(&amp;msg_media, "output.jpg").await?;
+let bytes = msg.bytes().await?;                        // → Vec&lt;u8&gt;
 
-// Via Downloadable trait (Photo, Document, Sticker)
-let bytes = client.download(&amp;photo).await?;
-<span class="boring">}</span></code></pre>
-<h3 id="downloaditer-streaming-chunks"><a class="header" href="#downloaditer-streaming-chunks"><code>DownloadIter</code>: streaming chunks</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let location = msg.raw.download_location().unwrap();
-let mut iter = client.iter_download(location);
-iter = iter.chunk_size(128 * 1024); // 128 KB chunks
+let mut file = tokio::fs::File::create("out.mp4").await?;
+msg.download(&amp;mut file).await?;                        // stream to file
 
-while let Some(chunk) = iter.next().await? {
-    file.write_all(&amp;chunk).await?;
+if let Some(mut iter) = client.iter_download(msg.media().unwrap()) {
+    while let Some(chunk) = iter.next().await? {
+        // chunk: bytes::Bytes - zero-copy slice
+        process(&amp;chunk);
+    }
 }
 <span class="boring">}</span></code></pre>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Method</th><th>Description</th></tr>
+<tr><th>Method</th><th>Dest</th><th>Returns</th></tr>
 </thead>
 <tbody>
-<tr><td><code>client.iter_download(location)</code></td><td>Create a lazy chunk iterator</td></tr>
-<tr><td><code>iter.chunk_size(bytes)</code></td><td>Set download chunk size</td></tr>
-<tr><td><code>iter.next()</code></td><td><code>async → Option&lt;Vec&lt;u8&gt;&gt;</code></td></tr>
+<tr><td><code>client.download(media, dest)</code></td><td>any <code>AsyncWrite</code></td><td><code>u64</code> bytes written</td></tr>
+<tr><td><code>client.download_file(media, path)</code></td><td>file on disk</td><td><code>u64</code> bytes written</td></tr>
+<tr><td><code>client.iter_download(media)</code></td><td>caller-driven</td><td><code>Option&lt;DownloadIter&gt;</code></td></tr>
+<tr><td><code>msg.download(dest)</code></td><td>any <code>AsyncWrite</code></td><td><code>u64</code> bytes written</td></tr>
+<tr><td><code>msg.bytes()</code></td><td>in-memory <code>Vec&lt;u8&gt;</code></td><td><code>Vec&lt;u8&gt;</code></td></tr>
 </tbody>
 </table>
 </div>
-<hr>
-<h2 id="photo-type"><a class="header" href="#photo-type"><code>Photo</code> type</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use ferogram::media::Photo;
-
-let photo = Photo::from_media(&amp;msg.raw).unwrap();
-// or
-let photo = msg.photo().unwrap();
-
-photo.id()                // i64
-photo.access_hash()       // i64
-photo.date()              // i32: Unix timestamp
-photo.has_stickers()      // bool
-photo.largest_thumb_type() // &amp;str: e.g. "y", "x", "s"
-
-let bytes = client.download(&amp;photo).await?;
-<span class="boring">}</span></code></pre>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Constructor</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>Photo::from_raw(tl::types::Photo)</code></td><td>Wrap raw TL photo</td></tr>
-<tr><td><code>Photo::from_media(&amp;MessageMedia)</code></td><td>Extract from message media</td></tr>
-</tbody>
-</table>
-</div>
-<hr>
-<h2 id="document-type"><a class="header" href="#document-type"><code>Document</code> type</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use ferogram::media::Document;
-
-let doc = Document::from_media(&amp;msg.raw).unwrap();
-// or
-let doc = msg.document().unwrap();
-
-doc.id()              // i64
-doc.access_hash()     // i64
-doc.date()            // i32
-doc.mime_type()       // &amp;str
-doc.size()            // i64: bytes
-doc.file_name()       // Option&lt;&amp;str&gt;
-doc.is_animated()     // bool: animated GIF or sticker
-
-let bytes = client.download(&amp;doc).await?;
-<span class="boring">}</span></code></pre>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Constructor</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>Document::from_raw(tl::types::Document)</code></td><td>Wrap raw TL document</td></tr>
-<tr><td><code>Document::from_media(&amp;MessageMedia)</code></td><td>Extract from message media</td></tr>
-</tbody>
-</table>
-</div>
-<hr>
-<h2 id="sticker-type"><a class="header" href="#sticker-type"><code>Sticker</code> type</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use ferogram::media::Sticker;
-
-let sticker = Sticker::from_media(&amp;msg.raw).unwrap();
-
-sticker.id()          // i64
-sticker.mime_type()   // &amp;str: "image/webp" or "video/webm"
-sticker.emoji()       // Option&lt;&amp;str&gt;: associated emoji
-sticker.is_video()    // bool: animated video sticker
-
-let bytes = client.download(&amp;sticker).await?;
-<span class="boring">}</span></code></pre>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Constructor</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>Sticker::from_document(Document)</code></td><td>Wrap a document as a sticker</td></tr>
-<tr><td><code>Sticker::from_media(&amp;MessageMedia)</code></td><td>Extract sticker from message</td></tr>
-</tbody>
-</table>
-</div>
-<hr>
 <h2 id="downloadable-trait"><a class="header" href="#downloadable-trait"><code>Downloadable</code> trait</a></h2>
-<p><code>Photo</code>, <code>Document</code>, and <code>Sticker</code> all implement <code>Downloadable</code>, so you can use <code>client.download(&amp;item)</code> on any of them uniformly.</p>
+<h2 id="downloadable-trait-1"><a class="header" href="#downloadable-trait-1"><code>Downloadable</code> trait</a></h2>
+<p><code>Photo</code>, <code>Document</code>, and <code>Sticker</code> all implement <code>Downloadable</code>, so you can use <code>client.download_item(&amp;item)</code> (internal) on any of them uniformly.
+For the public API, pass <code>msg.media()</code> to <code>client.download</code>.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use ferogram::media::Downloadable;
 
 async fn save_any&lt;D: Downloadable&gt;(client: &amp;Client, item: &amp;D) -&gt; Vec&lt;u8&gt; {
+    // internal method - public API uses client.download(media, dest)
     client.download(item).await.unwrap()
 }
 <span class="boring">}</span></code></pre>
@@ -2536,12 +2440,10 @@ async fn save_any&lt;D: Downloadable&gt;(client: &amp;Client, item: &amp;D) -&gt
 </span>// Get an InputFileLocation from the raw message
 use ferogram::media::download_location_from_media;
 
-if let Some(loc) = download_location_from_media(&amp;msg.raw) {
-    let bytes = client.download_media(&amp;loc).await?;
-}
+// use msg.bytes() or client.download(msg.media().unwrap(), &amp;mut buf) instead
 
 // Or via IncomingMessage convenience:
-msg.download_media("output.jpg").await?;
+client.download_file(msg.media().unwrap(), "output.jpg").await?;
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="media-groups-albums"><a class="header" href="#media-groups-albums">Media groups (albums)</a></h2>
@@ -3270,8 +3172,8 @@ msg.delete_with(&amp;client).await?;
 <h3 id="mark-as-read"><a class="header" href="#mark-as-read">Mark as read</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>msg.mark_as_read().await?;
-msg.mark_as_read_with(&amp;client).await?;
+</span>msg.mark_read().await?;
+msg.mark_read_with(&amp;client).await?;
 <span class="boring">}</span></code></pre>
 <h3 id="pin--unpin"><a class="header" href="#pin--unpin">Pin / Unpin</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -3302,7 +3204,10 @@ msg.forward_to_with(&amp;client, peer).await?;
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Download attached media to a file path, returns true if media existed
-let downloaded = msg.download_media("output.jpg").await?;
+// to disk
+client.download_file(msg.media().unwrap(), "output.jpg").await?;
+// to memory
+let bytes = msg.bytes().await?;
 <span class="boring">}</span></code></pre>
 <h3 id="fetch-replied-to-message"><a class="header" href="#fetch-replied-to-message">Fetch replied-to message</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -3324,7 +3229,7 @@ msg.refetch_with(&amp;client).await?;
 </span><span class="boring">fn main() {
 </span>// Fetch the replied-to message by ID
 if let Some(reply_id) = msg.reply_to_message_id() {
-    let parent = client.get_message_by_id(msg.peer(), reply_id).await?;
+    let parent = client.get_messages(msg.peer(), &amp;[reply_id]).await.ok().and_then(|mut v| v.into_iter().next()).await?;
 }
 <span class="boring">}</span></code></pre>
 <hr>
@@ -3353,7 +3258,7 @@ while let Some(update) = stream.next().await {
 
             } else if let Some(media) = msg.media() {
                 msg.reply("Downloading…").await.ok();
-                msg.download_media("received_file").await.ok();
+                msg.bytes().await.ok();
                 msg.react("✅").await.ok();
             }
         }
@@ -4650,7 +4555,7 @@ Full-featured send with the <a href="#inputmessage-builder"><code>InputMessage</
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_messages_by_id(peer: Peer, ids: &amp;[i32]) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_messages(peer: Peer, ids: &amp;[i32]) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Fetch specific messages by their IDs from a peer. Returns messages in the same order as the input IDs.</div>
@@ -4670,7 +4575,7 @@ Full-featured send with the <a href="#inputmessage-builder"><code>InputMessage</
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.unpin_message(peer: Peer, message_id: i32) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.pin_message(peer: impl Into&lt;PeerRef&gt;, id: i32, pin: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Unpin a specific message.</div>
@@ -4865,7 +4770,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.mark_as_read(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.mark_read(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Mark all messages in a dialog as read.</div>
@@ -4915,7 +4820,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.unpin_dialog(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.pin_dialog(peer: impl Into&lt;PeerRef&gt;, pin: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Unpin a previously pinned dialog.</div>
@@ -4999,37 +4904,37 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.kick_participant(chat_id: i64, user_id: i64) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.kick(peer: impl Into&lt;PeerRef&gt;, user_id: i64) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Remove a user from a basic group by chat ID. For channels and supergroups use <code>ban_participant</code> instead (with <code>until_date = 0</code> for a permanent ban, or unban immediately after).</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.ban_participant(channel: impl Into&lt;PeerRef&gt;, user_id: i64, until_date: i32) → Result&lt;(), InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">Ban a user from a channel or supergroup. <code>until_date</code> is a Unix timestamp; pass <code>0</code> for a permanent ban. To unban, pass a past timestamp or call again with <code>0</code> and then immediately unban via <code>set_banned_rights</code> with an empty builder.</div>
+<div class="api-card-body">Remove a user from a group, channel, or supergroup.</div>
 
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.promote_participant(channel: impl Into&lt;PeerRef&gt;, user_id: i64, promote: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.ban(peer: impl Into&lt;PeerRef&gt;, user_id: i64, until: Option&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Quick-promote (<code>true</code>) or demote (<code>false</code>) a user in a channel or supergroup. Promotion grants all standard admin rights except <code>add_admins</code>. For fine-grained control use <code>set_admin_rights</code> with <code>AdminRightsBuilder</code>.</div>
+<div class="api-card-body">Ban a user from a channel or supergroup. <code>until: None</code> is permanent; <code>Some(ts)</code> bans until that Unix timestamp. To unban, use <code>restrict</code> with an empty <code>BannedRightsBuilder</code>.</div>
 
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_admin_rights(peer: impl Into&lt;PeerRef&gt;, user_id: i64, rights: AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_admin(peer: impl Into&lt;PeerRef&gt;, user_id: i64, rights: AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
+</div>
+
+<div class="api-card-body">Set admin rights. Use <code>AdminRightsBuilder::full_admin()</code> to promote or <code>AdminRightsBuilder::new()</code> to demote.</div>
+
+</div>
+
+<div class="api-card">
+<div class="api-card-header">
+<span class="api-badge api-badge-async">async</span>
+<span class="api-card-sig">client.set_admin(peer: impl Into&lt;PeerRef&gt;, user_id: i64, rights: AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Promote a user to admin with specified rights. See <a href="#admin--ban-rights">Admin &amp; Ban Rights</a>.</div>
@@ -5039,7 +4944,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_banned_rights(peer: impl Into&lt;PeerRef&gt;, user_id: i64, rights: BannedRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.restrict(peer: impl Into&lt;PeerRef&gt;, user_id: i64, rights: BannedRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Restrict or ban a user. Pass <code>BannedRightsBuilder::full_ban()</code> to fully ban. See <a href="#admin--ban-rights">Admin &amp; Ban Rights</a>.</div>
@@ -5091,13 +4996,13 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_file(data: &amp;[u8], name: &amp;str, mime_type: &amp;str) → Result&lt;UploadedFile, InvocationError&gt;</span>
+<span class="api-card-sig">client.upload_file(path: impl AsRef&lt;Path&gt;) → Result&lt;UploadedFile, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Upload raw bytes as a file. <code>name</code> is used as the filename; <code>mime_type</code> is auto-detected from the extension if you pass <code>""</code>. Returns an <code>UploadedFile</code> with <code>.as_photo_media()</code> and <code>.as_document_media()</code> methods. For large files, prefer <code>upload_file_concurrent</code>.
+Upload a file from disk. Stats the file for optimal part sizing; uses parallel workers and <code>saveBigFilePart</code> for files over 10 MB automatically. Returns an <code>UploadedFile</code>.
 <pre><code>let data = std::fs::read("photo.jpg")?;
-let uploaded = client.upload_file(&amp;data, "photo.jpg", "image/jpeg").await?;
+let uploaded = client.upload_file("/tmp/photo.jpg").await?;
 let media = uploaded.as_photo_media();</code></pre>
 
 </div>
@@ -5135,7 +5040,7 @@ client.send_album(peer, vec![
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.download_file(location: tl::enums::InputFileLocation, path: impl AsRef&lt;Path&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.download(media: &amp;MessageMedia, dest: impl AsyncWrite + Unpin) → Result&lt;u64, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Download a media file and write it to <code>path</code>. The <code>path</code> argument accepts anything that implements <code>AsRef&lt;Path&gt;</code> (e.g. <code>&amp;str</code>, <code>String</code>, <code>PathBuf</code>). DC routing is handled automatically.</div>
@@ -5193,7 +5098,7 @@ Resolution is cache-first; an RPC is only made on a cache miss.
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.resolve_peer(peer: &amp;str) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
+<span class="api-card-sig">client.resolve(peer: &amp;str) → Result&lt;tl::enums::Peer, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">String-only variant of <code>resolve()</code>. Accepts <code>"@username"</code>, <code>"+phone"</code>, <code>"me"</code>, numeric string, <code>t.me/</code> URL, and invite links. Prefer <code>resolve()</code> when the input may not be a string.</div>
@@ -5252,7 +5157,7 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.accept_invite_link(link: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.join_link(link: &amp;str) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Accept a <code>t.me/+hash</code> or <code>t.me/joinchat/hash</code> invite link.</div>
@@ -5282,7 +5187,7 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.delete_channel(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.delete_chat(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Permanently delete a channel or supergroup. Only the creator can do this. Irreversible.</div>
@@ -5295,7 +5200,7 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
 <span class="api-card-sig">client.delete_chat(chat_id: i64) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Delete a legacy basic group by its chat ID. Only the creator can do this. Use <code>delete_channel</code> for supergroups and channels.</div>
+<div class="api-card-body">Delete a legacy basic group by its chat ID. Only the creator can do this. Use <code>delete_chat</code> for all peer types.</div>
 
 </div>
 
@@ -5305,14 +5210,14 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
 <span class="api-card-sig">client.leave_chat(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Leave a channel or supergroup. For basic groups, use <code>kick_participant</code> on yourself or <code>delete_dialog</code> to just hide it.</div>
+<div class="api-card-body">Leave a channel or supergroup. For basic groups, use <code>kick</code> on yourself or <code>delete_dialog</code> to just hide it.</div>
 
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.edit_chat_title(peer: impl Into&lt;PeerRef&gt;, title: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).title(: impl Into&lt;PeerRef&gt;, title: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Rename a chat, group, channel, or supergroup. Works for both basic groups and channels/supergroups.</div>
@@ -5322,7 +5227,7 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.edit_chat_about(peer: impl Into&lt;PeerRef&gt;, about: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).bio(: impl Into&lt;PeerRef&gt;, about: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Set or update the description/about text for any chat type.</div>
@@ -5332,7 +5237,7 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.edit_chat_photo(peer: impl Into&lt;PeerRef&gt;, photo: tl::enums::InputChatPhoto) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).chat_photo(peer: impl Into&lt;PeerRef&gt;, photo: tl::enums::InputChatPhoto) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Change the profile photo of a chat. Pass <code>tl::enums::InputChatPhoto::Empty</code> to remove the current photo.</div>
@@ -5494,7 +5399,7 @@ tl::enums::ChatReactions::ChatReactionsNone
 <span class="api-card-sig">msg.get_reply() → Option&lt;&amp;IncomingMessage&gt;</span>
 </div>
 
-<div class="api-card-body">Access the message this message replies to. Available directly on <code>IncomingMessage</code>. Returns <code>None</code> if not a reply. To fetch the replied-to message by ID, use <code>client.get_message_by_id(peer, id)</code>.</div>
+<div class="api-card-body">Access the message this message replies to. Available directly on <code>IncomingMessage</code>. Returns <code>None</code> if not a reply. To fetch the replied-to message by ID, use <code>client.get_messages(peer, &amp;[id])</code>.</div>
 
 </div>
 
@@ -5541,7 +5446,7 @@ tl::enums::ChatReactions::ChatReactionsNone
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.unpin_message(peer: impl Into&lt;PeerRef&gt;, message_id: i32) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.pin_message(peer: impl Into&lt;PeerRef&gt;, id: i32, pin: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Shorthand for unpinning a specific message (calls <code>pin_message</code> with <code>unpin = true</code>).</div>
@@ -7230,7 +7135,7 @@ client.send_message("+12025551234", "hi").await?;
 // t.me URL
 client.send_message("https://t.me/telegram", "hi").await?;
 
-// Invite link (must already be a member, otherwise call join_by_invite first)
+// Invite link (must already be a member, otherwise call join_link first)
 client.send_message("https://t.me/+AbCdEfGhIjKl", "hi").await?;
 
 // Positive i64: user ID
@@ -7240,7 +7145,7 @@ client.send_message(12345678_i64, "hi").await?;
 client.get_message_history(-1001234567890_i64, 50, 0).await?;
 
 // Small negative i64: basic group
-client.mark_as_read(-123456_i64).await?;
+client.mark_read(-123456_i64).await?;
 
 // Raw TL peer: zero cost, no network call
 use ferogram::tl;
@@ -7290,7 +7195,7 @@ let peer = client.resolve(raw).await?;
 let ip: tl::enums::InputPeer = get_it_from_somewhere();
 let peer = client.resolve(ip).await?;
 <span class="boring">}</span></code></pre>
-<p><code>client.resolve_peer(peer: &amp;str)</code> is the string-only variant; use it when the input is always a <code>&amp;str</code>. Use <code>resolve()</code> for everything else.</p>
+<p><code>client.resolve(peer: &amp;str)</code> is the string-only variant; use it when the input is always a <code>&amp;str</code>. Use <code>resolve()</code> for everything else.</p>
 <p>To go from a <code>Peer</code> back to an <code>InputPeer</code> (with access hash):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -7569,35 +7474,35 @@ p.is_member()   // bool: active member (not banned, not left)
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Removes the user from a basic group by chat_id (i64)
-// For channels/supergroups, use ban_participant instead
-client.kick_participant(chat_id, user_id).await?;
+// For channels/supergroups, use ban instead
+client.kick(chat_id, user_id).await?;
 <span class="boring">}</span></code></pre>
 <blockquote>
-<p><strong>Note:</strong> <code>kick_participant</code> takes a <code>chat_id: i64</code>, not a <code>PeerRef</code>. Use the raw numeric ID of the basic group.</p>
+<p><strong>Note:</strong> <code>kick</code> takes a <code>chat_id: i64</code>, not a <code>PeerRef</code>. Use the raw numeric ID of the basic group.</p>
 </blockquote>
 <hr>
 <h2 id="ban-participant"><a class="header" href="#ban-participant">Ban participant</a></h2>
-<p><code>ban_participant</code> takes a Unix timestamp for <code>until_date</code>. For granular per-permission restrictions use <code>set_banned_rights</code> with <code>BannedRightsBuilder</code>.</p>
+<p><code>ban</code> takes a Unix timestamp for <code>until_date</code>. For granular per-permission restrictions use <code>restrict</code> with <code>BannedRightsBuilder</code>.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Permanent full ban (until_date = 0)
-client.ban_participant(peer.clone(), user_id, 0).await?;
+client.ban(peer.clone(), user_id, None).await?;
 
 // Timed ban: expires in 24 h
 let expires = (std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 86400) as i32;
-client.ban_participant(peer.clone(), user_id, expires).await?;
+client.ban(peer.clone(), user_id, Some(expires)).await?;
 
 // Unban: set a past timestamp (e.g. 1) to lift the ban
-client.ban_participant(peer.clone(), user_id, 1).await?;
+client.ban(peer.clone(), user_id, Some(1)).await?;
 <span class="boring">}</span></code></pre>
-<p>For per-permission restrictions (no media, no stickers, etc.) use <code>set_banned_rights</code> with <code>BannedRightsBuilder</code>:</p>
+<p>For per-permission restrictions (no media, no stickers, etc.) use <code>restrict</code> with <code>BannedRightsBuilder</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use ferogram::participants::BannedRightsBuilder;
 
 client
-    .set_banned_rights(
+    .restrict(
         peer.clone(),
         user_input_peer,
         BannedRightsBuilder::new()
@@ -7634,24 +7539,24 @@ client
 </table>
 </div>
 <hr>
-<h2 id="promote-admin-promote_participant-and-adminrightsbuilder"><a class="header" href="#promote-admin-promote_participant-and-adminrightsbuilder">Promote admin: <code>promote_participant</code> and <code>AdminRightsBuilder</code></a></h2>
-<p><code>promote_participant</code> is a boolean shorthand  -  <code>true</code> grants all standard rights, <code>false</code> demotes:</p>
+<h2 id="promote-admin-set_admin-and-adminrightsbuilder"><a class="header" href="#promote-admin-set_admin-and-adminrightsbuilder">Promote admin: <code>set_admin</code> and <code>AdminRightsBuilder</code></a></h2>
+<p><code>set_admin</code> is a boolean shorthand  -  <code>true</code> grants all standard rights, <code>false</code> demotes:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Quick promote (all standard rights except add_admins)
-client.promote_participant(peer.clone(), user_id, true).await?;
+client.set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin()).await?;
 
 // Demote back to regular member
-client.promote_participant(peer.clone(), user_id, false).await?;
+client.set_admin(peer.clone(), user_id, AdminRightsBuilder::new()).await?;
 <span class="boring">}</span></code></pre>
-<p>For fine-grained control, use <code>set_admin_rights</code> with <code>AdminRightsBuilder</code>:</p>
+<p>For fine-grained control, use <code>set_admin</code> with <code>AdminRightsBuilder</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use ferogram::participants::AdminRightsBuilder;
 
 // Promote with specific rights and a custom title
 client
-    .promote_participant(
+    .set_admin(
         peer.clone(),
         user_id,
         AdminRightsBuilder::new()
@@ -7666,12 +7571,12 @@ client
 
 // Full admin (all standard rights except add_admins)
 client
-    .promote_participant(peer.clone(), user_id, AdminRightsBuilder::full_admin())
+    .set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin())
     .await?;
 
 // Demote: pass an empty builder to remove all admin rights
 client
-    .promote_participant(peer.clone(), user_id, AdminRightsBuilder::new())
+    .set_admin(peer.clone(), user_id, AdminRightsBuilder::new())
     .await?;
 <span class="boring">}</span></code></pre>
 <h3 id="adminrightsbuilder-methods"><a class="header" href="#adminrightsbuilder-methods"><code>AdminRightsBuilder</code> methods</a></h3>
@@ -7757,7 +7662,7 @@ while let Some(photo) = iter.next().await? {
 client.join_chat("@somegroup").await?;
 
 // Accept a private invite link
-client.accept_invite_link("https://t.me/joinchat/AbCdEfG").await?;
+client.join_link("https://t.me/joinchat/AbCdEfG").await?;
 
 // Parse invite hash from any link format
 let hash = Client::parse_invite_hash("https://t.me/+AbCdEfG12345");
@@ -7810,18 +7715,18 @@ let all_photos = iter.collect().await?;
 </div>
 <hr>
 <h2 id="low-level-rights-setters"><a class="header" href="#low-level-rights-setters">Low-level rights setters</a></h2>
-<p>For advanced use cases, <code>set_banned_rights</code> and <code>set_admin_rights</code> give direct access to the TL layer:</p>
+<p>For advanced use cases, <code>restrict</code> and <code>set_admin</code> give direct access to the TL layer:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Set banned rights directly (channel/supergroup only)
-client.set_banned_rights(
+client.restrict(
     peer.clone(),
     user_input_peer,
     BannedRightsBuilder::new().send_media(true),
 ).await?;
 
 // Set admin rights directly
-client.set_admin_rights(
+client.set_admin(
     peer.clone(),
     user_input_peer,
     AdminRightsBuilder::new().delete_messages(true),
@@ -7839,7 +7744,7 @@ client.set_admin_rights(
 
 // Permanent full ban
 client
-    .ban_participant(peer.clone(), user_id, BannedRightsBuilder::full_ban())
+    .ban(peer.clone(), user_id, None)
     .await?;
 
 // Partial restriction (no media, expires in 24 h)
@@ -7847,7 +7752,7 @@ let tomorrow = (std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 86400) as i32;
 
 client
-    .ban_participant(
+    .ban(
         peer.clone(), user_id,
         BannedRightsBuilder::new()
             .send_media(true)
@@ -7860,7 +7765,7 @@ client
 // Unban
 // Passing an empty builder restores full permissions
 client
-    .ban_participant(peer.clone(), user_id, BannedRightsBuilder::new())
+    .ban(peer.clone(), user_id, None)
     .await?;
 <span class="boring">}</span></code></pre>
 <h3 id="method-reference"><a class="header" href="#method-reference">Method reference</a></h3>
@@ -7899,7 +7804,7 @@ client
 
 // Custom moderator
 client
-    .promote_participant(
+    .set_admin(
         peer.clone(), user_id,
         AdminRightsBuilder::new()
             .delete_messages(true)
@@ -7912,12 +7817,12 @@ client
 
 // Full admin (all standard rights)
 client
-    .promote_participant(peer.clone(), user_id, AdminRightsBuilder::full_admin())
+    .set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin())
     .await?;
 
 // Demote (remove all admin rights)
 client
-    .promote_participant(peer.clone(), user_id, AdminRightsBuilder::new())
+    .set_admin(peer.clone(), user_id, AdminRightsBuilder::new())
     .await?;
 <span class="boring">}</span></code></pre>
 <h3 id="method-reference-1"><a class="header" href="#method-reference-1">Method reference</a></h3>
@@ -7983,12 +7888,12 @@ let perms: ParticipantPermissions = client
 </span><span class="boring">fn main() {
 </span>// Temporarily mute: no messages for 1 hour
 let in_1h = (chrono::Utc::now().timestamp() + 3600) as i32;
-client.ban_participant(peer.clone(), uid,
+client.ban(peer.clone(), uid,
     BannedRightsBuilder::new().send_messages(true).until_date(in_1h)
 ).await?;
 
 // Promote to channel editor
-client.promote_participant(peer.clone(), uid,
+client.set_admin(peer.clone(), uid,
     AdminRightsBuilder::new()
         .post_messages(true)
         .edit_messages(true)
@@ -7998,7 +7903,7 @@ client.promote_participant(peer.clone(), uid,
 // Check before acting
 let perms = client.get_permissions(peer.clone(), uid).await?;
 if !perms.is_admin() &amp;&amp; !perms.is_banned() {
-    client.ban_participant(peer.clone(), uid, BannedRightsBuilder::full_ban()).await?;
+    client.ban(peer.clone(), uid, BannedRightsBuilder::full_ban()).await?;
 }
 <span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -8091,14 +7996,14 @@ while let Some(msg) = iter.next(&amp;client).await? {
 let messages = client.get_message_history(peer.clone(), 20).await?;
 
 // Specific message IDs
-let messages = client.get_messages_by_id(peer.clone(), &amp;[100, 101, 102]).await?;
+let messages = client.get_messages(peer.clone(), &amp;[100, 101, 102]).await?;
 // Returns Vec&lt;Option&lt;tl::enums::Message&gt;&gt;: None if not found
 
 // Pinned message
 let pinned = client.get_pinned_message(peer.clone()).await?;
 
 // Fetch the message a reply refers to by ID
-let parent = client.get_message_by_id(peer.clone(), reply_id).await?;
+let parent = client.get_messages(peer.clone(), &amp;[reply_id]).await?.into_iter().next();
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="scheduled-messages-2"><a class="header" href="#scheduled-messages-2">Scheduled messages</a></h2>
@@ -8118,7 +8023,7 @@ client.delete_scheduled_messages(peer.clone(), &amp;[scheduled_id]).await?;
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Mark all messages as read
-client.mark_as_read(peer.clone()).await?;
+client.mark_read(peer.clone()).await?;
 
 // Clear @mention badges
 client.clear_mentions(peer.clone()).await?;
@@ -8128,7 +8033,7 @@ client.delete_dialog(peer.clone()).await?;
 
 // Pin / unpin a dialog
 client.pin_dialog(peer.clone()).await?;
-client.unpin_dialog(peer.clone()).await?;
+client.pin_dialog(peer.clone(), false).await?;
 
 // Get pinned dialogs (folder_id: 0 = main, 1 = archived)
 let pinned = client.get_pinned_dialogs(0).await?;
@@ -8137,13 +8042,13 @@ let pinned = client.get_pinned_dialogs(0).await?;
 client.mark_dialog_unread(peer.clone(), true).await?;
 
 // Clear the manual unread flag
-client.mark_dialog_read(peer.clone()).await?;
+client.mark_read(peer.clone()).await?;
 
 // Join a public group/channel
 client.join_chat("@somegroup").await?;
 
 // Accept a private invite link
-client.accept_invite_link("https://t.me/joinchat/AbCdEfG").await?;
+client.join_link("https://t.me/joinchat/AbCdEfG").await?;
 
 // Parse invite hash from any link format
 let hash = Client::parse_invite_hash("https://t.me/+AbCdEfG12345");
@@ -8154,10 +8059,10 @@ let hash = Client::parse_invite_hash("https://t.me/+AbCdEfG12345");
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Move to archive - chat disappears from the main dialog list
-client.archive_chat("@somebot").await?;
+client.archive("@somebot").await?;
 
 // Move back to main list
-client.unarchive_chat("@somebot").await?;
+client.archive("@somebot").await?;
 <span class="boring">}</span></code></pre>
 <p>Archived chats still receive messages; they are simply hidden from the main list and muted by default until the user opens them.</p>
 <h3 id="low-level-folder-move"><a class="header" href="#low-level-folder-move">Low-level folder move</a></h3>
@@ -8559,7 +8464,7 @@ async fn compute_answer() -&gt; String {
     // Show "uploading document…" while the upload runs
     let _guard = client.uploading_document(peer.clone()).await?;
 
-    let uploaded = client.upload_file(filename, &amp;bytes).await?;
+    let uploaded = client.upload_file(filename).await?;
 
     drop(_guard); // cancel the indicator before sending
 
@@ -8613,7 +8518,7 @@ async fn compute_answer() -&gt; String {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.accept_invite_link(link: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.join_link(link: &amp;str) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Accept a <code>t.me/+hash</code> or <code>t.me/joinchat/hash</code> invite link and join the chat.</div>
@@ -8626,7 +8531,7 @@ async fn compute_answer() -&gt; String {
 <span class="api-card-sig">client.leave_chat(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Leave a channel or supergroup. For basic groups, use <code>kick_participant</code> on yourself or <code>delete_dialog</code> to hide it.</div>
+<div class="api-card-body">Leave a channel or supergroup. For basic groups, use <code>kick</code> on yourself or <code>delete_dialog</code> to hide it.</div>
 
 </div>
 
@@ -8671,7 +8576,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.delete_channel(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.delete_chat(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Permanently delete a channel or supergroup. Only the creator can do this. Irreversible  -  all messages are lost.</div>
@@ -8684,7 +8589,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <span class="api-card-sig">client.delete_chat(chat_id: i64) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Delete a legacy basic group by its raw numeric chat ID. Only the creator can do this. For supergroups and channels use <code>delete_channel</code>.</div>
+<div class="api-card-body">Delete a legacy basic group by its raw numeric chat ID. Only the creator can do this. For supergroups and channels use <code>delete_chat</code>.</div>
 
 </div>
 
@@ -8703,7 +8608,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.edit_chat_title(peer: impl Into&lt;PeerRef&gt;, title: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).title(: impl Into&lt;PeerRef&gt;, title: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Rename a chat, group, channel, or supergroup.</div>
@@ -8713,7 +8618,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.edit_chat_about(peer: impl Into&lt;PeerRef&gt;, about: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).bio(: impl Into&lt;PeerRef&gt;, about: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Set or update the description/about text. Works for all chat types.</div>
@@ -8723,15 +8628,15 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.edit_chat_photo(peer: impl Into&lt;PeerRef&gt;, photo: tl::enums::InputChatPhoto) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).chat_photo(peer: impl Into&lt;PeerRef&gt;, photo: tl::enums::InputChatPhoto) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Change the group/channel photo. Pass <code>InputChatPhoto::Empty</code> to remove it.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Set a new photo (upload first)
-let uploaded = client.upload_file(&amp;bytes, "photo.jpg", "image/jpeg").await?;
-client.edit_chat_photo(
+let uploaded = client.upload_file("photo.jpg").await?;
+client.set_profile(peer).chat_photo(
     peer.clone(),
     tl::enums::InputChatPhoto::InputChatUploadedPhoto(
         tl::types::InputChatUploadedPhoto {
@@ -8742,7 +8647,7 @@ client.edit_chat_photo(
 ).await?;
 
 // Remove photo
-client.edit_chat_photo(peer.clone(), tl::enums::InputChatPhoto::Empty).await?;
+client.set_profile(peer).chat_photo(peer.clone(), tl::enums::InputChatPhoto::Empty).await?;
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -8876,7 +8781,7 @@ let chat = client.create_channel("My Group", "Welcome!", false).await?;
 client.invite_users(chat.clone(), vec![user_a, user_b]).await?;
 
 // 3. Set description and lock down media for all
-client.edit_chat_about(chat.clone(), "Read the rules before posting.").await?;
+client.set_profile(chat.clone()).bio("Read the rules before posting.").send().await?;
 client.edit_chat_default_banned_rights(chat.clone(), |b| {
     b.send_media(true).send_polls(true)
 }).await?;
@@ -9308,7 +9213,7 @@ for user in &amp;result.users {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.block_user(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.block(peer: impl Into&lt;PeerRef&gt;, block: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -9320,7 +9225,7 @@ Block a user. Blocked users cannot send you messages, see your phone number, or 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.unblock_user(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+<!-- removed: use block(peer, false) --> → Result&lt;(), InvocationError&gt;
 </div>
 
 <div class="api-card-body">
@@ -9360,7 +9265,7 @@ loop {
 </span>// Find and block all users named "Spammer"
 let results = client.search_contacts("Spammer", 50).await?;
 for peer in results {
-    client.block_user(peer).await?;
+    client.block(peer, true).await?;
     println!("Blocked {peer:?}");
 }
 
@@ -9405,15 +9310,15 @@ client.set_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
 Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>client.set_username("my_new_handle").await?;
-client.set_username("").await?;  // remove username
+</span>client.set_profile("me").username("my_new_handle").send().await?;
+client.set_profile("me").username("").send().await?;  // remove username
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -9422,7 +9327,7 @@ client.set_username("").await?;  // remove username
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_online() / set_offline() → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_presence(true) / set_presence(false) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -9436,16 +9341,16 @@ Manually set your online/offline status. Pass <code>offline: false</code> to app
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile_photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Set or add a new profile photo. Upload the image with <code>upload_file</code> first.
+Set or add a new profile photo. Upload the image with <code>upload_file(path)</code> first.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let bytes = tokio::fs::read("avatar.jpg").await?;
-let uploaded = client.upload_file(&amp;bytes, "avatar.jpg", "image/jpeg").await?;
-let photo = client.set_profile_photo(uploaded).await?;
+let uploaded = client.upload_file("avatar.jpg").await?;
+let photo = client.set_profile("me").photo(uploaded).send().await?;
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -9488,15 +9393,15 @@ client.set_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
 Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>client.set_username("my_new_handle").await?;
-client.set_username("").await?;  // remove username
+</span>client.set_profile("me").username("my_new_handle").send().await?;
+client.set_profile("me").username("").send().await?;  // remove username
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -9505,7 +9410,7 @@ client.set_username("").await?;  // remove username
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_online() / set_offline() → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_presence(true) / set_presence(false) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -9562,16 +9467,16 @@ while let Some(photo) = iter.next(&amp;client).await? {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile_photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Set or add a new profile photo. Upload the image with <code>upload_file</code> first. Returns the new <code>Photo</code> object.
+Set or add a new profile photo. Upload the image with <code>upload_file(path)</code> first. Returns the new <code>Photo</code> object.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let bytes = tokio::fs::read("avatar.jpg").await?;
-let uploaded = client.upload_file(&amp;bytes, "avatar.jpg", "image/jpeg").await?;
-let photo = client.set_profile_photo(uploaded).await?;
+let uploaded = client.upload_file("avatar.jpg").await?;
+let photo = client.set_profile("me").photo(uploaded).send().await?;
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -9669,11 +9574,11 @@ client.set_profile(
 
 // Set a new avatar
 let bytes = tokio::fs::read("new_avatar.png").await?;
-let f = client.upload_file(&amp;bytes, "avatar.png", "image/png").await?;
-client.set_profile_photo(f).await?;
+let f = client.upload_file("avatar.png").await?;
+client.set_profile("me").photo(f).send().await?;
 
 // Go offline
-client.set_offline().await?;
+client.set_presence(false).await?;
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="emoji-status"><a class="header" href="#emoji-status">Emoji status</a></h2>
@@ -9682,13 +9587,13 @@ client.set_offline().await?;
 </span><span class="boring">fn main() {
 </span>// Set an emoji status using a custom emoji document ID
 // (obtain IDs from sticker sets via client.get_sticker_set)
-client.set_emoji_status(Some(5260885697911948121), None).await?;
+client.set_profile("me").emoji_status(Some(5260885697911948121), None).send().await?;
 
 // Set with an expiry (Unix timestamp)
-client.set_emoji_status(Some(5260885697911948121), Some(1_800_000_000)).await?;
+client.set_profile("me").emoji_status(Some(5260885697911948121), Some(1_800_000_000)).send().await?;
 
 // Clear the current emoji status
-client.set_emoji_status(None, None).await?;
+client.set_profile("me").emoji_status(None, None).send().await?;
 <span class="boring">}</span></code></pre>
 <p><code>document_id</code> is the <code>id</code> field from a <code>tl::types::Document</code> belonging to a custom-emoji sticker. Pass <code>None</code> to remove the status. <code>until</code> is an optional Unix timestamp after which the status expires automatically; pass <code>None</code> for no expiry.</p>
 </parameter></div>
@@ -9967,7 +9872,7 @@ client.send_vote(peer.clone(), 1234, vec![vec![0]]).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, poll_hash: i64) -&gt; Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, poll_hash: i64) -&gt; Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -10027,14 +9932,14 @@ if let Some(next) = page.next_offset {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_poll_stats(peer: impl Into&lt;PeerRef&gt;, msg_id: i32) -&gt; Result&lt;tl::types::stats::PollStats, InvocationError&gt;</span>
+<span class="api-card-sig">client.poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32) -&gt; Result&lt;tl::types::stats::PollStats, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
 Fetch detailed vote graph stats for a poll (`stats.getPollStats`). Returns a `PollStats` with a `votes_graph` field containing a `StatsGraph` you can render as a chart.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let stats = client.get_poll_stats(peer.clone(), msg_id).await?;
+</span>let stats = client.poll_results(peer.clone(), msg_id).await?;
 // stats.votes_graph: tl::enums::StatsGraph
 <span class="boring">}</span></code></pre>
 </div>
@@ -10106,7 +10011,7 @@ for doc in &amp;set.documents {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.install_sticker_set(stickerset: tl::enums::InputStickerSet, archived: bool) → Result&lt;tl::enums::messages::StickerSetInstallResult, InvocationError&gt;</span>
+<span class="api-card-sig">client.toggle_stickers(stickerset: tl::enums::InputStickerSet, archived: bool) → Result&lt;tl::enums::messages::StickerSetInstallResult, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -10114,7 +10019,7 @@ Install a sticker set for the current account. Pass <code>archived: true</code> 
 <p>The return value is <code>StickerSetInstallResult::Success</code> on a clean install, or <code>StickerSetInstallResult::Archive</code> when older sets were moved to the archive to make room.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let result = client.install_sticker_set(
+</span>let result = client.toggle_stickers(
     tl::enums::InputStickerSet::InputStickerSetShortName(
         tl::types::InputStickerSetShortName { short_name: "Animals".into() }
     ),
@@ -10128,7 +10033,7 @@ Install a sticker set for the current account. Pass <code>archived: true</code> 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.uninstall_sticker_set(stickerset: tl::enums::InputStickerSet) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.untoggle_stickers(stickerset: tl::enums::InputStickerSet) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -10232,7 +10137,7 @@ if let Some(sticker) = Sticker::from_media(&amp;incoming_msg.raw) {
 Send a <code>/start</code> command to a bot with a deep-link parameter, as if
 the user clicked a <code>t.me/BotUsername?start=param</code> link. The bot
 receives the parameter in <code>Message.text</code> as <code>/start param</code>.
-<h3 id="parameters-1"><a class="header" href="#parameters-1">Parameters</a></h3>
+<h3 id="parameters"><a class="header" href="#parameters">Parameters</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -10245,7 +10150,7 @@ receives the parameter in <code>Message.text</code> as <code>/start param</code>
 </tbody>
 </table>
 </div>
-<h3 id="examples-1"><a class="header" href="#examples-1">Examples</a></h3>
+<h3 id="examples"><a class="header" href="#examples">Examples</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Basic: open a bot in a private chat with a deep-link parameter
@@ -10275,7 +10180,7 @@ can resolve it from the username once and cache it:</p>
 </span><span class="boring">fn main() {
 </span>use ferogram::PeerRef;
 
-let bot = client.resolve_peer("MyBotUsername").await?;
+let bot = client.resolve("MyBotUsername").await?;
 let bot_user_id: i64 = match bot {
     PeerRef::UserId(id) =&gt; id,
     other =&gt; panic!("expected a user, got {:?}", other),
@@ -10292,7 +10197,7 @@ let bot_user_id: i64 = match bot {
 <pre><code>/start ref_42
 </code></pre>
 <p>The bot can extract the param from <code>message.text.strip_prefix("/start ")</code>.</p>
-<h3 id="notes-1"><a class="header" href="#notes-1">Notes</a></h3>
+<h3 id="notes"><a class="header" href="#notes">Notes</a></h3>
 <ul>
 <li><code>start_param</code> is limited to 64 characters. Attempting a longer value will
 be rejected by the Telegram server with <code>START_PARAM_INVALID</code>.</li>
@@ -10302,7 +10207,7 @@ characters are not permitted.</li>
 <code>/start param</code> twice triggers two separate updates on the bot side.</li>
 <li>For bots with <code>allow_zero_hash</code> disabled (the default), the bot’s
 <code>access_hash</code> must already be in the peer cache. Call
-<code>client.resolve_peer()</code> at least once before <code>start_bot</code> to populate
+<code>client.resolve()</code> at least once before <code>start_bot</code> to populate
 the cache, or enable
 <a href="#experimental-features-1"><code>ExperimentalFeatures::allow_zero_hash</code></a>.</li>
 </ul>
@@ -10634,7 +10539,7 @@ Update::PreCheckoutQuery(pcq) =&gt; {
 <h2 id="broadcast-channel-statistics"><a class="header" href="#broadcast-channel-statistics">Broadcast channel statistics</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let stats = client.get_broadcast_stats("@mychannel", false).await?;
+</span>let stats = client.stats("@mychannel").await?;
 // dark=true requests dark-themed graph images
 <span class="boring">}</span></code></pre>
 <p>Returns <code>tl::enums::stats::BroadcastStats</code>. Key fields:</p>
@@ -10656,7 +10561,7 @@ println!("Shares/post: {} (prev {})", s.shares_per_post.current, s.shares_per_po
 <h2 id="supergroup-megagroup-statistics"><a class="header" href="#supergroup-megagroup-statistics">Supergroup (megagroup) statistics</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let stats = client.get_megagroup_stats("@mysupergroup", false).await?;
+</span>let stats = client.stats("@mysupergroup").await?;
 <span class="boring">}</span></code></pre>
 <p>Returns <code>tl::enums::stats::MegagroupStats</code>. Key fields:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -10681,7 +10586,7 @@ println!("{online} members are online right now");
 <h2 id="poll-statistics"><a class="header" href="#poll-statistics">Poll statistics</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let stats = client.get_poll_stats(peer.clone(), msg_id).await?;
+</span>let stats = client.poll_results(peer.clone(), msg_id).await?;
 <span class="boring">}</span></code></pre>
 <p>Returns <code>tl::types::stats::PollStats</code>. Contains a <code>votes_graph</code> field with a <code>StatsGraph</code> showing vote distribution over time. Use <code>stats.loadAsyncGraph</code> if the graph carries an async token.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -10925,7 +10830,7 @@ println!("pts={} qts={} seq={}", state.pts, state.qts, state.seq);
 </tbody>
 </table>
 </div>
-<h2 id="examples-2"><a class="header" href="#examples-2">Examples</a></h2>
+<h2 id="examples-1"><a class="header" href="#examples-1">Examples</a></h2>
 <h3 id="get-full-user-info"><a class="header" href="#get-full-user-info">Get full user info</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -11030,11 +10935,11 @@ if let enums::UserFull::UserFull(info) = uf.full_user {
 }).await?;
 <span class="boring">}</span></code></pre>
 <h2 id="access-hashes"><a class="header" href="#access-hashes">Access hashes</a></h2>
-<p>Many raw API calls need an <code>access_hash</code> alongside user/channel IDs. The internal peer cache is populated by <code>resolve_peer</code>, <code>get_participants</code>, <code>get_dialogs</code>, etc.:</p>
+<p>Many raw API calls need an <code>access_hash</code> alongside user/channel IDs. The internal peer cache is populated by <code>resolve</code>, <code>get_participants</code>, <code>get_dialogs</code>, etc.:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// This populates the peer cache
-let peer = client.resolve_peer("@username").await?;
+let peer = client.resolve("@username").await?;
 
 // For users
 let user_hash = client.inner_peer_cache_users().get(&amp;user_id).copied().unwrap_or(0);
@@ -11826,7 +11731,7 @@ version = "0.2.0"
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="cdn-downloads-1"><a class="header" href="#cdn-downloads-1">CDN Downloads</a></h1>
 <p>Large files on Telegram are often served from <strong>CDN DCs</strong>  -  lightweight edge data-centres that don’t participate in the normal MTProto auth flow. ferogram exposes the full CDN download path via <code>CdnDownloader</code> in <code>ferogram::cdn_download</code>.</p>
-<p>In normal usage you never need to interact with <code>CdnDownloader</code> directly  -  <code>download_media</code>, <code>download_media_concurrent</code>, and <code>iter_download</code> handle CDN redirects transparently. This page is for advanced use-cases where you need explicit control.</p>
+<p>In normal usage you never need to interact with <code>CdnDownloader</code> directly  -  <code>client.download</code>, <code>client.download_file</code>, and <code>iter_download</code> handle CDN redirects transparently. This page is for advanced use-cases where you need explicit control.</p>
 <hr>
 <h2 id="how-cdn-redirects-work"><a class="header" href="#how-cdn-redirects-work">How CDN redirects work</a></h2>
 <ol>
@@ -12196,7 +12101,7 @@ match client.send_message("@peer", "Hello").await {
 <tr><td><code>InvocationError::Io(io::Error)</code></td><td>Network or socket error</td></tr>
 <tr><td><code>InvocationError::Deserialize(e)</code></td><td>Failed to decode server response</td></tr>
 <tr><td><code>InvocationError::Dropped</code></td><td>Request dropped (sender task shut down)</td></tr>
-<tr><td><code>InvocationError::PeerNotCached(String)</code></td><td>Peer seen before but its <code>access_hash</code> was never stored; resolve via <code>client.resolve_peer()</code> first</td></tr>
+<tr><td><code>InvocationError::PeerNotCached(String)</code></td><td>Peer seen before but its <code>access_hash</code> was never stored; resolve via <code>client.resolve()</code> first</td></tr>
 </tbody>
 </table>
 </div>
@@ -12570,19 +12475,19 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <li><code>ClientBuilder</code>: fluent connection builder</li>
 </ul>
 <pre><code class="language-toml"># SQLite session only
-ferogram = { version = "0.4.0", features = ["sqlite-session"] }
+ferogram = { version = "0.5.0", features = ["sqlite-session"] }
 
 # LibSQL / Turso session (new in 0.2.0)
-ferogram = { version = "0.4.0", features = ["libsql-session"] }
+ferogram = { version = "0.5.0", features = ["libsql-session"] }
 
 # HTML parsing (minimal, no extra deps)
-ferogram = { version = "0.4.0", features = ["html"] }
+ferogram = { version = "0.5.0", features = ["html"] }
 
 # HTML parsing (spec-compliant, adds html5ever dep)
-ferogram = { version = "0.4.0", features = ["html5ever"] }
+ferogram = { version = "0.5.0", features = ["html5ever"] }
 
 # Multiple features at once
-ferogram = { version = "0.4.0", features = ["sqlite-session", "html"] }
+ferogram = { version = "0.5.0", features = ["sqlite-session", "html"] }
 </code></pre>
 <hr>
 <h2 id="ferogram-tl-types-1"><a class="header" href="#ferogram-tl-types-1">ferogram-tl-types</a></h2>
@@ -12604,14 +12509,14 @@ ferogram = { version = "0.4.0", features = ["sqlite-session", "html"] }
 </table>
 </div>
 <h3 id="example-enable-serde"><a class="header" href="#example-enable-serde">Example: enable serde</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.4.0", features = ["tl-api", "impl-serde"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.5.0", features = ["tl-api", "impl-serde"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let json = serde_json::to_string(&amp;some_tl_type)?;
 <span class="boring">}</span></code></pre>
 <h3 id="example-name_for_id-debugging"><a class="header" href="#example-name_for_id-debugging">Example: name_for_id (debugging)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.4.0", features = ["tl-api", "name-for-id"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.5.0", features = ["tl-api", "name-for-id"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -12622,13 +12527,13 @@ if let Some(name) = name_for_id(0x74ae4240) {
 }
 <span class="boring">}</span></code></pre>
 <h3 id="example-minimal-no-debug-no-conversions"><a class="header" href="#example-minimal-no-debug-no-conversions">Example: minimal (no Debug, no conversions)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.4.0", default-features = false, features = ["tl-api"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.5.0", default-features = false, features = ["tl-api"] }
 </code></pre>
 <p>Reduces compile time when you don’t need convenience traits.</p>
 <hr>
 <h2 id="string-session-no-feature-flag-needed"><a class="header" href="#string-session-no-feature-flag-needed">String session: no feature flag needed</a></h2>
 <p><code>StringSessionBackend</code> and <code>export_session_string()</code> are available in the default build: no feature flag required:</p>
-<pre><code class="language-toml">ferogram = "0.4.0"   # already includes StringSessionBackend
+<pre><code class="language-toml">ferogram = "0.5.0"   # already includes StringSessionBackend
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {

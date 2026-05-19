@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -192,16 +192,34 @@ the data comes from.</p>
 <tr><th>Method</th><th>Input</th><th>Best for</th></tr>
 </thead>
 <tbody>
-<tr><td><code>upload_file</code></td><td><code>&amp;[u8]</code></td><td>Small files already in memory (under ~10 MB)</td></tr>
-<tr><td><code>upload_file_concurrent</code></td><td><code>Arc&lt;Vec&lt;u8&gt;&gt;</code></td><td>Large files already in memory (10 MB+), parallel chunks</td></tr>
-<tr><td><code>upload_stream</code></td><td><code>impl AsyncRead</code></td><td>Files on disk or any async reader</td></tr>
+<tr><td><code>upload_file(path)</code></td><td>path on disk</td><td>Any file - stat → chunked upload</td></tr>
+<tr><td><code>upload(source, name)</code></td><td><code>impl AsyncRead</code></td><td>In-memory bytes or any async reader</td></tr>
 </tbody>
 </table>
 </div>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_file(name: &amp;str, data: &amp;[u8]) → Result&lt;UploadedFile, InvocationError&gt;</span>
+<span class="api-card-sig">client.upload_file(path: impl AsRef&lt;Path&gt;) → Result&lt;UploadedFile, InvocationError&gt;</span>
+<p>Upload a file from disk. Stats the file for optimal part sizing, then uploads in chunks. Automatically uses parallel workers and <code>saveBigFilePart</code> for files over 10 MB.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let uploaded = client.upload_file("/tmp/photo.jpg").await?;
+client.send_media(peer, InputMessage::media(uploaded.as_photo_media())).await?;
+<span class="boring">}</span></code></pre>
+<hr>
+<p><span class="api-card-sig">client.upload(source: impl AsyncRead + Unpin + Send, name: &amp;str) → Result&lt;UploadedFile, InvocationError&gt;</span></p>
+<p>Upload from any <code>AsyncRead</code> source (in-memory <code>Cursor</code>, network stream, etc.). Buffers the stream to determine size, then uploads with optimal part sizing.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// from a Vec&lt;u8&gt;
+use std::io::Cursor;
+let uploaded = client.upload(Cursor::new(bytes), "photo.jpg").await?;
+
+// from a tokio File
+let f = tokio::fs::File::open("video.mp4").await?;
+let uploaded = client.upload(f, "video.mp4").await?;
+<span class="boring">}</span></code></pre>
 </div>
 
 <div class="api-card-body">
@@ -210,118 +228,8 @@ a time. Suitable for files under ~10 MB or when parallelism is not needed.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let bytes: Vec&lt;u8&gt; = std::fs::read("photo.jpg")?;
-let uploaded = client.upload_file("photo.jpg", &amp;bytes).await?;
+let uploaded = client.upload_file("/tmp/photo.jpg").await?;
 <span class="boring">}</span></code></pre>
-</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_file_concurrent(name: &amp;str, data: Arc&lt;Vec&lt;u8&gt;&gt;, mime_type: &amp;str) → Result&lt;UploadedFile, InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">
-Upload using a parallel worker pool. Takes <code>Arc&lt;Vec&lt;u8&gt;&gt;</code> for
-zero-copy sharing across worker tasks. Significantly faster for large files
-(video, large documents) because multiple chunks are in flight simultaneously.
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use std::sync::Arc;
-
-let bytes = Arc::new(std::fs::read("video.mp4")?);
-let uploaded = client
-    .upload_file_concurrent("video.mp4", bytes, "video/mp4")
-    .await?;
-<span class="boring">}</span></code></pre>
-</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_stream&lt;R: AsyncRead + Unpin&gt;(reader: &amp;mut R, name: &amp;str, mime_type: &amp;str) → Result&lt;UploadedFile, InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">
-Upload from any type that implements <code>tokio::io::AsyncRead</code>. Reads
-the entire reader into memory, then automatically delegates to
-<code>upload_file_concurrent</code> for large data or <code>upload_file</code>
-for small data based on a built-in threshold.
-<p>This is the most convenient method when working with files on disk, network
-streams, or in-memory cursors.</p>
-<h3 id="parameters"><a class="header" href="#parameters">Parameters</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Param</th><th>Type</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>reader</code></td><td><code>&amp;mut impl AsyncRead + Unpin</code></td><td>Any async reader: <code>tokio::fs::File</code>, <code>tokio::io::BufReader</code>, <code>std::io::Cursor</code>, etc.</td></tr>
-<tr><td><code>name</code></td><td><code>&amp;str</code></td><td>Filename that Telegram stores and shows to recipients.</td></tr>
-<tr><td><code>mime_type</code></td><td><code>&amp;str</code></td><td>MIME type. Pass <code>""</code> to auto-detect from the file extension in <code>name</code>.</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="examples"><a class="header" href="#examples">Examples</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Upload from a file on disk
-use tokio::fs::File;
-
-let mut f = File::open("document.pdf").await?;
-let uploaded = client
-    .upload_stream(&amp;mut f, "document.pdf", "application/pdf")
-    .await?;
-<span class="boring">}</span></code></pre>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Auto-detect MIME type from the filename extension
-let mut f = File::open("photo.jpg").await?;
-let uploaded = client
-    .upload_stream(&amp;mut f, "photo.jpg", "")   // "" -&gt; auto-detects image/jpeg
-    .await?;
-<span class="boring">}</span></code></pre>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Upload from an in-memory buffer via std::io::Cursor
-use std::io::Cursor;
-use tokio::io::BufReader;
-
-let data: Vec&lt;u8&gt; = generate_pdf_bytes();
-let mut reader = BufReader::new(Cursor::new(data));
-let uploaded = client
-    .upload_stream(&amp;mut reader, "report.pdf", "application/pdf")
-    .await?;
-<span class="boring">}</span></code></pre>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Upload a file produced by an async process (e.g. compression)
-use tokio::io::AsyncWriteExt;
-
-let (reader, mut writer) = tokio::io::duplex(64 * 1024);
-tokio::spawn(async move {
-    // write compressed data to writer ...
-    writer.shutdown().await.unwrap();
-});
-
-let mut r = reader;
-let uploaded = client
-    .upload_stream(&amp;mut r, "archive.gz", "application/gzip")
-    .await?;
-<span class="boring">}</span></code></pre>
-<h3 id="notes"><a class="header" href="#notes">Notes</a></h3>
-<ul>
-<li><code>upload_stream</code> reads the entire reader to completion before uploading.
-There is no true streaming upload to Telegram; the data must fit in memory.</li>
-<li>For data already in memory as <code>Vec&lt;u8&gt;</code>, prefer <code>upload_file</code> or
-<code>upload_file_concurrent</code> to avoid the extra <code>read_to_end</code> allocation.</li>
-<li>The MIME type is used by Telegram clients to decide how to display the file
-(inline image preview, audio player, generic document, etc.). Passing <code>""</code>
-enables built-in MIME detection from the file extension.</li>
-</ul>
 </div>
 
 </div>
@@ -410,134 +318,48 @@ client.send_album(peer.clone(), items).await?;
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// To bytes: sequential
-let bytes: Vec&lt;u8&gt; = client.download_media(&amp;msg_media).await?;
+```rust
+let mut buf = Vec::new();
+client.download(msg.media().unwrap(), &amp;mut buf).await?;
 
-// To bytes: parallel chunks
-let bytes = client.download_media_concurrent(&amp;msg_media).await?;
+client.download_file(msg.media().unwrap(), "/tmp/output.jpg").await?;
 
-// Stream to file
-client.download_file(&amp;msg_media, "output.jpg").await?;
+let bytes = msg.bytes().await?;                        // → Vec&lt;u8&gt;
 
-// Via Downloadable trait (Photo, Document, Sticker)
-let bytes = client.download(&amp;photo).await?;
-<span class="boring">}</span></code></pre>
-<h3 id="downloaditer-streaming-chunks"><a class="header" href="#downloaditer-streaming-chunks"><code>DownloadIter</code>: streaming chunks</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let location = msg.raw.download_location().unwrap();
-let mut iter = client.iter_download(location);
-iter = iter.chunk_size(128 * 1024); // 128 KB chunks
+let mut file = tokio::fs::File::create("out.mp4").await?;
+msg.download(&amp;mut file).await?;                        // stream to file
 
-while let Some(chunk) = iter.next().await? {
-    file.write_all(&amp;chunk).await?;
+if let Some(mut iter) = client.iter_download(msg.media().unwrap()) {
+    while let Some(chunk) = iter.next().await? {
+        // chunk: bytes::Bytes - zero-copy slice
+        process(&amp;chunk);
+    }
 }
 <span class="boring">}</span></code></pre>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Method</th><th>Description</th></tr>
+<tr><th>Method</th><th>Dest</th><th>Returns</th></tr>
 </thead>
 <tbody>
-<tr><td><code>client.iter_download(location)</code></td><td>Create a lazy chunk iterator</td></tr>
-<tr><td><code>iter.chunk_size(bytes)</code></td><td>Set download chunk size</td></tr>
-<tr><td><code>iter.next()</code></td><td><code>async → Option&lt;Vec&lt;u8&gt;&gt;</code></td></tr>
+<tr><td><code>client.download(media, dest)</code></td><td>any <code>AsyncWrite</code></td><td><code>u64</code> bytes written</td></tr>
+<tr><td><code>client.download_file(media, path)</code></td><td>file on disk</td><td><code>u64</code> bytes written</td></tr>
+<tr><td><code>client.iter_download(media)</code></td><td>caller-driven</td><td><code>Option&lt;DownloadIter&gt;</code></td></tr>
+<tr><td><code>msg.download(dest)</code></td><td>any <code>AsyncWrite</code></td><td><code>u64</code> bytes written</td></tr>
+<tr><td><code>msg.bytes()</code></td><td>in-memory <code>Vec&lt;u8&gt;</code></td><td><code>Vec&lt;u8&gt;</code></td></tr>
 </tbody>
 </table>
 </div>
-<hr>
-<h2 id="photo-type"><a class="header" href="#photo-type"><code>Photo</code> type</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use ferogram::media::Photo;
-
-let photo = Photo::from_media(&amp;msg.raw).unwrap();
-// or
-let photo = msg.photo().unwrap();
-
-photo.id()                // i64
-photo.access_hash()       // i64
-photo.date()              // i32: Unix timestamp
-photo.has_stickers()      // bool
-photo.largest_thumb_type() // &amp;str: e.g. "y", "x", "s"
-
-let bytes = client.download(&amp;photo).await?;
-<span class="boring">}</span></code></pre>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Constructor</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>Photo::from_raw(tl::types::Photo)</code></td><td>Wrap raw TL photo</td></tr>
-<tr><td><code>Photo::from_media(&amp;MessageMedia)</code></td><td>Extract from message media</td></tr>
-</tbody>
-</table>
-</div>
-<hr>
-<h2 id="document-type"><a class="header" href="#document-type"><code>Document</code> type</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use ferogram::media::Document;
-
-let doc = Document::from_media(&amp;msg.raw).unwrap();
-// or
-let doc = msg.document().unwrap();
-
-doc.id()              // i64
-doc.access_hash()     // i64
-doc.date()            // i32
-doc.mime_type()       // &amp;str
-doc.size()            // i64: bytes
-doc.file_name()       // Option&lt;&amp;str&gt;
-doc.is_animated()     // bool: animated GIF or sticker
-
-let bytes = client.download(&amp;doc).await?;
-<span class="boring">}</span></code></pre>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Constructor</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>Document::from_raw(tl::types::Document)</code></td><td>Wrap raw TL document</td></tr>
-<tr><td><code>Document::from_media(&amp;MessageMedia)</code></td><td>Extract from message media</td></tr>
-</tbody>
-</table>
-</div>
-<hr>
-<h2 id="sticker-type"><a class="header" href="#sticker-type"><code>Sticker</code> type</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use ferogram::media::Sticker;
-
-let sticker = Sticker::from_media(&amp;msg.raw).unwrap();
-
-sticker.id()          // i64
-sticker.mime_type()   // &amp;str: "image/webp" or "video/webm"
-sticker.emoji()       // Option&lt;&amp;str&gt;: associated emoji
-sticker.is_video()    // bool: animated video sticker
-
-let bytes = client.download(&amp;sticker).await?;
-<span class="boring">}</span></code></pre>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Constructor</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>Sticker::from_document(Document)</code></td><td>Wrap a document as a sticker</td></tr>
-<tr><td><code>Sticker::from_media(&amp;MessageMedia)</code></td><td>Extract sticker from message</td></tr>
-</tbody>
-</table>
-</div>
-<hr>
 <h2 id="downloadable-trait"><a class="header" href="#downloadable-trait"><code>Downloadable</code> trait</a></h2>
-<p><code>Photo</code>, <code>Document</code>, and <code>Sticker</code> all implement <code>Downloadable</code>, so you can use <code>client.download(&amp;item)</code> on any of them uniformly.</p>
+<h2 id="downloadable-trait-1"><a class="header" href="#downloadable-trait-1"><code>Downloadable</code> trait</a></h2>
+<p><code>Photo</code>, <code>Document</code>, and <code>Sticker</code> all implement <code>Downloadable</code>, so you can use <code>client.download_item(&amp;item)</code> (internal) on any of them uniformly.
+For the public API, pass <code>msg.media()</code> to <code>client.download</code>.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use ferogram::media::Downloadable;
 
 async fn save_any&lt;D: Downloadable&gt;(client: &amp;Client, item: &amp;D) -&gt; Vec&lt;u8&gt; {
+    // internal method - public API uses client.download(media, dest)
     client.download(item).await.unwrap()
 }
 <span class="boring">}</span></code></pre>
@@ -548,12 +370,10 @@ async fn save_any&lt;D: Downloadable&gt;(client: &amp;Client, item: &amp;D) -&gt
 </span>// Get an InputFileLocation from the raw message
 use ferogram::media::download_location_from_media;
 
-if let Some(loc) = download_location_from_media(&amp;msg.raw) {
-    let bytes = client.download_media(&amp;loc).await?;
-}
+// use msg.bytes() or client.download(msg.media().unwrap(), &amp;mut buf) instead
 
 // Or via IncomingMessage convenience:
-msg.download_media("output.jpg").await?;
+client.download_file(msg.media().unwrap(), "output.jpg").await?;
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="media-groups-albums"><a class="header" href="#media-groups-albums">Media groups (albums)</a></h2>

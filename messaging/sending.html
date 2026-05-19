@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -245,7 +245,7 @@ msg.pin().await?;
 msg.unpin().await?;
 
 // Mark as read
-msg.mark_as_read().await?;
+msg.mark_read().await?;
 
 // Reload from server
 msg.refetch().await?;
@@ -306,14 +306,14 @@ client.delete_messages(&amp;[msg_id_1, msg_id_2], true).await?;
 
 // Pin / unpin
 client.pin_message("@peer", msg_id).await?;
-client.unpin_message("@peer", msg_id).await?;
+client.pin_message("@peer", msg_id, false).await?;
 client.unpin_all_messages("@peer").await?;
 
 // Get pinned message
 let pinned = client.get_pinned_message("@peer").await?;
 
 // Mark as read
-client.mark_as_read("@peer").await?;
+client.mark_read("@peer").await?;
 
 // Export a permanent message link
 let link = client.export_message_link("@peer", msg_id).await?;

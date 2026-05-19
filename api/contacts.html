@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -276,7 +276,7 @@ for user in &amp;result.users {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.block_user(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.block(peer: impl Into&lt;PeerRef&gt;, block: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -288,7 +288,7 @@ Block a user. Blocked users cannot send you messages, see your phone number, or 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.unblock_user(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
+<!-- removed: use block(peer, false) --> → Result&lt;(), InvocationError&gt;
 </div>
 
 <div class="api-card-body">
@@ -328,7 +328,7 @@ loop {
 </span>// Find and block all users named "Spammer"
 let results = client.search_contacts("Spammer", 50).await?;
 for peer in results {
-    client.block_user(peer).await?;
+    client.block(peer, true).await?;
     println!("Blocked {peer:?}");
 }
 

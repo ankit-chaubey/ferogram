@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -201,7 +201,7 @@ client.send_message("+12025551234", "hi").await?;
 // t.me URL
 client.send_message("https://t.me/telegram", "hi").await?;
 
-// Invite link (must already be a member, otherwise call join_by_invite first)
+// Invite link (must already be a member, otherwise call join_link first)
 client.send_message("https://t.me/+AbCdEfGhIjKl", "hi").await?;
 
 // Positive i64: user ID
@@ -211,7 +211,7 @@ client.send_message(12345678_i64, "hi").await?;
 client.get_message_history(-1001234567890_i64, 50, 0).await?;
 
 // Small negative i64: basic group
-client.mark_as_read(-123456_i64).await?;
+client.mark_read(-123456_i64).await?;
 
 // Raw TL peer: zero cost, no network call
 use ferogram::tl;
@@ -261,7 +261,7 @@ let peer = client.resolve(raw).await?;
 let ip: tl::enums::InputPeer = get_it_from_somewhere();
 let peer = client.resolve(ip).await?;
 <span class="boring">}</span></code></pre>
-<p><code>client.resolve_peer(peer: &amp;str)</code> is the string-only variant; use it when the input is always a <code>&amp;str</code>. Use <code>resolve()</code> for everything else.</p>
+<p><code>client.resolve(peer: &amp;str)</code> is the string-only variant; use it when the input is always a <code>&amp;str</code>. Use <code>resolve()</code> for everything else.</p>
 <p>To go from a <code>Peer</code> back to an <code>InputPeer</code> (with access hash):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -323,11 +323,11 @@ if let enums::UserFull::UserFull(info) = uf.full_user {
 }).await?;
 <span class="boring">}</span></code></pre>
 <h2 id="access-hashes"><a class="header" href="#access-hashes">Access hashes</a></h2>
-<p>Many raw API calls need an <code>access_hash</code> alongside user/channel IDs. The internal peer cache is populated by <code>resolve_peer</code>, <code>get_participants</code>, <code>get_dialogs</code>, etc.:</p>
+<p>Many raw API calls need an <code>access_hash</code> alongside user/channel IDs. The internal peer cache is populated by <code>resolve</code>, <code>get_participants</code>, <code>get_dialogs</code>, etc.:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// This populates the peer cache
-let peer = client.resolve_peer("@username").await?;
+let peer = client.resolve("@username").await?;
 
 // For users
 let user_hash = client.inner_peer_cache_users().get(&amp;user_id).copied().unwrap_or(0);

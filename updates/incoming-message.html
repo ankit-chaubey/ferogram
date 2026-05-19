@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -292,8 +292,8 @@ msg.delete_with(&amp;client).await?;
 <h3 id="mark-as-read"><a class="header" href="#mark-as-read">Mark as read</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>msg.mark_as_read().await?;
-msg.mark_as_read_with(&amp;client).await?;
+</span>msg.mark_read().await?;
+msg.mark_read_with(&amp;client).await?;
 <span class="boring">}</span></code></pre>
 <h3 id="pin--unpin"><a class="header" href="#pin--unpin">Pin / Unpin</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -324,7 +324,10 @@ msg.forward_to_with(&amp;client, peer).await?;
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Download attached media to a file path, returns true if media existed
-let downloaded = msg.download_media("output.jpg").await?;
+// to disk
+client.download_file(msg.media().unwrap(), "output.jpg").await?;
+// to memory
+let bytes = msg.bytes().await?;
 <span class="boring">}</span></code></pre>
 <h3 id="fetch-replied-to-message"><a class="header" href="#fetch-replied-to-message">Fetch replied-to message</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -346,7 +349,7 @@ msg.refetch_with(&amp;client).await?;
 </span><span class="boring">fn main() {
 </span>// Fetch the replied-to message by ID
 if let Some(reply_id) = msg.reply_to_message_id() {
-    let parent = client.get_message_by_id(msg.peer(), reply_id).await?;
+    let parent = client.get_messages(msg.peer(), &amp;[reply_id]).await.ok().and_then(|mut v| v.into_iter().next()).await?;
 }
 <span class="boring">}</span></code></pre>
 <hr>
@@ -375,7 +378,7 @@ while let Some(update) = stream.next().await {
 
             } else if let Some(media) = msg.media() {
                 msg.reply("Downloading…").await.ok();
-                msg.download_media("received_file").await.ok();
+                msg.bytes().await.ok();
                 msg.react("✅").await.ok();
             }
         }

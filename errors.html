@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6eda89bf.js"></script>
@@ -223,7 +223,7 @@ match client.send_message("@peer", "Hello").await {
 <tr><td><code>InvocationError::Io(io::Error)</code></td><td>Network or socket error</td></tr>
 <tr><td><code>InvocationError::Deserialize(e)</code></td><td>Failed to decode server response</td></tr>
 <tr><td><code>InvocationError::Dropped</code></td><td>Request dropped (sender task shut down)</td></tr>
-<tr><td><code>InvocationError::PeerNotCached(String)</code></td><td>Peer seen before but its <code>access_hash</code> was never stored; resolve via <code>client.resolve_peer()</code> first</td></tr>
+<tr><td><code>InvocationError::PeerNotCached(String)</code></td><td>Peer seen before but its <code>access_hash</code> was never stored; resolve via <code>client.resolve()</code> first</td></tr>
 </tbody>
 </table>
 </div>

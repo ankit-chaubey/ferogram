@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -220,7 +220,7 @@ for doc in &amp;set.documents {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.install_sticker_set(stickerset: tl::enums::InputStickerSet, archived: bool) → Result&lt;tl::enums::messages::StickerSetInstallResult, InvocationError&gt;</span>
+<span class="api-card-sig">client.toggle_stickers(stickerset: tl::enums::InputStickerSet, archived: bool) → Result&lt;tl::enums::messages::StickerSetInstallResult, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -228,7 +228,7 @@ Install a sticker set for the current account. Pass <code>archived: true</code> 
 <p>The return value is <code>StickerSetInstallResult::Success</code> on a clean install, or <code>StickerSetInstallResult::Archive</code> when older sets were moved to the archive to make room.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let result = client.install_sticker_set(
+</span>let result = client.toggle_stickers(
     tl::enums::InputStickerSet::InputStickerSetShortName(
         tl::types::InputStickerSetShortName { short_name: "Animals".into() }
     ),
@@ -242,7 +242,7 @@ Install a sticker set for the current account. Pass <code>archived: true</code> 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.uninstall_sticker_set(stickerset: tl::enums::InputStickerSet) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.untoggle_stickers(stickerset: tl::enums::InputStickerSet) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">

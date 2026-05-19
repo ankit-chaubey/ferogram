@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -321,7 +321,7 @@ async fn compute_answer() -&gt; String {
     // Show "uploading document…" while the upload runs
     let _guard = client.uploading_document(peer.clone()).await?;
 
-    let uploaded = client.upload_file(filename, &amp;bytes).await?;
+    let uploaded = client.upload_file(filename).await?;
 
     drop(_guard); // cancel the indicator before sending
 

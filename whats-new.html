@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-6eda89bf.js"></script>
@@ -183,6 +183,88 @@
                     <main>
                         <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
+<hr>
+<h2 id="v050"><a class="header" href="#v050">v0.5.0</a></h2>
+<p>Released 2026-05-16. API consolidation release. Paired functions that differed only by a single boolean condition have been merged into one. Download and upload paths were redesigned around <code>AsyncRead</code>/<code>AsyncWrite</code>. No new protocol or behavioural changes.</p>
+<h3 id="breaking-changes"><a class="header" href="#breaking-changes">Breaking changes</a></h3>
+<p><strong>Merged paired functions into one</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Removed</th><th>Replacement</th></tr>
+</thead>
+<tbody>
+<tr><td><code>set_online()</code> / <code>set_offline()</code></td><td><code>set_presence(online: bool)</code></td></tr>
+<tr><td><code>block_user(peer)</code> / <code>unblock_user(peer)</code></td><td><code>block(peer, true/false)</code></td></tr>
+<tr><td><code>pin_dialog(peer)</code> / <code>unpin_dialog(peer)</code></td><td><code>pin_dialog(peer, true/false)</code></td></tr>
+<tr><td><code>archive_chat(peer)</code> / <code>unarchive_chat(peer)</code></td><td><code>archive(peer, true/false)</code></td></tr>
+<tr><td><code>pin_message(peer, id, silent)</code> / <code>unpin_message(peer, id)</code></td><td><code>pin_message(peer, id, true/false)</code></td></tr>
+<tr><td><code>delete_channel(peer)</code> / <code>delete_chat(id)</code></td><td><code>delete_chat(peer)</code> (dispatches by peer type)</td></tr>
+<tr><td><code>install_sticker_set(set, archived)</code> / <code>uninstall_sticker_set(set)</code></td><td><code>toggle_stickers(set, true/false)</code></td></tr>
+<tr><td><code>get_broadcast_stats(peer)</code> / <code>get_megagroup_stats(peer)</code></td><td><code>stats(peer) -&gt; ChannelStats</code></td></tr>
+<tr><td><code>get_poll_stats(peer, id)</code> / <code>get_poll_results(peer, id)</code></td><td><code>poll_results(peer, id)</code></td></tr>
+<tr><td><code>promote_participant</code> / <code>demote_participant</code></td><td><code>set_admin(peer, user, rights)</code></td></tr>
+<tr><td><code>ban_participant(peer, user)</code> / <code>ban_participant_until(peer, user, ts)</code></td><td><code>ban(peer, user, until: Option&lt;i32&gt;)</code></td></tr>
+<tr><td><code>kick_participant(peer, user)</code></td><td><code>kick(peer, user)</code></td></tr>
+<tr><td><code>set_banned_rights(peer, user, rights)</code></td><td><code>restrict(peer, user, rights)</code></td></tr>
+<tr><td><code>set_admin_rights(peer, user, rights)</code></td><td><code>set_admin(peer, user, rights)</code></td></tr>
+<tr><td><code>set_profile(first, last, about)</code> / <code>set_username(u)</code> / <code>set_emoji_status(id, until)</code> / <code>edit_chat_title</code> / <code>edit_chat_about</code> / <code>edit_chat_photo</code></td><td><code>set_profile(peer) -&gt; SetProfileBuilder</code></td></tr>
+<tr><td><code>get_message_by_id(peer, id)</code> / <code>get_messages_by_id(peer, ids)</code></td><td><code>get_messages(peer, ids)</code></td></tr>
+<tr><td><code>mark_as_read(peer)</code> / <code>mark_dialog_read(peer)</code></td><td><code>mark_read(peer)</code></td></tr>
+<tr><td><code>resolve_peer(str)</code></td><td><code>resolve(str)</code> (or pass peer string directly via <code>PeerRef</code>)</td></tr>
+<tr><td><code>accept_invite_link(link)</code></td><td><code>join_link(link)</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Download and upload API redesigned</strong></p>
+<p>Old API passed raw <code>InputFileLocation</code> handles. New API works directly with <code>&amp;MessageMedia</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// download to any AsyncWrite sink
+client.download(msg.media().unwrap(), &amp;mut file).await?;
+
+// download to disk
+client.download_file(msg.media().unwrap(), "photo.jpg").await?;
+
+// lazy chunk iterator
+let mut iter = client.iter_download(msg.media().unwrap()).unwrap();
+while let Some(chunk) = iter.next().await? { ... }
+
+// upload from any AsyncRead
+let uploaded = client.upload(reader, "file.jpg").await?;
+
+// upload from path (stats file, streams to upload)
+let uploaded = client.upload_file_from_path("photo.jpg").await?;
+<span class="boring">}</span></code></pre>
+<p><code>IncomingMessage</code> also gains two convenience methods:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>msg.download(&amp;mut buf).await?;   // stream to AsyncWrite
+let bytes = msg.bytes().await?;  // into Vec&lt;u8&gt;
+<span class="boring">}</span></code></pre>
+<p><strong><code>set_profile</code> is now a builder</strong></p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// user
+client.set_profile("me").name("Alice", "").bio("Hello!").send().await?;
+
+// channel / group
+client.set_profile("@mychannel").title("New Name").bio("About text").send().await?;
+<span class="boring">}</span></code></pre>
+<p><strong><code>stats</code> returns <code>ChannelStats</code></strong></p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>match client.stats("@mychannel").await? {
+    ChannelStats::Broadcast(s) =&gt; { /* channel */ }
+    ChannelStats::Megagroup(s) =&gt; { /* supergroup */ }
+}
+<span class="boring">}</span></code></pre>
+<p><strong>Upload part-size table revised</strong></p>
+<p>Five tiers keyed on file size (&lt; 1 MB, 1-32 MB, 32-512 MB, 512 MB-1 GB, &gt; 1 GB) replace the old two-tier heuristic. This reduces per-chunk overhead for small files and stays safely below the 4000-part hard limit for large ones.</p>
+<h3 id="upgrading-from-041"><a class="header" href="#upgrading-from-041">Upgrading from 0.4.1</a></h3>
+<pre><code class="language-toml">ferogram = "0.5.0"
+</code></pre>
+<p>Rename call sites per the table above. The session format, feature flags, and all other APIs are unchanged.</p>
 <hr>
 <h2 id="v041"><a class="header" href="#v041">v0.4.1</a></h2>
 <p>Released 2026-05-14. Patch on top of 0.4.0: one new API for faster onboarding, a configurable update buffer, session schema improvements, and 15 new examples. No breaking changes.</p>
@@ -360,7 +442,7 @@ let chat   = msg.peer_id().bare_id();   // Option&lt;i64&gt;
     })
     .connect().await?;
 <span class="boring">}</span></code></pre>
-<h3 id="breaking-changes"><a class="header" href="#breaking-changes">Breaking changes</a></h3>
+<h3 id="breaking-changes-1"><a class="header" href="#breaking-changes-1">Breaking changes</a></h3>
 <p><strong><code>download_media_to_file</code> is now <code>download_file</code>:</strong></p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {

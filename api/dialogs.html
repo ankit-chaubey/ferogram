@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -270,14 +270,14 @@ while let Some(msg) = iter.next(&amp;client).await? {
 let messages = client.get_message_history(peer.clone(), 20).await?;
 
 // Specific message IDs
-let messages = client.get_messages_by_id(peer.clone(), &amp;[100, 101, 102]).await?;
+let messages = client.get_messages(peer.clone(), &amp;[100, 101, 102]).await?;
 // Returns Vec&lt;Option&lt;tl::enums::Message&gt;&gt;: None if not found
 
 // Pinned message
 let pinned = client.get_pinned_message(peer.clone()).await?;
 
 // Fetch the message a reply refers to by ID
-let parent = client.get_message_by_id(peer.clone(), reply_id).await?;
+let parent = client.get_messages(peer.clone(), &amp;[reply_id]).await?.into_iter().next();
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="scheduled-messages"><a class="header" href="#scheduled-messages">Scheduled messages</a></h2>
@@ -297,7 +297,7 @@ client.delete_scheduled_messages(peer.clone(), &amp;[scheduled_id]).await?;
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Mark all messages as read
-client.mark_as_read(peer.clone()).await?;
+client.mark_read(peer.clone()).await?;
 
 // Clear @mention badges
 client.clear_mentions(peer.clone()).await?;
@@ -307,7 +307,7 @@ client.delete_dialog(peer.clone()).await?;
 
 // Pin / unpin a dialog
 client.pin_dialog(peer.clone()).await?;
-client.unpin_dialog(peer.clone()).await?;
+client.pin_dialog(peer.clone(), false).await?;
 
 // Get pinned dialogs (folder_id: 0 = main, 1 = archived)
 let pinned = client.get_pinned_dialogs(0).await?;
@@ -316,13 +316,13 @@ let pinned = client.get_pinned_dialogs(0).await?;
 client.mark_dialog_unread(peer.clone(), true).await?;
 
 // Clear the manual unread flag
-client.mark_dialog_read(peer.clone()).await?;
+client.mark_read(peer.clone()).await?;
 
 // Join a public group/channel
 client.join_chat("@somegroup").await?;
 
 // Accept a private invite link
-client.accept_invite_link("https://t.me/joinchat/AbCdEfG").await?;
+client.join_link("https://t.me/joinchat/AbCdEfG").await?;
 
 // Parse invite hash from any link format
 let hash = Client::parse_invite_hash("https://t.me/+AbCdEfG12345");
@@ -333,10 +333,10 @@ let hash = Client::parse_invite_hash("https://t.me/+AbCdEfG12345");
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Move to archive - chat disappears from the main dialog list
-client.archive_chat("@somebot").await?;
+client.archive("@somebot").await?;
 
 // Move back to main list
-client.unarchive_chat("@somebot").await?;
+client.archive("@somebot").await?;
 <span class="boring">}</span></code></pre>
 <p>Archived chats still receive messages; they are simply hidden from the main list and muted by default until the user opens them.</p>
 <h3 id="low-level-folder-move"><a class="header" href="#low-level-folder-move">Low-level folder move</a></h3>

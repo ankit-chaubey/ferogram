@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -232,35 +232,35 @@ p.is_member()   // bool: active member (not banned, not left)
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Removes the user from a basic group by chat_id (i64)
-// For channels/supergroups, use ban_participant instead
-client.kick_participant(chat_id, user_id).await?;
+// For channels/supergroups, use ban instead
+client.kick(chat_id, user_id).await?;
 <span class="boring">}</span></code></pre>
 <blockquote>
-<p><strong>Note:</strong> <code>kick_participant</code> takes a <code>chat_id: i64</code>, not a <code>PeerRef</code>. Use the raw numeric ID of the basic group.</p>
+<p><strong>Note:</strong> <code>kick</code> takes a <code>chat_id: i64</code>, not a <code>PeerRef</code>. Use the raw numeric ID of the basic group.</p>
 </blockquote>
 <hr>
 <h2 id="ban-participant"><a class="header" href="#ban-participant">Ban participant</a></h2>
-<p><code>ban_participant</code> takes a Unix timestamp for <code>until_date</code>. For granular per-permission restrictions use <code>set_banned_rights</code> with <code>BannedRightsBuilder</code>.</p>
+<p><code>ban</code> takes a Unix timestamp for <code>until_date</code>. For granular per-permission restrictions use <code>restrict</code> with <code>BannedRightsBuilder</code>.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Permanent full ban (until_date = 0)
-client.ban_participant(peer.clone(), user_id, 0).await?;
+client.ban(peer.clone(), user_id, None).await?;
 
 // Timed ban: expires in 24 h
 let expires = (std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 86400) as i32;
-client.ban_participant(peer.clone(), user_id, expires).await?;
+client.ban(peer.clone(), user_id, Some(expires)).await?;
 
 // Unban: set a past timestamp (e.g. 1) to lift the ban
-client.ban_participant(peer.clone(), user_id, 1).await?;
+client.ban(peer.clone(), user_id, Some(1)).await?;
 <span class="boring">}</span></code></pre>
-<p>For per-permission restrictions (no media, no stickers, etc.) use <code>set_banned_rights</code> with <code>BannedRightsBuilder</code>:</p>
+<p>For per-permission restrictions (no media, no stickers, etc.) use <code>restrict</code> with <code>BannedRightsBuilder</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use ferogram::participants::BannedRightsBuilder;
 
 client
-    .set_banned_rights(
+    .restrict(
         peer.clone(),
         user_input_peer,
         BannedRightsBuilder::new()
@@ -297,24 +297,24 @@ client
 </table>
 </div>
 <hr>
-<h2 id="promote-admin-promote_participant-and-adminrightsbuilder"><a class="header" href="#promote-admin-promote_participant-and-adminrightsbuilder">Promote admin: <code>promote_participant</code> and <code>AdminRightsBuilder</code></a></h2>
-<p><code>promote_participant</code> is a boolean shorthand  -  <code>true</code> grants all standard rights, <code>false</code> demotes:</p>
+<h2 id="promote-admin-set_admin-and-adminrightsbuilder"><a class="header" href="#promote-admin-set_admin-and-adminrightsbuilder">Promote admin: <code>set_admin</code> and <code>AdminRightsBuilder</code></a></h2>
+<p><code>set_admin</code> is a boolean shorthand  -  <code>true</code> grants all standard rights, <code>false</code> demotes:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Quick promote (all standard rights except add_admins)
-client.promote_participant(peer.clone(), user_id, true).await?;
+client.set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin()).await?;
 
 // Demote back to regular member
-client.promote_participant(peer.clone(), user_id, false).await?;
+client.set_admin(peer.clone(), user_id, AdminRightsBuilder::new()).await?;
 <span class="boring">}</span></code></pre>
-<p>For fine-grained control, use <code>set_admin_rights</code> with <code>AdminRightsBuilder</code>:</p>
+<p>For fine-grained control, use <code>set_admin</code> with <code>AdminRightsBuilder</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use ferogram::participants::AdminRightsBuilder;
 
 // Promote with specific rights and a custom title
 client
-    .promote_participant(
+    .set_admin(
         peer.clone(),
         user_id,
         AdminRightsBuilder::new()
@@ -329,12 +329,12 @@ client
 
 // Full admin (all standard rights except add_admins)
 client
-    .promote_participant(peer.clone(), user_id, AdminRightsBuilder::full_admin())
+    .set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin())
     .await?;
 
 // Demote: pass an empty builder to remove all admin rights
 client
-    .promote_participant(peer.clone(), user_id, AdminRightsBuilder::new())
+    .set_admin(peer.clone(), user_id, AdminRightsBuilder::new())
     .await?;
 <span class="boring">}</span></code></pre>
 <h3 id="adminrightsbuilder-methods"><a class="header" href="#adminrightsbuilder-methods"><code>AdminRightsBuilder</code> methods</a></h3>
@@ -420,7 +420,7 @@ while let Some(photo) = iter.next().await? {
 client.join_chat("@somegroup").await?;
 
 // Accept a private invite link
-client.accept_invite_link("https://t.me/joinchat/AbCdEfG").await?;
+client.join_link("https://t.me/joinchat/AbCdEfG").await?;
 
 // Parse invite hash from any link format
 let hash = Client::parse_invite_hash("https://t.me/+AbCdEfG12345");
@@ -473,18 +473,18 @@ let all_photos = iter.collect().await?;
 </div>
 <hr>
 <h2 id="low-level-rights-setters"><a class="header" href="#low-level-rights-setters">Low-level rights setters</a></h2>
-<p>For advanced use cases, <code>set_banned_rights</code> and <code>set_admin_rights</code> give direct access to the TL layer:</p>
+<p>For advanced use cases, <code>restrict</code> and <code>set_admin</code> give direct access to the TL layer:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Set banned rights directly (channel/supergroup only)
-client.set_banned_rights(
+client.restrict(
     peer.clone(),
     user_input_peer,
     BannedRightsBuilder::new().send_media(true),
 ).await?;
 
 // Set admin rights directly
-client.set_admin_rights(
+client.set_admin(
     peer.clone(),
     user_input_peer,
     AdminRightsBuilder::new().delete_messages(true),

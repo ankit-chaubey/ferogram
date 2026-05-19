@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2011a82.js";
+            window.path_to_searchindex_js = "../searchindex-f63515b2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-6eda89bf.js"></script>
@@ -183,7 +183,7 @@
                     <main>
                         <h1 id="cdn-downloads"><a class="header" href="#cdn-downloads">CDN Downloads</a></h1>
 <p>Large files on Telegram are often served from <strong>CDN DCs</strong>  -  lightweight edge data-centres that don’t participate in the normal MTProto auth flow. ferogram exposes the full CDN download path via <code>CdnDownloader</code> in <code>ferogram::cdn_download</code>.</p>
-<p>In normal usage you never need to interact with <code>CdnDownloader</code> directly  -  <code>download_media</code>, <code>download_media_concurrent</code>, and <code>iter_download</code> handle CDN redirects transparently. This page is for advanced use-cases where you need explicit control.</p>
+<p>In normal usage you never need to interact with <code>CdnDownloader</code> directly  -  <code>client.download</code>, <code>client.download_file</code>, and <code>iter_download</code> handle CDN redirects transparently. This page is for advanced use-cases where you need explicit control.</p>
 <hr>
 <h2 id="how-cdn-redirects-work"><a class="header" href="#how-cdn-redirects-work">How CDN redirects work</a></h2>
 <ol>
