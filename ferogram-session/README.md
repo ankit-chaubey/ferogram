@@ -11,16 +11,12 @@ Session persistence for ferogram. Extracted in v0.3.7 so you can swap, extend, o
 
 `ferogram` re-exports everything from here, so existing code needs no changes.
 
----
-
 ## Installation
 
 ```toml
 [dependencies]
 ferogram-session = "0.5.0"
 ```
-
----
 
 ## What it stores
 
@@ -29,38 +25,50 @@ ferogram-session = "0.5.0"
 - Peer access-hash cache for users, channels, and groups
 - Min-user message contexts for `InputPeerUserFromMessage`
 
-The binary format is versioned. `load()` handles all previous versions without error. `save()` always writes the current version. Saves are atomic: written to a `.tmp` file first, then renamed into place.
+The binary format is versioned. `load()` handles all previous versions. `save()` always writes the current version. Saves are atomic: written to a `.tmp` file first, then renamed into place.
 
----
+## String Sessions
 
-## Session Types
+Two session string formats are supported. Both are accepted by `Client::builder().session_string("...")` which auto-detects the format.
 
-### PersistedSession
+### Compact (V1/V2)
 
-The main serializable struct. Holds the full DC table, update state, and peer cache.
-
-```rust
-use ferogram_session::PersistedSession;
-use std::path::Path;
-
-let session = PersistedSession::load(Path::new("my.session"))?;
-session.save(Path::new("my.session"))?;
-
-// String (base64) round-trip
-let s = session.to_string();
-let session2 = PersistedSession::from_string(&s)?;
-```
-
-### DcEntry and DcFlags
+Exported by `client.export_session_string()`. Encodes dc_id, ip, port, user_id, and auth key only. Use for serverless or portable deployments.
 
 ```rust
-use ferogram_session::{DcEntry, DcFlags};
+// export
+let s = client.export_session_string().await?;
 
-let entry = DcEntry::from_parts(2, "149.154.167.51", 443, DcFlags::NONE);
-let ipv6  = DcEntry::from_parts(2, "2001:b28:f23d:f001::a", 443, DcFlags::IPV6);
+// import
+Client::builder()
+    .session_string(&s)
+    .connect()
+    .await?;
 ```
 
----
+Encode/decode manually if needed:
+
+```rust
+use ferogram_session::{StringSession, StringSessionError};
+
+let ss = StringSession::decode("AGQy...")?;
+println!("dc={} user={}", ss.session().dc_id, ss.session().user_id);
+println!("{}", ss.encode());
+```
+
+### Native (full state)
+
+Exported by `client.export_native_session_string()`. Includes the full DC table, update counters (PTS, QTS, seq), and peer cache. Use when you need to resume update processing from exactly where you left off.
+
+```rust
+let s = client.export_native_session_string().await?;
+
+// restore
+Client::builder()
+    .session_string(&s)
+    .connect()
+    .await?;
+```
 
 ## Backends
 
@@ -86,7 +94,7 @@ let backend = InMemoryBackend::new();
 
 ### StringSessionBackend
 
-Stores the session as a base64 string. Handy when you can't write to disk, like reading the session from an environment variable in a serverless setup.
+Stores the session as a base64 string. Useful when you cannot write to disk.
 
 ```rust
 use ferogram_session::StringSessionBackend;
@@ -118,8 +126,6 @@ use ferogram_session::LibSqlBackend;
 let backend = LibSqlBackend::open_local("sessions.db")?;
 ```
 
----
-
 ## Custom Backends
 
 Implement `SessionBackend` to add your own storage:
@@ -138,8 +144,6 @@ impl SessionBackend for RedisBackend {
 }
 ```
 
----
-
 ## Feature flags
 
 | Flag | What it enables |
@@ -148,16 +152,12 @@ impl SessionBackend for RedisBackend {
 | `libsql-session` | `LibSqlBackend` via libsql |
 | `serde` | `Serialize`/`Deserialize` on session types |
 
----
-
 ## Stack position
 
 ```
 ferogram
 └ ferogram-session  <-- here
 ```
-
----
 
 ## License
 

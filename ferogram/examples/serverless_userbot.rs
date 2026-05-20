@@ -10,26 +10,21 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
-//! Userbot using a string session instead of a session file.
+//! Userbot that connects from a string session, no session file needed.
 //!
-//! Useful for serverless environments, tiny VPS setups, or anywhere you
-//! can't or don't want to persist files to disk. The session string is
-//! loaded from an env var at startup.
+//! Useful for serverless environments or anywhere you cannot persist files
+//! to disk. The session string is read from SESSION_STRING at startup.
 //!
-//! On connect it sends a message to your Saved Messages to confirm the
-//! session is working, then exits. Good sanity check before wiring up
-//! more logic.
-//!
-//! Run:
-//!   SESSION_STRING="..." cargo run --example serverless_userbot
-//!
-//! To generate a session string, run the string_session_gen example first:
+//! Generate a session string first:
 //!   cargo run --example string_session_gen
+//!
+//! Then run:
+//!   SESSION_STRING="..." cargo run --example serverless_userbot
 
 use ferogram::Client;
 
-const API_ID: i32 = 0; // fill in your api_id from https://my.telegram.org
-const API_HASH: &str = ""; // fill in your api_hash from https://my.telegram.org
+const API_ID: i32 = 0; // fill in from https://my.telegram.org
+const API_HASH: &str = ""; // fill in from https://my.telegram.org
 
 #[tokio::main]
 async fn main() {
@@ -46,7 +41,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let session_string = std::env::var("SESSION_STRING")
-        .map_err(|_| "SESSION_STRING env var not set. Run string_session_gen first.")?;
+        .map_err(|_| "SESSION_STRING not set. Run string_session_gen first.")?;
 
     let (client, _shutdown) = Client::builder()
         .api_id(API_ID)
@@ -63,9 +58,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     client
-        .send_message("me", "Hello from ferogram! String session is working.")
+        .send_message("me", "ferogram string session works.")
         .await?;
-    println!("Sent a message to Saved Messages. Check your Telegram app.");
 
     Ok(())
 }

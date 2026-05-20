@@ -936,6 +936,14 @@ impl SessionBackend for StringSessionBackend {
 
 // Tests
 
+/// Portable compact string-session encoding/decoding (V1/V2 binary base64).
+///
+/// Use via `Client::builder().session_string("ABC...")` which auto-detects
+/// the format. Use this module directly only when you need to inspect or
+/// construct a [`StringSession`] manually.
+pub mod string_session;
+pub use string_session::{FullSession, Session, StringSession, StringSessionError};
+
 #[cfg(test)]
 mod tests {
     use super::*;

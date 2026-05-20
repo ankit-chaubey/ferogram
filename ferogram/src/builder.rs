@@ -103,25 +103,30 @@ impl ClientBuilder {
         self
     }
 
-    /// Use a portable base64 string session.
+    /// Use a string session.
     ///
-    /// Pass an empty string to start fresh: the exported session string
-    /// from [`Client::export_session_string`] can be injected here directly
-    /// (e.g. via an environment variable).
+    /// Accepts two formats:
+    ///
+    /// - **Compact V1/V2**: exported by [`Client::export_session_string`].
+    ///   Encodes dc_id, ip, port, auth_key, user_id.
+    /// - **Native**: exported by [`Client::export_native_session_string`].
+    ///   Full state: DC table, update counters, peer cache.
+    ///
+    /// Pass `""` to start a fresh in-memory session.
     ///
     /// Mutually exclusive with [`session`](Self::session) and
     /// [`in_memory`](Self::in_memory): last call wins.
     pub fn session_string(mut self, s: impl Into<String>) -> Self {
-        self.session_backend = Arc::new(StringSessionBackend::new(s));
-        self
-    }
+        let s: String = s.into();
 
-    /// Use a non-persistent in-memory session (useful for tests).
-    ///
-    /// Mutually exclusive with [`session`](Self::session) and
-    /// [`session_string`](Self::session_string): last call wins.
-    pub fn in_memory(mut self) -> Self {
-        self.session_backend = Arc::new(InMemoryBackend::new());
+        if let Some(persisted) = crate::builder_util::detect_compact_session(&s) {
+            let backend = InMemoryBackend::new();
+            let _ = crate::session_backend::SessionBackend::save(&backend, &persisted);
+            self.session_backend = Arc::new(backend);
+            return self;
+        }
+
+        self.session_backend = Arc::new(StringSessionBackend::new(s));
         self
     }
 

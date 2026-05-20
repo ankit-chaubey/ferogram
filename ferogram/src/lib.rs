@@ -201,6 +201,21 @@ pub mod middleware;
 pub mod update_config;
 pub mod util;
 
+pub(crate) mod builder_util;
+
+/// Portable string-session encoding/decoding (V1/V2 binary base64 format).
+///
+/// Most users never need this module. Just pass any session string
+/// directly to [`ClientBuilder::session_string`] and it is handled automatically.
+///
+/// Use this module only when you need to inspect or construct a
+/// [`StringSession`] value programmatically.
+pub mod string_session {
+    pub use ferogram_session::string_session::{
+        FullSession, Session, StringSession, StringSessionError,
+    };
+}
+
 // Re-export FsmState at the crate root for convenience.
 pub use fsm::FsmState;
 

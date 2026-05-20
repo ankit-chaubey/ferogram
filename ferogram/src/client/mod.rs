@@ -1561,13 +1561,46 @@ impl Client {
         Ok(())
     }
 
-    /// Export the current session as a portable URL-safe base64 string.
+    /// Export the session as a compact string (V2 format).
     ///
-    /// The returned string encodes the auth key, DC, update state, and peer
-    /// cache. Store it in an environment variable or secret manager and pass
-    /// it back via [`Config::with_string_session`] to restore the session
-    /// without re-authenticating.
+    /// Encodes dc_id, ip, port, user_id, and auth key. Store in an env var
+    /// or secret manager and pass back to [`ClientBuilder::session_string`]
+    /// to resume without re-authenticating.
+    ///
+    /// Calls `get_me()` internally to obtain the user_id.
     pub async fn export_session_string(&self) -> Result<String, InvocationError> {
+        use ferogram_session::string_session::{Session, StringSession};
+
+        let me = self.get_me().await?;
+        let persisted = self.build_persisted_session().await;
+        let home_dc_id = persisted.home_dc_id;
+
+        let dc = persisted.dc_for(home_dc_id, false).and_then(|dc| {
+            let auth_key = dc.auth_key?;
+            let socket_addr = dc.socket_addr().ok()?;
+            Some((auth_key, socket_addr))
+        });
+
+        if let Some((auth_key, socket_addr)) = dc {
+            let ss = StringSession::V2(Session {
+                dc_id: home_dc_id as u8,
+                ip: socket_addr.ip(),
+                port: socket_addr.port(),
+                auth_key,
+                user_id: me.id,
+            });
+            Ok(ss.encode())
+        } else {
+            Ok(persisted.to_string())
+        }
+    }
+
+    /// Export the full native session string (DC table, update state, peer cache).
+    ///
+    /// Use this when you need to resume update processing from exactly where
+    /// you left off (PTS, QTS, seq, peer cache intact). Pass the result back
+    /// to [`ClientBuilder::session_string`] which auto-detects the format.
+    pub async fn export_native_session_string(&self) -> Result<String, InvocationError> {
         Ok(self.build_persisted_session().await.to_string())
     }
 
