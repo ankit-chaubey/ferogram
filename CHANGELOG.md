@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.1]: 2026-05-31
+
+### Fixed
+
+- **MessageBoxes: bot skipping every first message.** `force_update_entry` seeded the
+  Common pts from the arriving update instead of the real server baseline, causing every
+  odd-numbered incoming message to be dropped silently.
+
+---
+
 ## [0.5.0]: 2026-05-16
 
 API consolidation release. Paired functions that differed only by a single boolean condition have been merged into one. Download and upload paths were redesigned around `AsyncRead`/`AsyncWrite`. No new protocol or behavioural changes.
