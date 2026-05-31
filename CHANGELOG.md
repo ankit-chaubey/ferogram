@@ -10,6 +10,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.2]: 2026-05-31
+
+### Added
+
+- **`ChannelKind` on `IncomingMessage`.** Three new async methods: `channel_kind()`,
+  `is_megagroup()`, `is_broadcast()`, `is_gigagroup()`. The fast path reads from a
+  per-batch `PeerMap` injected at dispatch time (no lock); the slow path falls back to
+  the session peer cache.
+
+- **`PeerMap` fast path for live updates.** `from_single_update_with_peers()` attaches
+  the batch's chat list to every `IncomingMessage` produced in that batch, so
+  `channel_kind()` never needs to acquire the `PeerCache` lock for the common case.
+
+- **Session format v6.** Each channel peer entry now stores a `ChannelKind` byte
+  (`0xFF` = absent for older entries). Fully backward-compatible: sessions from v2-v5
+  load without changes, just without kind data until the peer is seen again.
+
+- **SQLite and libSQL migration for `channel_kind`.** Both backends add the column if
+  absent and persist/load kind alongside the existing peer fields.
+
+- **`PeerCache::channel_kind_of(channel_id)`.** Direct kind lookup on the in-memory
+  peer cache. Returns `None` for unknown or pre-v6 entries.
+
+- **`build_peer_map(chats)` / `PeerMap` type** in `peer_cache`. Builds a cheap
+  `Arc<HashMap>` from a batch's chat slice; shared across all messages in the batch.
+
+### Fixed
+
+- **`UpdateShortSentMessage` now boxed.** Reduced stack size of `EnvelopeResult` and
+  `message_box` update paths by wrapping the type in `Box`.
+
+- **`adaptor.rs`: flattened nested `if let` into `let ... && let ...`** (Rust 2024
+  let-chains). Fixes an indentation issue that caused the reply-to reconstruction and
+  synthesized `Message` block to be double-indented inside a dead scope.
+
+- **`proxy.rs`: early-return refactor.** `strip_prefix` failure now uses `?` instead of
+  an else branch, eliminating a nesting level.
+
+- **`participants.rs`**: updated all `.copied()` calls on channel map entries to
+  `.map(|&(hash, _)| hash)` following the `channels` value type change to `(i64,
+  Option<ChannelKind>)`.
+
+- **`builder_util.rs`**: use struct-update syntax for `PersistedSession` init instead of
+  default-then-field-assign.
+
+- **`ferogram-mtproto`: HTTP header byte literals** use `*b"..."` syntax instead of
+  explicit `[u8; 4]` arrays.
+
+---
+
 ## [0.5.1]: 2026-05-31
 
 ### Fixed
