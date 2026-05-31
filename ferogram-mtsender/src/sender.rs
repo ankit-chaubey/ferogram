@@ -484,8 +484,10 @@ impl DcConnection {
                 loop {
                     getrandom::getrandom(&mut nonce)
                         .map_err(|_| InvocationError::Deserialize("getrandom".into()))?;
-                    let first = u32::from_le_bytes(nonce[0..4].try_into().unwrap());
-                    let second = u32::from_le_bytes(nonce[4..8].try_into().unwrap());
+                    let first =
+                        u32::from_le_bytes(nonce[0..4].try_into().expect("nonce is [u8;64]"));
+                    let second =
+                        u32::from_le_bytes(nonce[4..8].try_into().expect("nonce is [u8;64]"));
                     let bad = nonce[0] == 0xEF
                         || first == 0x44414548
                         || first == 0x54534F50
@@ -499,12 +501,16 @@ impl DcConnection {
                         break;
                     }
                 }
-                let tx_raw: [u8; 32] = nonce[8..40].try_into().unwrap();
-                let tx_iv: [u8; 16] = nonce[40..56].try_into().unwrap();
+                let tx_raw: [u8; 32] = nonce[8..40].try_into().expect("nonce is [u8;64]");
+                let tx_iv: [u8; 16] = nonce[40..56].try_into().expect("nonce is [u8;64]");
                 let mut rev48 = nonce[8..56].to_vec();
                 rev48.reverse();
-                let rx_raw: [u8; 32] = rev48[0..32].try_into().unwrap();
-                let rx_iv: [u8; 16] = rev48[32..48].try_into().unwrap();
+                let rx_raw: [u8; 32] = rev48[0..32]
+                    .try_into()
+                    .expect("rev48 is nonce[8..56].reversed(), len=48");
+                let rx_iv: [u8; 16] = rev48[32..48]
+                    .try_into()
+                    .expect("rev48 is nonce[8..56].reversed(), len=48");
                 let (tx_key, rx_key): ([u8; 32], [u8; 32]) = if let Some(s) = secret {
                     let mut h = sha2::Sha256::new();
                     h.update(tx_raw);
@@ -539,8 +545,10 @@ impl DcConnection {
                 loop {
                     getrandom::getrandom(&mut nonce)
                         .map_err(|_| InvocationError::Deserialize("getrandom".into()))?;
-                    let first = u32::from_le_bytes(nonce[0..4].try_into().unwrap());
-                    let second = u32::from_le_bytes(nonce[4..8].try_into().unwrap());
+                    let first =
+                        u32::from_le_bytes(nonce[0..4].try_into().expect("nonce is [u8;64]"));
+                    let second =
+                        u32::from_le_bytes(nonce[4..8].try_into().expect("nonce is [u8;64]"));
                     let bad = nonce[0] == 0xEF
                         || first == 0x44414548
                         || first == 0x54534F50
@@ -554,12 +562,16 @@ impl DcConnection {
                         break;
                     }
                 }
-                let tx_raw: [u8; 32] = nonce[8..40].try_into().unwrap();
-                let tx_iv: [u8; 16] = nonce[40..56].try_into().unwrap();
+                let tx_raw: [u8; 32] = nonce[8..40].try_into().expect("nonce is [u8;64]");
+                let tx_iv: [u8; 16] = nonce[40..56].try_into().expect("nonce is [u8;64]");
                 let mut rev48 = nonce[8..56].to_vec();
                 rev48.reverse();
-                let rx_raw: [u8; 32] = rev48[0..32].try_into().unwrap();
-                let rx_iv: [u8; 16] = rev48[32..48].try_into().unwrap();
+                let rx_raw: [u8; 32] = rev48[0..32]
+                    .try_into()
+                    .expect("rev48 is nonce[8..56].reversed(), len=48");
+                let rx_iv: [u8; 16] = rev48[32..48]
+                    .try_into()
+                    .expect("rev48 is nonce[8..56].reversed(), len=48");
                 let (tx_key, rx_key): ([u8; 32], [u8; 32]) = if let Some(s) = secret {
                     let mut h = sha2::Sha256::new();
                     h.update(tx_raw);
@@ -789,12 +801,12 @@ impl DcConnection {
         if body.len() < 4 {
             return Ok(None);
         }
-        let cid = u32::from_le_bytes(body[..4].try_into().unwrap());
+        let cid = u32::from_le_bytes(body[..4].try_into().expect("body.len() >= 4 checked above"));
         match cid {
             0xf35c6d01 /* rpc_result: CID(4) + req_msg_id(8) + result */ => {
                 if body.len() >= 12
                     && let Some(expected) = sent_msg_id {
-                        let resp_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
+                        let resp_id = i64::from_le_bytes(body[4..12].try_into().expect("body.len() >= 12 checked above"));
                         if resp_id != expected {
                             tracing::debug!(
                                 "[dc_pool] rpc_result req_msg_id mismatch \
@@ -806,7 +818,7 @@ impl DcConnection {
                 let inner = if body.len() >= 12 { &body[12..] } else { body };
                 // Inner body may itself be gzip_packed (e.g. help.Config inside rpc_result).
                 if inner.len() >= 4
-                    && u32::from_le_bytes(inner[..4].try_into().unwrap()) == 0x3072cfa1
+                    && u32::from_le_bytes(inner[..4].try_into().expect("inner.len() >= 4 checked above")) == 0x3072cfa1
                 {
                     let mut dummy_salt = *salt;
                     let mut nr = false; let mut nsr = false;
@@ -826,9 +838,9 @@ impl DcConnection {
                     return Ok(None);
                 }
                 if inner.len() >= 8
-                    && u32::from_le_bytes(inner[..4].try_into().unwrap()) == 0x2144ca19
+                    && u32::from_le_bytes(inner[..4].try_into().expect("inner.len() >= 8 checked above")) == 0x2144ca19
                 {
-                    let code = i32::from_le_bytes(inner[4..8].try_into().unwrap());
+                    let code = i32::from_le_bytes(inner[4..8].try_into().expect("inner.len() >= 8 checked above"));
                     let message = tl_read_string(&inner[8..]).unwrap_or_default();
                     return Err(InvocationError::Rpc(
                         crate::errors::RpcError::from_telegram(code, &message),
@@ -840,15 +852,15 @@ impl DcConnection {
                 if body.len() < 8 {
                     return Err(InvocationError::Deserialize("rpc_error short".into()));
                 }
-                let code = i32::from_le_bytes(body[4..8].try_into().unwrap());
+                let code = i32::from_le_bytes(body[4..8].try_into().expect("body.len() >= 8 checked above"));
                 let message = tl_read_string(&body[8..]).unwrap_or_default();
                 Err(InvocationError::Rpc(crate::errors::RpcError::from_telegram(code, &message)))
             }
             0xedab447b /* bad_server_salt */ => {
                 // bad_server_salt#edab447b bad_msg_id:long bad_msg_seqno:int error_code:int new_server_salt:long
                 if body.len() >= 28 {
-                    let bad_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                    let new_salt   = i64::from_le_bytes(body[20..28].try_into().unwrap());
+                    let bad_msg_id = i64::from_le_bytes(body[4..12].try_into().expect("body.len() >= 28 checked above"));
+                    let new_salt   = i64::from_le_bytes(body[20..28].try_into().expect("body.len() >= 28 checked above"));
                     // Only apply new salt when bad_msg_id matches our sent request;
                     // stale frames from prior requests must not corrupt the current salt.
                     if sent_msg_id.is_none_or(|id| id == bad_msg_id) {
@@ -862,9 +874,9 @@ impl DcConnection {
                 // new_session_created#9ec20908 first_msg_id:long unique_id:long server_salt:long
                 // Signal need_session_reset so the caller resets seq_no before resending.
                 if body.len() >= 28 {
-                    let first_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                    let unique_id    = i64::from_le_bytes(body[12..20].try_into().unwrap());
-                    let server_salt  = i64::from_le_bytes(body[20..28].try_into().unwrap());
+                    let first_msg_id = i64::from_le_bytes(body[4..12].try_into().expect("body.len() >= 28 checked above"));
+                    let unique_id    = i64::from_le_bytes(body[12..20].try_into().expect("body.len() >= 28 checked above"));
+                    let server_salt  = i64::from_le_bytes(body[20..28].try_into().expect("body.len() >= 28 checked above"));
                     tracing::debug!(
                         "[dc_pool] new_session_created: unique_id={unique_id:#018x} \
                          first_msg_id={first_msg_id} salt={server_salt}"
@@ -888,9 +900,9 @@ impl DcConnection {
                 // body[16..20]=error_code. Previous code read [12..16] as error_code
                 // (bad_msg_seqno), so error matching always compared the wrong field.
                 if body.len() >= 20 {
-                    let bad_msg_id  = i64::from_le_bytes(body[4..12].try_into().unwrap());
+                    let bad_msg_id  = i64::from_le_bytes(body[4..12].try_into().expect("body.len() >= 20 checked above"));
                     // body[12..16] = bad_msg_seqno, not used for recovery.
-                    let error_code  = u32::from_le_bytes(body[16..20].try_into().unwrap());
+                    let error_code  = u32::from_le_bytes(body[16..20].try_into().expect("body.len() >= 20 checked above"));
                     tracing::debug!(
                         "[dc_pool] bad_msg_notification: bad_msg_id={bad_msg_id:#018x} code={error_code}"
                     );
@@ -937,7 +949,7 @@ impl DcConnection {
                 if body.len() >= 12
                     && let Some(expected) = sent_msg_id
                 {
-                    let pong_req_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
+                    let pong_req_id = i64::from_le_bytes(body[4..12].try_into().expect("body.len() >= 12 for pong"));
                     if pong_req_id == expected {
                         return Ok(Some(body.to_vec()));
                     }
@@ -949,7 +961,7 @@ impl DcConnection {
                 if body.len() < 8 {
                     return Ok(None);
                 }
-                let count = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+                let count = u32::from_le_bytes(body[4..8].try_into().expect("body.len() >= 8 for msg_container")) as usize;
                 let mut pos = 8usize;
                 // Do not early-return: containers may bundle new_session_created + rpc_result
                 // together; all items must be processed so session/salt flags are observed.
@@ -957,7 +969,7 @@ impl DcConnection {
                 for _ in 0..count {
                     if pos + 16 > body.len() { break; }
                     let inner_bytes =
-                        u32::from_le_bytes(body[pos + 12..pos + 16].try_into().unwrap()) as usize;
+                        u32::from_le_bytes(body[pos + 12..pos + 16].try_into().expect("pos+16 <= body.len() checked above")) as usize;
                     pos += 16;
                     if pos + inner_bytes > body.len() { break; }
                     let inner = &body[pos..pos + inner_bytes];
@@ -1214,7 +1226,8 @@ impl DcConnection {
         // distinguish a transport error from a valid encrypted frame; this is
         // correct by protocol structure, not merely empirically safe.
         if buf.len() == 4 {
-            let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
+            let code =
+                i32::from_le_bytes(buf[..4].try_into().expect("buf.len() == 4 checked above"));
             if code < 0 {
                 return Err(InvocationError::Io(std::io::Error::new(
                     std::io::ErrorKind::ConnectionRefused,
@@ -1251,7 +1264,8 @@ impl DcConnection {
         // A 4-byte negative payload is a transport error code from the server.
         // Surface it directly rather than masking it with "plain frame too short".
         if raw.len() == 4 {
-            let code = i32::from_le_bytes(raw[..4].try_into().unwrap());
+            let code =
+                i32::from_le_bytes(raw[..4].try_into().expect("raw.len() == 4 checked above"));
             if code < 0 {
                 return Err(InvocationError::Deserialize(format!(
                     "server transport error during DH: code {code}"
@@ -1261,12 +1275,22 @@ impl DcConnection {
         if raw.len() < 20 {
             return Err(InvocationError::Deserialize("plain frame too short".into()));
         }
-        if u64::from_le_bytes(raw[..8].try_into().unwrap()) != 0 {
+        // auth_key_id must be 0 in plaintext frames; checked after length guard above.
+        if u64::from_le_bytes(
+            raw[..8]
+                .try_into()
+                .expect("raw.len() >= 20 checked above, >= 8 implied"),
+        ) != 0
+        {
             return Err(InvocationError::Deserialize(
                 "expected auth_key_id=0 in plaintext".into(),
             ));
         }
-        let body_len = u32::from_le_bytes(raw[16..20].try_into().unwrap()) as usize;
+        let body_len = u32::from_le_bytes(
+            raw[16..20]
+                .try_into()
+                .expect("raw.len() >= 20 checked above"),
+        ) as usize;
         if raw.len() < 20 + body_len {
             return Err(InvocationError::Deserialize(format!(
                 "plain frame truncated: have {} bytes, need {}",
@@ -1296,7 +1320,7 @@ fn pfs_pool_decode_bind_single(body: &[u8]) -> Result<(), String> {
     if body.len() < 4 {
         return Err("skip".into());
     }
-    let ctor = u32::from_le_bytes(body[..4].try_into().unwrap());
+    let ctor = u32::from_le_bytes(body[..4].try_into().expect("body.len() >= 4 checked above"));
 
     match ctor {
         BOOL_TRUE => Ok(()),
@@ -1304,12 +1328,20 @@ fn pfs_pool_decode_bind_single(body: &[u8]) -> Result<(), String> {
         NEW_SESSION | FUTURE_SALTS | MSGS_ACK | PONG => Err("skip".into()),
 
         RPC_RESULT if body.len() >= 16 => {
-            let inner = u32::from_le_bytes(body[12..16].try_into().unwrap());
+            let inner = u32::from_le_bytes(
+                body[12..16]
+                    .try_into()
+                    .expect("body.len() >= 16 from match arm guard"),
+            );
             match inner {
                 BOOL_TRUE => Ok(()),
                 BOOL_FALSE => Err("rpc_result{boolFalse} (server rejected binding)".into()),
                 RPC_ERROR if body.len() >= 20 => {
-                    let code = i32::from_le_bytes(body[16..20].try_into().unwrap());
+                    let code = i32::from_le_bytes(
+                        body[16..20]
+                            .try_into()
+                            .expect("body.len() >= 20 from match arm guard"),
+                    );
                     let msg = tl_read_string(body.get(20..).unwrap_or(&[])).unwrap_or_default();
                     Err(format!("rpc_error code={code} message={msg:?}"))
                 }
@@ -1318,7 +1350,11 @@ fn pfs_pool_decode_bind_single(body: &[u8]) -> Result<(), String> {
         }
 
         BAD_MSG if body.len() >= 16 => {
-            let code = u32::from_le_bytes(body[12..16].try_into().unwrap());
+            let code = u32::from_le_bytes(
+                body[12..16]
+                    .try_into()
+                    .expect("body.len() >= 16 from match arm guard"),
+            );
             let desc = match code {
                 16 => "msg_id too low (clock skew)",
                 17 => "msg_id too high (clock skew)",
@@ -1334,7 +1370,11 @@ fn pfs_pool_decode_bind_single(body: &[u8]) -> Result<(), String> {
         }
 
         BAD_SALT if body.len() >= 24 => {
-            let new_salt = i64::from_le_bytes(body[16..24].try_into().unwrap());
+            let new_salt = i64::from_le_bytes(
+                body[16..24]
+                    .try_into()
+                    .expect("body.len() >= 24 from match arm guard"),
+            );
             Err(format!(
                 "bad_server_salt, server wants salt={new_salt:#018x}"
             ))
@@ -1354,7 +1394,7 @@ fn pfs_pool_decode_bind_response(body: &[u8]) -> Result<(), String> {
     if body.len() < 4 {
         return Err(format!("response body too short ({} bytes)", body.len()));
     }
-    let ctor = u32::from_le_bytes(body[..4].try_into().unwrap());
+    let ctor = u32::from_le_bytes(body[..4].try_into().expect("body.len() >= 4 checked above"));
 
     if ctor != MSG_CONTAINER {
         return pfs_pool_decode_bind_single(body).map_err(|e| {
@@ -1369,7 +1409,11 @@ fn pfs_pool_decode_bind_response(body: &[u8]) -> Result<(), String> {
     if body.len() < 8 {
         return Err("msg_container too short to read count".into());
     }
-    let count = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+    let count = u32::from_le_bytes(
+        body[4..8]
+            .try_into()
+            .expect("body.len() >= 8 checked above"),
+    ) as usize;
     let mut pos = 8usize;
     let mut last_real_err: Option<String> = None;
 
@@ -1380,7 +1424,11 @@ fn pfs_pool_decode_bind_response(body: &[u8]) -> Result<(), String> {
                 body.len()
             ));
         }
-        let msg_bytes = u32::from_le_bytes(body[pos + 12..pos + 16].try_into().unwrap()) as usize;
+        let msg_bytes = u32::from_le_bytes(
+            body[pos + 12..pos + 16]
+                .try_into()
+                .expect("pos+16 <= body.len() checked above"),
+        ) as usize;
         pos += 16;
 
         if pos + msg_bytes > body.len() {
