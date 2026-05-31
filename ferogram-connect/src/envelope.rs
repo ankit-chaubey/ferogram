@@ -189,7 +189,7 @@ pub enum EnvelopeResult {
     /// Raw update bytes to be routed through dispatch_updates for proper pts tracking.
     RawUpdates(Vec<Vec<u8>>),
     /// updateShortSentMessage as RPC result; full struct for outgoing message reconstruction.
-    SentMessage(tl::types::UpdateShortSentMessage),
+    SentMessage(Box<tl::types::UpdateShortSentMessage>),
     None,
 }
 
@@ -289,7 +289,7 @@ pub fn unwrap_envelope(body: Vec<u8>) -> Result<EnvelopeResult, ConnectError> {
                         "[ferogram] updateShortSentMessage (RPC): pts={} pts_count={}: advancing pts",
                         m.pts, m.pts_count
                     );
-                    Ok(EnvelopeResult::SentMessage(m))
+                    Ok(EnvelopeResult::SentMessage(Box::new(m)))
                 }
                 Err(e) => {
                     tracing::debug!("[ferogram] updateShortSentMessage deserialize error: {e}");

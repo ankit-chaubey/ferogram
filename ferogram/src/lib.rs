@@ -257,8 +257,7 @@ pub use session_backend::{
     BinaryFileBackend, InMemoryBackend, SessionBackend, StringSessionBackend, UpdateStateChange,
 };
 pub use socks5::Socks5Config;
-pub use types::ChannelKind;
-pub use types::{Channel, Chat, Group, User};
+pub use types::{Channel, ChannelKind, Chat, Group, User};
 pub use typing_guard::TypingGuard;
 pub use update::{BotStoppedUpdate, MessageReactionUpdate, PollVoteUpdate};
 pub use update::{ButtonFilter, Update};

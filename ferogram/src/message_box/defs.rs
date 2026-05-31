@@ -198,7 +198,7 @@ pub enum UpdatesLike {
         pts: i32,
         pts_count: i32,
         request_body: Option<Vec<u8>>,
-        update: tl::types::UpdateShortSentMessage,
+        update: Box<tl::types::UpdateShortSentMessage>,
     },
 }
 

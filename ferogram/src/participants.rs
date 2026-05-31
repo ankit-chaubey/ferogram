@@ -95,7 +95,7 @@ impl Client {
                     .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
+                    .map(|&(hash, _)| hash)
                     .unwrap_or(0);
                 self.get_channel_participants(c.channel_id, access_hash, limit)
                     .await
@@ -382,7 +382,7 @@ impl Client {
                     .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
+                    .map(|&(hash, _)| hash)
                     .unwrap_or(0);
                 (c.channel_id, h)
             }
@@ -460,7 +460,7 @@ impl Client {
                     .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
+                    .map(|&(hash, _)| hash)
                     .unwrap_or(0);
                 (c.channel_id, h)
             }
@@ -1023,7 +1023,7 @@ impl Client {
                     .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
+                    .map(|&(hash, _)| hash)
                     .unwrap_or(0);
                 (c.channel_id, h)
             }
@@ -1079,7 +1079,7 @@ impl Client {
                     .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
+                    .map(|&(hash, _)| hash)
                     .unwrap_or(0);
                 (c.channel_id, h)
             }
@@ -1135,7 +1135,7 @@ impl Client {
                     .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
+                    .map(|&(hash, _)| hash)
                     .unwrap_or(0);
                 let filter = filter
                     .unwrap_or(tl::enums::ChannelParticipantsFilter::ChannelParticipantsRecent);
@@ -1235,7 +1235,7 @@ impl Client {
                     .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
+                    .map(|&(hash, _)| hash)
                     .unwrap_or(0);
                 (c.channel_id, h)
             }

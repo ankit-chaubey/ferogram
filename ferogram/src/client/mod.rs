@@ -1028,7 +1028,10 @@ impl Client {
                     cache.chats.insert(p.id);
                 } else if p.is_channel {
                     if p.access_hash != 0 {
-                        cache.channels.entry(p.id).or_insert(p.access_hash);
+                        cache
+                            .channels
+                            .entry(p.id)
+                            .or_insert((p.access_hash, p.channel_kind.map(Into::into)));
                     } else {
                         // Min channel: access_hash was 0 at save time.
                         // Only restore to channels_min if no full hash yet.
@@ -1466,14 +1469,16 @@ impl Client {
                     access_hash: hash,
                     is_channel: false,
                     is_chat: false,
+                    channel_kind: None,
                 });
             }
-            for (&id, &hash) in &cache.channels {
+            for (&id, &(hash, kind)) in &cache.channels {
                 v.push(CachedPeer {
                     id,
                     access_hash: hash,
                     is_channel: true,
                     is_chat: false,
+                    channel_kind: kind.map(Into::into),
                 });
             }
             for &id in &cache.chats {
@@ -1482,6 +1487,7 @@ impl Client {
                     access_hash: 0,
                     is_channel: false,
                     is_chat: true,
+                    channel_kind: None,
                 });
             }
             // channels_min: type byte 3. No access_hash; just existence tracking.
@@ -1492,6 +1498,7 @@ impl Client {
                     access_hash: 0,
                     is_channel: true,
                     is_chat: false,
+                    channel_kind: None,
                 });
             }
             v
@@ -2317,13 +2324,14 @@ impl Client {
                             let c = self.clone();
                             let pts = update.pts;
                             let pts_count = update.pts_count;
+                            let update = *update;
                             tokio::spawn(async move {
                                 let mut mb = c.inner.message_box.lock().await;
                                 let _ = mb.process_updates(message_box::UpdatesLike::SentMessage {
                                     pts,
                                     pts_count,
                                     request_body: sent_body,
-                                    update,
+                                    update: Box::new(update),
                                 });
                             });
                             Ok(vec![])
@@ -3300,8 +3308,9 @@ impl Client {
                         self.mark_session_snapshot_dirty();
                     }
                     // Convert and emit each approved update.
+                    let peer_map = crate::peer_cache::build_peer_map(&parsed.chats);
                     for raw in raw_updates {
-                        let highs = update::from_single_update(raw);
+                        let highs = update::from_single_update_with_peers(raw, peer_map.clone());
                         for u in highs {
                             let u = attach_client_to_update(u, self);
                             if self.inner.update_tx.try_send(u).is_err() {
@@ -3543,7 +3552,11 @@ impl Client {
                 let access_hash = {
                     let cache: tokio::sync::RwLockReadGuard<'_, PeerCache> =
                         self.inner.peer_cache.read().await;
-                    cache.channels.get(&channel_id).copied().unwrap_or(0)
+                    cache
+                        .channels
+                        .get(&channel_id)
+                        .map(|&(h, _)| h)
+                        .unwrap_or(0)
                 };
                 if access_hash == 0 {
                     let auto_resolve = {
@@ -3564,7 +3577,7 @@ impl Client {
                                     .await
                                     .channels
                                     .get(&channel_id)
-                                    .copied()
+                                    .map(|&(hash, _)| hash)
                                     .unwrap_or(0);
                                 if h != 0 {
                                     req.channel = tl::enums::InputChannel::InputChannel(
@@ -3727,6 +3740,8 @@ impl Client {
     /// Convert raw `tl::enums::Update` list → high-level updates and send to `update_tx`.
     async fn emit_raw_updates(&self, updates: Vec<tl::enums::Update>) {
         for raw in updates {
+            // No per-batch peer map is available from getDifference paths; the
+            // peer cache (populated during dispatch) handles kind lookups.
             let highs = update::from_single_update(raw);
             for u in highs {
                 let u = attach_client_to_update(u, self);
@@ -5529,7 +5544,7 @@ impl Client {
         for chat in &chats {
             match chat {
                 tl::enums::Chat::Channel(c) if !c.min => {
-                    if let Some(&hash) = cache.channels.get(&c.id) {
+                    if let Some(&(hash, _)) = cache.channels.get(&c.id) {
                         return Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
                             channel_id: c.id,
                             access_hash: hash,
@@ -8434,7 +8449,7 @@ impl Client {
                     .await
                     .channels
                     .get(&c.channel_id)
-                    .copied()
+                    .map(|&(hash, _)| hash)
                     .unwrap_or(0);
                 let req = tl::functions::channels::GetParticipants {
                     channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {

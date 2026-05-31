@@ -13,6 +13,7 @@
 use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable};
 
+use crate::peer_cache::PeerMap;
 use crate::{Client, InvocationError as Error};
 
 /// Filter for [`IncomingMessage::find_button`].
@@ -37,6 +38,12 @@ pub struct IncomingMessage {
     /// `edit`, `delete`, `pin`, `unpin`, `react`, ...) can be called without
     /// passing a `&Client` argument.
     pub client: Option<Client>,
+    /// Per-batch peer map (channel_id -> Chat) injected during live update
+    /// dispatch.  Provides a lock-free fast path for `channel_kind_with()` so
+    /// the first lookup in a high-throughput batch does not need to acquire the
+    /// PeerCache RwLock.  `None` for messages from history APIs (those go
+    /// straight to the cache).
+    pub(crate) peers: Option<PeerMap>,
 }
 
 impl std::fmt::Debug for IncomingMessage {
@@ -44,13 +51,18 @@ impl std::fmt::Debug for IncomingMessage {
         f.debug_struct("IncomingMessage")
             .field("raw", &self.raw)
             .field("has_client", &self.client.is_some())
+            .field("has_peers", &self.peers.is_some())
             .finish()
     }
 }
 
 impl IncomingMessage {
     pub(crate) fn from_raw(raw: tl::enums::Message) -> Self {
-        Self { raw, client: None }
+        Self {
+            raw,
+            client: None,
+            peers: None,
+        }
     }
 
     /// Attach a `Client` so the clientless action methods work.
@@ -64,6 +76,13 @@ impl IncomingMessage {
     /// ```
     pub(crate) fn with_client(mut self, client: Client) -> Self {
         self.client = Some(client);
+        self
+    }
+
+    /// Attach a per-batch `PeerMap` so `channel_kind_with()` can resolve kinds
+    /// without acquiring the `PeerCache` lock.
+    pub(crate) fn with_peers(mut self, peers: PeerMap) -> Self {
+        self.peers = Some(peers);
         self
     }
 
@@ -427,6 +446,89 @@ impl IncomingMessage {
     /// `true` when the message is in *any* multi-user chat (group or channel).
     pub fn is_any_group(&self) -> bool {
         self.is_group() || self.is_channel()
+    }
+
+    /// Look up the [`ChannelKind`] of the chat this message is in.
+    ///
+    /// Returns `None` when the message is not in a channel/supergroup, or when
+    /// the kind is not yet known (e.g. first message from an unseen channel, or
+    /// a pre-v6 session with no kind stored).
+    ///
+    /// Requires an embedded client (set via `stream_updates()`).  For messages
+    /// retrieved via history APIs, use [`channel_kind_with`] and pass the client
+    /// explicitly.
+    ///
+    /// [`channel_kind_with`]: IncomingMessage::channel_kind_with
+    pub async fn channel_kind(&self) -> Option<crate::types::ChannelKind> {
+        let client = self.client.as_ref()?;
+        self.channel_kind_with(client).await
+    }
+
+    /// Look up the [`ChannelKind`] of the chat this message is in, using an
+    /// explicit client reference.
+    pub async fn channel_kind_with(&self, client: &Client) -> Option<crate::types::ChannelKind> {
+        match self.peer_id()? {
+            tl::enums::Peer::Channel(c) => {
+                // Fast path: derive kind from the per-batch peer map without
+                // taking the PeerCache lock.
+                if let Some(peers) = &self.peers
+                    && let Some(chat) = peers.get(&c.channel_id)
+                {
+                    let kind = match chat {
+                        tl::enums::Chat::Channel(ch) => {
+                            if ch.megagroup {
+                                Some(crate::types::ChannelKind::Megagroup)
+                            } else if ch.gigagroup {
+                                Some(crate::types::ChannelKind::Gigagroup)
+                            } else {
+                                Some(crate::types::ChannelKind::Broadcast)
+                            }
+                        }
+                        _ => None,
+                    };
+                    if kind.is_some() {
+                        return kind;
+                    }
+                }
+                // Slow path: consult the session peer cache.
+                let cache = client.inner.peer_cache.read().await;
+                cache.channel_kind_of(c.channel_id)
+            }
+            _ => None,
+        }
+    }
+
+    /// `true` when the message is in a supergroup (megagroup).
+    ///
+    /// Queries the session cache; returns `false` when the kind is unknown.
+    /// See [`channel_kind`] for details.
+    ///
+    /// [`channel_kind`]: IncomingMessage::channel_kind
+    pub async fn is_megagroup(&self) -> bool {
+        matches!(
+            self.channel_kind().await,
+            Some(crate::types::ChannelKind::Megagroup)
+        )
+    }
+
+    /// `true` when the message is in a broadcast channel (not a supergroup).
+    ///
+    /// Queries the session cache; returns `false` when the kind is unknown.
+    pub async fn is_broadcast(&self) -> bool {
+        matches!(
+            self.channel_kind().await,
+            Some(crate::types::ChannelKind::Broadcast)
+        )
+    }
+
+    /// `true` when the message is in a gigagroup (large broadcast group).
+    ///
+    /// Queries the session cache; returns `false` when the kind is unknown.
+    pub async fn is_gigagroup(&self) -> bool {
+        matches!(
+            self.channel_kind().await,
+            Some(crate::types::ChannelKind::Gigagroup)
+        )
     }
 
     /// `true` when the message text begins with `/` (a bot command).
@@ -1675,12 +1777,36 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
 
 /// Convert a single `tl::enums::Update` into a `Vec<Update>`.
 pub(crate) fn from_single_update(upd: tl::enums::Update) -> Vec<Update> {
+    from_single_update_with_peers(upd, None)
+}
+
+/// Like [`from_single_update`] but injects a `PeerMap` into every
+/// `IncomingMessage` produced, enabling the lock-free `channel_kind_with()`
+/// fast path.
+pub(crate) fn from_single_update_with_peers(
+    upd: tl::enums::Update,
+    peers: Option<PeerMap>,
+) -> Vec<Update> {
+    let attach_peers = |msg: IncomingMessage| -> IncomingMessage {
+        match &peers {
+            Some(p) => msg.with_peers(p.clone()),
+            None => msg,
+        }
+    };
     use tl::enums::Update::*;
     match upd {
-        NewMessage(u) => vec![Update::NewMessage(IncomingMessage::from_raw(u.message))],
-        NewChannelMessage(u) => vec![Update::NewMessage(IncomingMessage::from_raw(u.message))],
-        EditMessage(u) => vec![Update::MessageEdited(IncomingMessage::from_raw(u.message))],
-        EditChannelMessage(u) => vec![Update::MessageEdited(IncomingMessage::from_raw(u.message))],
+        NewMessage(u) => vec![Update::NewMessage(attach_peers(IncomingMessage::from_raw(
+            u.message,
+        )))],
+        NewChannelMessage(u) => vec![Update::NewMessage(attach_peers(IncomingMessage::from_raw(
+            u.message,
+        )))],
+        EditMessage(u) => vec![Update::MessageEdited(attach_peers(
+            IncomingMessage::from_raw(u.message),
+        ))],
+        EditChannelMessage(u) => vec![Update::MessageEdited(attach_peers(
+            IncomingMessage::from_raw(u.message),
+        ))],
         DeleteMessages(u) => vec![Update::MessageDeleted(MessageDeletion {
             message_ids: u.messages,
             channel_id: None,
@@ -2088,6 +2214,7 @@ pub(crate) fn make_short_dm(m: tl::types::UpdateShortMessage) -> IncomingMessage
     IncomingMessage {
         raw: tl::enums::Message::Message(msg),
         client: None,
+        peers: None,
     }
 }
 
@@ -2147,5 +2274,6 @@ pub(crate) fn make_short_chat(m: tl::types::UpdateShortChatMessage) -> IncomingM
     IncomingMessage {
         raw: tl::enums::Message::Message(msg),
         client: None,
+        peers: None,
     }
 }

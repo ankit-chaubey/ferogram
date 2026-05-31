@@ -17,10 +17,10 @@ pub use ferogram_connect::MtProxyConfig;
 /// Returns `None` if the URL is invalid or not an MTProxy link.
 pub fn parse_proxy_link(url: &str) -> Option<MtProxyConfig> {
     use ferogram_connect::TransportKind;
-    let (query, port_str, host) = if let Some(rest) = url
-        .strip_prefix("https://t.me/proxy?")
-        .or_else(|| url.strip_prefix("tg://proxy?"))
-    {
+    let (query, port_str, host) = {
+        let rest = url
+            .strip_prefix("https://t.me/proxy?")
+            .or_else(|| url.strip_prefix("tg://proxy?"))?;
         let params: std::collections::HashMap<_, _> = rest
             .split('&')
             .filter_map(|kv| {
@@ -32,8 +32,6 @@ pub fn parse_proxy_link(url: &str) -> Option<MtProxyConfig> {
         let port = params.get("port")?.to_string();
         let secret = params.get("secret")?.to_string();
         (secret, port, server)
-    } else {
-        return None;
     };
     let port: u16 = port_str.parse().ok()?;
     let secret_bytes = if query.len() >= 32 && query.chars().all(|c| c.is_ascii_hexdigit()) {

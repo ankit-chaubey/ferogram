@@ -93,10 +93,10 @@ impl<T: Transport> Tagged for AbridgedTransport<T> {
 // Obfuscated + Abridged
 
 const FORBIDDEN: &[[u8; 4]] = &[
-    [b'H', b'E', b'A', b'D'],
-    [b'P', b'O', b'S', b'T'],
-    [b'G', b'E', b'T', b' '],
-    [b'O', b'P', b'T', b'I'],
+    *b"HEAD",
+    *b"POST",
+    *b"GET ",
+    *b"OPTI",
     [0x16, 0x03, 0x01, 0x02],
     [0xdd, 0xdd, 0xdd, 0xdd],
     [0xee, 0xee, 0xee, 0xee],

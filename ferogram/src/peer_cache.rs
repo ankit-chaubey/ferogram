@@ -11,10 +11,64 @@
 // Please keep this notice when redistributing.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use ferogram_tl_types as tl;
 
 use crate::errors::InvocationError;
+pub use crate::types::ChannelKind;
+
+impl From<ferogram_session::ChannelKind> for ChannelKind {
+    fn from(k: ferogram_session::ChannelKind) -> Self {
+        match k {
+            ferogram_session::ChannelKind::Broadcast => ChannelKind::Broadcast,
+            ferogram_session::ChannelKind::Megagroup => ChannelKind::Megagroup,
+            ferogram_session::ChannelKind::Gigagroup => ChannelKind::Gigagroup,
+        }
+    }
+}
+
+impl From<ChannelKind> for ferogram_session::ChannelKind {
+    fn from(k: ChannelKind) -> Self {
+        match k {
+            ChannelKind::Broadcast => ferogram_session::ChannelKind::Broadcast,
+            ChannelKind::Megagroup => ferogram_session::ChannelKind::Megagroup,
+            ChannelKind::Gigagroup => ferogram_session::ChannelKind::Gigagroup,
+        }
+    }
+}
+
+/// A batch-scoped, read-only map from channel ID to the raw TL chat object.
+///
+/// Built once per update batch from the `chats` vec and shared (cheaply via
+/// `Arc` refcount) across every `IncomingMessage` produced in that batch.
+/// When the last message is dropped the map is freed automatically.
+pub type PeerMap = Arc<HashMap<i64, tl::enums::Chat>>;
+
+/// Build a `PeerMap` from a slice of TL chat objects.
+///
+/// Silently ignores `Chat::Empty` and any entry without an ID.
+pub fn build_peer_map(chats: &[tl::enums::Chat]) -> Option<PeerMap> {
+    if chats.is_empty() {
+        return None;
+    }
+    let mut map = HashMap::with_capacity(chats.len());
+    for chat in chats {
+        let id = match chat {
+            tl::enums::Chat::Channel(c) => c.id,
+            tl::enums::Chat::ChannelForbidden(c) => c.id,
+            tl::enums::Chat::Chat(c) => c.id,
+            tl::enums::Chat::Forbidden(c) => c.id,
+            tl::enums::Chat::Empty(_) => continue,
+        };
+        map.insert(id, chat.clone());
+    }
+    if map.is_empty() {
+        None
+    } else {
+        Some(Arc::new(map))
+    }
+}
 
 /// Opt-in experimental behaviours that deviate from strict Telegram spec.
 ///
@@ -86,8 +140,8 @@ pub enum PeerType {
 pub struct PeerCache {
     /// user_id -> access_hash (full users only, min=false)
     pub users: HashMap<i64, i64>,
-    /// channel_id -> access_hash (full channels only, min=false)
-    pub channels: HashMap<i64, i64>,
+    /// channel_id -> (access_hash, Option<ChannelKind>) (full channels only, min=false)
+    pub channels: HashMap<i64, (i64, Option<ChannelKind>)>,
     /// Regular group chat IDs (Chat::Chat / ChatForbidden).
     /// Groups need no access_hash; track existence for peer validation.
     pub chats: HashSet<i64>,
@@ -194,6 +248,13 @@ impl PeerCache {
     pub fn cache_chat(&mut self, chat: &tl::enums::Chat) {
         match chat {
             tl::enums::Chat::Channel(c) => {
+                let kind = if c.megagroup {
+                    Some(ChannelKind::Megagroup)
+                } else if c.gigagroup {
+                    Some(ChannelKind::Gigagroup)
+                } else {
+                    Some(ChannelKind::Broadcast)
+                };
                 if c.min {
                     // min channel: no access_hash available.
                     // Store in channels_min; never put in chats (InputPeerChat fails).
@@ -203,9 +264,9 @@ impl PeerCache {
                 } else if let Some(hash) = c.access_hash {
                     // Never overwrite a valid non-zero hash with zero.
                     if hash != 0 {
-                        self.channels.insert(c.id, hash);
+                        self.channels.insert(c.id, (hash, kind));
                     } else {
-                        self.channels.entry(c.id).or_insert(0);
+                        self.channels.entry(c.id).or_insert((0, kind));
                     }
                     // Full channel supersedes any min tracking.
                     self.channels_min.remove(&c.id);
@@ -217,11 +278,14 @@ impl PeerCache {
                 }
             }
             tl::enums::Chat::ChannelForbidden(c) => {
-                // Only store if the hash is non-zero.
+                // ChannelForbidden has no flags; treat as Broadcast kind.
                 if c.access_hash != 0 {
-                    self.channels.insert(c.id, c.access_hash);
+                    self.channels
+                        .insert(c.id, (c.access_hash, Some(ChannelKind::Broadcast)));
                 } else {
-                    self.channels.entry(c.id).or_insert(0);
+                    self.channels
+                        .entry(c.id)
+                        .or_insert((0, Some(ChannelKind::Broadcast)));
                 }
                 self.channels_min.remove(&c.id);
             }
@@ -234,6 +298,14 @@ impl PeerCache {
             }
             _ => {}
         }
+    }
+
+    /// Look up the cached [`ChannelKind`] for a channel ID.
+    ///
+    /// Returns `None` when the channel is not in the cache or was loaded from a
+    /// pre-v6 session file that predates kind tracking.
+    pub fn channel_kind_of(&self, channel_id: i64) -> Option<ChannelKind> {
+        self.channels.get(&channel_id).and_then(|&(_, k)| k)
     }
 
     pub fn cache_users(&mut self, users: &[tl::enums::User]) {
@@ -264,9 +336,12 @@ impl PeerCache {
             }
             tl::enums::InputPeer::Channel(c) => {
                 if c.access_hash != 0 {
-                    self.channels.insert(c.channel_id, c.access_hash);
+                    self.channels
+                        .entry(c.channel_id)
+                        .and_modify(|e| e.0 = c.access_hash)
+                        .or_insert((c.access_hash, None));
                 } else {
-                    self.channels.entry(c.channel_id).or_insert(0);
+                    self.channels.entry(c.channel_id).or_insert((0, None));
                 }
                 self.channels_min.remove(&c.channel_id);
             }
@@ -341,7 +416,7 @@ impl PeerCache {
         if let Some(&(peer_id, msg_id)) = self.min_contexts.get(&user_id) {
             // The containing peer can be a channel, a basic group, or a DM user.
             // Build the correct InputPeer variant for each case.
-            let container = if let Some(&hash) = self.channels.get(&peer_id) {
+            let container = if let Some(&(hash, _)) = self.channels.get(&peer_id) {
                 tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
                     channel_id: peer_id,
                     access_hash: hash,
@@ -414,7 +489,7 @@ impl PeerCache {
     }
 
     fn channel_input_peer(&self, channel_id: i64) -> Result<tl::enums::InputPeer, InvocationError> {
-        if let Some(&hash) = self.channels.get(&channel_id) {
+        if let Some(&(hash, _)) = self.channels.get(&channel_id) {
             return Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
                 channel_id,
                 access_hash: hash,

@@ -51,8 +51,9 @@
 //! The file backends start with a version byte:
 //! - `0x01`: legacy (DC table only, no update state or peer cache).
 //! - `0x02`: current (DC table + update state + peer cache).
+//! - `0x06`: adds per-channel `ChannelKind` byte to each peer entry.
 //!
-//! `load()` handles both. `save()` always writes v2.
+//! `load()` handles all versions. `save()` always writes v6.
 //!
 //! # Example: export and re-import a session
 //!
@@ -247,6 +248,36 @@ impl UpdatesStateSnap {
     }
 }
 
+/// The kind of a Telegram channel, persisted in the session so that
+/// `is_megagroup()` / `is_broadcast()` work correctly after a restart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[repr(u8)]
+pub enum ChannelKind {
+    /// A broadcast channel (posts only).
+    Broadcast = 0,
+    /// A supergroup / megagroup (all members can post).
+    Megagroup = 1,
+    /// A gigagroup / broadcast group (large public broadcast supergroup).
+    Gigagroup = 2,
+}
+
+impl ChannelKind {
+    /// Decode from the session byte.  Unknown values fall back to `Broadcast`.
+    pub fn from_byte(b: u8) -> Option<Self> {
+        match b {
+            0 => Some(Self::Broadcast),
+            1 => Some(Self::Megagroup),
+            2 => Some(Self::Gigagroup),
+            _ => None,
+        }
+    }
+
+    pub fn to_byte(self) -> u8 {
+        self as u8
+    }
+}
+
 /// A cached access-hash entry so that the peer can be addressed across restarts
 /// without re-resolving it from Telegram.
 #[derive(Clone, Debug)]
@@ -262,6 +293,9 @@ pub struct CachedPeer {
     /// `true` → regular group chat (Chat::Chat / ChatForbidden).
     /// When true, access_hash is meaningless (groups need no hash).
     pub is_chat: bool,
+    /// For channel peers: the kind (broadcast / megagroup / gigagroup).
+    /// `None` for users, regular groups, and channels loaded from a pre-v6 session.
+    pub channel_kind: Option<ChannelKind>,
 }
 
 /// A min-user context entry: the user was seen with `min=true` (access_hash
@@ -299,7 +333,7 @@ impl PersistedSession {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(512);
 
-        b.push(0x05u8); // version
+        b.push(0x06u8); // version
 
         b.extend_from_slice(&self.home_dc_id.to_le_bytes());
 
@@ -334,7 +368,7 @@ impl PersistedSession {
             b.extend_from_slice(&cpts.to_le_bytes());
         }
 
-        // v5 peer type: 0=user, 1=channel, 2=regular-group-chat
+        // v6 peer encoding: peer_type byte (0=user,1=channel,2=chat) + channel_kind byte
         b.extend_from_slice(&(self.peers.len() as u16).to_le_bytes());
         for p in &self.peers {
             b.extend_from_slice(&p.id.to_le_bytes());
@@ -347,6 +381,8 @@ impl PersistedSession {
                 0
             };
             b.push(peer_type);
+            // channel_kind byte: 0xFF = absent, otherwise ChannelKind::to_byte()
+            b.push(p.channel_kind.map(|k| k.to_byte()).unwrap_or(0xFF));
         }
 
         b.extend_from_slice(&(self.min_peers.len() as u16).to_le_bytes());
@@ -417,7 +453,9 @@ impl PersistedSession {
 
         let first_byte = r_u8!();
 
-        let (home_dc_id, version) = if first_byte == 0x05 {
+        let (home_dc_id, version) = if first_byte == 0x06 {
+            (r_i32!(), 6u8)
+        } else if first_byte == 0x05 {
             (r_i32!(), 5u8)
         } else if first_byte == 0x04 {
             (r_i32!(), 4u8)
@@ -491,15 +529,27 @@ impl PersistedSession {
         for _ in 0..peer_count {
             let id = r_i64!();
             let access_hash = r_i64!();
-            // v5: type byte 0=user, 1=channel, 2=chat; v2-v4: 0=user, 1=channel
+            // v5+: type byte 0=user, 1=channel, 2=chat; v2-v4: 0=user, 1=channel
             let peer_type = r_u8!();
             let is_channel = peer_type == 1;
             let is_chat = peer_type == 2;
+            // v6+: channel_kind byte (0xFF = absent)
+            let channel_kind = if version >= 6 {
+                let kb = r_u8!();
+                if kb == 0xFF {
+                    None
+                } else {
+                    ChannelKind::from_byte(kb)
+                }
+            } else {
+                None
+            };
             peers.push(CachedPeer {
                 id,
                 access_hash,
                 is_channel,
                 is_chat,
+                channel_kind,
             });
         }
 
@@ -965,6 +1015,7 @@ mod tests {
             access_hash: hash,
             is_channel: false,
             is_chat: false,
+            channel_kind: None,
         }
     }
 
@@ -1229,6 +1280,78 @@ mod tests {
         assert_eq!(loaded.dcs.iter().filter(|d| d.is_ipv6()).count(), 1);
         assert_eq!(loaded.dcs.iter().filter(|d| !d.is_ipv6()).count(), 1);
     }
+
+    #[test]
+    fn v6_channel_kind_roundtrip_all_variants() {
+        let mut s = PersistedSession::default();
+        s.home_dc_id = 1;
+        s.peers.push(CachedPeer {
+            id: 1001,
+            access_hash: 0xaaaa,
+            is_channel: true,
+            is_chat: false,
+            channel_kind: Some(ChannelKind::Broadcast),
+        });
+        s.peers.push(CachedPeer {
+            id: 1002,
+            access_hash: 0xbbbb,
+            is_channel: true,
+            is_chat: false,
+            channel_kind: Some(ChannelKind::Megagroup),
+        });
+        s.peers.push(CachedPeer {
+            id: 1003,
+            access_hash: 0xcccc,
+            is_channel: true,
+            is_chat: false,
+            channel_kind: Some(ChannelKind::Gigagroup),
+        });
+        s.peers.push(CachedPeer {
+            id: 1004,
+            access_hash: 0xdddd,
+            is_channel: false,
+            is_chat: false,
+            channel_kind: None,
+        });
+
+        let bytes = s.to_bytes();
+        assert_eq!(bytes[0], 0x06, "version byte must be 6");
+
+        let loaded = PersistedSession::from_bytes(&bytes).unwrap();
+        assert_eq!(loaded.peers.len(), 4);
+
+        let p = &loaded.peers[0];
+        assert_eq!(p.id, 1001);
+        assert_eq!(p.channel_kind, Some(ChannelKind::Broadcast));
+
+        let p = &loaded.peers[1];
+        assert_eq!(p.id, 1002);
+        assert_eq!(p.channel_kind, Some(ChannelKind::Megagroup));
+
+        let p = &loaded.peers[2];
+        assert_eq!(p.id, 1003);
+        assert_eq!(p.channel_kind, Some(ChannelKind::Gigagroup));
+
+        let p = &loaded.peers[3];
+        assert_eq!(p.id, 1004);
+        assert_eq!(p.channel_kind, None);
+    }
+
+    #[test]
+    fn v6_channel_kind_absent_sentinel_roundtrip() {
+        // A user peer (not a channel) must survive a v6 encode/decode with kind=None.
+        let mut s = PersistedSession::default();
+        s.home_dc_id = 1;
+        s.peers.push(CachedPeer {
+            id: 555,
+            access_hash: 0x1234,
+            is_channel: false,
+            is_chat: false,
+            channel_kind: None,
+        });
+        let loaded = PersistedSession::from_bytes(&s.to_bytes()).unwrap();
+        assert_eq!(loaded.peers[0].channel_kind, None);
+    }
 }
 
 // SqliteBackend
@@ -1300,7 +1423,8 @@ impl SqliteBackend {
             id           INTEGER PRIMARY KEY,
             access_hash  INTEGER NOT NULL,
             is_channel   INTEGER NOT NULL DEFAULT 0,
-            is_chat      INTEGER NOT NULL DEFAULT 0
+            is_chat      INTEGER NOT NULL DEFAULT 0,
+            channel_kind INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS min_peers (
@@ -1357,6 +1481,24 @@ impl SqliteBackend {
         }
         if !has_is_chat {
             conn.execute_batch("ALTER TABLE peers ADD COLUMN is_chat INTEGER NOT NULL DEFAULT 0;")
+                .map_err(Self::map_err)?;
+        }
+        // v6 migration: channel_kind column (NULL = absent/unknown).
+        let mut has_channel_kind = false;
+        let mut stmt2 = conn
+            .prepare("PRAGMA table_info(peers)")
+            .map_err(Self::map_err)?;
+        let cols2 = stmt2
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(Self::map_err)?;
+        for col in cols2.filter_map(|r| r.ok()) {
+            if col == "channel_kind" {
+                has_channel_kind = true;
+                break;
+            }
+        }
+        if !has_channel_kind {
+            conn.execute_batch("ALTER TABLE peers ADD COLUMN channel_kind INTEGER;")
                 .map_err(Self::map_err)?;
         }
         conn.execute_batch(
@@ -1447,15 +1589,17 @@ impl SqliteBackend {
 
         // peers
         let mut peer_stmt = conn
-            .prepare("SELECT id, access_hash, is_channel, is_chat FROM peers")
+            .prepare("SELECT id, access_hash, is_channel, is_chat, channel_kind FROM peers")
             .map_err(Self::map_err)?;
         let peers: Vec<CachedPeer> = peer_stmt
             .query_map([], |r| {
+                let kind_raw: Option<i32> = r.get(4)?;
                 Ok(CachedPeer {
                     id: r.get(0)?,
                     access_hash: r.get(1)?,
                     is_channel: r.get::<_, i32>(2)? != 0,
                     is_chat: r.get::<_, i32>(3)? != 0,
+                    channel_kind: kind_raw.and_then(|k| ChannelKind::from_byte(k as u8)),
                 })
             })
             .map_err(Self::map_err)?
@@ -1550,8 +1694,14 @@ impl SqliteBackend {
             .map_err(Self::map_err)?;
         for p in &s.peers {
             conn.execute(
-                "INSERT INTO peers (id, access_hash, is_channel, is_chat) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![p.id, p.access_hash, p.is_channel as i32, p.is_chat as i32],
+                "INSERT INTO peers (id, access_hash, is_channel, is_chat, channel_kind) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    p.id,
+                    p.access_hash,
+                    p.is_channel as i32,
+                    p.is_chat as i32,
+                    p.channel_kind.map(|k| k.to_byte() as i32),
+                ],
             )
             .map_err(Self::map_err)?;
         }
@@ -1699,16 +1849,18 @@ impl SessionBackend for SqliteBackend {
     fn cache_peer(&self, peer: &CachedPeer) -> io::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO peers (id, access_hash, is_channel, is_chat) VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO peers (id, access_hash, is_channel, is_chat, channel_kind) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET
-               access_hash = excluded.access_hash,
-               is_channel  = excluded.is_channel,
-               is_chat     = excluded.is_chat",
+               access_hash  = excluded.access_hash,
+               is_channel   = excluded.is_channel,
+               is_chat      = excluded.is_chat,
+               channel_kind = excluded.channel_kind",
             rusqlite::params![
                 peer.id,
                 peer.access_hash,
                 peer.is_channel as i32,
-                peer.is_chat as i32
+                peer.is_chat as i32,
+                peer.channel_kind.map(|k| k.to_byte() as i32),
             ],
         )
         .map(|_| ())
@@ -1772,7 +1924,8 @@ impl LibSqlBackend {
             id          INTEGER PRIMARY KEY,
             access_hash INTEGER NOT NULL,
             is_channel  INTEGER NOT NULL DEFAULT 0,
-            is_chat     INTEGER NOT NULL DEFAULT 0
+            is_chat     INTEGER NOT NULL DEFAULT 0,
+            channel_kind INTEGER
         );
         CREATE TABLE IF NOT EXISTS min_peers (
             user_id INTEGER PRIMARY KEY,
@@ -1791,7 +1944,14 @@ impl LibSqlBackend {
     }
 
     async fn apply_schema(conn: &libsql::Connection) -> Result<(), libsql::Error> {
-        conn.execute_batch(Self::SCHEMA).await
+        conn.execute_batch(Self::SCHEMA).await?;
+        // v6 migration: add channel_kind column to existing databases.
+        // libSQL does not support PRAGMA table_info the same way, so we use a
+        // best-effort ALTER TABLE that is silently ignored if the column exists.
+        let _ = conn
+            .execute_batch("ALTER TABLE peers ADD COLUMN channel_kind INTEGER;")
+            .await;
+        Ok(())
     }
 
     /// Open a local file database.
@@ -1940,15 +2100,20 @@ impl LibSqlBackend {
 
         // peers
         let mut peer_rows = conn
-            .query("SELECT id, access_hash, is_channel, is_chat FROM peers", ())
+            .query(
+                "SELECT id, access_hash, is_channel, is_chat, channel_kind FROM peers",
+                (),
+            )
             .await?;
         let mut peers = Vec::new();
         while let Some(r) = peer_rows.next().await? {
+            let kind_raw: Option<i32> = r.get(4).ok();
             peers.push(CachedPeer {
                 id: r.get(0)?,
                 access_hash: r.get(1)?,
                 is_channel: r.get::<i32>(2)? != 0,
                 is_chat: r.get::<i32>(3)? != 0,
+                channel_kind: kind_raw.and_then(|k| ChannelKind::from_byte(k as u8)),
             });
         }
 
@@ -2031,8 +2196,14 @@ impl LibSqlBackend {
         conn.execute("DELETE FROM peers", ()).await?;
         for p in &s.peers {
             conn.execute(
-                "INSERT INTO peers (id, access_hash, is_channel, is_chat) VALUES (?1,?2,?3,?4)",
-                libsql::params![p.id, p.access_hash, p.is_channel as i32, p.is_chat as i32],
+                "INSERT INTO peers (id, access_hash, is_channel, is_chat, channel_kind) VALUES (?1,?2,?3,?4,?5)",
+                libsql::params![
+                    p.id,
+                    p.access_hash,
+                    p.is_channel as i32,
+                    p.is_chat as i32,
+                    p.channel_kind.map(|k| k.to_byte() as i32),
+                ],
             )
             .await?;
         }
@@ -2196,21 +2367,23 @@ impl SessionBackend for LibSqlBackend {
 
     fn cache_peer(&self, peer: &CachedPeer) -> io::Result<()> {
         let conn = self.conn.clone();
-        let (id, hash, is_ch, is_ct) = (
+        let (id, hash, is_ch, is_ct, kind) = (
             peer.id,
             peer.access_hash,
             peer.is_channel as i32,
             peer.is_chat as i32,
+            peer.channel_kind.map(|k| k.to_byte() as i32),
         );
         Self::block(async move {
             let conn = conn.lock().await;
             conn.execute(
-                "INSERT INTO peers (id,access_hash,is_channel,is_chat) VALUES (?1,?2,?3,?4)
+                "INSERT INTO peers (id,access_hash,is_channel,is_chat,channel_kind) VALUES (?1,?2,?3,?4,?5)
                  ON CONFLICT(id) DO UPDATE SET
                    access_hash=excluded.access_hash,
                    is_channel=excluded.is_channel,
-                   is_chat=excluded.is_chat",
-                libsql::params![id, hash, is_ch, is_ct],
+                   is_chat=excluded.is_chat,
+                   channel_kind=excluded.channel_kind",
+                libsql::params![id, hash, is_ch, is_ct, kind],
             )
             .await
             .map(|_| ())
