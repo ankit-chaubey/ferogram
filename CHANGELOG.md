@@ -10,6 +10,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.0] - 2026-05-29
+
+### Added
+
+- `TransferHandle` and `TransferProgress` in `ferogram::transfer`. Pass a handle to any upload or download to track progress, pause, resume, or cancel. Both are re-exported from the crate root.
+- `InvocationErrorExt` trait with `.kind()` and `.friendly()` on `InvocationError`. Returns `ErrorKind` enum (`FloodWait`, `Network`, `Auth`, `Migration`, `Rpc`, `Transfer`, `Other`) or a readable string.
+- `UploadedFile::as_auto_media()` picks the right Telegram media type from MIME (photo, video, audio, voice, animation, or document).
+- `From<UploadedFile> for InputMedia` so you can pass an `UploadedFile` directly to `send_file`.
+- `download_resumable` and `upload_resumable` under `features = ["experimental"]`. Interrupted transfers save a checkpoint JSON and a `.partial` bytes file to `<checkpoint_dir>/`. On the next call with the same media the partial bytes are restored, the download resumes from the saved byte offset (aligned to the nearest 1 MB boundary per Telegram's requirement), and all checkpoint files are deleted on success.
+- `CheckpointStore::partial_path` - returns the path for the in-progress partial bytes file for a given download key.
+- `download_streaming_on_dc_from` - internal method that starts `GetFile` requests from a given byte offset. Used by `download_resumable` to skip already-downloaded bytes.
+- Unit tests in `ferogram/tests/resumable_transfers.rs` covering checkpoint roundtrip, delete, partial file I/O, key stability, SHA-256 correctness, TTL expiry detection, offset alignment math, and overlap-skip calculation. All tests run without a Telegram connection.
+- Example `transfer_showcase.rs` demonstrating all 0.6.0 transfer APIs: progress, pause/resume/cancel, typed errors, auto media, and resumable transfers.
+
+### Changed
+
+- `upload_file_from_path` renamed to `upload_file`.
+- `upload_file`, `upload`, `download`, `download_file` all take `handle: Option<&TransferHandle>` as a new last param. Pass `None` to keep old behavior.
+- `send_file` now takes `impl Into<InputMedia>` instead of `InputMedia` directly. Existing callers unchanged.
+
+### Fixed
+
+- `download_resumable` now actually resumes. Previously the checkpoint offset was loaded and logged but never used; every call re-downloaded from byte 0. The fix passes `start_offset` to `download_streaming_on_dc_from`, which aligns it to the nearest 1 MB boundary and starts `GetFile` requests from there.
+- `download_resumable` no longer computes or compares a partial SHA-256 hash. The old code saved `sha256_hex(dest)` on interruption (a hash of an incomplete buffer) then compared it against the final file. The hashes could never match. SHA-256 is now computed on the complete assembled file only and logged for auditing.
+- Interrupted downloads now flush received bytes to a `.partial` file on disk so they survive a process restart. The file is deleted on successful completion.
 ## [0.5.2]: 2026-05-31
 
 ### Added
@@ -119,7 +144,7 @@ while let Some(chunk) = iter.next().await? { ... }
 let uploaded = client.upload(reader, "file.jpg").await?;
 
 // upload from path
-let uploaded = client.upload_file_from_path("photo.jpg").await?;
+let uploaded = client.upload_file("photo.jpg").await?;
 ```
 
 `IncomingMessage` gains two convenience methods:

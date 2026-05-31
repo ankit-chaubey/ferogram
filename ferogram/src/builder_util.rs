@@ -40,10 +40,10 @@ pub(crate) fn detect_compact_session(s: &str) -> Option<PersistedSession> {
         flags,
     };
 
-    let mut persisted = PersistedSession {
+    let persisted = PersistedSession {
         home_dc_id: session.dc_id as i32,
+        dcs: vec![dc_entry],
         ..Default::default()
     };
-    persisted.dcs.push(dc_entry);
     Some(persisted)
 }

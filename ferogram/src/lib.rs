@@ -196,8 +196,12 @@ pub mod reactions;
 pub mod dc_migration;
 pub mod proxy;
 
+pub mod file_info;
 pub mod fsm;
 pub mod middleware;
+#[cfg(feature = "experimental")]
+pub mod resume;
+pub mod transfer;
 pub mod update_config;
 pub mod util;
 
@@ -228,9 +232,13 @@ pub use builder::{BuilderError, ClientBuilder};
 pub use client::Client;
 pub use client::{Config, ShutdownToken, UpdateStream};
 pub use dialog::{Dialog, DialogIter, MessageIter};
-pub use errors::{InvocationError, LoginToken, PasswordToken, RpcError, SignInError};
+pub use errors::{
+    ErrorKind, InvocationError, InvocationErrorExt, LoginToken, PasswordToken, RpcError,
+    SignInError,
+};
 pub use ferogram_connect::TransportKind;
 pub use ferogram_connect::random_i64 as random_i64_pub;
+pub use file_info::{FileInfo, detect_mime, file_info, file_info_from_path};
 pub use guest_chat::GuestChatQuery;
 pub use input_message::{ForwardOptions, InputMessage, InvoiceOptions, LinkKind};
 pub use keyboard::{Button, InlineKeyboard, ReplyKeyboard};
@@ -257,6 +265,7 @@ pub use session_backend::{
     BinaryFileBackend, InMemoryBackend, SessionBackend, StringSessionBackend, UpdateStateChange,
 };
 pub use socks5::Socks5Config;
+pub use transfer::{TransferError, TransferHandle, TransferProgress};
 pub use types::{Channel, ChannelKind, Chat, Group, User};
 pub use typing_guard::TypingGuard;
 pub use update::{BotStoppedUpdate, MessageReactionUpdate, PollVoteUpdate};
@@ -422,7 +431,7 @@ impl SetProfileBuilder {
         use ferogram_tl_types as tl;
         // Handle photo_path: upload before resolving anything else.
         if let Some(path) = self.photo_path.take() {
-            let uploaded = self.client.upload_file_from_path(path).await?;
+            let uploaded = self.client.upload_file(path, None).await?;
             self.photo = Some(uploaded);
         }
 

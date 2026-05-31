@@ -963,7 +963,7 @@ async fn h_media_echo(
 
     let ul_start = Instant::now();
     let uploaded = match client
-        .upload_file_concurrent(Arc::new(bytes), &file_name, &mime)
+        .upload_file_concurrent(Arc::new(bytes), &file_name, &mime, None)
         .await
     {
         Ok(u) => u,

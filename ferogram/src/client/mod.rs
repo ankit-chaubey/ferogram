@@ -478,6 +478,10 @@ pub(crate) struct ClientInner {
     /// Set to true after any peer-cache mutation so the full-snapshot periodic
     /// saver knows a flush to the session backend is needed.
     session_snapshot_dirty: std::sync::atomic::AtomicBool,
+
+    /// Experimental feature flags, stored for runtime checks in files.rs etc.
+    #[allow(dead_code)]
+    pub(crate) experimental: ExperimentalFeatures,
 }
 
 /// The main Telegram client. Cheap to clone: internally Arc-wrapped.
@@ -737,6 +741,7 @@ impl Client {
             // Persistent dedup ring for the main connection reader task.
             seen_msg_ids: ferogram_mtproto::new_seen_msg_ids(),
             session_snapshot_dirty: std::sync::atomic::AtomicBool::new(false),
+            experimental: config.experimental_features.clone(),
         });
 
         let client = Self {
@@ -5115,36 +5120,45 @@ impl Client {
     /// # async fn ex(client: Client, msg: ferogram::update::IncomingMessage) {
     /// // to memory
     /// let mut buf = Vec::new();
-    /// client.download(msg.media().unwrap(), &mut buf).await.unwrap();
+    /// client.download(msg.media().unwrap(), &mut buf, None).await.unwrap();
     ///
     /// // to file
     /// let mut file = tokio::fs::File::create("photo.jpg").await.unwrap();
-    /// client.download(msg.media().unwrap(), &mut file).await.unwrap();
+    /// client.download(msg.media().unwrap(), &mut file, None).await.unwrap();
     /// # }
     /// ```
     pub async fn download(
         &self,
         media: &tl::enums::MessageMedia,
         mut dest: impl tokio::io::AsyncWrite + Unpin,
+        handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<u64, InvocationError> {
         let (loc, dc) = crate::media::location_from_media(media).ok_or_else(|| {
             InvocationError::Deserialize("media has no downloadable location".into())
         })?;
-        self.download_streaming_on_dc(loc, dc, &mut dest).await
+        if let Some(h) = handle {
+            let total = crate::media::size_from_media(media).unwrap_or(0);
+            h.set_total(total as u64);
+            h.reset_start();
+        }
+        self.download_streaming_on_dc(loc, dc, &mut dest, handle)
+            .await
     }
 
     /// Download message media directly to a file at `path`. Returns bytes written.
     ///
     /// Creates (or truncates) the file. Streams directly to disk.
+    /// Pass `Some(&handle)` to track progress or support pause/cancel.
     pub async fn download_file(
         &self,
         media: &tl::enums::MessageMedia,
         path: impl AsRef<std::path::Path>,
+        handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<u64, InvocationError> {
         let mut file = tokio::fs::File::create(path)
             .await
             .map_err(InvocationError::Io)?;
-        self.download(media, &mut file).await
+        self.download(media, &mut file, handle).await
     }
 
     /// Return a lazy chunk iterator for `media`.
@@ -5173,6 +5187,7 @@ impl Client {
         &self,
         mut source: impl tokio::io::AsyncRead + Unpin + Send,
         name: &str,
+        handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<crate::media::UploadedFile, InvocationError> {
         use tokio::io::AsyncReadExt;
         let mut data = Vec::new();
@@ -5181,19 +5196,21 @@ impl Client {
             .await
             .map_err(InvocationError::Io)?;
         if data.len() > crate::media::BIG_FILE_THRESHOLD {
-            self.upload_file_concurrent(std::sync::Arc::new(data), name, "")
+            self.upload_file_concurrent(std::sync::Arc::new(data), name, "", handle)
                 .await
         } else {
-            self.upload_file(&data, name, "").await
+            self.upload_bytes(&data, name, "", handle).await
         }
     }
 
     /// Upload a file from disk by path.
     ///
     /// Stats the file first (for optimal part sizing), then streams in chunks.
-    pub async fn upload_file_from_path(
+    /// Pass `Some(&handle)` to track progress or support pause/cancel.
+    pub async fn upload_file(
         &self,
         path: impl AsRef<std::path::Path>,
+        handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<crate::media::UploadedFile, InvocationError> {
         use tokio::io::AsyncReadExt;
         let path = path.as_ref();
@@ -5208,10 +5225,10 @@ impl Client {
             .await
             .map_err(InvocationError::Io)?;
         if data.len() > crate::media::BIG_FILE_THRESHOLD {
-            self.upload_file_concurrent(std::sync::Arc::new(data), name, "")
+            self.upload_file_concurrent(std::sync::Arc::new(data), name, "", handle)
                 .await
         } else {
-            self.upload_file(&data, name, "").await
+            self.upload_bytes(&data, name, "", handle).await
         }
     }
 
@@ -9636,6 +9653,36 @@ pub(crate) fn attach_client_to_update(u: update::Update, client: &Client) -> upd
 #[allow(dead_code)]
 pub(crate) fn random_i64_pub() -> i64 {
     random_i64()
+}
+
+impl Client {
+    /// Upload a single part for experimental resumable upload.
+    #[cfg(feature = "experimental")]
+    pub(crate) async fn upload_part_pub(
+        &self,
+        big: bool,
+        file_id: i64,
+        part: i32,
+        total_parts: i32,
+        data: &[u8],
+    ) -> Result<bool, InvocationError> {
+        if big {
+            self.rpc_call(tl::functions::upload::SaveBigFilePart {
+                file_id,
+                file_part: part,
+                file_total_parts: total_parts,
+                bytes: data.to_vec(),
+            })
+            .await
+        } else {
+            self.rpc_call(tl::functions::upload::SaveFilePart {
+                file_id,
+                file_part: part,
+                bytes: data.to_vec(),
+            })
+            .await
+        }
+    }
 }
 
 pub(crate) fn is_bool_true(body: &[u8]) -> bool {

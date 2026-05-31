@@ -122,6 +122,23 @@ pub struct ExperimentalFeatures {
     /// `channels.getChannels { access_hash: 0 }` succeeds only for public channels
     /// and channels you are currently a member of.
     pub auto_resolve_peers: bool,
+
+    /// Enable resumable uploads and downloads.
+    ///
+    /// When `true`, interrupted transfers save a checkpoint under
+    /// `checkpoint_dir` (defaults to `.ferogram-transfers/` next to the
+    /// session file). The next call with the same media / file automatically
+    /// resumes from where it left off.
+    ///
+    /// Upload sessions are valid for ~1 hour on Telegram's side; if more time
+    /// has passed the upload restarts from scratch automatically.
+    ///
+    /// Default: `false`.
+    pub resumable_transfers: bool,
+
+    /// Directory for transfer checkpoints when `resumable_transfers` is enabled.
+    /// If `None`, defaults to `.ferogram-transfers/` next to the session file.
+    pub checkpoint_dir: Option<std::path::PathBuf>,
 }
 
 /// Caches access hashes for users and channels so every API call carries the

@@ -80,3 +80,113 @@ pub struct LoginToken {
     pub(crate) phone: String,
     pub(crate) phone_code_hash: String,
 }
+
+// Typed error helpers
+
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ErrorKind {
+    /// The transfer was cancelled by the caller.
+    Cancelled,
+    /// Telegram rate limit. Contains seconds to wait.
+    FloodWait(u64),
+    /// Network or I/O failure.
+    Network,
+    /// Authentication / session error.
+    Auth,
+    /// DC migration redirect. Contains target DC id.
+    Migration(i32),
+    /// Generic Telegram RPC error.
+    Rpc { code: i32, name: String },
+    /// File or media transfer error.
+    Transfer,
+    /// Other / unclassified.
+    Other,
+}
+
+/// Extension trait adding `.kind()` and `.friendly()` to [`InvocationError`].
+pub trait InvocationErrorExt {
+    fn kind(&self) -> ErrorKind;
+    fn friendly(&self) -> String;
+}
+
+impl InvocationErrorExt for InvocationError {
+    fn kind(&self) -> ErrorKind {
+        match self {
+            Self::Rpc(e) => {
+                if e.code == 420 {
+                    return ErrorKind::FloodWait(e.value.unwrap_or(0) as u64);
+                }
+                if e.code == 303 {
+                    return ErrorKind::Migration(e.value.unwrap_or(1) as i32);
+                }
+                if e.code == 401
+                    || e.name.contains("AUTH")
+                    || e.name == "SESSION_EXPIRED"
+                    || e.name == "SESSION_REVOKED"
+                {
+                    return ErrorKind::Auth;
+                }
+                if e.name.contains("FILE") || e.name.contains("UPLOAD") {
+                    return ErrorKind::Transfer;
+                }
+                ErrorKind::Rpc {
+                    code: e.code,
+                    name: e.name.clone(),
+                }
+            }
+            Self::Io(_) | Self::Dropped => ErrorKind::Network,
+            Self::Migrate(dc) => ErrorKind::Migration(*dc),
+            Self::StaleHash | Self::PeerNotCached(_) => ErrorKind::Auth,
+            Self::Deserialize(s) if s.contains("cancel") => ErrorKind::Cancelled,
+            Self::Deserialize(_) => ErrorKind::Other,
+            _ => ErrorKind::Other,
+        }
+    }
+
+    fn friendly(&self) -> String {
+        match self {
+            Self::Rpc(e) => {
+                if e.code == 420 {
+                    let secs = e.value.unwrap_or(0);
+                    return format!("Telegram rate limit reached. Retry after {secs} seconds.");
+                }
+                if e.code == 303 {
+                    let dc = e.value.unwrap_or(1);
+                    return format!("Redirecting to datacenter {dc}.");
+                }
+                if e.code == 401 {
+                    return format!("Authentication error: {}. Please log in again.", e.name);
+                }
+                if e.code == 400 && e.name == "PHONE_CODE_INVALID" {
+                    return "Invalid or expired verification code.".into();
+                }
+                if e.code == 400 && e.name == "PASSWORD_HASH_INVALID" {
+                    return "Wrong 2FA password.".into();
+                }
+                if e.code == 400 && e.name == "PEER_ID_INVALID" {
+                    return "Peer not found or not cached. Try resolving by username first.".into();
+                }
+                if e.name == "CHAT_WRITE_FORBIDDEN" {
+                    return "You do not have write access to this chat.".into();
+                }
+                if e.name == "USER_BANNED_IN_CHANNEL" {
+                    return "You are banned in this channel.".into();
+                }
+                format!(
+                    "Telegram error ({code}): {name}",
+                    code = e.code,
+                    name = e.name
+                )
+            }
+            Self::Io(e) => format!("Network error: {e}"),
+            Self::Deserialize(s) if s.contains("cancel") => "Transfer cancelled.".into(),
+            Self::Deserialize(s) => format!("Response parse error: {s}"),
+            Self::Dropped => "Request dropped (connection closed).".into(),
+            Self::Migrate(dc) => format!("DC migration to {dc}."),
+            Self::StaleHash => "Access hash expired. Please retry.".into(),
+            Self::PeerNotCached(s) => format!("Peer not cached: {s}. Try resolving it first."),
+            _ => format!("{self}"),
+        }
+    }
+}

@@ -43,11 +43,14 @@ base64         = "0.22"
 chrono         = { version = "0.4", features = ["clock"] }
 reqwest        = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde_json     = "1"
+infer          = { version = "0.19", default-features = false }
+mp4            = { version = "0.14", optional = true }
 
 [features]
 default = []
 derive          = ["dep:ferogram-derive"]
 sqlite-session  = ["ferogram-session/sqlite-session"]
+experimental    = ["dep:mp4"]
 libsql-session  = ["ferogram-session/libsql-session"]
 serde           = ["ferogram-session/serde"]
 html            = ["ferogram-parsers/html"]
@@ -113,6 +116,12 @@ required-features = ["derive"]
 
 [[example]]
 name = "showcase_bot"
+
+[[example]]
+name = "progress_transfer"
+
+[[example]]
+name = "typed_errors"
 
 # session utilities
 [[example]]

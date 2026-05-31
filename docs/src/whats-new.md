@@ -53,7 +53,7 @@ while let Some(chunk) = iter.next().await? { ... }
 let uploaded = client.upload(reader, "file.jpg").await?;
 
 // upload from path (stats file, streams to upload)
-let uploaded = client.upload_file_from_path("photo.jpg").await?;
+let uploaded = client.upload_file("photo.jpg").await?;
 ```
 
 `IncomingMessage` also gains two convenience methods:

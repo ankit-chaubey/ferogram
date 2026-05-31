@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-// ---------- Instant (real vs test-time fake) ----------
+// Instant (real vs test-time fake)
 
 #[cfg(not(test))]
 pub(super) use std::time::Instant;

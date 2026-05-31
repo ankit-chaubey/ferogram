@@ -16,8 +16,6 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable};
-use tokio::io::AsyncRead;
-use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 
 use crate::{Client, InvocationError};
@@ -255,6 +253,17 @@ fn resolve_mime(name: &str, mime_type: &str) -> String {
         .first_or_octet_stream()
         .to_string()
 }
+
+/// Public wrapper for `resolve_mime` used by `client/files.rs` experimental code.
+pub fn resolve_mime_pub(name: &str) -> String {
+    resolve_mime(name, "")
+}
+
+/// Detect MIME from bytes first (magic bytes), fall back to extension.
+/// Used when uploading to ensure correct media type even without extension.
+pub fn detect_mime_from_bytes(bytes: &[u8], name: &str) -> String {
+    crate::file_info::detect_mime(bytes, name)
+}
 /// A successfully uploaded file handle, ready to be sent as media.
 #[derive(Debug, Clone)]
 pub struct UploadedFile {
@@ -264,6 +273,15 @@ pub struct UploadedFile {
 }
 
 impl UploadedFile {
+    /// Construct an `UploadedFile` from its parts. Used by experimental resumable upload.
+    pub(crate) fn new(inner: tl::enums::InputFile, mime_type: String, name: String) -> Self {
+        Self {
+            inner,
+            mime_type,
+            name,
+        }
+    }
+
     pub fn mime_type(&self) -> &str {
         &self.mime_type
     }
@@ -302,6 +320,170 @@ impl UploadedFile {
             ttl_seconds: None,
             video: None,
         })
+    }
+
+    /// Automatically choose the best `InputMedia` type based on MIME.
+    ///
+    /// | MIME              | Sent as   |
+    /// |-------------------|-----------|
+    /// | `image/gif`       | Animation |
+    /// | `image/*`         | Photo     |
+    /// | `video/*`         | Video     |
+    /// | `audio/ogg`       | Voice     |
+    /// | `audio/*`         | Audio     |
+    /// | everything else   | Document  |
+    pub fn as_auto_media(&self) -> tl::enums::InputMedia {
+        let mime = self.mime_type.as_str();
+        let name = self.name.as_str();
+
+        if mime == "image/gif" {
+            return tl::enums::InputMedia::UploadedDocument(
+                tl::types::InputMediaUploadedDocument {
+                    nosound_video: false,
+                    force_file: false,
+                    spoiler: false,
+                    file: self.inner.clone(),
+                    thumb: None,
+                    mime_type: mime.to_string(),
+                    attributes: vec![
+                        tl::enums::DocumentAttribute::Animated,
+                        tl::enums::DocumentAttribute::Filename(
+                            tl::types::DocumentAttributeFilename {
+                                file_name: name.to_string(),
+                            },
+                        ),
+                    ],
+                    stickers: None,
+                    ttl_seconds: None,
+                    video_cover: None,
+                    video_timestamp: None,
+                },
+            );
+        }
+
+        if mime.starts_with("image/") {
+            return self.as_photo_media();
+        }
+
+        if mime.starts_with("video/") {
+            return tl::enums::InputMedia::UploadedDocument(
+                tl::types::InputMediaUploadedDocument {
+                    nosound_video: false,
+                    force_file: false,
+                    spoiler: false,
+                    file: self.inner.clone(),
+                    thumb: None,
+                    mime_type: mime.to_string(),
+                    attributes: vec![
+                        tl::enums::DocumentAttribute::Video(tl::types::DocumentAttributeVideo {
+                            round_message: false,
+                            supports_streaming: true,
+                            nosound: false,
+                            duration: 0.0,
+                            w: 0,
+                            h: 0,
+                            preload_prefix_size: None,
+                            video_start_ts: None,
+                            video_codec: None,
+                        }),
+                        tl::enums::DocumentAttribute::Filename(
+                            tl::types::DocumentAttributeFilename {
+                                file_name: name.to_string(),
+                            },
+                        ),
+                    ],
+                    stickers: None,
+                    ttl_seconds: None,
+                    video_cover: None,
+                    video_timestamp: None,
+                },
+            );
+        }
+
+        if mime == "audio/ogg" || mime == "application/ogg" {
+            return tl::enums::InputMedia::UploadedDocument(
+                tl::types::InputMediaUploadedDocument {
+                    nosound_video: false,
+                    force_file: false,
+                    spoiler: false,
+                    file: self.inner.clone(),
+                    thumb: None,
+                    mime_type: mime.to_string(),
+                    attributes: vec![
+                        tl::enums::DocumentAttribute::Audio(tl::types::DocumentAttributeAudio {
+                            voice: true,
+                            duration: 0,
+                            title: None,
+                            performer: None,
+                            waveform: None,
+                        }),
+                        tl::enums::DocumentAttribute::Filename(
+                            tl::types::DocumentAttributeFilename {
+                                file_name: name.to_string(),
+                            },
+                        ),
+                    ],
+                    stickers: None,
+                    ttl_seconds: None,
+                    video_cover: None,
+                    video_timestamp: None,
+                },
+            );
+        }
+
+        if mime.starts_with("audio/") {
+            let stem = std::path::Path::new(name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(name);
+            return tl::enums::InputMedia::UploadedDocument(
+                tl::types::InputMediaUploadedDocument {
+                    nosound_video: false,
+                    force_file: false,
+                    spoiler: false,
+                    file: self.inner.clone(),
+                    thumb: None,
+                    mime_type: mime.to_string(),
+                    attributes: vec![
+                        tl::enums::DocumentAttribute::Audio(tl::types::DocumentAttributeAudio {
+                            voice: false,
+                            duration: 0,
+                            title: Some(stem.to_string()),
+                            performer: None,
+                            waveform: None,
+                        }),
+                        tl::enums::DocumentAttribute::Filename(
+                            tl::types::DocumentAttributeFilename {
+                                file_name: name.to_string(),
+                            },
+                        ),
+                    ],
+                    stickers: None,
+                    ttl_seconds: None,
+                    video_cover: None,
+                    video_timestamp: None,
+                },
+            );
+        }
+
+        self.as_document_media()
+    }
+}
+
+/// `UploadedFile` converts to `InputMedia` automatically using MIME detection.
+///
+/// This lets you pass an `UploadedFile` directly to [`Client::send_file`]:
+///
+/// ```rust,no_run
+/// # use ferogram::{Client, InputMessage};
+/// # async fn ex(client: Client) -> anyhow::Result<()> {
+/// let uploaded = client.upload_file("video.mp4", None).await?;
+/// client.send_file("me", uploaded, &InputMessage::default()).await?;
+/// # Ok(()) }
+/// ```
+impl From<UploadedFile> for tl::enums::InputMedia {
+    fn from(f: UploadedFile) -> Self {
+        f.as_auto_media()
     }
 }
 
@@ -614,11 +796,12 @@ impl Client {
     /// - `upload.saveBigFilePart` used for files > 30 MB (`kUseBigFilesFrom`).
     ///
     /// For files that benefit from parallelism use [`upload_file_concurrent`].
-    pub async fn upload_file(
+    pub(crate) async fn upload_bytes(
         &self,
         data: &[u8],
         name: &str,
         mime_type: &str,
+        handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<UploadedFile, InvocationError> {
         // Zero-byte upload produces parts=0; add 1 to satisfy FILE_PART_0_MISSING check.
         if data.is_empty() {
@@ -626,14 +809,28 @@ impl Client {
                 "cannot upload empty file".into(),
             ));
         }
-        let resolved_mime = resolve_mime(name, mime_type);
+        // Prefer magic-byte detection over extension when mime_type is not already known.
+        let resolved_mime = if mime_type.is_empty() || mime_type == "application/octet-stream" {
+            detect_mime_from_bytes(data, name)
+        } else {
+            resolve_mime(name, mime_type)
+        };
         let total = data.len();
         let big = total > BIG_FILE_THRESHOLD;
         // Pick smallest part size that keeps total_parts <= 4000.
         let (part_size, total_parts) = upload_part_size(total);
         let file_id = crate::random_i64_pub();
 
+        if let Some(h) = handle {
+            h.set_total(total as u64);
+            h.reset_start();
+        }
+
         for (part_num, chunk) in data.chunks(part_size).enumerate() {
+            if let Some(h) = handle {
+                h.poll_pause_cancel().await?;
+            }
+            let chunk_len = chunk.len();
             if big {
                 // Always through transfer pool, never main session.
                 self.rpc_transfer_on_dc_pub(
@@ -656,6 +853,9 @@ impl Client {
                     },
                 )
                 .await?;
+            }
+            if let Some(h) = handle {
+                h.add_bytes(chunk_len as u64);
             }
         }
 
@@ -687,6 +887,7 @@ impl Client {
         data: Arc<Vec<u8>>,
         name: &str,
         mime_type: &str,
+        handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<UploadedFile, InvocationError> {
         // Zero-byte upload produces parts=0; add 1 to satisfy FILE_PART_0_MISSING check.
         if data.is_empty() {
@@ -699,6 +900,13 @@ impl Client {
         let big = total > BIG_FILE_THRESHOLD;
         // Per-file hard ceiling: max 4 workers. Global ceiling: MAX_GLOBAL_SENDERS permits.
         let n_workers = upload_worker_count(total).min(MAX_WORKERS_PER_FILE);
+
+        if let Some(h) = handle {
+            h.set_total(total as u64);
+            h.reset_start();
+        }
+        // Arc-wrap handle so workers can report progress without lifetime issues.
+        let shared_handle: Option<crate::transfer::TransferHandle> = handle.cloned();
         let _global_guard = self
             .inner
             .worker_semaphore
@@ -738,7 +946,9 @@ impl Client {
         }
         if conns.is_empty() {
             tracing::warn!("[ferogram] upload: no worker conns, falling back to sequential");
-            return self.upload_file(&data, name, mime_type).await;
+            return self
+                .upload_bytes(&data, name, mime_type, shared_handle.as_ref())
+                .await;
         }
         let actual_workers = conns.len();
 
@@ -752,6 +962,7 @@ impl Client {
             let client = self.clone();
             let upload_dc = Arc::clone(&upload_dc);
             let file_id_atomic = std::sync::Arc::clone(&file_id_atomic);
+            let worker_handle = shared_handle.clone();
 
             tasks.spawn(async move {
                 // Reconnect budget is per-worker lifetime.
@@ -785,6 +996,12 @@ impl Client {
                     let start = part_num as usize * part_size;
                     let end = (start + part_size).min(data.len());
                     let bytes = data[start..end].to_vec();
+                    let chunk_len = bytes.len() as u64;
+
+                    // Pause / cancel check before each chunk.
+                    if let Some(ref h) = worker_handle {
+                        h.poll_pause_cancel().await?;
+                    }
 
                     // Error handling:
                     //   FLOOD_WAIT (420)          → sleep, retry same conn
@@ -810,7 +1027,12 @@ impl Client {
                             .await
                         };
                         let err = match result {
-                            Ok(_) => break,
+                            Ok(_) => {
+                                if let Some(ref h) = worker_handle {
+                                    h.add_bytes(chunk_len);
+                                }
+                                break;
+                            }
                             Err(e) => e,
                         };
                         if let InvocationError::Rpc(ref rpc) = err {
@@ -932,32 +1154,16 @@ impl Client {
         })
     }
 
-    /// Upload from an `AsyncRead`. Reads fully into memory then uploads.
-    pub async fn upload_stream<R: AsyncRead + Unpin>(
-        &self,
-        reader: &mut R,
-        name: &str,
-        mime_type: &str,
-    ) -> Result<UploadedFile, InvocationError> {
-        let mut data = Vec::new();
-        reader.read_to_end(&mut data).await?;
-        if data.len() > BIG_FILE_THRESHOLD {
-            self.upload_file_concurrent(Arc::new(data), name, mime_type)
-                .await
-        } else {
-            self.upload_file(&data, name, mime_type).await
-        }
-    }
-
     // Send
 
     /// Send a file as a document or photo to a chat.
     pub async fn send_file(
         &self,
         peer: impl Into<crate::PeerRef>,
-        media: tl::enums::InputMedia,
+        media: impl Into<tl::enums::InputMedia>,
         msg: &crate::InputMessage,
     ) -> Result<crate::update::IncomingMessage, InvocationError> {
+        let media = media.into();
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::SendMedia {
@@ -1263,6 +1469,23 @@ impl Client {
         location: tl::enums::InputFileLocation,
         dc_id: i32,
         writer: &mut W,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<u64, InvocationError> {
+        self.download_streaming_on_dc_from(location, dc_id, writer, handle, 0)
+            .await
+    }
+
+    /// Like [`download_streaming_on_dc`] but starts at `start_offset` bytes.
+    ///
+    /// Used by resumable downloads to skip already-received bytes.
+    /// `start_offset` is aligned down to the nearest 1 MB boundary as Telegram requires.
+    pub(crate) async fn download_streaming_on_dc_from<W: tokio::io::AsyncWrite + Unpin>(
+        &self,
+        location: tl::enums::InputFileLocation,
+        dc_id: i32,
+        writer: &mut W,
+        handle: Option<&crate::transfer::TransferHandle>,
+        start_offset: i64,
     ) -> Result<u64, InvocationError> {
         use tokio::io::AsyncWriteExt;
         let chunk = 512 * 1024i32;
@@ -1273,12 +1496,17 @@ impl Client {
             dc_id
         };
         let mut conn = self.open_worker_conn(worker_dc).await?;
-        let mut offset = 0i64;
+        // Align start_offset down to the nearest 1 MB boundary (Telegram requirement).
+        let mb = 1024 * 1024i64;
+        let mut offset = (start_offset / mb) * mb;
         let mut total_written = 0u64;
         let mut reopen_attempts = 0u8;
         const MAX_REOPEN: u8 = 3;
 
         loop {
+            if let Some(h) = handle {
+                h.poll_pause_cancel().await?;
+            }
             let req = tl::functions::upload::GetFile {
                 precise: true,
                 cdn_supported: false,
@@ -1293,11 +1521,15 @@ impl Client {
                         tl::enums::upload::File::File(f) => {
                             reopen_attempts = 0;
                             let done = (f.bytes.len() as i32) < chunk;
+                            let n = f.bytes.len() as u64;
                             writer
                                 .write_all(&f.bytes)
                                 .await
                                 .map_err(InvocationError::Io)?;
-                            total_written += f.bytes.len() as u64;
+                            total_written += n;
+                            if let Some(h) = handle {
+                                h.add_bytes(n);
+                            }
                             if done {
                                 break;
                             }
@@ -1741,7 +1973,7 @@ impl crate::update::IncomingMessage {
                 ));
             }
         };
-        client.download(media, dest).await
+        client.download(media, dest, None).await
     }
 
     /// Download this message's media into memory and return the raw bytes.
@@ -1817,4 +2049,30 @@ pub fn location_from_media(
         return Some((photo.to_input_location()?, photo.dc_id()));
     }
     None
+}
+
+/// Return the known byte size of `media`, if available.
+pub fn size_from_media(media: &tl::enums::MessageMedia) -> Option<usize> {
+    if let Some(doc) = Document::from_media(media) {
+        return Some(doc.raw.size as usize);
+    }
+    None
+}
+
+// Helpers
+
+/// Public wrapper around `make_input_file` for use from `client/files.rs`.
+pub fn make_input_file_pub(
+    big: bool,
+    file_id: i64,
+    total_parts: i32,
+    name: &str,
+    data: &[u8],
+) -> tl::enums::InputFile {
+    make_input_file(big, file_id, total_parts, name, data)
+}
+
+/// Generate a random upload session file_id. Used by experimental resumable upload.
+pub fn random_file_id_pub() -> i64 {
+    crate::random_i64_pub()
 }
