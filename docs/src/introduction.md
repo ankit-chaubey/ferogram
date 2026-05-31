@@ -5,15 +5,36 @@
 [![TL Layer](https://img.shields.io/badge/TL%20Layer-225-8b5cf6?style=flat-square)](https://core.telegram.org/schema)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square)](#license)
 
-ferogram is an async Rust library for Telegram's MTProto protocol. It works for user accounts and bots, and talks to Telegram directly over MTProto with no Bot API HTTP proxy in the middle.
+Hey, glad you're here.
 
-Everything in the workspace is written from scratch: the `.tl` schema parser, the TL code generator, AES-IGE crypto, the DH key exchange, MTProto framing, the session layer, and the high-level client on top. Each piece is its own crate so you can pull in just what you need.
+ferogram is an async Rust library for Telegram's MTProto protocol, built by [Ankit Chaubey](https://github.com/ankit-chaubey). It talks to Telegram directly, no Bot API proxy in between, and it works for both bots and user accounts from the same API.
 
-## Why it exists
+I built it because I kept hitting walls with other MTProto libraries. Things that should have been straightforward weren't, and I kept needing the library to behave slightly differently than it would let me. So I wrote my own. The goal was to cover the major use cases first, and it does: messaging, media, CDN downloads, inline keyboards, FSM for multi-step conversations, FakeTLS and MTProxy for censored networks, and a raw `invoke()` escape hatch for anything the high-level API doesn't wrap yet.
 
-I was already using other MTProto libraries and kept running into cases where I needed things to work a bit differently than they allowed. So I wrote my own.
+If you want the Bot API instead, take a look at [ferobot](https://github.com/ankit-chaubey/ferobot).
 
-The goal was to cover the major use cases first, and it does. If something's missing for you, drop by [t.me/FerogramChat](https://t.me/FerogramChat). I genuinely like hearing what people are building with it.
+If something's missing for you, drop by [t.me/FerogramChat](https://t.me/FerogramChat). I genuinely like hearing what people are building with it.
+
+## Quick install
+
+```toml
+[dependencies]
+ferogram = "0.6.0"
+tokio    = { version = "1", features = ["full"] }
+```
+
+Get `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org). That's all you need to get started.
+
+## Where to go next
+
+- [Installation](./installation.md) covers credentials, optional feature flags, and session backends.
+- [Quick Start: Bot](./quickstart-bot.md) gets a bot running in about 20 lines.
+- [Quick Start: User Account](./quickstart-user.md) covers phone login and sending your first message.
+- [Crate Architecture](./crates.md) if you want to understand how the pieces fit together.
+
+## What's under the hood
+
+Everything in the workspace is written from scratch: the `.tl` schema parser, the TL code generator, AES-IGE crypto, the DH key exchange, MTProto framing, the session layer, and the high-level client on top. Each piece is its own crate so you can pull in just what you need. Most people never touch any of it directly, but it's all there if you do.
 
 ## Crates
 
@@ -48,30 +69,27 @@ ferogram
     └ ferogram-crypto
 ```
 
-## Quick install
-
-```toml
-[dependencies]
-ferogram = "0.5.0"
-tokio    = { version = "1", features = ["full"] }
-```
-
-Get `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org). That's all you need to get started.
-
-## Where to go next
-
-- [Installation](./installation.md) covers credentials, optional feature flags, and session backends.
-- [Quick Start: Bot](./quickstart-bot.md) gets a bot running in about 20 lines.
-- [Quick Start: User Account](./quickstart-user.md) covers phone login and sending your first message.
-- [Crate Architecture](./crates.md) if you want to understand how the pieces fit together.
-
 ## Python
 
-Python support is live via [ferogram-py](https://github.com/ankit-chaubey/ferogram-py). Pre-built wheels, no Rust toolchain needed.
+Python support is live via [ferogram-py](https://github.com/ankit-chaubey/ferogram-py). Pre-built wheels for major platforms, no Rust toolchain needed.
 
 ```bash
 pip install ferogram
 ```
+
+## Secret chats
+
+Secret chats (end-to-end encrypted) are fully implemented but not published to crates.io yet. The plan is to release once there is enough community demand for it.
+
+## Voice and video calls
+
+Group audio calls are fully implemented, stable, and already in active production use by the author. Written in Rust from scratch, not a wrapper around anything.
+
+Group video calls are implemented and stable for most scenarios, with some known codec edge cases still being ironed out.
+
+Peer-to-peer calls are partially implemented and still in active development.
+
+All of this lives in its own workspace crate and will be published separately when it comes out of the workspace. Python bindings via ferogram-py are also planned.
 
 ## Community
 

@@ -9,14 +9,7 @@ FSM state management for ferogram bots.
 
 Handles state storage and context for multi-step bot conversations. Used by `ferogram`'s dispatcher when you register FSM handlers.
 
-`ferogram` re-exports everything from here. Existing code needs no changes.
-
-## Installation
-
-```toml
-[dependencies]
-ferogram-fsm = "0.5.0"
-```
+`ferogram` re-exports everything from here. If you're building a bot, you probably don't need to depend on this directly. For installation instructions see the [ferogram README](https://github.com/ankit-chaubey/ferogram).
 
 ## What it does
 
@@ -28,34 +21,30 @@ ferogram-fsm = "0.5.0"
 
 ## Usage
 
-Define a state enum and implement `FsmState` on it (or use `#[derive(FsmState)]` from `ferogram-derive`):
+Define a state enum and implement `FsmState` (or use `#[derive(FsmState)]` from `ferogram-derive`):
 
 ```rust
 use ferogram_fsm::{FsmState, MemoryStorage, StateContext};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq)]
-enum Order {
-    Item,
-    Quantity,
-    Confirm,
-}
+enum Order { Item, Quantity, Confirm }
 
 impl FsmState for Order {
     fn as_key(&self) -> String {
         match self {
-            Order::Item => "Item".into(),
+            Order::Item     => "Item".into(),
             Order::Quantity => "Quantity".into(),
-            Order::Confirm => "Confirm".into(),
+            Order::Confirm  => "Confirm".into(),
         }
     }
 
     fn from_key(key: &str) -> Option<Self> {
         match key {
-            "Item" => Some(Order::Item),
+            "Item"     => Some(Order::Item),
             "Quantity" => Some(Order::Quantity),
-            "Confirm" => Some(Order::Confirm),
-            _ => None,
+            "Confirm"  => Some(Order::Confirm),
+            _          => None,
         }
     }
 }
@@ -65,23 +54,16 @@ Use `StateContext` to read, write, and move between states:
 
 ```rust
 async fn handle(ctx: StateContext) {
-    // Read stored data
     let item = ctx.get_data("item").await.unwrap_or_default();
-
-    // Store data
     ctx.set_data("item", "Widget").await.ok();
-
-    // Move to next state
     ctx.transition(Order::Quantity).await.ok();
-
-    // Clear everything and exit the FSM
-    ctx.finish().await.ok();
+    ctx.finish().await.ok(); // clear everything, exit the FSM
 }
 ```
 
 ## Custom storage
 
-If you need persistence, implement `StateStorage` for Redis, SQL, or whatever backend you prefer:
+Implement `StateStorage` for Redis, SQL, or any other backend:
 
 ```rust
 use ferogram_fsm::{StateStorage, StorageError};

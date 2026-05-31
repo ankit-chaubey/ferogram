@@ -7,38 +7,17 @@ Procedural macros for the ferogram workspace. Currently exposes `#[derive(FsmSta
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram--derive-5865F2)](https://docs.rs/ferogram-derive)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-Most users get this through `ferogram` with the `derive` feature flag. Direct usage is only needed when building on top of the FSM layer directly.
+Most people get this through `ferogram` with the `derive` feature flag. Direct usage is only needed when building on top of the FSM layer without the full client.
 
----
-
-## Installation
-
-Via the `ferogram` crate (recommended):
-
-```toml
-[dependencies]
-ferogram = { version = "0.5.0", features = ["derive"] }
-```
-
-Or directly:
-
-```toml
-[dependencies]
-ferogram-derive = "0.5.0"
-```
+For installation instructions see the [ferogram README](https://github.com/ankit-chaubey/ferogram).
 
 ---
 
 ## `#[derive(FsmState)]`
 
-Implements the `ferogram::fsm::FsmState` trait for an enum.
+Implements the `ferogram::fsm::FsmState` trait for an enum. Only unit variants are supported; tuple or struct variants produce a compile error.
 
-**Restrictions:** only unit variants are supported. Tuple or struct variants produce a compile error.
-
-**What gets generated:**
-
-- `as_key(&self) -> String` converts the variant name to a string.
-- `from_key(key: &str) -> Option<Self>` parses the variant name back into the enum.
+What gets generated: `as_key(&self) -> String` and `from_key(key: &str) -> Option<Self>`, both using the variant name as written in source.
 
 ```rust
 use ferogram::FsmState;
@@ -48,36 +27,11 @@ enum RegistrationState {
     Start,
     WaitingName,
     WaitingPhone,
-    WaitingCity,
     Done,
 }
 ```
 
-The generated impl:
-
-```rust
-impl ferogram::fsm::FsmState for RegistrationState {
-    fn as_key(&self) -> String {
-        match self {
-            Self::Start       => "Start",
-            Self::WaitingName => "WaitingName",
-            // ...
-        }
-        .to_string()
-    }
-
-    fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "Start"       => Some(Self::Start),
-            "WaitingName" => Some(Self::WaitingName),
-            // ...
-            _ => None,
-        }
-    }
-}
-```
-
-Keys are the variant names as written in source. Renaming a variant changes its key and breaks any stored state.
+Keys are the variant names as written. Renaming a variant changes its key and breaks any stored state.
 
 ---
 

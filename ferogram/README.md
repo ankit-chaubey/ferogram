@@ -15,22 +15,20 @@ Built by **[Ankit Chaubey](https://github.com/ankit-chaubey)**
 
 </div>
 
+This is the main client crate. It talks to Telegram directly over MTProto, no Bot API proxy in between. It handles auth for both bots and user accounts, and gives you a dispatcher with composable filters, FSM for multi-step conversations, CDN downloads, middleware, and a raw `invoke()` escape hatch for anything not wrapped yet.
+
+If you want the Bot API instead, take a look at [ferobot](https://github.com/ankit-chaubey/ferobot).
+
+If you're starting fresh, this is the only crate you need. Everything else in the workspace exists to support it and can be pulled in separately if you need a specific layer on its own.
+
 > [!NOTE]
-> ferogram is still in development but already covers major use cases for production. Check [CHANGELOG](../CHANGELOG.md) before upgrading.
-
-## What it is
-
-This is the high-level client crate in the ferogram workspace. It talks to Telegram directly over MTProto, no Bot API proxy in between. Works for user accounts and bots.
-
-For the rest of the workspace (crypto, session, TL types, transport layer, etc.) see the [repository root](https://github.com/ankit-chaubey/ferogram) or the [crates table](#crates) below.
-
----
+> ferogram is still in active development. It covers major use cases and runs in production, but the API may still shift. Check [CHANGELOG](../CHANGELOG.md) before upgrading.
 
 ## Installation
 
 ```toml
 [dependencies]
-ferogram = "0.5.0"
+ferogram = "0.6.0"
 tokio    = { version = "1", features = ["full"] }
 ```
 
@@ -39,7 +37,7 @@ Get `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org).
 Optional feature flags:
 
 ```toml
-ferogram = { version = "0.5.0", features = [
+ferogram = { version = "0.6.0", features = [
     "sqlite-session",  # SqliteBackend via rusqlite
     "libsql-session",  # LibSqlBackend via libsql-client (Turso)
     "html",            # parse_html / generate_html (built-in parser)
@@ -48,8 +46,6 @@ ferogram = { version = "0.5.0", features = [
     "serde",           # serde support on session types
 ] }
 ```
-
----
 
 ## Quick start: bot
 
@@ -92,11 +88,9 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
----
-
 ## Examples
 
-19 runnable examples covering everything from sending a message to your Saved Messages to a full FSM order bot. Good place to start if you learn by reading code.
+19 runnable examples covering everything from sending a message to your Saved Messages to a full FSM order bot.
 
 ```
 cargo run --example hello_self
@@ -105,11 +99,11 @@ cargo run --example showcase_bot
 # ... and 16 more
 ```
 
-See **[examples/README.md](examples/README.md)** for the full list with descriptions, what each one needs, and when to use `quick_connect` vs `Client::builder()`.
-
----
+See **[examples/README.md](examples/README.md)** for the full list with descriptions and notes on when to use `quick_connect` vs `Client::builder()`.
 
 ## Connecting
+
+`quick_connect` is the fast path. For anything more specific, use the builder:
 
 ```rust
 use ferogram::Client;
@@ -123,19 +117,17 @@ let (client, _shutdown) = Client::builder()
     .await?;
 ```
 
-Some builder options worth knowing:
+A few builder options worth knowing:
 
 - `.session(path)` / `.in_memory()` / `.session_string(s)` / `.session_backend(Arc<...>)` for session storage
 - `.socks5("127.0.0.1:1080")` / `.proxy_link("t.me/proxy?...")` for proxies
 - `.transport(TransportKind::Obfuscated)` or `.transport(TransportKind::FakeTls)` for DPI bypass
-- `.probe_transport(true)` to race transports and use the first that connects
-- `.resilient_connect(true)` to fall back through DoH and Telegram's special-config if TCP fails
+- `.probe_transport(true)` to race transports and use whichever connects first
+- `.resilient_connect(true)` to fall back through DoH and Telegram's special-config if TCP is blocked
 - `.catch_up(true)` to replay missed updates after a reconnect
-- `.retry_policy(...)` / `.restart_policy(...)` to customize retry and reconnect behavior
+- `.retry_policy(...)` / `.restart_policy(...)` for custom retry and reconnect behavior
 
-Full list and usage at [docs.rs/ferogram](https://docs.rs/ferogram).
-
----
+Full list at [docs.rs/ferogram](https://docs.rs/ferogram).
 
 ## Dispatcher and filters
 
@@ -161,9 +153,7 @@ while let Some(upd) = stream.next().await {
 }
 ```
 
-Filters compose with `&`, `|`, `!`. Built-ins include `command`, `private`, `group`, `channel`, `text`, `text_contains`, `media`, `photo`, `document`, `forwarded`, `reply`, `from_user`, `album`, `custom`, and more.
-
----
+Filters compose with `&`, `|`, `!`. Built-ins cover `command`, `private`, `group`, `channel`, `text`, `text_contains`, `media`, `photo`, `document`, `forwarded`, `reply`, `from_user`, `album`, `custom`, and more.
 
 ## Middleware
 
@@ -177,8 +167,6 @@ dp.middleware(|upd, next| async move {
 ```
 
 Runs in registration order. Call `next.run(upd)` to pass control forward, or return early to stop the chain.
-
----
 
 ## FSM
 
@@ -198,26 +186,19 @@ dp.on_message_fsm(text(), Form::Name, |msg, state| async move {
 });
 ```
 
-`MemoryStorage` is built in. To persist state, implement `StateStorage` for Redis, a database, or anything else. State keys scope per-user, per-chat, or per-user-in-chat via `StateKeyStrategy`. See [`ferogram-fsm`](../ferogram-fsm/) for details.
-
----
+`MemoryStorage` is built in. To persist state across restarts, implement `StateStorage` for Redis, a database, or anything else. State keys scope per-user, per-chat, or per-user-in-chat via `StateKeyStrategy`. See [`ferogram-fsm`](../ferogram-fsm/) for details.
 
 ## Session backends
 
 ```rust
-use ferogram_session::{SqliteBackend, LibSqlBackend};
-use std::sync::Arc;
-
-Client::builder().session("bot.session")                                     // binary file (default)
-Client::builder().in_memory()                                                // no persistence
-Client::builder().session_string(env::var("SESSION")?)                       // base64 string
-Client::builder().session_backend(Arc::new(SqliteBackend::open("s.db")?))   // sqlite
-Client::builder().session_backend(Arc::new(LibSqlBackend::remote(url, token).await?))  // turso
+Client::builder().session("bot.session")                                              // binary file (default)
+Client::builder().in_memory()                                                         // no persistence
+Client::builder().session_string(env::var("SESSION")?)                               // base64 string
+Client::builder().session_backend(Arc::new(SqliteBackend::open("s.db")?))            // sqlite
+Client::builder().session_backend(Arc::new(LibSqlBackend::remote(url, token).await?)) // turso
 ```
 
-Custom: implement `SessionBackend` from [`ferogram-session`](../ferogram-session/). The base64 string backend is handy for serverless or containers where you can't write to disk.
-
----
+The base64 string backend is useful for serverless or containers where writing to disk isn't an option. To bring your own, implement `SessionBackend` from [`ferogram-session`](../ferogram-session/).
 
 ## Transport and proxy
 
@@ -237,17 +218,15 @@ Client::builder().socks5("127.0.0.1:1080")
 // Race transports, use first to connect
 Client::builder().probe_transport(true)
 
-// Fall back through DoH + Telegram special-config if TCP fails
+// Fall back through DoH + Telegram special-config if TCP is blocked
 Client::builder().resilient_connect(true)
 ```
 
 See [`ferogram-connect`](../ferogram-connect/) for the framing layer underneath.
 
----
-
 ## Raw API
 
-If the high-level API doesn't cover something yet, `client.invoke()` takes any Layer 225 TL function directly:
+When the high-level API isn't enough, `client.invoke()` takes any Layer 225 TL function directly. It's the escape hatch, not the normal path, but it's always there:
 
 ```rust
 use ferogram::tl;
@@ -264,9 +243,7 @@ client.invoke(&req).await?;
 client.invoke_on_dc(2, &req).await?;  // target a specific DC
 ```
 
-See [`ferogram-tl-types`](../ferogram-tl-types/) for all 2,329 generated types.
-
----
+See [`ferogram-tl-types`](../ferogram-tl-types/) for all generated types and functions.
 
 ## Error handling
 
@@ -290,8 +267,6 @@ use ferogram::retry::NoRetries;
 Client::builder().retry_policy(Arc::new(NoRetries))
 ```
 
----
-
 ## Shutdown
 
 ```rust
@@ -301,34 +276,41 @@ shutdown.cancel();   // graceful
 client.disconnect(); // immediate
 ```
 
----
-
 ## Features
 
-Most of what you'd expect is already covered. Check **[FEATURES.md](../FEATURES.md)** for the complete list with all method signatures. A few things worth pointing out:
+See **[FEATURES.md](../FEATURES.md)** for the full list with method signatures. A few things worth calling out explicitly:
 
-- [x] **Bot + user account** in the same API, same client builder
-- [x] **Dispatcher with composable filters** (`&`, `|`, `!`) and middleware pipeline
-- [x] **FSM with pluggable storage** for multi-step conversations
-- [x] **FakeTLS and Obfuscated2 transport** for censored regions, full MTProxy support
-- [x] **Resilient connect** - DoH resolver + Telegram special-config fallback when TCP is blocked
-- [x] **Transport probing** - races multiple transports, uses whichever connects first
-- [x] **Update gap recovery** - PTS/QTS tracking, fetches missed updates via `getDifference` on reconnect
-- [x] **QR code login** for user accounts
-- [x] **Concurrent upload and download** with per-part retry and CDN redirect handling
-- [x] **Turso/LibSQL session backend** for serverless and distributed setups
-- [x] **Forum topics** (supergroups with topics enabled) - create, edit, delete
-- [x] **Inline button click from code** (`msg.click_button`, `msg.click_button_where`)
-- [x] **Scheduled messages** - send, list, delete, send immediately
-- [x] **Paid reactions** and custom emoji reactions
-- [x] **Python bindings** via [ferogram-py](https://github.com/ankit-chaubey/ferogram-py), pre-built wheels, no Rust toolchain needed
-- [ ] Secret chats (end-to-end encrypted) - not yet
+- Bot and user account in the same API, same client builder
+- Dispatcher with composable filters and middleware pipeline
+- FSM with pluggable storage for multi-step conversations
+- FakeTLS and Obfuscated2 transport for censored regions, full MTProxy support
+- Resilient connect: DoH resolver + Telegram special-config fallback when TCP is blocked
+- Transport probing: races multiple transports, uses whichever connects first
+- Update gap recovery: PTS/QTS tracking, fetches missed updates via `getDifference` on reconnect
+- QR code login for user accounts
+- Concurrent upload and download with per-part retry and CDN redirect handling
+- Turso/LibSQL session backend for serverless and distributed setups
+- Forum topics (supergroups with topics enabled): create, edit, delete
+- Inline button click from code (`msg.click_button`, `msg.click_button_where`)
+- Scheduled messages: send, list, delete, send immediately
+- Paid reactions and custom emoji reactions
+- Python bindings via [ferogram-py](https://github.com/ankit-chaubey/ferogram-py), pre-built wheels, no Rust toolchain needed
 
----
+Secret chats (end-to-end encrypted) are fully implemented but not published to crates.io yet. The plan is to release once there is enough community demand for it.
+
+## Voice and video calls
+
+Group audio calls are fully implemented, stable, and already in active production use. Written in Rust from scratch, not a wrapper around anything, which keeps it lightweight and efficient.
+
+Group video calls are implemented and stable for most scenarios, with some known codec edge cases still being ironed out.
+
+Peer-to-peer calls are partially implemented and still in active development.
+
+All of this lives in its own workspace crate and will be published separately when it comes out of the workspace. Python bindings via ferogram-py are also planned for it.
 
 ## Crates
 
-Most people only need `ferogram`. But each crate is independently publishable if you need just one layer.
+Most people only need this crate. But each crate in the workspace is independently publishable if you need just one layer.
 
 | Crate | What it does |
 |---|---|
@@ -345,7 +327,7 @@ Most people only need `ferogram`. But each crate is independently publishable if
 | [`ferogram-tl-gen`](../ferogram-tl-gen/) | Build-time code generator from TL AST to Rust source. |
 | [`ferogram-tl-parser`](../ferogram-tl-parser/) | Parses `.tl` schema text into a Definition AST. |
 
-The rough dependency chain:
+The rough dependency chain (build-critical path only):
 
 ```
 ferogram
@@ -358,8 +340,6 @@ ferogram
     │ └ ferogram-crypto
     └ ferogram-crypto
 ```
-
----
 
 ## Testing
 
@@ -379,27 +359,16 @@ cargo test --workspace --all-features
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR. Run `cargo fmt --all`, `cargo test --workspace` and `cargo clippy --workspace` first. Security issues: see [SECURITY.md](SECURITY.md).
-
-## Author
-
-[Ankit Chaubey](https://github.com/ankit-chaubey)
-
-I built ferogram because I was already using other MTProto libraries but kept running into cases where I needed things to work a bit differently than they allowed. So I wrote my own.
-
-It covers the major use cases and that was the primary goal. If something's missing for you, feel free to drop by [t.me/FerogramChat](https://t.me/FerogramChat) and say hi. I genuinely like hearing what people are building with it. Just keeping it real though, every new feature is more to maintain, so I'm a bit selective. But I still love to hear from you.
-
-If ferogram has been useful, a star or fork means a lot. And if you want to contribute, even better.
+Read [CONTRIBUTING.md](../CONTRIBUTING.md) before opening a PR. Run `cargo fmt --all`, `cargo test --workspace`, and `cargo clippy --workspace` first. Security issues: see [SECURITY.md](../SECURITY.md).
 
 ## Acknowledgments
 
-Big shoutout to [Lonami](https://codeberg.org/Lonami/grammers) for grammers. It was genuinely one of the most helpful references while building ferogram, and honestly grammers and Telethon are two of my all-time favorites that I've been using for years. Love those projects.
+Big shoutout to [Lonami](https://codeberg.org/Lonami/grammers) for grammers. It was one of the most helpful references while building ferogram, and grammers and Telethon are two of my all-time favorites. Love those projects.
 
 Protocol behavior references from [Telegram Desktop](https://github.com/telegramdesktop/tdesktop) and [TDLib](https://github.com/tdlib/td).
 
 ## License
 
-MIT OR Apache-2.0. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
+MIT OR Apache-2.0. See [LICENSE-MIT](../LICENSE-MIT) and [LICENSE-APACHE](../LICENSE-APACHE).
 
 Usage must comply with [Telegram's API Terms of Service](https://core.telegram.org/api/terms).
-

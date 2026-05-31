@@ -4,6 +4,121 @@ ferogram started as a renamed continuation of [layer](https://github.com/ankit-c
 
 ---
 
+## v0.6.0
+
+Released 2026-05-29. Transfer progress tracking, resumable transfers, and typed errors.
+
+### Transfer progress and control
+
+`TransferHandle` and `TransferProgress` let you track, pause, resume, or cancel any upload or download. Pass a handle as the last argument to `upload_file`, `upload`, `download`, or `download_file`. Pass `None` to keep old behavior.
+
+```rust
+use ferogram::{Client, TransferHandle};
+
+let handle = TransferHandle::new();
+let ctl = handle.clone();
+
+tokio::spawn(async move {
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    ctl.cancel();
+});
+
+let uploaded = client.upload_file("/tmp/video.mp4", Some(&handle)).await?;
+```
+
+### Typed errors
+
+`InvocationErrorExt` trait adds `.kind()` and `.friendly()` on `InvocationError`. `.kind()` returns an `ErrorKind` enum so you can tell a flood wait from a network failure from a cancelled transfer without matching on strings.
+
+```rust
+use ferogram::InvocationErrorExt;
+
+match result {
+    Err(e) if matches!(e.kind(), ferogram::ErrorKind::Transfer) => println!("transfer: {}", e.friendly()),
+    Err(e) => println!("other: {e}"),
+    Ok(_) => {}
+}
+```
+
+### Auto media type and `From<UploadedFile>`
+
+`UploadedFile::as_auto_media()` picks the right Telegram media type from MIME (photo, video, audio, voice, animation, or document). `UploadedFile` now implements `Into<InputMedia>` so you can pass it directly to `send_file`.
+
+### Resumable transfers (experimental)
+
+`download_resumable` and `upload_resumable` are available under `features = ["experimental"]`. Interrupted transfers save a checkpoint JSON and a `.partial` bytes file to a directory you specify. On the next call with the same media the download picks up from the saved offset. Checkpoint files are deleted on success.
+
+### Breaking changes
+
+- `upload_file_from_path` renamed to `upload_file`.
+- `upload_file`, `upload`, `download`, `download_file` all take `handle: Option<&TransferHandle>` as a new last param.
+- `send_file` now takes `impl Into<InputMedia>` instead of `InputMedia` directly.
+
+### Upgrading from 0.5.2
+
+```toml
+ferogram = "0.6.0"
+```
+
+Rename `upload_file_from_path` call sites to `upload_file`. Add `None` as the last argument to all upload and download calls.
+
+---
+
+## v0.5.2
+
+Released 2026-05-31. Channel kind tracking and session format v6.
+
+### `channel_kind()` on `IncomingMessage`
+
+Four new async methods: `channel_kind()`, `is_megagroup()`, `is_broadcast()`, `is_gigagroup()`. The fast path reads from a per-batch peer map built at dispatch time, so live updates never need to acquire the session cache lock. The slow path falls back to the session cache.
+
+```rust
+if msg.is_megagroup().await {
+    // message is from a supergroup
+}
+
+match msg.channel_kind().await {
+    Some(ChannelKind::Broadcast) => { /* channel post */ }
+    Some(ChannelKind::Megagroup) => { /* supergroup */ }
+    Some(ChannelKind::Gigagroup) => { /* gigagroup */ }
+    None => { /* not a channel, or kind not yet known */ }
+}
+```
+
+### Session format v6
+
+Each channel peer now stores a `ChannelKind` byte (0xFF = absent). Old sessions from v2-v5 load without changes and pick up kind data the next time the peer appears in an update.
+
+SQLite and libSQL both add the `channel_kind` column automatically on first open.
+
+### Upgrading from 0.5.1
+
+```toml
+ferogram = "0.5.2"
+```
+
+No API changes required.
+
+---
+
+## v0.5.1
+
+Released 2026-05-31. Single bug fix: bots were skipping every first message.
+
+### Fixed: MessageBoxes dropping every first message
+
+`force_update_entry` was seeding the Common pts from the arriving update instead of the real server baseline. This caused every odd-numbered incoming message to be dropped silently. Fixed.
+
+### Upgrading from 0.5.0
+
+```toml
+ferogram = "0.5.1"
+```
+
+No API changes.
+
+---
+
 ## v0.5.0
 
 Released 2026-05-16. API consolidation release. Paired functions that differed only by a single boolean condition have been merged into one. Download and upload paths were redesigned around `AsyncRead`/`AsyncWrite`. No new protocol or behavioural changes.

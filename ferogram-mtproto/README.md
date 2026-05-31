@@ -8,15 +8,9 @@ MTProto 2.0 session management, DH key exchange, and message framing for Rust.
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![TL Layer](https://img.shields.io/badge/TL%20Layer-225-8b5cf6)](https://core.telegram.org/mtproto)
 
----
+The MTProto session layer. Handles everything from raw bytes to decrypted, sequenced messages. `ferogram` sits on top of this; most users don't need to depend on it directly.
 
-## Installation
-
-```toml
-[dependencies]
-ferogram-mtproto  = "0.5.0"
-ferogram-tl-types = { version = "0.5.0", features = ["tl-mtproto"] }
-```
+For installation instructions see the [ferogram README](https://github.com/ankit-chaubey/ferogram).
 
 ---
 
@@ -28,7 +22,7 @@ ferogram-tl-types = { version = "0.5.0", features = ["tl-mtproto"] }
 - `msg_container` and `gzip_packed` unwrapping
 - Error recovery: `bad_msg_notification`, `bad_server_salt`, `msg_resend_req`
 - Acknowledgements via `MsgsAck`
-- Temporary key binding for PFS (`bind_temp_key` module, v0.3.7)
+- Temporary key binding for PFS (`bind_temp_key` module)
 
 ---
 
@@ -79,42 +73,9 @@ pub struct Message {
 }
 ```
 
-### Session (plaintext)
+### bind_temp_key
 
-Used only before an auth key exists, for the initial DH handshake messages.
-
-```rust
-use ferogram_mtproto::Session;
-
-let mut plain = Session::new();
-let framed = plain.pack_plain(&my_handshake_request)?;
-```
-
----
-
-## Message Framing
-
-Every outgoing MTProto message:
-
-```
-server_salt     8 bytes
-session_id      8 bytes
-message_id      8 bytes  (Unix time * 2^32, monotonically increasing)
-seq_no          4 bytes
-message_length  4 bytes
-payload         N bytes
-padding         12-1024 random bytes (total % 16 == 0)
-```
-
-Prefixed by a 32-byte `msg_key` after encryption.
-
-`msg_key` is SHA-256 of `(auth_key[88..120] || plaintext)` for client-to-server, and `(auth_key[96..128] || plaintext)` for server-to-client.
-
----
-
-### bind_temp_key (0.3.7)
-
-Implements PFS temporary key binding. Used by `ferogram` when connecting to auxiliary DCs.
+Implements PFS temporary key binding.
 
 ```rust
 use ferogram_mtproto::{serialize_bind_temp_auth_key, encrypt_bind_inner, gen_msg_id};
@@ -128,8 +89,6 @@ let wire = serialize_bind_temp_auth_key(
     seq_no,
 )?;
 ```
-
-Public re-exports: `EncryptedSession`, `SeenMsgIds`, `new_seen_msg_ids`, `gen_msg_id`, `serialize_bind_temp_auth_key`, `encrypt_bind_inner`.
 
 ---
 

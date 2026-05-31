@@ -7,16 +7,9 @@ Build-time Rust code generator for Telegram's TL schema.
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram--tl--gen-5865F2)](https://docs.rs/ferogram-tl-gen)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-Runs during `cargo build` via `build.rs`. Takes a parsed TL AST from `ferogram-tl-parser` and writes Rust source to `$OUT_DIR`. Not a runtime dependency, so add it to `[build-dependencies]`, not `[dependencies]`.
+Runs during `cargo build` via `build.rs`. Takes a parsed TL AST from `ferogram-tl-parser` and writes Rust source to `$OUT_DIR`. Add it to `[build-dependencies]`, not `[dependencies]`.
 
----
-
-## Installation
-
-```toml
-[build-dependencies]
-ferogram-tl-gen = "0.5.0"
-```
+For installation instructions see the [ferogram README](https://github.com/ankit-chaubey/ferogram).
 
 ---
 

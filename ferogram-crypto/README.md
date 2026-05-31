@@ -7,16 +7,11 @@ Cryptographic primitives for the Telegram MTProto 2.0 protocol.
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram--crypto-5865F2)](https://docs.rs/ferogram-crypto)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-Implements AES-IGE, RSA, SHA-1/256, Diffie-Hellman, PQ factorization, auth key derivation, and transport obfuscation. All written from scratch specifically for Telegram's protocol.
+AES-IGE, RSA, SHA-1/256, Diffie-Hellman, PQ factorization, auth key derivation, and transport obfuscation. All written specifically for Telegram's protocol.
 
----
+This is a low-level crate. If you're building a bot or a client, you want [`ferogram`](https://crates.io/crates/ferogram) instead; it uses this internally.
 
-## Installation
-
-```toml
-[dependencies]
-ferogram-crypto = "0.5.0"
-```
+If you need general-purpose crypto in Rust, [RustCrypto](https://github.com/RustCrypto) is the right place.
 
 ---
 
@@ -24,7 +19,7 @@ ferogram-crypto = "0.5.0"
 
 ### AES-IGE
 
-MTProto uses AES-IGE mode, not available in standard crypto libraries. Used by `ferogram-mtproto` to encrypt and decrypt every MTProto message.
+MTProto uses AES-IGE mode, which isn't in standard crypto libraries. Used by `ferogram-mtproto` to encrypt and decrypt every MTProto message.
 
 ```rust
 use ferogram_crypto::aes::{ige_encrypt, ige_decrypt};
@@ -94,12 +89,6 @@ ferogram
   ├ ferogram-tl-types
   └ ferogram-crypto  <-- here
 ```
-
----
-
-## Note
-
-This crate is built specifically for MTProto. If you need general-purpose crypto in Rust, [RustCrypto](https://github.com/RustCrypto) is the right place.
 
 ---
 

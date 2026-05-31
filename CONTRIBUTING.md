@@ -40,7 +40,7 @@ Each wrapper should:
 
 ### Writing tests
 
-Unit tests live alongside the source (`#[cfg(test)]` blocks). Integration tests that require a real Telegram connection are kept in `ferogram-app/`. If you add a new method, a matching test is appreciated.
+Unit tests live alongside the source (`#[cfg(test)]` blocks). Integration tests that require a real Telegram connection live in `ferogram/tests/`. If you add a new method, a matching test is appreciated.
 
 ### Improving documentation
 
@@ -106,8 +106,7 @@ ferogram/
 │ ├ session_backend.rs Session backends
 │ ├ parsers.rs Markdown and HTML parsers
 │ └ update.rs Update types and IncomingMessage
-├ ferogram-connect/ Minimal DH demo
-└ ferogram-app/ Interactive demo binary
+└ ferogram-connect/ Raw TCP/transport layer
 ```
 
 ---

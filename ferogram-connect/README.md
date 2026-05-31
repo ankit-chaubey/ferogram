@@ -7,26 +7,19 @@ Raw TCP connection, MTProto framing, and transport layer for ferogram.
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram--connect-5865F2)](https://docs.rs/ferogram-connect)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-Handles everything between a `TcpStream` and a decrypted MTProto message. The `ferogram` crate sits on top of this; most users never touch it directly.
+Sits between a raw `TcpStream` and decrypted MTProto messages. The `ferogram` crate uses this internally; most people never need to depend on it directly. If you're just building a bot or a client, start with [`ferogram`](https://crates.io/crates/ferogram) instead.
 
-`ferogram` re-exports everything here. Existing code needs no changes.
-
-## Installation
-
-```toml
-[dependencies]
-ferogram-connect = "0.5.0"
-```
+`ferogram` re-exports everything here, so existing code needs no changes.
 
 ## What it does
 
-Takes a raw TCP connection to a Telegram DC and gives back decrypted, framed MTProto messages.
+Takes a TCP connection to a Telegram DC and gives back decrypted, framed MTProto messages.
 
 - Abridged, Intermediate, Padded Intermediate, and Full transport framing
 - Obfuscated2 AES-256-CTR transport for bypassing DPI and MTProxy
 - FakeTLS transport for `0xee` MTProxy secrets
-- SOCKS5 proxy support
-- MTProxy (`tg://proxy?...` and `https://t.me/proxy?...`) connection and secret parsing
+- SOCKS5 proxy with optional username/password
+- MTProxy (`tg://proxy?...` and `https://t.me/proxy?...`) parsing and connection
 - Keepalive pings with configurable interval
 - gzip inflate and compress for MTProto containers
 - MTProto envelope unwrapping and entity extraction

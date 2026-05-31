@@ -9,14 +9,7 @@ MTProto sender pool and retry policy for ferogram.
 
 Manages DC connections and drives the retry loop for RPC calls. `ferogram` sits on top of this; most users never touch it directly.
 
-`ferogram` re-exports the retry types. Existing code needs no changes.
-
-## Installation
-
-```toml
-[dependencies]
-ferogram-mtsender = "0.5.0"
-```
+`ferogram` re-exports the retry types. For installation instructions see the [ferogram README](https://github.com/ankit-chaubey/ferogram).
 
 ## What it does
 
@@ -30,25 +23,24 @@ ferogram-mtsender = "0.5.0"
 
 ### AutoSleep
 
-Sleeps on `FLOOD_WAIT` and retries once on I/O errors. This is the default policy used by `ferogram`.
+Sleeps on `FLOOD_WAIT` and retries once on I/O errors. Default policy used by `ferogram`.
 
 ```rust
 use ferogram_mtsender::AutoSleep;
 use std::time::Duration;
 
 let policy = AutoSleep {
-    threshold: Duration::from_secs(60), // sleep through flood waits up to 60s
+    threshold: Duration::from_secs(60),
     io_errors_as_flood_of: Some(Duration::from_secs(1)),
 };
 ```
 
 ### NoRetries
 
-Propagates every error immediately without sleeping.
+Propagates every error immediately.
 
 ```rust
 use ferogram_mtsender::NoRetries;
-
 let policy = NoRetries;
 ```
 
@@ -60,7 +52,6 @@ Trips after a set number of consecutive failures and stays open for a cooldown w
 use ferogram_mtsender::CircuitBreaker;
 use std::time::Duration;
 
-// Trip after 5 consecutive errors, stay open for 30s
 let policy = CircuitBreaker::new(5, Duration::from_secs(30));
 ```
 

@@ -167,6 +167,8 @@ Every received message exposes:
 - `restriction_reason()`
 - `markdown_text()`: message text with Markdown formatting restored
 - `html_text()`: message text with HTML formatting restored
+- `channel_kind()`: async lookup of `ChannelKind` (Broadcast / Megagroup / Gigagroup)
+- `is_megagroup()`, `is_broadcast()`, `is_gigagroup()`: async channel-type helpers
 
 ---
 
@@ -174,29 +176,39 @@ Every received message exposes:
 
 **Uploading**
 
-- `upload_file(path)`: sequential upload
-- `upload(source, name)`: upload from any `AsyncRead`
+- `upload_file(path, handle)`: sequential upload with optional `TransferHandle`
+- `upload(source, name, handle)`: upload from any `AsyncRead` with optional handle
 - `upload_media(peer, InputMedia)`: upload and get a reusable `InputMedia`
+- `upload_resumable(source, name, checkpoint_dir)`: resumable upload under `experimental` feature
 - Automatic part size selection based on file size
 - Automatic worker count scaling based on file size
 
 **Sending media**
 
-- `send_file(peer, InputMedia, caption)`: send any media type
+- `send_file(peer, impl Into<InputMedia>, caption)`: send any media type
 - `send_album(peer, Vec<InputMedia>)`: grouped media album
 - `msg.download(dest)` / `msg.bytes()`: download from a message
+- `UploadedFile::as_auto_media()`: picks the right Telegram media type from MIME
+- `From<UploadedFile> for InputMedia`: pass an `UploadedFile` directly to `send_file`
 
 **Downloading**
 
-- `client.download(media, dest)`: stream to any `AsyncWrite`
-- `client.download_file(media, path)`: stream to disk
+- `client.download(media, dest, handle)`: stream to any `AsyncWrite` with optional `TransferHandle`
+- `client.download_file(media, path, handle)`: stream to disk with optional handle
+- `client.download_resumable(media, path, checkpoint_dir)`: resumable download under `experimental` feature
 - CDN download for large files (transparent, no extra API calls needed)
 - Automatic DC redirect for cross-DC media
+
+**Transfer progress and control**
+
+- `TransferHandle`: pause, resume, or cancel any upload or download
+- `TransferProgress`: track bytes transferred and total size
+- Both re-exported from the crate root
 
 **InputMedia variants**
 
 - `InputMedia::upload_file(path)`: local file
-- `client.upload(source, name)`: upload from `AsyncRead`
+- `client.upload(source, name, handle)`: upload from `AsyncRead`
 - `InputMedia::document(attributes)`: generic document with custom attributes
 - `InputMedia::photo(id, access_hash, ...)`: existing photo by ID
 - `InputMedia::geo(lat, long)`: location

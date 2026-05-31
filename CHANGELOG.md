@@ -35,7 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `download_resumable` now actually resumes. Previously the checkpoint offset was loaded and logged but never used; every call re-downloaded from byte 0. The fix passes `start_offset` to `download_streaming_on_dc_from`, which aligns it to the nearest 1 MB boundary and starts `GetFile` requests from there.
 - `download_resumable` no longer computes or compares a partial SHA-256 hash. The old code saved `sha256_hex(dest)` on interruption (a hash of an incomplete buffer) then compared it against the final file. The hashes could never match. SHA-256 is now computed on the complete assembled file only and logged for auditing.
 - Interrupted downloads now flush received bytes to a `.partial` file on disk so they survive a process restart. The file is deleted on successful completion.
-## [0.5.2]: 2026-05-31
+
+---
+
+## [0.5.2] - 2026-05-31
 
 ### Added
 
@@ -85,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.5.1]: 2026-05-31
+## [0.5.1] - 2026-05-31
 
 ### Fixed
 
@@ -95,7 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.5.0]: 2026-05-16
+## [0.5.0] - 2026-05-16
 
 API consolidation release. Paired functions that differed only by a single boolean condition have been merged into one. Download and upload paths were redesigned around `AsyncRead`/`AsyncWrite`. No new protocol or behavioural changes.
 
@@ -179,7 +182,7 @@ Five tiers keyed on file size (< 1 MB, 1-32 MB, 32-512 MB, 512 MB-1 GB, > 1 GB) 
 
 ---
 
-## [0.4.1]: 2026-05-14
+## [0.4.1] - 2026-05-14
 
 Patch release with one new API, configurable update buffering, session schema improvements, and 15 new examples.
 
@@ -278,7 +281,7 @@ New page: `docs/src/api/quick-connect.md` covering `quick_connect` usage and err
 
 ---
 
-## [0.4.0]: 2026-05-08
+## [0.4.0] - 2026-05-08
 
 0.4.0 is the first production-ready release of ferogram. It ships Layer 225 support. All users are advised to upgrade to 0.4.0 (or 0.4.x+) as the most recommended and supported version.
 
@@ -290,7 +293,7 @@ For the latest git revision: https://github.com/ankit-chaubey/ferogram
 
 ---
 
-## [0.3.9]: 2026-05-07
+## [0.3.9] - 2026-05-07
 
 Updated to TL Layer 225.
 
@@ -392,7 +395,7 @@ BannedRights::default().send_reactions(false)
 
 - `parse_markdown_v1` marked `#[deprecated(since = "0.3.9")]`. Will be removed in 0.4.0.
 
-## [0.3.8]: 2026-05-06
+## [0.3.8] - 2026-05-06
 
 Bug fixes
 
@@ -405,7 +408,7 @@ Bug fixes
 
 ---
 
-## [0.3.7]: 2026-05-05
+## [0.3.7] - 2026-05-05
 
 The big story this release is workspace restructuring. Three crates were extracted out of the monolith, the connection stack got its own proper home, and a handful of API rough edges were smoothed out.
 
@@ -502,7 +505,7 @@ The `ferogram/src/lib.rs` monolith has been split up. `client/` is now a proper 
 
 ---
 
-## [0.3.6]: 2026-04-30
+## [0.3.6] - 2026-04-30
 
 ### API Stabilization (Towards v0.4.0)
 
@@ -516,7 +519,7 @@ See [FEATURES.md](FEATURES.md) for the full list of what is currently public and
 
 ---
 
-## [0.3.5]: 2026-04-30
+## [0.3.5] - 2026-04-30
 
 ### Fixed
 
@@ -571,7 +574,7 @@ See [FEATURES.md](FEATURES.md) for the full list of what is currently public and
 
 ---
 
-## [0.3.4]: 2026-04-28
+## [0.3.4] - 2026-04-28
 
 ### Added
 
@@ -595,7 +598,7 @@ See [FEATURES.md](FEATURES.md) for the full list of what is currently public and
 
 ---
 
-## [0.3.3]: 2026-04-22
+## [0.3.3] - 2026-04-22
 
 ### New crate
 
@@ -627,7 +630,7 @@ New pages:
 
 ---
 
-## [0.3.2]: 2026-04-21
+## [0.3.2] - 2026-04-21
 
 ### Changed
 
@@ -646,7 +649,7 @@ New pages:
 
 ---
 
-## [0.3.1]: 2026-04-20
+## [0.3.1] - 2026-04-20
 
 Patch release to fix the docs.rs build. No functional changes from 0.3.0.
 
@@ -654,7 +657,7 @@ Patch release to fix the docs.rs build. No functional changes from 0.3.0.
 
 ---
 
-## [0.3.0]: 2026-04-19
+## [0.3.0] - 2026-04-19
 
 0.3.0 is a substantial release. The workspace grew by two new crates, the session and parser layers were extracted into their own packages, and the connection stack gained CDN support, DNS-over-HTTPS fallback, and transport probing. About 16.7k lines were added across 114 changed files.
 
@@ -699,7 +702,7 @@ New pages added:
 
 ---
 
-## [0.2.0]: 2026-04-13
+## [0.2.0] - 2026-04-13
 
 ### Changed
 
@@ -719,7 +722,7 @@ New pages added:
 - Container message parsing now validates inner message alignment and discards malformed frames instead of propagating a parse error.
 - Transport errors `-429` and `-444` are now surfaced as log warnings before reconnecting rather than being swallowed silently.
 
-## [0.1.0]: 2026-04-11
+## [0.1.0] - 2026-04-11
 
 Renamed and rebranded from [layer](https://github.com/ankit-chaubey/layer) v0.5.0.
 

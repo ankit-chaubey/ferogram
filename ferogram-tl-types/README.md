@@ -10,17 +10,7 @@ Auto-generated Rust types for all Telegram API Layer 225 constructors, functions
 
 2,329 TL definitions generated at build time from Layer 225. All constructors, functions, and abstract types are represented as Rust structs and enums with binary TL serialization and deserialization.
 
----
-
-## Installation
-
-```toml
-[dependencies]
-ferogram-tl-types = "0.5.0"
-
-# With MTProto low-level types (required by ferogram-mtproto):
-ferogram-tl-types = { version = "0.5.0", features = ["tl-mtproto"] }
-```
+Most users get this through `ferogram` directly. For installation instructions see the [ferogram README](https://github.com/ankit-chaubey/ferogram).
 
 ---
 
