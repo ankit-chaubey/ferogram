@@ -11,7 +11,8 @@
 // Please keep this notice when redistributing.
 
 pub use ferogram_session::{
-    BinaryFileBackend, InMemoryBackend, SessionBackend, StringSessionBackend, UpdateStateChange,
+    BinaryFileBackend, InMemoryBackend, PersistedSession, SessionBackend, StringSessionBackend,
+    UpdateStateChange,
 };
 
 #[cfg(feature = "sqlite-session")]

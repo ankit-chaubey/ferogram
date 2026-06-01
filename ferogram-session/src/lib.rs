@@ -1996,9 +1996,11 @@ impl LibSqlBackend {
         auth_token: impl Into<String>,
     ) -> io::Result<Self> {
         let path = path.into();
-        let label = format!("{} (replica of {})", path.display(), url.into());
+        let url = url.into();
+        let auth_token = auth_token.into();
+        let label = format!("{} (replica of {})", path.display(), url);
         let db = Self::block(async {
-            libsql::Builder::new_remote_replica(path, url.into(), auth_token.into())
+            libsql::Builder::new_remote_replica(path, url, auth_token)
                 .build()
                 .await
         })?;
@@ -2010,8 +2012,6 @@ impl LibSqlBackend {
     async fn read_session_async(
         conn: &libsql::Connection,
     ) -> Result<PersistedSession, libsql::Error> {
-        use libsql::de;
-
         // home_dc_id
         let home_dc_id: i32 = conn
             .query("SELECT value FROM meta WHERE key = 'home_dc_id'", ())
