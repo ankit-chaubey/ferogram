@@ -431,7 +431,7 @@ impl SetProfileBuilder {
         use ferogram_tl_types as tl;
         // Handle photo_path: upload before resolving anything else.
         if let Some(path) = self.photo_path.take() {
-            let uploaded = self.client.upload_file(path, None).await?;
+            let uploaded = self.client.upload_file(path).await?;
             self.photo = Some(uploaded);
         }
 

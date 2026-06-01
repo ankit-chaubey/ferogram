@@ -477,7 +477,7 @@ impl UploadedFile {
 /// ```rust,no_run
 /// # use ferogram::{Client, InputMessage};
 /// # async fn ex(client: Client) -> anyhow::Result<()> {
-/// let uploaded = client.upload_file("video.mp4", None).await?;
+/// let uploaded = client.upload_file("video.mp4").await?;
 /// client.send_file("me", uploaded, &InputMessage::default()).await?;
 /// # Ok(()) }
 /// ```

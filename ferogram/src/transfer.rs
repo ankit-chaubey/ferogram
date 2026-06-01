@@ -50,7 +50,7 @@
 //! });
 //!
 //! let uploaded = client
-//!     .upload_file("/tmp/video.mp4", Some(&handle))
+//!     .upload_file_with_handle("/tmp/video.mp4", Some(&handle))
 //!     .await?;
 //! # Ok(()) }
 //! ```

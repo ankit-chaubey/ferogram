@@ -236,7 +236,7 @@ async fn demo_auto_media(client: &Client) -> Result<(), Box<dyn std::error::Erro
     ];
 
     let uploaded = client
-        .upload(std::io::Cursor::new(jpeg_bytes), "showcase.jpg", None)
+        .upload(std::io::Cursor::new(jpeg_bytes), "showcase.jpg")
         .await?;
 
     // as_auto_media() should pick photo for a JPEG.
@@ -254,7 +254,6 @@ async fn demo_auto_media(client: &Client) -> Result<(), Box<dyn std::error::Erro
         .upload(
             std::io::Cursor::new(vec![0u8; 512]),
             "showcase_doc.bin",
-            None,
         )
         .await?;
 
@@ -272,7 +271,7 @@ async fn demo_download_progress(client: &Client) -> Result<(), Box<dyn std::erro
     // Upload something first so we have a media to download.
     let data = vec![42u8; 256 * 1024]; // 256 KB
     let uploaded = client
-        .upload(std::io::Cursor::new(data), "showcase_dl.bin", None)
+        .upload(std::io::Cursor::new(data), "showcase_dl.bin")
         .await?;
     let msg = client
         .send_file(TARGET_PEER, uploaded, &Default::default())

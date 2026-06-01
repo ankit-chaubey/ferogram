@@ -138,7 +138,7 @@ impl Client {
             }
         });
 
-        let result = self.upload(source, name, Some(handle)).await;
+        let result = self.upload_with_handle(source, name, Some(handle)).await;
         done.store(true, Ordering::Release);
         result
     }
@@ -770,7 +770,9 @@ impl Client {
             }
         });
 
-        let result = self.download_file(media, path, Some(handle)).await;
+        let result = self
+            .download_file_with_handle(media, path, Some(handle))
+            .await;
         done.store(true, Ordering::Release);
         result
     }

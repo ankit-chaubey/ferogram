@@ -2569,6 +2569,10 @@ impl Client {
                         let active_salt;
                         {
                             let mut w = self.inner.writer.lock().await;
+                            // Drop already-expired salts from the server pool before
+                            // storing -- they will never be usable and would otherwise
+                            // be logged as "pruned" on every subsequent startup.
+                            new_salts.retain(|s| s.valid_until > server_now as u32);
                             w.salts = new_salts;
                             w.start_salt_time = Some((server_now, std::time::Instant::now()));
 
@@ -5148,8 +5152,23 @@ impl Client {
     /// Download message media directly to a file at `path`. Returns bytes written.
     ///
     /// Creates (or truncates) the file. Streams directly to disk.
-    /// Pass `Some(&handle)` to track progress or support pause/cancel.
+    /// Use [`download_file_with_handle`] to track progress or support pause/cancel.
+    ///
+    /// [`download_file_with_handle`]: Client::download_file_with_handle
     pub async fn download_file(
+        &self,
+        media: &tl::enums::MessageMedia,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<u64, InvocationError> {
+        self.download_file_with_handle(media, path, None).await
+    }
+
+    /// Like [`download_file`] but accepts a [`TransferHandle`] for progress
+    /// tracking or pause/cancel support.
+    ///
+    /// [`download_file`]: Client::download_file
+    /// [`TransferHandle`]: crate::transfer::TransferHandle
+    pub async fn download_file_with_handle(
         &self,
         media: &tl::enums::MessageMedia,
         path: impl AsRef<std::path::Path>,
@@ -5178,12 +5197,28 @@ impl Client {
     /// Upload from any [`AsyncRead`] source.
     ///
     /// Buffers the stream to determine size, then uploads using the optimal
-    /// part size and worker count. Use [`upload_file`] when you have a path
+    /// part size and worker count. Use [`upload_file`] when you have a path -
     /// it avoids the double-buffer.
+    ///
+    /// Use [`upload_with_handle`] to track progress or support pause/cancel.
     ///
     /// [`AsyncRead`]: tokio::io::AsyncRead
     /// [`upload_file`]: Client::upload_file
+    /// [`upload_with_handle`]: Client::upload_with_handle
     pub async fn upload(
+        &self,
+        source: impl tokio::io::AsyncRead + Unpin + Send,
+        name: &str,
+    ) -> Result<crate::media::UploadedFile, InvocationError> {
+        self.upload_with_handle(source, name, None).await
+    }
+
+    /// Like [`upload`] but accepts a [`TransferHandle`] for progress tracking
+    /// or pause/cancel support.
+    ///
+    /// [`upload`]: Client::upload
+    /// [`TransferHandle`]: crate::transfer::TransferHandle
+    pub async fn upload_with_handle(
         &self,
         mut source: impl tokio::io::AsyncRead + Unpin + Send,
         name: &str,
@@ -5206,8 +5241,22 @@ impl Client {
     /// Upload a file from disk by path.
     ///
     /// Stats the file first (for optimal part sizing), then streams in chunks.
-    /// Pass `Some(&handle)` to track progress or support pause/cancel.
+    /// Use [`upload_file_with_handle`] to track progress or support pause/cancel.
+    ///
+    /// [`upload_file_with_handle`]: Client::upload_file_with_handle
     pub async fn upload_file(
+        &self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<crate::media::UploadedFile, InvocationError> {
+        self.upload_file_with_handle(path, None).await
+    }
+
+    /// Like [`upload_file`] but accepts a [`TransferHandle`] for progress
+    /// tracking or pause/cancel support.
+    ///
+    /// [`upload_file`]: Client::upload_file
+    /// [`TransferHandle`]: crate::transfer::TransferHandle
+    pub async fn upload_file_with_handle(
         &self,
         path: impl AsRef<std::path::Path>,
         handle: Option<&crate::transfer::TransferHandle>,
