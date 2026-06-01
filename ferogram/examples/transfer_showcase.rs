@@ -251,10 +251,7 @@ async fn demo_auto_media(client: &Client) -> Result<(), Box<dyn std::error::Erro
     // Send it to Saved Messages using the Into<InputMedia> impl on UploadedFile.
     // (uploaded consumed by as_auto_media, so re-upload for the send demo)
     let uploaded2 = client
-        .upload(
-            std::io::Cursor::new(vec![0u8; 512]),
-            "showcase_doc.bin",
-        )
+        .upload(std::io::Cursor::new(vec![0u8; 512]), "showcase_doc.bin")
         .await?;
 
     // From<UploadedFile> for InputMedia; pass directly to send_file.

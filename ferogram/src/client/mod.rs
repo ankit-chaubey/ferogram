@@ -6230,6 +6230,21 @@ impl Client {
         }
     }
 
+    /// Look up the cached [`ChannelKind`] for a raw channel ID.
+    ///
+    /// Returns `None` if the channel is not in the peer cache yet. The cache is
+    /// populated automatically as updates arrive, or you can warm it explicitly
+    /// with [`warm_peer_cache_from_dialogs`].
+    ///
+    /// [`warm_peer_cache_from_dialogs`]: Client::warm_peer_cache_from_dialogs
+    pub async fn channel_kind_of(&self, channel_id: i64) -> Option<crate::types::ChannelKind> {
+        self.inner
+            .peer_cache
+            .read()
+            .await
+            .channel_kind_of(channel_id)
+    }
+
     pub async fn warm_peer_cache_from_dialogs(&self) -> Result<(), InvocationError> {
         let req = tl::functions::messages::GetDialogs {
             exclude_pinned: false,
