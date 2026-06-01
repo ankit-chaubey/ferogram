@@ -1961,10 +1961,7 @@ impl LibSqlBackend {
         let db = Self::block(async { libsql::Builder::new_local(path).build().await })?;
         let conn = Self::block(async { db.connect() }).map_err(io::Error::other)?;
         Self::block(Self::apply_schema(&conn))?;
-        Ok(Self {
-            conn: std::sync::Arc::new(tokio::sync::Mutex::new(conn)),
-            label,
-        })
+        Ok(Self { conn, label })
     }
 
     /// Open an in-process in-memory database (useful for tests).
@@ -1973,7 +1970,7 @@ impl LibSqlBackend {
         let conn = Self::block(async { db.connect() }).map_err(io::Error::other)?;
         Self::block(Self::apply_schema(&conn))?;
         Ok(Self {
-            conn: std::sync::Arc::new(tokio::sync::Mutex::new(conn)),
+            conn,
             label: ":memory:".into(),
         })
     }
@@ -1989,10 +1986,7 @@ impl LibSqlBackend {
         })?;
         let conn = Self::block(async { db.connect() }).map_err(io::Error::other)?;
         Self::block(Self::apply_schema(&conn))?;
-        Ok(Self {
-            conn: std::sync::Arc::new(tokio::sync::Mutex::new(conn)),
-            label,
-        })
+        Ok(Self { conn, label })
     }
 
     /// Open an embedded replica (local file + Turso remote sync).
@@ -2010,10 +2004,7 @@ impl LibSqlBackend {
         })?;
         let conn = Self::block(async { db.connect() }).map_err(io::Error::other)?;
         Self::block(Self::apply_schema(&conn))?;
-        Ok(Self {
-            conn: std::sync::Arc::new(tokio::sync::Mutex::new(conn)),
-            label,
-        })
+        Ok(Self { conn, label })
     }
 
     async fn read_session_async(
@@ -2146,7 +2137,7 @@ impl LibSqlBackend {
         conn: &libsql::Connection,
         s: &PersistedSession,
     ) -> Result<(), libsql::Error> {
-        conn.execute_batch("BEGIN IMMEDIATE").await?;
+        conn.execute_batch("BEGIN IMMEDIATE").await.map(|_| ())?;
 
         conn.execute(
             "INSERT INTO meta (key, value) VALUES ('home_dc_id', ?1)
@@ -2217,7 +2208,7 @@ impl LibSqlBackend {
             .await?;
         }
 
-        conn.execute_batch("COMMIT").await
+        conn.execute_batch("COMMIT").await.map(|_| ())
     }
 }
 
@@ -2226,16 +2217,12 @@ impl SessionBackend for LibSqlBackend {
     fn save(&self, session: &PersistedSession) -> io::Result<()> {
         let conn = self.conn.clone();
         let session = session.clone();
-        Self::block(async move {
-            let conn = conn.lock().await;
-            Self::write_session_async(&conn, session).await
-        })
+        Self::block(async move { Self::write_session_async(&conn, &session).await })
     }
 
     fn load(&self) -> io::Result<Option<PersistedSession>> {
         let conn = self.conn.clone();
         let count: i64 = Self::block(async move {
-            let conn = conn.lock().await;
             let mut rows = conn.query("SELECT COUNT(*) FROM meta", ()).await?;
             Ok::<i64, libsql::Error>(rows.next().await?.and_then(|r| r.get(0).ok()).unwrap_or(0))
         })?;
@@ -2243,17 +2230,12 @@ impl SessionBackend for LibSqlBackend {
             return Ok(None);
         }
         let conn = self.conn.clone();
-        Self::block(async move {
-            let conn = conn.lock().await;
-            Self::read_session_async(&conn).await
-        })
-        .map(Some)
+        Self::block(async move { Self::read_session_async(&conn).await }).map(Some)
     }
 
     fn delete(&self) -> io::Result<()> {
         let conn = self.conn.clone();
         Self::block(async move {
-            let conn = conn.lock().await;
             conn.execute_batch(
                 "BEGIN IMMEDIATE;
                  DELETE FROM meta;
@@ -2265,6 +2247,7 @@ impl SessionBackend for LibSqlBackend {
                  COMMIT;",
             )
             .await
+            .map(|_| ())
         })
     }
 
@@ -2285,7 +2268,6 @@ impl SessionBackend for LibSqlBackend {
             entry.flags.0 as i64,
         );
         Self::block(async move {
-            let conn = conn.lock().await;
             conn.execute(
                 "INSERT INTO dcs (dc_id, flags, addr, auth_key, first_salt, time_offset)
                  VALUES (?1,?6,?2,?3,?4,?5)
@@ -2302,7 +2284,6 @@ impl SessionBackend for LibSqlBackend {
     fn set_home_dc(&self, dc_id: i32) -> io::Result<()> {
         let conn = self.conn.clone();
         Self::block(async move {
-            let conn = conn.lock().await;
             conn.execute(
                 "INSERT INTO meta (key, value) VALUES ('home_dc_id',?1)
                  ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -2316,7 +2297,6 @@ impl SessionBackend for LibSqlBackend {
     fn apply_update_state(&self, update: UpdateStateChange) -> io::Result<()> {
         let conn = self.conn.clone();
         Self::block(async move {
-            let conn = conn.lock().await;
             match update {
                 UpdateStateChange::All(snap) => {
                     conn.execute(
@@ -2375,7 +2355,6 @@ impl SessionBackend for LibSqlBackend {
             peer.channel_kind.map(|k| k.to_byte() as i32),
         );
         Self::block(async move {
-            let conn = conn.lock().await;
             conn.execute(
                 "INSERT INTO peers (id,access_hash,is_channel,is_chat,channel_kind) VALUES (?1,?2,?3,?4,?5)
                  ON CONFLICT(id) DO UPDATE SET
