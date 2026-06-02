@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f63515b2.js";
+            window.path_to_searchindex_js = "searchindex-d270a347.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-fccdd209.js"></script>
@@ -184,9 +184,88 @@
                         <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
 <hr>
+<h2 id="v060"><a class="header" href="#v060">v0.6.0</a></h2>
+<p>Released 2026-05-29. Transfer progress tracking, resumable transfers, and typed errors.</p>
+<h3 id="transfer-progress-and-control"><a class="header" href="#transfer-progress-and-control">Transfer progress and control</a></h3>
+<p><code>TransferHandle</code> and <code>TransferProgress</code> let you track, pause, resume, or cancel any upload or download. Pass a handle as the last argument to <code>upload_file</code>, <code>upload</code>, <code>download</code>, or <code>download_file</code>. Pass <code>None</code> to keep old behavior.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::{Client, TransferHandle};
+
+let handle = TransferHandle::new();
+let ctl = handle.clone();
+
+tokio::spawn(async move {
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    ctl.cancel();
+});
+
+let uploaded = client.upload_file("/tmp/video.mp4", Some(&amp;handle)).await?;
+<span class="boring">}</span></code></pre>
+<h3 id="typed-errors"><a class="header" href="#typed-errors">Typed errors</a></h3>
+<p><code>InvocationErrorExt</code> trait adds <code>.kind()</code> and <code>.friendly()</code> on <code>InvocationError</code>. <code>.kind()</code> returns an <code>ErrorKind</code> enum so you can tell a flood wait from a network failure from a cancelled transfer without matching on strings.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::InvocationErrorExt;
+
+match result {
+    Err(e) if matches!(e.kind(), ferogram::ErrorKind::Transfer) =&gt; println!("transfer: {}", e.friendly()),
+    Err(e) =&gt; println!("other: {e}"),
+    Ok(_) =&gt; {}
+}
+<span class="boring">}</span></code></pre>
+<h3 id="auto-media-type-and-fromuploadedfile"><a class="header" href="#auto-media-type-and-fromuploadedfile">Auto media type and <code>From&lt;UploadedFile&gt;</code></a></h3>
+<p><code>UploadedFile::as_auto_media()</code> picks the right Telegram media type from MIME (photo, video, audio, voice, animation, or document). <code>UploadedFile</code> now implements <code>Into&lt;InputMedia&gt;</code> so you can pass it directly to <code>send_file</code>.</p>
+<h3 id="resumable-transfers-experimental"><a class="header" href="#resumable-transfers-experimental">Resumable transfers (experimental)</a></h3>
+<p><code>download_resumable</code> and <code>upload_resumable</code> are available under <code>features = ["experimental"]</code>. Interrupted transfers save a checkpoint JSON and a <code>.partial</code> bytes file to a directory you specify. On the next call with the same media the download picks up from the saved offset. Checkpoint files are deleted on success.</p>
+<h3 id="breaking-changes"><a class="header" href="#breaking-changes">Breaking changes</a></h3>
+<ul>
+<li><code>upload_file_from_path</code> renamed to <code>upload_file</code>.</li>
+<li><code>upload_file</code>, <code>upload</code>, <code>download</code>, <code>download_file</code> all take <code>handle: Option&lt;&amp;TransferHandle&gt;</code> as a new last param.</li>
+<li><code>send_file</code> now takes <code>impl Into&lt;InputMedia&gt;</code> instead of <code>InputMedia</code> directly.</li>
+</ul>
+<h3 id="upgrading-from-052"><a class="header" href="#upgrading-from-052">Upgrading from 0.5.2</a></h3>
+<pre><code class="language-toml">ferogram = "0.6.0"
+</code></pre>
+<p>Rename <code>upload_file_from_path</code> call sites to <code>upload_file</code>. Add <code>None</code> as the last argument to all upload and download calls.</p>
+<hr>
+<h2 id="v052"><a class="header" href="#v052">v0.5.2</a></h2>
+<p>Released 2026-05-31. Channel kind tracking and session format v6.</p>
+<h3 id="channel_kind-on-incomingmessage"><a class="header" href="#channel_kind-on-incomingmessage"><code>channel_kind()</code> on <code>IncomingMessage</code></a></h3>
+<p>Four new async methods: <code>channel_kind()</code>, <code>is_megagroup()</code>, <code>is_broadcast()</code>, <code>is_gigagroup()</code>. The fast path reads from a per-batch peer map built at dispatch time, so live updates never need to acquire the session cache lock. The slow path falls back to the session cache.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if msg.is_megagroup().await {
+    // message is from a supergroup
+}
+
+match msg.channel_kind().await {
+    Some(ChannelKind::Broadcast) =&gt; { /* channel post */ }
+    Some(ChannelKind::Megagroup) =&gt; { /* supergroup */ }
+    Some(ChannelKind::Gigagroup) =&gt; { /* gigagroup */ }
+    None =&gt; { /* not a channel, or kind not yet known */ }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="session-format-v6"><a class="header" href="#session-format-v6">Session format v6</a></h3>
+<p>Each channel peer now stores a <code>ChannelKind</code> byte (0xFF = absent). Old sessions from v2-v5 load without changes and pick up kind data the next time the peer appears in an update.</p>
+<p>SQLite and libSQL both add the <code>channel_kind</code> column automatically on first open.</p>
+<h3 id="upgrading-from-051"><a class="header" href="#upgrading-from-051">Upgrading from 0.5.1</a></h3>
+<pre><code class="language-toml">ferogram = "0.5.2"
+</code></pre>
+<p>No API changes required.</p>
+<hr>
+<h2 id="v051"><a class="header" href="#v051">v0.5.1</a></h2>
+<p>Released 2026-05-31. Single bug fix: bots were skipping every first message.</p>
+<h3 id="fixed-messageboxes-dropping-every-first-message"><a class="header" href="#fixed-messageboxes-dropping-every-first-message">Fixed: MessageBoxes dropping every first message</a></h3>
+<p><code>force_update_entry</code> was seeding the Common pts from the arriving update instead of the real server baseline. This caused every odd-numbered incoming message to be dropped silently. Fixed.</p>
+<h3 id="upgrading-from-050"><a class="header" href="#upgrading-from-050">Upgrading from 0.5.0</a></h3>
+<pre><code class="language-toml">ferogram = "0.5.1"
+</code></pre>
+<p>No API changes.</p>
+<hr>
 <h2 id="v050"><a class="header" href="#v050">v0.5.0</a></h2>
 <p>Released 2026-05-16. API consolidation release. Paired functions that differed only by a single boolean condition have been merged into one. Download and upload paths were redesigned around <code>AsyncRead</code>/<code>AsyncWrite</code>. No new protocol or behavioural changes.</p>
-<h3 id="breaking-changes"><a class="header" href="#breaking-changes">Breaking changes</a></h3>
+<h3 id="breaking-changes-1"><a class="header" href="#breaking-changes-1">Breaking changes</a></h3>
 <p><strong>Merged paired functions into one</strong></p>
 <div class="table-wrapper">
 <table>
@@ -234,7 +313,7 @@ while let Some(chunk) = iter.next().await? { ... }
 let uploaded = client.upload(reader, "file.jpg").await?;
 
 // upload from path (stats file, streams to upload)
-let uploaded = client.upload_file_from_path("photo.jpg").await?;
+let uploaded = client.upload_file("photo.jpg").await?;
 <span class="boring">}</span></code></pre>
 <p><code>IncomingMessage</code> also gains two convenience methods:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -442,7 +521,7 @@ let chat   = msg.peer_id().bare_id();   // Option&lt;i64&gt;
     })
     .connect().await?;
 <span class="boring">}</span></code></pre>
-<h3 id="breaking-changes-1"><a class="header" href="#breaking-changes-1">Breaking changes</a></h3>
+<h3 id="breaking-changes-2"><a class="header" href="#breaking-changes-2">Breaking changes</a></h3>
 <p><strong><code>download_media_to_file</code> is now <code>download_file</code>:</strong></p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {

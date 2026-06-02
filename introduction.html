@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f63515b2.js";
+            window.path_to_searchindex_js = "searchindex-d270a347.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-fccdd209.js"></script>
@@ -186,11 +186,26 @@
 <a href="https://docs.rs/ferogram"><img src="https://img.shields.io/docsrs/ferogram?style=flat-square&amp;color=22c55e" alt="docs.rs"></a>
 <a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-225-8b5cf6?style=flat-square" alt="TL Layer"></a>
 <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License"></a></p>
-<p>ferogram is an async Rust library for Telegram’s MTProto protocol. It works for user accounts and bots, and talks to Telegram directly over MTProto with no Bot API HTTP proxy in the middle.</p>
-<p>Everything in the workspace is written from scratch: the <code>.tl</code> schema parser, the TL code generator, AES-IGE crypto, the DH key exchange, MTProto framing, the session layer, and the high-level client on top. Each piece is its own crate so you can pull in just what you need.</p>
-<h2 id="why-it-exists"><a class="header" href="#why-it-exists">Why it exists</a></h2>
-<p>I was already using other MTProto libraries and kept running into cases where I needed things to work a bit differently than they allowed. So I wrote my own.</p>
-<p>The goal was to cover the major use cases first, and it does. If something’s missing for you, drop by <a href="https://t.me/FerogramChat">t.me/FerogramChat</a>. I genuinely like hearing what people are building with it.</p>
+<p>Hey, glad you’re here.</p>
+<p>ferogram is an async Rust library for Telegram’s MTProto protocol, built by <a href="https://github.com/ankit-chaubey">Ankit Chaubey</a>. It talks to Telegram directly, no Bot API proxy in between, and it works for both bots and user accounts from the same API.</p>
+<p>I built it because I kept hitting walls with other MTProto libraries. Things that should have been straightforward weren’t, and I kept needing the library to behave slightly differently than it would let me. So I wrote my own. The goal was to cover the major use cases first, and it does: messaging, media, CDN downloads, inline keyboards, FSM for multi-step conversations, FakeTLS and MTProxy for censored networks, and a raw <code>invoke()</code> escape hatch for anything the high-level API doesn’t wrap yet.</p>
+<p>If you want the Bot API instead, take a look at <a href="https://github.com/ankit-chaubey/ferobot">ferobot</a>.</p>
+<p>If something’s missing for you, drop by <a href="https://t.me/FerogramChat">t.me/FerogramChat</a>. I genuinely like hearing what people are building with it.</p>
+<h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
+<pre><code class="language-toml">[dependencies]
+ferogram = "0.6.0"
+tokio    = { version = "1", features = ["full"] }
+</code></pre>
+<p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
+<h2 id="where-to-go-next"><a class="header" href="#where-to-go-next">Where to go next</a></h2>
+<ul>
+<li><a href="./installation.html">Installation</a> covers credentials, optional feature flags, and session backends.</li>
+<li><a href="./quickstart-bot.html">Quick Start: Bot</a> gets a bot running in about 20 lines.</li>
+<li><a href="./quickstart-user.html">Quick Start: User Account</a> covers phone login and sending your first message.</li>
+<li><a href="./crates.html">Crate Architecture</a> if you want to understand how the pieces fit together.</li>
+</ul>
+<h2 id="whats-under-the-hood"><a class="header" href="#whats-under-the-hood">What’s under the hood</a></h2>
+<p>Everything in the workspace is written from scratch: the <code>.tl</code> schema parser, the TL code generator, AES-IGE crypto, the DH key exchange, MTProto framing, the session layer, and the high-level client on top. Each piece is its own crate so you can pull in just what you need. Most people never touch any of it directly, but it’s all there if you do.</p>
 <h2 id="crates"><a class="header" href="#crates">Crates</a></h2>
 <p>Most people only need <code>ferogram</code>. But each crate is independently published if you need a specific layer on its own.</p>
 <div class="table-wrapper">
@@ -225,23 +240,17 @@
     │ └ ferogram-crypto
     └ ferogram-crypto
 </code></pre>
-<h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
-<pre><code class="language-toml">[dependencies]
-ferogram = "0.5.0"
-tokio    = { version = "1", features = ["full"] }
-</code></pre>
-<p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
-<h2 id="where-to-go-next"><a class="header" href="#where-to-go-next">Where to go next</a></h2>
-<ul>
-<li><a href="./installation.html">Installation</a> covers credentials, optional feature flags, and session backends.</li>
-<li><a href="./quickstart-bot.html">Quick Start: Bot</a> gets a bot running in about 20 lines.</li>
-<li><a href="./quickstart-user.html">Quick Start: User Account</a> covers phone login and sending your first message.</li>
-<li><a href="./crates.html">Crate Architecture</a> if you want to understand how the pieces fit together.</li>
-</ul>
 <h2 id="python"><a class="header" href="#python">Python</a></h2>
-<p>Python support is live via <a href="https://github.com/ankit-chaubey/ferogram-py">ferogram-py</a>. Pre-built wheels, no Rust toolchain needed.</p>
+<p>Python support is live via <a href="https://github.com/ankit-chaubey/ferogram-py">ferogram-py</a>. Pre-built wheels for major platforms, no Rust toolchain needed.</p>
 <pre><code class="language-bash">pip install ferogram
 </code></pre>
+<h2 id="secret-chats"><a class="header" href="#secret-chats">Secret chats</a></h2>
+<p>Secret chats (end-to-end encrypted) are fully implemented but not published to crates.io yet. The plan is to release once there is enough community demand for it.</p>
+<h2 id="voice-and-video-calls"><a class="header" href="#voice-and-video-calls">Voice and video calls</a></h2>
+<p>Group audio calls are fully implemented, stable, and already in active production use by the author. Written in Rust from scratch, not a wrapper around anything.</p>
+<p>Group video calls are implemented and stable for most scenarios, with some known codec edge cases still being ironed out.</p>
+<p>Peer-to-peer calls are partially implemented and still in active development.</p>
+<p>All of this lives in its own workspace crate and will be published separately when it comes out of the workspace. Python bindings via ferogram-py are also planned.</p>
 <h2 id="community"><a class="header" href="#community">Community</a></h2>
 <ul>
 <li><strong>Channel</strong> (releases, announcements): <a href="https://t.me/Ferogram">t.me/Ferogram</a></li>

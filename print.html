@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f63515b2.js";
+            window.path_to_searchindex_js = "searchindex-d270a347.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-fccdd209.js"></script>
@@ -184,11 +184,26 @@
 <a href="https://docs.rs/ferogram"><img src="https://img.shields.io/docsrs/ferogram?style=flat-square&amp;color=22c55e" alt="docs.rs"></a>
 <a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-225-8b5cf6?style=flat-square" alt="TL Layer"></a>
 <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License"></a></p>
-<p>ferogram is an async Rust library for Telegram’s MTProto protocol. It works for user accounts and bots, and talks to Telegram directly over MTProto with no Bot API HTTP proxy in the middle.</p>
-<p>Everything in the workspace is written from scratch: the <code>.tl</code> schema parser, the TL code generator, AES-IGE crypto, the DH key exchange, MTProto framing, the session layer, and the high-level client on top. Each piece is its own crate so you can pull in just what you need.</p>
-<h2 id="why-it-exists"><a class="header" href="#why-it-exists">Why it exists</a></h2>
-<p>I was already using other MTProto libraries and kept running into cases where I needed things to work a bit differently than they allowed. So I wrote my own.</p>
-<p>The goal was to cover the major use cases first, and it does. If something’s missing for you, drop by <a href="https://t.me/FerogramChat">t.me/FerogramChat</a>. I genuinely like hearing what people are building with it.</p>
+<p>Hey, glad you’re here.</p>
+<p>ferogram is an async Rust library for Telegram’s MTProto protocol, built by <a href="https://github.com/ankit-chaubey">Ankit Chaubey</a>. It talks to Telegram directly, no Bot API proxy in between, and it works for both bots and user accounts from the same API.</p>
+<p>I built it because I kept hitting walls with other MTProto libraries. Things that should have been straightforward weren’t, and I kept needing the library to behave slightly differently than it would let me. So I wrote my own. The goal was to cover the major use cases first, and it does: messaging, media, CDN downloads, inline keyboards, FSM for multi-step conversations, FakeTLS and MTProxy for censored networks, and a raw <code>invoke()</code> escape hatch for anything the high-level API doesn’t wrap yet.</p>
+<p>If you want the Bot API instead, take a look at <a href="https://github.com/ankit-chaubey/ferobot">ferobot</a>.</p>
+<p>If something’s missing for you, drop by <a href="https://t.me/FerogramChat">t.me/FerogramChat</a>. I genuinely like hearing what people are building with it.</p>
+<h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
+<pre><code class="language-toml">[dependencies]
+ferogram = "0.6.0"
+tokio    = { version = "1", features = ["full"] }
+</code></pre>
+<p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
+<h2 id="where-to-go-next"><a class="header" href="#where-to-go-next">Where to go next</a></h2>
+<ul>
+<li><a href="#installation">Installation</a> covers credentials, optional feature flags, and session backends.</li>
+<li><a href="#quick-start-bot">Quick Start: Bot</a> gets a bot running in about 20 lines.</li>
+<li><a href="#quick-start-user-account">Quick Start: User Account</a> covers phone login and sending your first message.</li>
+<li><a href="#crate-architecture">Crate Architecture</a> if you want to understand how the pieces fit together.</li>
+</ul>
+<h2 id="whats-under-the-hood"><a class="header" href="#whats-under-the-hood">What’s under the hood</a></h2>
+<p>Everything in the workspace is written from scratch: the <code>.tl</code> schema parser, the TL code generator, AES-IGE crypto, the DH key exchange, MTProto framing, the session layer, and the high-level client on top. Each piece is its own crate so you can pull in just what you need. Most people never touch any of it directly, but it’s all there if you do.</p>
 <h2 id="crates"><a class="header" href="#crates">Crates</a></h2>
 <p>Most people only need <code>ferogram</code>. But each crate is independently published if you need a specific layer on its own.</p>
 <div class="table-wrapper">
@@ -223,23 +238,17 @@
     │ └ ferogram-crypto
     └ ferogram-crypto
 </code></pre>
-<h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
-<pre><code class="language-toml">[dependencies]
-ferogram = "0.5.0"
-tokio    = { version = "1", features = ["full"] }
-</code></pre>
-<p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
-<h2 id="where-to-go-next"><a class="header" href="#where-to-go-next">Where to go next</a></h2>
-<ul>
-<li><a href="#installation">Installation</a> covers credentials, optional feature flags, and session backends.</li>
-<li><a href="#quick-start-bot">Quick Start: Bot</a> gets a bot running in about 20 lines.</li>
-<li><a href="#quick-start-user-account">Quick Start: User Account</a> covers phone login and sending your first message.</li>
-<li><a href="#crate-architecture">Crate Architecture</a> if you want to understand how the pieces fit together.</li>
-</ul>
 <h2 id="python"><a class="header" href="#python">Python</a></h2>
-<p>Python support is live via <a href="https://github.com/ankit-chaubey/ferogram-py">ferogram-py</a>. Pre-built wheels, no Rust toolchain needed.</p>
+<p>Python support is live via <a href="https://github.com/ankit-chaubey/ferogram-py">ferogram-py</a>. Pre-built wheels for major platforms, no Rust toolchain needed.</p>
 <pre><code class="language-bash">pip install ferogram
 </code></pre>
+<h2 id="secret-chats"><a class="header" href="#secret-chats">Secret chats</a></h2>
+<p>Secret chats (end-to-end encrypted) are fully implemented but not published to crates.io yet. The plan is to release once there is enough community demand for it.</p>
+<h2 id="voice-and-video-calls"><a class="header" href="#voice-and-video-calls">Voice and video calls</a></h2>
+<p>Group audio calls are fully implemented, stable, and already in active production use by the author. Written in Rust from scratch, not a wrapper around anything.</p>
+<p>Group video calls are implemented and stable for most scenarios, with some known codec edge cases still being ironed out.</p>
+<p>Peer-to-peer calls are partially implemented and still in active development.</p>
+<p>All of this lives in its own workspace crate and will be published separately when it comes out of the workspace. Python bindings via ferogram-py are also planned.</p>
 <h2 id="community"><a class="header" href="#community">Community</a></h2>
 <ul>
 <li><strong>Channel</strong> (releases, announcements): <a href="https://t.me/Ferogram">t.me/Ferogram</a></li>
@@ -254,9 +263,88 @@ tokio    = { version = "1", features = ["full"] }
 <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
 <hr>
+<h2 id="v060"><a class="header" href="#v060">v0.6.0</a></h2>
+<p>Released 2026-05-29. Transfer progress tracking, resumable transfers, and typed errors.</p>
+<h3 id="transfer-progress-and-control"><a class="header" href="#transfer-progress-and-control">Transfer progress and control</a></h3>
+<p><code>TransferHandle</code> and <code>TransferProgress</code> let you track, pause, resume, or cancel any upload or download. Pass a handle as the last argument to <code>upload_file</code>, <code>upload</code>, <code>download</code>, or <code>download_file</code>. Pass <code>None</code> to keep old behavior.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::{Client, TransferHandle};
+
+let handle = TransferHandle::new();
+let ctl = handle.clone();
+
+tokio::spawn(async move {
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    ctl.cancel();
+});
+
+let uploaded = client.upload_file("/tmp/video.mp4", Some(&amp;handle)).await?;
+<span class="boring">}</span></code></pre>
+<h3 id="typed-errors"><a class="header" href="#typed-errors">Typed errors</a></h3>
+<p><code>InvocationErrorExt</code> trait adds <code>.kind()</code> and <code>.friendly()</code> on <code>InvocationError</code>. <code>.kind()</code> returns an <code>ErrorKind</code> enum so you can tell a flood wait from a network failure from a cancelled transfer without matching on strings.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::InvocationErrorExt;
+
+match result {
+    Err(e) if matches!(e.kind(), ferogram::ErrorKind::Transfer) =&gt; println!("transfer: {}", e.friendly()),
+    Err(e) =&gt; println!("other: {e}"),
+    Ok(_) =&gt; {}
+}
+<span class="boring">}</span></code></pre>
+<h3 id="auto-media-type-and-fromuploadedfile"><a class="header" href="#auto-media-type-and-fromuploadedfile">Auto media type and <code>From&lt;UploadedFile&gt;</code></a></h3>
+<p><code>UploadedFile::as_auto_media()</code> picks the right Telegram media type from MIME (photo, video, audio, voice, animation, or document). <code>UploadedFile</code> now implements <code>Into&lt;InputMedia&gt;</code> so you can pass it directly to <code>send_file</code>.</p>
+<h3 id="resumable-transfers-experimental"><a class="header" href="#resumable-transfers-experimental">Resumable transfers (experimental)</a></h3>
+<p><code>download_resumable</code> and <code>upload_resumable</code> are available under <code>features = ["experimental"]</code>. Interrupted transfers save a checkpoint JSON and a <code>.partial</code> bytes file to a directory you specify. On the next call with the same media the download picks up from the saved offset. Checkpoint files are deleted on success.</p>
+<h3 id="breaking-changes"><a class="header" href="#breaking-changes">Breaking changes</a></h3>
+<ul>
+<li><code>upload_file_from_path</code> renamed to <code>upload_file</code>.</li>
+<li><code>upload_file</code>, <code>upload</code>, <code>download</code>, <code>download_file</code> all take <code>handle: Option&lt;&amp;TransferHandle&gt;</code> as a new last param.</li>
+<li><code>send_file</code> now takes <code>impl Into&lt;InputMedia&gt;</code> instead of <code>InputMedia</code> directly.</li>
+</ul>
+<h3 id="upgrading-from-052"><a class="header" href="#upgrading-from-052">Upgrading from 0.5.2</a></h3>
+<pre><code class="language-toml">ferogram = "0.6.0"
+</code></pre>
+<p>Rename <code>upload_file_from_path</code> call sites to <code>upload_file</code>. Add <code>None</code> as the last argument to all upload and download calls.</p>
+<hr>
+<h2 id="v052"><a class="header" href="#v052">v0.5.2</a></h2>
+<p>Released 2026-05-31. Channel kind tracking and session format v6.</p>
+<h3 id="channel_kind-on-incomingmessage"><a class="header" href="#channel_kind-on-incomingmessage"><code>channel_kind()</code> on <code>IncomingMessage</code></a></h3>
+<p>Four new async methods: <code>channel_kind()</code>, <code>is_megagroup()</code>, <code>is_broadcast()</code>, <code>is_gigagroup()</code>. The fast path reads from a per-batch peer map built at dispatch time, so live updates never need to acquire the session cache lock. The slow path falls back to the session cache.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if msg.is_megagroup().await {
+    // message is from a supergroup
+}
+
+match msg.channel_kind().await {
+    Some(ChannelKind::Broadcast) =&gt; { /* channel post */ }
+    Some(ChannelKind::Megagroup) =&gt; { /* supergroup */ }
+    Some(ChannelKind::Gigagroup) =&gt; { /* gigagroup */ }
+    None =&gt; { /* not a channel, or kind not yet known */ }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="session-format-v6"><a class="header" href="#session-format-v6">Session format v6</a></h3>
+<p>Each channel peer now stores a <code>ChannelKind</code> byte (0xFF = absent). Old sessions from v2-v5 load without changes and pick up kind data the next time the peer appears in an update.</p>
+<p>SQLite and libSQL both add the <code>channel_kind</code> column automatically on first open.</p>
+<h3 id="upgrading-from-051"><a class="header" href="#upgrading-from-051">Upgrading from 0.5.1</a></h3>
+<pre><code class="language-toml">ferogram = "0.5.2"
+</code></pre>
+<p>No API changes required.</p>
+<hr>
+<h2 id="v051"><a class="header" href="#v051">v0.5.1</a></h2>
+<p>Released 2026-05-31. Single bug fix: bots were skipping every first message.</p>
+<h3 id="fixed-messageboxes-dropping-every-first-message"><a class="header" href="#fixed-messageboxes-dropping-every-first-message">Fixed: MessageBoxes dropping every first message</a></h3>
+<p><code>force_update_entry</code> was seeding the Common pts from the arriving update instead of the real server baseline. This caused every odd-numbered incoming message to be dropped silently. Fixed.</p>
+<h3 id="upgrading-from-050"><a class="header" href="#upgrading-from-050">Upgrading from 0.5.0</a></h3>
+<pre><code class="language-toml">ferogram = "0.5.1"
+</code></pre>
+<p>No API changes.</p>
+<hr>
 <h2 id="v050"><a class="header" href="#v050">v0.5.0</a></h2>
 <p>Released 2026-05-16. API consolidation release. Paired functions that differed only by a single boolean condition have been merged into one. Download and upload paths were redesigned around <code>AsyncRead</code>/<code>AsyncWrite</code>. No new protocol or behavioural changes.</p>
-<h3 id="breaking-changes"><a class="header" href="#breaking-changes">Breaking changes</a></h3>
+<h3 id="breaking-changes-1"><a class="header" href="#breaking-changes-1">Breaking changes</a></h3>
 <p><strong>Merged paired functions into one</strong></p>
 <div class="table-wrapper">
 <table>
@@ -304,7 +392,7 @@ while let Some(chunk) = iter.next().await? { ... }
 let uploaded = client.upload(reader, "file.jpg").await?;
 
 // upload from path (stats file, streams to upload)
-let uploaded = client.upload_file_from_path("photo.jpg").await?;
+let uploaded = client.upload_file("photo.jpg").await?;
 <span class="boring">}</span></code></pre>
 <p><code>IncomingMessage</code> also gains two convenience methods:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -512,7 +600,7 @@ let chat   = msg.peer_id().bare_id();   // Option&lt;i64&gt;
     })
     .connect().await?;
 <span class="boring">}</span></code></pre>
-<h3 id="breaking-changes-1"><a class="header" href="#breaking-changes-1">Breaking changes</a></h3>
+<h3 id="breaking-changes-2"><a class="header" href="#breaking-changes-2">Breaking changes</a></h3>
 <p><strong><code>download_media_to_file</code> is now <code>download_file</code>:</strong></p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -719,7 +807,7 @@ See <a href="#peer-cache-helpers">Raw API Access</a> for usage details.</p>
 <h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
 <h2 id="add-to-cargotoml"><a class="header" href="#add-to-cargotoml">Add to Cargo.toml</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.5.0"
+ferogram = "0.6.0"
 tokio        = { version = "1", features = ["full"] }
 </code></pre>
 <p><code>ferogram</code> re-exports everything you need for both user clients and bots.</p>
@@ -760,11 +848,11 @@ let api_hash = "deadbeef..."; // ← never do this in a public repo
 <hr>
 <h2 id="optional-features"><a class="header" href="#optional-features">Optional features</a></h2>
 <h3 id="sqlite-session-storage"><a class="header" href="#sqlite-session-storage">SQLite session storage</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.5.0", features = ["sqlite-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.0", features = ["sqlite-session"] }
 </code></pre>
 <p>Stores session data in a SQLite database instead of a binary file. Better choice for long-running servers where crash-corruption of the binary file is a concern.</p>
 <h3 id="libsql--turso-session-storage-new-in-v020"><a class="header" href="#libsql--turso-session-storage-new-in-v020">LibSQL / Turso session storage: New in v0.2.0</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.5.0", features = ["libsql-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.0", features = ["libsql-session"] }
 </code></pre>
 <p>Backed by <a href="https://github.com/tursodatabase/libsql">libsql</a>: supports local embedded databases and remote Turso cloud databases. Ideal for serverless or distributed deployments.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -798,10 +886,10 @@ let (client, _shutdown) = Client::builder()
 <p>See <a href="#session-backends-1">Session Backends</a> for the full guide.</p>
 <h3 id="html-entity-parsing"><a class="header" href="#html-entity-parsing">HTML entity parsing</a></h3>
 <pre><code class="language-toml"># Built-in hand-rolled HTML parser (no extra deps)
-ferogram = { version = "0.5.0", features = ["html"] }
+ferogram = { version = "0.6.0", features = ["html"] }
 
 # OR: spec-compliant html5ever tokenizer (overrides built-in)
-ferogram = { version = "0.5.0", features = ["html5ever"] }
+ferogram = { version = "0.6.0", features = ["html5ever"] }
 </code></pre>
 <div class="table-wrapper">
 <table>
@@ -816,7 +904,7 @@ ferogram = { version = "0.5.0", features = ["html5ever"] }
 </div>
 <h3 id="raw-type-system-features-ferogram-tl-types"><a class="header" href="#raw-type-system-features-ferogram-tl-types">Raw type system features (<code>ferogram-tl-types</code>)</a></h3>
 <p>If you use <code>ferogram-tl-types</code> directly for raw API access:</p>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.5.0", features = [
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.0", features = [
     "tl-api",          # Telegram API types (required)
     "tl-mtproto",      # Low-level MTProto types
     "impl-debug",      # Debug trait on all types (default ON)
@@ -12475,19 +12563,19 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <li><code>ClientBuilder</code>: fluent connection builder</li>
 </ul>
 <pre><code class="language-toml"># SQLite session only
-ferogram = { version = "0.5.0", features = ["sqlite-session"] }
+ferogram = { version = "0.6.0", features = ["sqlite-session"] }
 
 # LibSQL / Turso session (new in 0.2.0)
-ferogram = { version = "0.5.0", features = ["libsql-session"] }
+ferogram = { version = "0.6.0", features = ["libsql-session"] }
 
 # HTML parsing (minimal, no extra deps)
-ferogram = { version = "0.5.0", features = ["html"] }
+ferogram = { version = "0.6.0", features = ["html"] }
 
 # HTML parsing (spec-compliant, adds html5ever dep)
-ferogram = { version = "0.5.0", features = ["html5ever"] }
+ferogram = { version = "0.6.0", features = ["html5ever"] }
 
 # Multiple features at once
-ferogram = { version = "0.5.0", features = ["sqlite-session", "html"] }
+ferogram = { version = "0.6.0", features = ["sqlite-session", "html"] }
 </code></pre>
 <hr>
 <h2 id="ferogram-tl-types-1"><a class="header" href="#ferogram-tl-types-1">ferogram-tl-types</a></h2>
@@ -12509,14 +12597,14 @@ ferogram = { version = "0.5.0", features = ["sqlite-session", "html"] }
 </table>
 </div>
 <h3 id="example-enable-serde"><a class="header" href="#example-enable-serde">Example: enable serde</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.5.0", features = ["tl-api", "impl-serde"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.0", features = ["tl-api", "impl-serde"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let json = serde_json::to_string(&amp;some_tl_type)?;
 <span class="boring">}</span></code></pre>
 <h3 id="example-name_for_id-debugging"><a class="header" href="#example-name_for_id-debugging">Example: name_for_id (debugging)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.5.0", features = ["tl-api", "name-for-id"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.0", features = ["tl-api", "name-for-id"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -12527,13 +12615,13 @@ if let Some(name) = name_for_id(0x74ae4240) {
 }
 <span class="boring">}</span></code></pre>
 <h3 id="example-minimal-no-debug-no-conversions"><a class="header" href="#example-minimal-no-debug-no-conversions">Example: minimal (no Debug, no conversions)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.5.0", default-features = false, features = ["tl-api"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.0", default-features = false, features = ["tl-api"] }
 </code></pre>
 <p>Reduces compile time when you don’t need convenience traits.</p>
 <hr>
 <h2 id="string-session-no-feature-flag-needed"><a class="header" href="#string-session-no-feature-flag-needed">String session: no feature flag needed</a></h2>
 <p><code>StringSessionBackend</code> and <code>export_session_string()</code> are available in the default build: no feature flag required:</p>
-<pre><code class="language-toml">ferogram = "0.5.0"   # already includes StringSessionBackend
+<pre><code class="language-toml">ferogram = "0.6.0"   # already includes StringSessionBackend
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
