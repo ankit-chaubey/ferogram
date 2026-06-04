@@ -5,36 +5,33 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-> **Note:** ferogram is the continuation of [layer](https://github.com/ankit-chaubey/layer).
-> For history prior to v0.1.0, see the [layer changelog](https://github.com/ankit-chaubey/layer/blob/main/CHANGELOG.md) (up to layer v0.5.0).
-
 ---
 
 ## [0.6.0] - 2026-06-01
 
 ### Added
 
-- `TransferHandle` and `TransferProgress` in `ferogram::transfer`. Pass a handle to any upload or download to track progress, pause, resume, or cancel. Both are re-exported from the crate root.
-- `InvocationErrorExt` trait with `.kind()` and `.friendly()` on `InvocationError`. Returns `ErrorKind` enum (`FloodWait`, `Network`, `Auth`, `Migration`, `Rpc`, `Transfer`, `Other`) or a readable string.
-- `UploadedFile::as_auto_media()` picks the right Telegram media type from MIME (photo, video, audio, voice, animation, or document).
+- `TransferHandle` and `TransferProgress` in `ferogram::transfer`. Pass a handle to any upload or download to track progress, pause, resume, or cancel. Both re-exported from the crate root.
+- `InvocationErrorExt` trait with `.kind()` and `.friendly()` on `InvocationError`. Returns an `ErrorKind` enum or a readable string.
+- `UploadedFile::as_auto_media()` picks the right Telegram media type from MIME.
 - `From<UploadedFile> for InputMedia` so you can pass an `UploadedFile` directly to `send_file`.
-- `download_resumable` and `upload_resumable` under `features = ["experimental"]`. Interrupted transfers save a checkpoint JSON and a `.partial` bytes file to `<checkpoint_dir>/`. On the next call with the same media the partial bytes are restored, the download resumes from the saved byte offset (aligned to the nearest 1 MB boundary per Telegram's requirement), and all checkpoint files are deleted on success.
-- `CheckpointStore::partial_path` - returns the path for the in-progress partial bytes file for a given download key.
-- `download_streaming_on_dc_from` - internal method that starts `GetFile` requests from a given byte offset. Used by `download_resumable` to skip already-downloaded bytes.
-- Unit tests in `ferogram/tests/resumable_transfers.rs` covering checkpoint roundtrip, delete, partial file I/O, key stability, SHA-256 correctness, TTL expiry detection, offset alignment math, and overlap-skip calculation. All tests run without a Telegram connection.
-- Example `transfer_showcase.rs` demonstrating all 0.6.0 transfer APIs: progress, pause/resume/cancel, typed errors, auto media, and resumable transfers.
+- `download_resumable` and `upload_resumable` under `features = ["experimental"]`. Interrupted transfers save a checkpoint JSON and a `.partial` file to `<checkpoint_dir>/`. Next call with the same media resumes from the saved offset, aligned to 1 MB per Telegram's requirement. Checkpoint files are deleted on success.
+- `CheckpointStore::partial_path` returns the path for the in-progress partial file for a given download key.
+- `download_streaming_on_dc_from` starts `GetFile` requests from a given byte offset. Used internally by `download_resumable`.
+- Unit tests in `ferogram/tests/resumable_transfers.rs` covering checkpoint roundtrip, delete, partial file I/O, key stability, SHA-256 correctness, TTL expiry, offset alignment, and overlap-skip. All run without a Telegram connection.
+- Example `transfer_showcase.rs` covering all 0.6.0 transfer APIs.
 
 ### Changed
 
 - `upload_file_from_path` renamed to `upload_file`.
-- `upload_file`, `upload`, `download`, `download_file` all take `handle: Option<&TransferHandle>` as a new last param. Pass `None` to keep old behavior.
+- `upload_file`, `upload`, `download`, `download_file` all take `handle: Option<&TransferHandle>` as a new last param. Pass `None` for old behavior.
 - `send_file` now takes `impl Into<InputMedia>` instead of `InputMedia` directly. Existing callers unchanged.
 
 ### Fixed
 
-- `download_resumable` now actually resumes. Previously the checkpoint offset was loaded and logged but never used; every call re-downloaded from byte 0. The fix passes `start_offset` to `download_streaming_on_dc_from`, which aligns it to the nearest 1 MB boundary and starts `GetFile` requests from there.
-- `download_resumable` no longer computes or compares a partial SHA-256 hash. The old code saved `sha256_hex(dest)` on interruption (a hash of an incomplete buffer) then compared it against the final file. The hashes could never match. SHA-256 is now computed on the complete assembled file only and logged for auditing.
-- Interrupted downloads now flush received bytes to a `.partial` file on disk so they survive a process restart. The file is deleted on successful completion.
+- `download_resumable` now actually resumes. The checkpoint offset was previously loaded but never used, so every call re-downloaded from byte 0. Fixed by passing `start_offset` to `download_streaming_on_dc_from`.
+- `download_resumable` no longer computes or compares a partial SHA-256. The old code hashed an incomplete buffer on interruption then compared it against the final file, so the hashes could never match. SHA-256 is now computed on the complete file only and logged for auditing.
+- Interrupted downloads now flush received bytes to a `.partial` file so they survive a process restart. Deleted on success.
 
 ---
 
@@ -42,49 +39,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`ChannelKind` on `IncomingMessage`.** Three new async methods: `channel_kind()`,
-  `is_megagroup()`, `is_broadcast()`, `is_gigagroup()`. The fast path reads from a
-  per-batch `PeerMap` injected at dispatch time (no lock); the slow path falls back to
-  the session peer cache.
-
-- **`PeerMap` fast path for live updates.** `from_single_update_with_peers()` attaches
-  the batch's chat list to every `IncomingMessage` produced in that batch, so
-  `channel_kind()` never needs to acquire the `PeerCache` lock for the common case.
-
-- **Session format v6.** Each channel peer entry now stores a `ChannelKind` byte
-  (`0xFF` = absent for older entries). Fully backward-compatible: sessions from v2-v5
-  load without changes, just without kind data until the peer is seen again.
-
-- **SQLite and libSQL migration for `channel_kind`.** Both backends add the column if
-  absent and persist/load kind alongside the existing peer fields.
-
-- **`PeerCache::channel_kind_of(channel_id)`.** Direct kind lookup on the in-memory
-  peer cache. Returns `None` for unknown or pre-v6 entries.
-
-- **`build_peer_map(chats)` / `PeerMap` type** in `peer_cache`. Builds a cheap
-  `Arc<HashMap>` from a batch's chat slice; shared across all messages in the batch.
+- `ChannelKind` on `IncomingMessage`. Three new async methods: `channel_kind()`, `is_megagroup()`, `is_broadcast()`, `is_gigagroup()`. Fast path reads from a per-batch `PeerMap` at dispatch time with no lock. Falls back to the session peer cache.
+- `PeerMap` fast path for live updates. `from_single_update_with_peers()` attaches the batch's chat list to every `IncomingMessage` in that batch, so `channel_kind()` never needs the `PeerCache` lock for the common case.
+- Session format v6. Each channel peer entry now stores a `ChannelKind` byte. Fully backward-compatible: sessions from v2-v5 load fine, just without kind data until the peer is seen again.
+- SQLite and libSQL migration for `channel_kind`. Both backends add the column if absent and persist/load kind alongside existing peer fields.
+- `PeerCache::channel_kind_of(channel_id)`. Direct kind lookup on the in-memory peer cache. Returns `None` for unknown or pre-v6 entries.
+- `build_peer_map(chats)` / `PeerMap` type in `peer_cache`. Builds a cheap `Arc<HashMap>` from a batch's chat slice, shared across all messages in the batch.
 
 ### Fixed
 
-- **`UpdateShortSentMessage` now boxed.** Reduced stack size of `EnvelopeResult` and
-  `message_box` update paths by wrapping the type in `Box`.
-
-- **`adaptor.rs`: flattened nested `if let` into `let ... && let ...`** (Rust 2024
-  let-chains). Fixes an indentation issue that caused the reply-to reconstruction and
-  synthesized `Message` block to be double-indented inside a dead scope.
-
-- **`proxy.rs`: early-return refactor.** `strip_prefix` failure now uses `?` instead of
-  an else branch, eliminating a nesting level.
-
-- **`participants.rs`**: updated all `.copied()` calls on channel map entries to
-  `.map(|&(hash, _)| hash)` following the `channels` value type change to `(i64,
-  Option<ChannelKind>)`.
-
-- **`builder_util.rs`**: use struct-update syntax for `PersistedSession` init instead of
-  default-then-field-assign.
-
-- **`ferogram-mtproto`: HTTP header byte literals** use `*b"..."` syntax instead of
-  explicit `[u8; 4]` arrays.
+- `UpdateShortSentMessage` now boxed. Reduced stack size of `EnvelopeResult` and `message_box` update paths.
+- `adaptor.rs`: flattened nested `if let` into `let ... && let ...` (Rust 2024 let-chains). Fixes a double-indent issue that put the reply-to reconstruction inside a dead scope.
+- `proxy.rs`: `strip_prefix` failure now uses `?` instead of an else branch, removing a nesting level.
+- `participants.rs`: updated `.copied()` calls on channel map entries to `.map(|&(hash, _)| hash)` after the `channels` value type changed to `(i64, Option<ChannelKind>)`.
+- `builder_util.rs`: use struct-update syntax for `PersistedSession` init.
+- `ferogram-mtproto`: HTTP header byte literals use `*b"..."` syntax instead of explicit `[u8; 4]` arrays.
 
 ---
 
@@ -92,15 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **MessageBoxes: bot skipping every first message.** `force_update_entry` seeded the
-  Common pts from the arriving update instead of the real server baseline, causing every
-  odd-numbered incoming message to be dropped silently.
+- MessageBoxes: bots were silently dropping every first message. `force_update_entry` was seeding the Common pts from the arriving update instead of the real server baseline, causing every odd-numbered message to be discarded.
 
 ---
 
 ## [0.5.0] - 2026-05-16
 
-API consolidation release. Paired functions that differed only by a single boolean condition have been merged into one. Download and upload paths were redesigned around `AsyncRead`/`AsyncWrite`. No new protocol or behavioural changes.
+API consolidation release. Paired functions that differed only by a boolean have been merged. Download and upload paths were redesigned around `AsyncRead`/`AsyncWrite`. No protocol or behavioral changes.
 
 ### Breaking changes
 
@@ -188,13 +155,11 @@ Patch release with one new API, configurable update buffering, session schema im
 
 No breaking changes from 0.4.0.
 
----
-
 ### Added
 
 **`Client::quick_connect`**
 
-Connects and authenticates in a single call. Handles the full auth flow from stdin: phone number or bot token, login code, 2FA password if needed. If the session is already authorized the prompt is skipped.
+Connects and authenticates in a single call. Handles the full auth flow from stdin: phone number or bot token, login code, 2FA password if needed. Skips the prompt if the session is already authorized.
 
 ```rust
 use ferogram::Client;
@@ -205,13 +170,11 @@ const API_HASH: &str = "your_api_hash";
 let (client, _shutdown) = Client::quick_connect("bot.session", API_ID, API_HASH).await?;
 ```
 
-Bot tokens are detected automatically by their `<digits>:<string>` format, so the same prompt works for both bots and users.
-
-For advanced options (proxy, PFS, custom transport, catch-up) use `Client::builder()` instead.
+Bot tokens are detected automatically by their `<digits>:<string>` format, so the same prompt works for both bots and users. For advanced options (proxy, PFS, custom transport, catch-up) use `Client::builder()` instead.
 
 **`UpdateConfig` / `OverflowStrategy`**
 
-Two new types for controlling the user-facing update dispatch buffer. Internal MTProto state (pts, qts, getDifference) is unaffected.
+Two new types for controlling the update dispatch buffer. Internal MTProto state (pts, qts, getDifference) is unaffected.
 
 ```rust
 use ferogram::{Client, update_config::OverflowStrategy};
@@ -225,11 +188,11 @@ let (client, _) = Client::builder()
     .connect().await?;
 ```
 
-`DropOldest` (default) evicts ephemeral updates (typing, online status) first, then the oldest normal update. The incoming update is always buffered. `DropNewest` discards the incoming update instead. Default capacity is 2048.
+`DropOldest` (default) evicts ephemeral updates first (typing, online status), then the oldest normal update. `DropNewest` discards the incoming update instead. Default capacity is 2048.
 
 **`ClientBuilder::low_memory_mode`**
 
-Drops the dispatch buffer to 256 slots with `DropOldest` eviction. Good for Termux or any host where RAM is tight.
+Drops the dispatch buffer to 256 slots with `DropOldest` eviction. Good for Termux or any RAM-constrained host.
 
 ```rust
 Client::builder()
@@ -240,11 +203,11 @@ Client::builder()
     .connect().await?;
 ```
 
-**`ParticipantStatus`** is now re-exported from the crate root.
+**Other additions**
 
-**`User::bot_guestchat()`** returns `true` if the bot supports guest-chat mode (`updateBotGuestChatQuery`).
-
-**`GuestChatQuery::via_from()`** returns the original requester peer when Telegram includes `guestchat_via_from` in the message. Present when the bot is acting as an intermediary.
+- `ParticipantStatus` re-exported from the crate root.
+- `User::bot_guestchat()` returns `true` if the bot supports guest-chat mode.
+- `GuestChatQuery::via_from()` returns the original requester peer when `guestchat_via_from` is present.
 
 **Examples**
 
@@ -256,40 +219,35 @@ Bots: `echo_bot`, `filters_showcase`, `hello_self`, `inline_keyboard`, `inline_q
 
 **Docs**
 
-New page: `docs/src/api/quick-connect.md` covering `quick_connect` usage and error handling.
-
----
+New page: `docs/src/api/quick-connect.md`.
 
 ### Changed
 
-**Session schema** - two schema additions for existing databases, applied automatically via `migrate_legacy_sqlite_schema` on open. Safe on fresh databases; both operations are no-ops if the schema is already current.
+**Session schema** - two additions applied automatically via `migrate_legacy_sqlite_schema` on open:
 
 - `peers` table gains an `is_chat` column for basic group tracking.
-- New `min_peers` table stores min-user message contexts (`user_id`, `peer_id`, `msg_id`).
+- New `min_peers` table stores min-user message contexts.
 
-**`allow_missing_channel_hash`** in `ExperimentalFeatures` is now active. When set, a missing access hash during `getChannelDifference` triggers a `channels.getChannels` call with `access_hash = 0` to fetch and cache the hash, then retries the diff in the same loop iteration. Bots only.
+**`allow_missing_channel_hash`** in `ExperimentalFeatures` is now active. A missing access hash during `getChannelDifference` triggers a `channels.getChannels` call with `access_hash = 0`, then retries the diff in the same loop iteration. Bots only.
 
-**Periodic session snapshot saver** - the client now flushes the full session (peers, channel_pts, min_peers, DC auth/salt data) to the session backend every 60 seconds when the peer cache has been mutated. A final save runs unconditionally on shutdown. Previously peers were only flushed on explicit `save_session()` calls.
-
----
+**Periodic session snapshot saver** - the client now flushes the full session to the backend every 60 seconds when the peer cache has been mutated. A final save runs on shutdown. Previously peers were only flushed on explicit `save_session()` calls.
 
 ### Fixed
 
-**Salt `valid_until` overflow** - `valid_until` was stored as `i32`. Telegram sends validity windows extending past 2038 (e.g. `valid_until = 2_751_656_413`, year 2057). Those values overflow `i32` and wrap negative, making every salt look expired on a signed comparison. Changed to `u32`.
-
-**`GuestChatAnswer::send` return type** - was returning `bool`. Now returns `InputBotInlineMessageID` matching the corrected TL schema. The `setBotGuestChatResult` constructor ID was also wrong; both are fixed.
+- `valid_until` was stored as `i32`. Telegram sends values past 2038 (e.g. year 2057) that overflow and go negative, making every salt look expired. Changed to `u32`.
+- `GuestChatAnswer::send` return type fixed to `InputBotInlineMessageID`. The `setBotGuestChatResult` constructor ID was also wrong; both are fixed.
 
 ---
 
 ## [0.4.0] - 2026-05-08
 
-0.4.0 is the first production-ready release of ferogram. It ships Layer 225 support. All users are advised to upgrade to 0.4.0 (or 0.4.x+) as the most recommended and supported version.
+0.4.0 is the first production-ready release of ferogram. Ships Layer 225 support. All users should upgrade to 0.4.0 or later.
 
-If you run into any bugs, please open an issue on GitHub or reach us at [@FerogramChat](https://t.me/FerogramChat). Thank you for using ferogram!
+If you run into any bugs, open an issue on GitHub or reach us at [@FerogramChat](https://t.me/FerogramChat).
 
 For the latest git revision: https://github.com/ankit-chaubey/ferogram
 
-> **Note:** 0.3.9 was a broken publish. The workspace internal deps were not bumped so crates.io resolved `ferogram-tl-types` to the old Layer 224 build. 0.4.0 fixes that and is the correct release to use.
+> **Note:** 0.3.9 was a broken publish. Workspace internal deps were not bumped so crates.io resolved `ferogram-tl-types` to the old Layer 224 build. 0.4.0 fixes that.
 
 ---
 
@@ -297,9 +255,9 @@ For the latest git revision: https://github.com/ankit-chaubey/ferogram
 
 Updated to TL Layer 225.
 
-### Breaking changes in 0.3.9
+### Breaking changes
 
-- **`send_poll` signature changed.** Now takes a `PollBuilder` instead of individual positional args:
+- **`send_poll` signature changed.** Now takes a `PollBuilder`:
 
   ```rust
   // before
@@ -310,23 +268,24 @@ Updated to TL Layer 225.
   client.send_poll(peer, PollBuilder::new("Best language?").answers(["Rust", "Go"])).await?;
   ```
 
-- **`parse_markdown` now implements MarkdownV2** (was a hybrid V1/V2 dialect):
-  - `__text__` produces **Underline** now, not Italic
-  - `~text~` is Strikethrough (single tilde, as Telegram specifies)
+- **`parse_markdown` now implements MarkdownV2:**
+  - `__text__` produces Underline (was Italic)
+  - `~text~` is Strikethrough (single tilde)
   - `> line` at line start produces Blockquote
   - `**> line` at line start produces Expandable blockquote
   - `![](tg://emoji?id=N)` with empty label now parses correctly
-  - Escape set is the strict V2 one: `_ * [ ] ( ) ~ \ \` > # + - = | { } . !`
+  - Escape set is the strict V2 one
+
 - **`generate_markdown` now emits V2 syntax:**
   - Italic: `_text_`
   - Underline: `__text__`
-  - Strike: `~text~` (single tilde)
+  - Strike: `~text~`
   - Blockquote: `> ` prefix; expandable: `**> ` prefix
   - All V2 special chars in plain text are backslash-escaped
 
-### Added in 0.3.9
+### Added
 
-**`PollBuilder`** is a new fluent builder for `send_poll`. It covers the full `InputMediaPoll` field set:
+**`PollBuilder`** - fluent builder for `send_poll`, covering the full `InputMediaPoll` field set:
 
 ```rust
 use ferogram::PollBuilder;
@@ -338,7 +297,7 @@ client.send_poll(peer,
         .close_period(300)
 ).await?;
 
-// Quiz with answer explanation
+// Quiz with explanation
 client.send_poll(peer,
     PollBuilder::new("Capital of France?")
         .answers(["Berlin", "Paris", "Rome"])
@@ -351,7 +310,7 @@ client.send_poll(peer,
 
 New fields not in the old API: `public_voters`, `shuffle_answers`, `hide_results_until_close`, `close_period`, `close_date`, `solution`, `subscribers_only`, `countries_iso2`.
 
-**`Update::GuestChatQuery`** is a new update variant for bots (`updateBotGuestChatQuery`). It fires when a user invites the bot into a guest-chat context. Carries `query_id`, `message`, `reference_messages`, and `qts`. `GuestChatQuery` derefs to `IncomingMessage`. Answer with `GuestChatAnswer`:
+**`Update::GuestChatQuery`** - new update variant for `updateBotGuestChatQuery`. Fires when a user invites the bot into a guest-chat context. Carries `query_id`, `message`, `reference_messages`, and `qts`. Derefs to `IncomingMessage`. Answer with `GuestChatAnswer`:
 
 ```rust
 if let Update::GuestChatQuery(q) = update {
@@ -363,78 +322,57 @@ if let Update::GuestChatQuery(q) = update {
 }
 ```
 
-`GuestChatAnswer` supports all inline result kinds: `article`, `photo`, `document`, `game`, `location`, `venue`, `contact`, `webpage`, `invoice`, `raw`. Sends via `messages.setBotGuestChatResult`.
+Supports all inline result kinds: `article`, `photo`, `document`, `game`, `location`, `venue`, `contact`, `webpage`, `invoice`, `raw`. Sends via `messages.setBotGuestChatResult`.
 
-**`Client::delete_reaction(peer, msg_id, participant)`** reports and removes a specific user's reaction on a message (`messages.reportReaction`). Returns `true` on success.
+**Other additions**
 
-**`Client::get_poll_stats(peer, msg_id)`** returns detailed vote stats for a poll (`stats.getPollStats`). Returns `tl::types::stats::PollStats`.
-
-**`BannedRights::send_reactions`** is a new field on the ban-rights builder. Controls whether restricted users can add reactions:
-
-```rust
-BannedRights::default().send_reactions(false)
-```
-
-**User ID in builtins** is now resolved for `CallbackQuery`, `InlineQuery`, `InlineSend`, and `GuestChatQuery`, not just message updates.
+- `Client::delete_reaction(peer, msg_id, participant)` removes a specific user's reaction (`messages.reportReaction`). Returns `true` on success.
+- `Client::get_poll_stats(peer, msg_id)` returns detailed vote stats (`stats.getPollStats`).
+- `BannedRights::send_reactions` field on the ban-rights builder.
+- User ID resolution for `CallbackQuery`, `InlineQuery`, `InlineSend`, and `GuestChatQuery`.
 
 **Parser additions (`ferogram-parsers`):**
 
-- `parse_markdown_v2()` explicit V2 entry point (same as `parse_markdown`)
-- `generate_markdown_v2()` explicit V2 generator (same as `generate_markdown`)
-- `parse_markdown_v1()` legacy V1 parser, kept for backward compat, now deprecated
-- HTML: `<ins>` accepted as underline alias (same as `<u>`)
-- HTML: `<span class="tg-spoiler">` accepted as spoiler alias
-- HTML: `<blockquote>` produces `MessageEntityBlockquote { collapsed: false }`
-- HTML: `<blockquote expandable>` produces `MessageEntityBlockquote { collapsed: true }`
-- HTML: `<tg-time unix="N" format="F">` produces `MessageEntityFormattedDate`
-- HTML: `<pre><code class="language-X">` now correctly produces one `Pre` entity with the language set, not two separate entities
-- `generate_html` now emits `<blockquote>`, `<blockquote expandable>`, and `<tg-time>`
-- Both `parse_html` backends (hand-rolled and `html5ever`) are at full parity
+- `parse_markdown_v2()` / `generate_markdown_v2()` explicit V2 entry points.
+- `parse_markdown_v1()` legacy V1 parser, now deprecated.
+- HTML: `<ins>` accepted as underline alias.
+- HTML: `<span class="tg-spoiler">` accepted as spoiler alias.
+- HTML: `<blockquote>` and `<blockquote expandable>` produce the right `MessageEntityBlockquote` variants.
+- HTML: `<tg-time unix="N" format="F">` produces `MessageEntityFormattedDate`.
+- HTML: `<pre><code class="language-X">` correctly produces one `Pre` entity with the language set.
+- `generate_html` now emits `<blockquote>`, `<blockquote expandable>`, and `<tg-time>`.
+- Both `parse_html` backends are at full parity.
 
-### Deprecated in 0.3.9
+### Deprecated
 
 - `parse_markdown_v1` marked `#[deprecated(since = "0.3.9")]`. Will be removed in 0.4.0.
 
+---
+
 ## [0.3.8] - 2026-05-06
 
-Bug fixes
+### Fixed
 
-### Changes in 0.3.8
-
-- `send_to_self(msg)` is fixed: it now actually sends to Saved Messages again. In 0.3.7 it was pointing at the wrong function body.
-- `open_mini_app(peer, MiniApp)` is now public. It was accidentally left private in 0.3.7.
-- `get_chat_full(peer)` is now `pub` instead of `pub(crate)`, so you can call it directly from outside the crate.
-- also fixed `download_media_to_file_on_dc` & `set_default_banned_rights_raw`
+- `send_to_self(msg)` now actually sends to Saved Messages. Was pointing at the wrong function body in 0.3.7.
+- `open_mini_app(peer, MiniApp)` is now public. Was accidentally left private in 0.3.7.
+- `get_chat_full(peer)` is now `pub` instead of `pub(crate)`.
+- Fixed `download_media_to_file_on_dc` and `set_default_banned_rights_raw`.
 
 ---
 
 ## [0.3.7] - 2026-05-05
 
-The big story this release is workspace restructuring. Three crates were extracted out of the monolith, the connection stack got its own proper home, and a handful of API rough edges were smoothed out.
+The big story this release is workspace restructuring. Three crates were extracted from the monolith, the connection stack got its own home, and a handful of API rough edges were smoothed out.
 
 ### New crates
 
-- **ferogram-connect**: the raw TCP/transport layer is now its own publishable crate. It owns the connection, MTProto framing, transport selection (Intermediate, Obfuscated, FakeTLS), SOCKS5, and proxy handling. Previously this code lived inside a throwaway demo binary. If you're doing anything low-level with connections, this is where to look.
+- **ferogram-connect**: the raw TCP/transport layer is now its own publishable crate. Owns the connection, MTProto framing, transport selection (Intermediate, Obfuscated, FakeTLS), SOCKS5, and proxy handling.
+- **ferogram-fsm**: FSM state management extracted into its own crate. Same `FsmState`, `StateContext`, `StateStorage`, and `MemoryStorage` as before.
+- **ferogram-mtsender**: the MTProto sender pool and retry policy. `RetryPolicy`, `AutoSleep`, `CircuitBreaker`, `NoRetries` all live here. The main `ferogram` crate re-exports everything.
 
-- **ferogram-fsm**: FSM state management is now its own crate. Same `FsmState`, `StateContext`, `StateStorage`, and `MemoryStorage` you already use, just extracted so it can be versioned and published independently.
-
-- **ferogram-mtsender**: the MTProto sender pool and retry policy is now its own crate too. `RetryPolicy`, `AutoSleep`, `CircuitBreaker`, `NoRetries` all live here now. The main `ferogram` crate re-exports everything so nothing breaks.
-
-The old `ferogram-app` and `ferogram-bot` standalone example binaries are gone. They've been replaced by proper examples under `ferogram/examples/` (`order_bot`, `showcase_bot`, `userbot`).
+The old `ferogram-app` and `ferogram-bot` binaries are gone, replaced by proper examples under `ferogram/examples/` (`order_bot`, `showcase_bot`, `userbot`).
 
 ### New: `PeerExt` and `OptionPeerExt`
-
-Getting a numeric ID out of a `tl::enums::Peer` used to mean writing a match every time:
-
-```rust
-let id = match peer {
-    tl::enums::Peer::User(u)    => u.user_id,
-    tl::enums::Peer::Chat(c)    => c.chat_id,
-    tl::enums::Peer::Channel(c) => c.channel_id,
-};
-```
-
-Now there's `.bare_id()`:
 
 ```rust
 use ferogram::{PeerExt, OptionPeerExt};
@@ -444,13 +382,13 @@ let sender = msg.sender_id().bare_id(); // Option<i64>
 let chat   = msg.peer_id().bare_id();   // Option<i64>
 ```
 
-`bare_id` returns the **native** Telegram ID, not the Bot-API-encoded one. A channel with native ID `1234567890` is `-1001234567890` in the Bot API.
+`bare_id` returns the native Telegram ID, not the Bot-API-encoded one.
 
 ### New: `PeerCache` and `ExperimentalFeatures`
 
-`PeerCache` is now its own file (`peer_cache.rs`) and fully public. It's what backs every peer lookup under the hood: users, channels, basic groups, min-users, username index, phone index.
+`PeerCache` is now its own file and fully public.
 
-`ExperimentalFeatures` lets you opt into behaviours that deviate from strict spec:
+`ExperimentalFeatures` lets you opt into behaviors that deviate from strict spec:
 
 ```rust
 Client::builder()
@@ -461,11 +399,9 @@ Client::builder()
     .connect().await?;
 ```
 
-`allow_zero_hash` is the main one: bots can skip needing a cached access hash. Don't enable it on user accounts.
-
 ### Breaking changes
 
-**`download_media_to_file` → `download_file`**
+**`download_media_to_file` renamed to `download_file`**
 
 ```rust
 // before
@@ -478,16 +414,16 @@ client.download_file(location, &path).await?;
 **`forward_messages` now requires `ForwardOptions`**
 
 ```rust
-// before (3 args)
+// before
 client.forward_messages(dest, &[id], src).await?;
 
-// now (4 args)
+// now
 client.forward_messages(dest, &[id], src, ForwardOptions::default()).await?;
 ```
 
 **`respond_ex` removed**
 
-`respond` already accepts `InputMessage` directly, so `respond_ex` was redundant:
+`respond` already accepts `InputMessage` directly:
 
 ```rust
 // before
@@ -499,7 +435,7 @@ msg.respond(InputMessage::html("<b>hi</b>")).await?;
 
 ### Internals
 
-The `ferogram/src/lib.rs` monolith has been split up. `client/` is now a proper module directory, `filters` and `middleware` are module directories instead of single files, and `peer_cache` is its own file. No public API changes; just much easier to navigate.
+`ferogram/src/lib.rs` has been split up. `client/`, `filters`, and `middleware` are now proper module directories, and `peer_cache` is its own file. No public API changes.
 
 **Full Changelog**: https://github.com/ankit-chaubey/ferogram/compare/v0.3.6...v0.3.7
 
@@ -509,11 +445,7 @@ The `ferogram/src/lib.rs` monolith has been split up. `client/` is now a proper 
 
 ### API Stabilization (Towards v0.4.0)
 
-This release focuses on giving the high-level APIs their final shape before v0.4.0.
-
-Some APIs have been simplified, merged, or removed where redundant. This may require a one-time migration, but it means a cleaner experience and no more overlapping methods going forward.
-
-Once stabilized, future updates will focus on new features and improvements without disruptive API changes.
+This release focuses on giving the high-level APIs their final shape before v0.4.0. Some APIs were simplified, merged, or removed where redundant. Once stabilized, future updates will focus on new features without disruptive API changes.
 
 See [FEATURES.md](FEATURES.md) for the full list of what is currently public and supported.
 
@@ -523,54 +455,21 @@ See [FEATURES.md](FEATURES.md) for the full list of what is currently public and
 
 ### Fixed
 
-- **PollResults deserialization** - `PollResults` was being treated as a bare
-  type (`crate::types::PollResults`) instead of a boxed type
-  (`crate::enums::PollResults`). The deserializer skipped reading the 4-byte
-  constructor ID, consuming it as the `flags` field instead. This misaligned
-  all subsequent reads inside `getChannelDifference` and `getDifference`
-  responses that contained a poll message, producing "unexpected constructor id"
-  errors and dropping those updates entirely. Fixed by removing the
-  special-case whitelist in `namegen.rs` so `PollResults` routes through
-  `crate::enums::` like every other boxed type.
+- **PollResults deserialization** - `PollResults` was being treated as a bare type instead of a boxed type. The deserializer skipped reading the 4-byte constructor ID, consuming it as the `flags` field, which misaligned all subsequent reads inside `getChannelDifference` and `getDifference` responses containing a poll message. Fixed by removing the special-case whitelist in `namegen.rs`.
 
-- **getDifference self-deadlock** - The `reader_loop` select arm that fires the
-  MessageBoxes deadline was directly awaiting `run_pending_differences()`.
-  `run_pending_differences` sends a getDifference RPC and then awaits the
-  response frame. But `reader_loop` is the only task reading TCP frames and
-  routing RPC responses - so the response could never arrive, producing a
-  30-second hang after the first gap detection. The fix: spawn a separate
-  task (same pattern already used by the Keepalive arm). A new
-  `diff_in_flight: AtomicBool` guard prevents redundant concurrent spawns
-  while a diff is already running.
+- **getDifference self-deadlock** - The `reader_loop` select arm was directly awaiting `run_pending_differences()`, which sends a getDifference RPC and awaits the response. But `reader_loop` is the only task reading TCP frames, so the response could never arrive, causing a 30-second hang after the first gap detection. Fixed by spawning a separate task. A new `diff_in_flight: AtomicBool` guard prevents concurrent redundant spawns.
 
 ### Removed
 
-- **`prefetch_channel_access_hashes` from startup** - The automatic call to
-  `messages.getDialogs` during startup and catch-up has been removed. This was
-  the root cause of breakage on Telegram beta layers: the call forced full
-  deserialization of `Dialog / DraftMessage / PollResults / PeerNotifySettings
-  / Story`, all of which are high-churn objects that change without a layer
-  bump. Removing it makes Ferogram resilient to Telegram schema drift.
+- **`prefetch_channel_access_hashes` from startup** - The automatic `messages.getDialogs` call during startup was the root cause of breakage on Telegram beta layers, forcing full deserialization of high-churn objects that change without a layer bump. Removing it makes ferogram resilient to Telegram schema drift.
 
 ### Changed
 
-- **Lazy access_hash resolution** - Channel access hashes are now resolved
-  purely lazily:
-  1. Hashes for channels already seen in a previous session are restored from
-     the persisted `peers` list in the session file.
-  2. New channels receive their hash from the entities embedded in incoming
-     updates / `getDifference` / `getChannelDifference` responses.
-  3. If `getChannelDifference` is triggered for a channel whose hash is still
-     unknown, `run_pending_differences` skips it gracefully
-     (`end_channel_difference Banned`) and continues; the hash arrives with the
-     next update entity.
+- **Lazy access_hash resolution** - Channel access hashes are now resolved purely lazily: restored from the session on startup, received from incoming update entities, or skipped gracefully if still unknown when `getChannelDifference` fires.
 
 ### Added
 
-- **`Client::warm_peer_cache_from_dialogs()`** - The former internal
-  `prefetch_channel_access_hashes` function is now a public, opt-in method.
-  Call it explicitly if you need a channel's access hash before any update has
-  arrived. Do not call it at startup.
+- **`Client::warm_peer_cache_from_dialogs()`** - The former internal `prefetch_channel_access_hashes` is now a public, opt-in method. Call it explicitly if you need a channel's access hash before any update has arrived. Do not call at startup.
 
 ---
 
@@ -578,20 +477,20 @@ See [FEATURES.md](FEATURES.md) for the full list of what is currently public and
 
 ### Added
 
-- **PFS (Perfect Forward Secrecy)**: `use_pfs` flag on `ClientConfig`. When enabled, the DC pool performs a temp-key DH bind after auth-key negotiation. The session uses a short-lived encrypted session key; the permanent auth key is never exposed in plaintext on the wire. Falls back gracefully if the bind fails.
-- **`prefetch_channel_access_hashes`**: called automatically at startup and after catch-up. Runs a single `GetDialogs` to pre-populate channel and user access hashes before the first update arrives, preventing `CHANNEL_INVALID` errors on reconnect.
-- **`Deserializable::from_bytes_exact`**: convenience method on all TL types. Constructs a cursor, deserializes, and returns an error if bytes are left over. Replaces the repeated `Cursor::from_slice` + `deserialize` pattern throughout the codebase.
+- **PFS (Perfect Forward Secrecy)**: `use_pfs` flag on `ClientConfig`. When enabled, the DC pool performs a temp-key DH bind after auth-key negotiation. Falls back gracefully if the bind fails.
+- **`prefetch_channel_access_hashes`**: called automatically at startup and after catch-up. Runs a single `GetDialogs` to pre-populate access hashes before the first update arrives.
+- **`Deserializable::from_bytes_exact`**: constructs a cursor, deserializes, and errors if bytes are left over. Replaces repeated `Cursor::from_slice` + `deserialize` patterns throughout the codebase.
 - **`auth_key_id_from_key`** utility in `ferogram-mtproto`.
 - **`ferogram::util`** module with `decode_checked` helper used by the pts layer.
 
 ### Fixed
 
-- `get_difference` no longer hangs when two tasks race to call it concurrently. The second caller now polls every 50 ms and gives up after 35 s with a warning, then lets the next gap tick retry.
+- `get_difference` no longer hangs when two tasks race to call it concurrently. The second caller polls every 50 ms and gives up after 35 s, then lets the next gap tick retry.
 - Parse errors on incoming `Updates` frames are now logged as warnings instead of being silently dropped.
 
 ### Changed
 
-- All raw `Cursor::from_slice` + `deserialize` call sites in `lib.rs`, `dc_pool.rs`, and `pts.rs` migrated to `from_bytes_exact`.
+- All raw `Cursor::from_slice` + `deserialize` call sites migrated to `from_bytes_exact`.
 - `step2_temp` re-exported from `ferogram-mtproto` auth module.
 
 **Full Changelog**: https://github.com/ankit-chaubey/ferogram/compare/v0.3.3...v0.3.4
@@ -606,8 +505,8 @@ See [FEATURES.md](FEATURES.md) for the full list of what is currently public and
 
 ### New modules
 
-- **ferogram::middleware**: `Middleware` trait, `Next` chain, `DispatchError`/`DispatchResult`, and a rate-limit middleware backed by `DashMap`. Wraps handler dispatch with pre/post logic.
-- **ferogram::filters**: composable, synchronous predicates over `IncomingMessage`. Built-in constructors for command, private, text, media, and more. Supports `&`, `|`, `!` operators for compound expressions. Integrates with the FSM via `StateContext`.
+- **ferogram::middleware**: `Middleware` trait, `Next` chain, `DispatchError`/`DispatchResult`, and a rate-limit middleware backed by `DashMap`.
+- **ferogram::filters**: composable, synchronous predicates over `IncomingMessage`. Built-in constructors for command, private, text, media, and more. Supports `&`, `|`, `!` operators. Integrates with the FSM via `StateContext`.
 - **ferogram::fsm**: `FsmState` trait, `StateContext`, `StateKey`, `StateKeyStrategy`, and `StateStorage`. In-memory `DashMap`-backed store by default; custom backends via async-trait extension point.
 - **ferogram::conversation**: `Conversation` for stateful back-and-forth with a single peer. Wraps `UpdateStream` for the conversation lifetime and buffers updates from other peers.
 
@@ -615,16 +514,13 @@ See [FEATURES.md](FEATURES.md) for the full list of what is currently public and
 
 - `IncomingMessage` gained message-inspection helpers: `chat_id()`, `is_private()`, `is_group()`, `is_channel()`, `is_any_group()`, `from_id()`, `is_bot_command()`, `command()`, `is_command_named()`, `command_args()`, `has_media()`, `has_photo()`, `has_document()`, `is_forwarded()`, `is_reply()`, `album_id()`.
 - New update types exported from the crate root: `ParticipantUpdate`, `JoinRequestUpdate`, `MessageReactionUpdate`, `PollVoteUpdate`, `BotStoppedUpdate`, `ShippingQueryUpdate`, `PreCheckoutQueryUpdate`, `ChatBoostUpdate`.
-- `Client::get_chat_administrators()`: returns all admins and the creator for a channel or supergroup. For basic groups, returns all participants (use `is_admin` on the result).
+- `Client::get_chat_administrators()`: returns all admins and the creator for a channel or supergroup.
 - `FsmState` re-exported from the crate root. With the `derive` feature, `#[derive(FsmState)]` is available directly from `ferogram`.
 - Example: `examples/order_bot.rs` showing a multi-step FSM-driven order flow.
 
 ### Docs
 
-New pages:
-
-- Bot Framework: Middleware & Dispatcher, Finite State Machine (FSM), Conversation API
-- API reference: Bot Configuration, Stats & Analytics
+New pages: Middleware & Dispatcher, Finite State Machine (FSM), Conversation API, Bot Configuration, Stats & Analytics.
 
 **Full Changelog**: https://github.com/ankit-chaubey/ferogram/compare/v0.3.2...v0.3.3
 
@@ -634,15 +530,15 @@ New pages:
 
 ### Changed
 
-- `SeenMsgIds` deque now paired with a `HashSet` for O(1) duplicate checks under concurrent workers (was O(n) linear scan).
+- `SeenMsgIds` deque now paired with a `HashSet` for O(1) duplicate checks under concurrent workers (was O(n)).
 - Session temp files now use a unique name per write. A `write_lock` serializes concurrent saves to prevent a rename race on Windows.
 
 ### Fixed
 
-- `PaddedIntermediate` handshake was missing in DC pool worker connections. Fixed.
-- `new_session_created` was resetting the session on fresh connections when it should not, causing a session ID mismatch on every decrypt after. Fixed.
-- `scan_body` was passing `None` as `sent_msg_id` on container iterations, letting stale results overwrite live responses. Fixed.
-- `importAuthorization` branch logic was inverted; it was skipping the import exactly when it was needed. Fixed.
+- `PaddedIntermediate` handshake was missing in DC pool worker connections.
+- `new_session_created` was resetting the session on fresh connections when it should not, causing a session ID mismatch on every decrypt after.
+- `scan_body` was passing `None` as `sent_msg_id` on container iterations, letting stale results overwrite live responses.
+- `importAuthorization` branch logic was inverted; it was skipping the import exactly when it was needed.
 - Server 4-byte transport error codes during DH now surface properly instead of logging as "plain frame too short".
 
 **Full Changelog**: https://github.com/ankit-chaubey/ferogram/compare/v0.3.1...v0.3.2
@@ -659,34 +555,34 @@ Patch release to fix the docs.rs build. No functional changes from 0.3.0.
 
 ## [0.3.0] - 2026-04-19
 
-0.3.0 is a substantial release. The workspace grew by two new crates, the session and parser layers were extracted into their own packages, and the connection stack gained CDN support, DNS-over-HTTPS fallback, and transport probing. About 16.7k lines were added across 114 changed files.
+0.3.0 is a substantial release. The workspace grew by two new crates, the session and parser layers were extracted into their own packages, and the connection stack gained CDN support, DNS-over-HTTPS fallback, and transport probing. About 16.7k lines added across 114 changed files.
 
 ### New crates
 
-- **ferogram-session**: session persistence is now its own crate. It owns `PersistedSession`, `DcEntry`, `DcFlags`, `UpdatesStateSnap`, `CachedPeer`, `CachedMinPeer`, `default_dc_addresses`, and all storage backends (`BinaryFileBackend`, `InMemoryBackend`, `StringSessionBackend`, `SqliteBackend`, `LibSqlBackend`). The main `ferogram` crate re-exports everything from it so existing code is unaffected.
-- **ferogram-parsers**: Telegram Markdown and HTML entity parsing is now its own crate. It provides `parse_markdown`, `generate_markdown`, `parse_html`, and `generate_html`. An optional `html5ever` feature enables spec-compliant HTML5 tokenization. The main `ferogram::parsers` module re-exports these.
+- **ferogram-session**: session persistence is now its own crate. Owns `PersistedSession`, `DcEntry`, `DcFlags`, `UpdatesStateSnap`, `CachedPeer`, `CachedMinPeer`, `default_dc_addresses`, and all storage backends (`BinaryFileBackend`, `InMemoryBackend`, `StringSessionBackend`, `SqliteBackend`, `LibSqlBackend`). The main `ferogram` crate re-exports everything.
+- **ferogram-parsers**: Telegram Markdown and HTML entity parsing is now its own crate. Provides `parse_markdown`, `generate_markdown`, `parse_html`, and `generate_html`. Optional `html5ever` feature for spec-compliant HTML5 tokenization.
 
 ### Session changes
 
 - Binary session format bumped to **v5**.
-- Session now stores home DC, full DC table, update state (pts/qts/date/seq), per-channel pts, peer cache, and min-user message contexts.
+- Now stores home DC, full DC table, update state (pts/qts/date/seq), per-channel pts, peer cache, and min-user message contexts.
 - Legacy formats load without error.
-- Saves are atomic: written to a `.tmp` file first, then renamed into place.
+- Saves are atomic: written to `.tmp` first, then renamed into place.
 - DC flags are now persisted so media and CDN DC entries survive restarts.
 
 ### Client and builder
 
 - `ClientBuilder` gained three new options:
-  - `.probe_transport(true)`: races Obfuscated, Abridged, and HTTP transports and picks the first to succeed. Has no effect when using MTProxy.
+  - `.probe_transport(true)`: races Obfuscated, Abridged, and HTTP transports and picks the first to succeed.
   - `.resilient_connect(true)`: if direct TCP fails, falls back through DNS-over-HTTPS and then Telegram's Firebase/Google special-config.
   - `.experimental_features(...)`: takes an `ExperimentalFeatures` struct.
-- New `ExperimentalFeatures` struct with fields: `allow_zero_hash`, `allow_missing_channel_hash`, `auto_resolve_peers` (reserved, not yet active).
+- New `ExperimentalFeatures` struct: `allow_zero_hash`, `allow_missing_channel_hash`, `auto_resolve_peers` (reserved).
 
 ### New modules
 
 - `ferogram::cdn_download`: full CDN file download path. Handles `upload.getCdnFile`, `upload.reuploadCdnFile`, AES-256-CTR chunk decryption, and reassembly. Exports `CdnDownloader`, `CdnChunkResult`, and `CDN_CHUNK_SIZE`.
 - `ferogram::dns_resolver`: DNS-over-HTTPS with TTL caching. Queries Google DoH and Mozilla/Cloudflare DoH, merges IPv4 and IPv6 answers.
-- `ferogram::special_config`: Telegram's Firebase/Google fallback for DC configuration. Decodes the encrypted `help.configSimple` response and extracts DC options.
+- `ferogram::special_config`: Telegram's Firebase/Google fallback for DC configuration.
 
 ### MTProto internals
 
@@ -695,10 +591,7 @@ Patch release to fix the docs.rs build. No functional changes from 0.3.0.
 
 ### Docs
 
-New pages added:
-
-- Advanced: CDN Downloads, Transport Probing and Resilient Connect, Connection Restart Policy, Experimental Features
-- API reference: ClientBuilder, Types Reference, Chat Management, Contacts, Forum Topics, Games, Invite Links, Polls, Privacy, Profile, Stickers
+New pages: CDN Downloads, Transport Probing and Resilient Connect, Connection Restart Policy, Experimental Features, ClientBuilder, Types Reference, Chat Management, Contacts, Forum Topics, Games, Invite Links, Polls, Privacy, Profile, Stickers.
 
 ---
 
@@ -706,36 +599,24 @@ New pages added:
 
 ### Changed
 
-- Peer cache moved from `RwLock<HashMap>` to `moka` concurrent cache to eliminate lock contention during peer lookups.
-- Pending RPC map replaced with `DashMap`, enabling lock-free response routing.
-- `dc_pool` now uses `tokio::sync::Mutex` instead of `parking_lot::Mutex` to avoid blocking the async runtime.
-- Fresh DH sessions now wait **2 seconds** after key derivation to allow Telegram to propagate the new auth key across DCs.
-- Stale key detection simplified: only error `-404` now triggers key rotation.
-- FakeTLS transport now prepends the **Change Cipher Spec** record to the first application data chunk to match Telegram’s expected TLS handshake pattern.
+- Peer cache moved from `RwLock<HashMap>` to `moka` concurrent cache to eliminate lock contention.
+- Pending RPC map replaced with `DashMap` for lock-free response routing.
+- `dc_pool` now uses `tokio::sync::Mutex` instead of `parking_lot::Mutex`.
+- Fresh DH sessions now wait 2 seconds after key derivation to allow Telegram to propagate the new auth key across DCs.
+- Stale key detection simplified: only error `-404` triggers key rotation.
+- FakeTLS transport now prepends the Change Cipher Spec record to the first application data chunk.
 - `getDifference` deserialization now tolerates unknown server responses instead of failing and dropping buffered updates.
-- Container message parsing now validates inner message alignment and safely discards malformed frames.
+- Container message parsing now validates inner message alignment and discards malformed frames safely.
 - Transport errors `-429` and `-444` are now logged clearly before reconnecting.
 
 ### Fixed
 
-- `getDifference` deserialization no longer fails hard on unknown server responses; unknown variants are discarded and buffered updates are preserved.
-- Container message parsing now validates inner message alignment and discards malformed frames instead of propagating a parse error.
-- Transport errors `-429` and `-444` are now surfaced as log warnings before reconnecting rather than being swallowed silently.
+- `getDifference` deserialization no longer fails hard on unknown server responses.
+- Container message parsing now discards malformed frames instead of propagating a parse error.
+- Transport errors `-429` and `-444` now surface as log warnings before reconnecting.
+
+---
 
 ## [0.1.0] - 2026-04-11
 
-Renamed and rebranded from [layer](https://github.com/ankit-chaubey/layer) v0.5.0.
-
-### Changed
-- Project renamed from `layer` to `ferogram`
-- All crate names updated (`layer-*` → `ferogram-*`)
-- Repository moved to `github.com/ankit-chaubey/ferogram`
-
-### Inherited from layer v0.5.0
-- Full MTProto 2.0 implementation (DH handshake, AES-IGE, salt tracking, DC migration)
-- MTProxy support (PaddedIntermediate, FakeTLS, SOCKS5)
-- User + bot authentication with 2FA SRP
-- Typed async update stream (NewMessage, MessageEdited, CallbackQuery, InlineQuery, ChatAction, UserStatus)
-- PTS/seq/qts gap detection and recovery
-- String, SQLite, and libsql session backends
-- Auto-generated TL Layer 224 types (2,329 constructors)
+Initial release.
