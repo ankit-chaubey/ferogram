@@ -14,7 +14,7 @@ build.rs           (reads api.tl, invokes ferogram-tl-gen)
     │
     ▼
 $OUT_DIR/
-  generated_common.rs     ← pub const LAYER: i32 = 225;
+  generated_common.rs     ← pub const LAYER: i32 = 227;
   generated_types.rs      ← pub mod types { ... }
   generated_enums.rs      ← pub mod enums { ... }
   generated_functions.rs  ← pub mod functions { ... }
@@ -28,12 +28,12 @@ The `LAYER` constant is extracted from the `// LAYER N` comment on the first lin
 # Get the new schema from Telegram's official sources
 # (TDLib repository, core.telegram.org, or unofficial mirrors)
 
-cp new-layer-225.tl ferogram-tl-types/tl/api.tl
+cp new-layer-227.tl ferogram-tl-types/tl/api.tl
 ```
 
 Make sure the first line of the file is:
 ```
-// LAYER 225
+// LAYER 227
 ```
 
 ## Step 2: Build
@@ -45,7 +45,7 @@ cargo build 2>&1 | head -40
 The build script automatically:
 - Parses the new schema
 - Generates updated Rust source
-- Patches `pub const LAYER: i32 = 225;` into `generated_common.rs`
+- Patches `pub const LAYER: i32 = 227;` into `generated_common.rs`
 
 If there are no breaking type changes in `ferogram`, it compiles cleanly.
 

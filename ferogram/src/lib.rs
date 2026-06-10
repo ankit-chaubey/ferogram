@@ -106,7 +106,7 @@
 //!
 //! # Raw API
 //!
-//! If something isn't wrapped yet, you can call any Layer 225 TL function directly:
+//! If something isn't wrapped yet, you can call any Layer 227 TL function directly:
 //!
 //! ```rust,ignore
 //! use ferogram::tl;
@@ -158,6 +158,7 @@ pub mod media;
 pub use media::DownloadIter;
 pub mod message_box;
 mod mini_app;
+#[cfg(feature = "parsers")]
 pub mod parsers;
 pub mod participants;
 mod peer_cache;
@@ -197,6 +198,7 @@ pub mod dc_migration;
 pub mod proxy;
 
 pub mod file_info;
+#[cfg(feature = "fsm")]
 pub mod fsm;
 pub mod middleware;
 #[cfg(feature = "experimental")]
@@ -221,6 +223,7 @@ pub mod string_session {
 }
 
 // Re-export FsmState at the crate root for convenience.
+#[cfg(feature = "fsm")]
 pub use fsm::FsmState;
 
 // Re-export the derive macro when the feature is enabled.

@@ -1200,7 +1200,27 @@ impl DcConnection {
             if let Some(ref mut c) = cipher.as_mut() {
                 c.decrypt(&mut b);
             }
-            b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16
+            let w = b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16;
+            // word count of 1 after 0x7f = Telegram 4-byte transport error code
+            if w == 1 {
+                let mut code_buf = [0u8; 4];
+                timeout(RECV_TIMEOUT, stream.read_exact(&mut code_buf))
+                    .await
+                    .map_err(|_| {
+                        InvocationError::Io(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "transfer recv: error code timeout (60 s)",
+                        ))
+                    })??;
+                if let Some(c) = cipher.as_mut() {
+                    c.decrypt(&mut code_buf);
+                }
+                let code = i32::from_le_bytes(code_buf);
+                return Err(InvocationError::Rpc(
+                    crate::errors::RpcError::from_telegram(code, "transport error"),
+                ));
+            }
+            w
         } else {
             h[0] as usize
         };
@@ -1219,20 +1239,16 @@ impl DcConnection {
         }
 
         // Transport errors are exactly 4 bytes (negative LE i32).
-        // A valid encrypted MTProto frame is always ≥ 68 bytes:
-        //   auth_key_id(8) + msg_key(16) + encrypted[salt(8)+session_id(8)+
-        //   msg_id(8)+seq_no(4)+data_len(4)+body(≥4)+padding(≥12)] ≥ 68 bytes.
-        // Checking buf.len() == 4 is therefore both necessary and sufficient to
-        // distinguish a transport error from a valid encrypted frame; this is
-        // correct by protocol structure, not merely empirically safe.
+        // This handles the short-frame path (h[0] == 1, not 0x7f).
+        // A valid encrypted MTProto frame is always >= 68 bytes, so buf.len() == 4
+        // unambiguously means a transport error code.
         if buf.len() == 4 {
             let code =
                 i32::from_le_bytes(buf[..4].try_into().expect("buf.len() == 4 checked above"));
             if code < 0 {
-                return Err(InvocationError::Io(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionRefused,
-                    format!("transport error from server: {code}"),
-                )));
+                return Err(InvocationError::Rpc(
+                    crate::errors::RpcError::from_telegram(code, "transport error"),
+                ));
             }
         }
 

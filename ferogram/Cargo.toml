@@ -13,7 +13,7 @@ keywords      = ["telegram", "mtproto", "client", "bot", "async"]
 categories    = ["api-bindings", "network-programming", "asynchronous"]
 
 [dependencies]
-ferogram-fsm       = { workspace = true }
+ferogram-fsm       = { workspace = true, optional = true }
 ferogram-connect   = { workspace = true }
 ferogram-mtsender  = { workspace = true }
 ferogram-tl-types  = { workspace = true, features = ["tl-api", "tl-mtproto", "deserializable-functions"] }
@@ -47,12 +47,14 @@ infer          = { version = "0.19", default-features = false }
 mp4            = { version = "0.14", optional = true }
 
 [features]
-default = []
+default = ["parsers", "html"]
 derive          = ["dep:ferogram-derive"]
 sqlite-session  = ["ferogram-session/sqlite-session"]
 experimental    = ["dep:mp4"]
 libsql-session  = ["ferogram-session/libsql-session"]
 serde           = ["ferogram-session/serde"]
+fsm             = ["dep:ferogram-fsm"]
+parsers         = ["ferogram-parsers/html"]
 html            = ["ferogram-parsers/html"]
 html5ever       = ["ferogram-parsers/html5ever"]
 ## Re-export the TL parser for custom tooling.
@@ -99,7 +101,8 @@ name = "admin_log"
 
 # bots
 [[example]]
-name = "inline_keyboard"
+name              = "inline_keyboard"
+required-features = ["parsers"]
 
 [[example]]
 name = "inline_query_bot"
@@ -112,13 +115,15 @@ name = "translate_bot"
 
 [[example]]
 name              = "order_bot"
-required-features = ["derive"]
+required-features = ["derive", "fsm"]
 
 [[example]]
-name = "showcase_bot"
+name              = "showcase_bot"
+required-features = ["parsers"]
 
 [[example]]
-name = "progress_transfer"
+name              = "progress_transfer"
+required-features = ["parsers"]
 
 [[example]]
 name = "typed_errors"
@@ -131,8 +136,9 @@ name = "string_session_gen"
 name = "serverless_userbot"
 
 [[example]]
-name = "userbot"
+name              = "userbot"
+required-features = ["parsers"]
 
 [package.metadata.docs.rs]
-features     = ["sqlite-session", "serde", "html", "html5ever", "parser", "codegen"]
+features     = ["sqlite-session", "serde", "fsm", "parsers", "html", "html5ever", "parser", "codegen"]
 rustdoc-args = ["--cfg", "docsrs"]

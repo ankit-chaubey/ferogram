@@ -48,6 +48,7 @@ impl AlbumItem {
     ///
     /// Parses `html` into plain text + entities and stores both, so the
     /// formatting is preserved when the album is sent.
+    #[cfg(feature = "parsers")]
     pub fn caption_html(mut self, html: impl Into<String>) -> Self {
         let (text, ents) = crate::parsers::parse_html(html.into().as_str());
         self.caption = text;
@@ -56,6 +57,7 @@ impl AlbumItem {
     }
 
     /// Set a Markdown-formatted caption on this album item.
+    #[cfg(feature = "parsers")]
     pub fn caption_markdown(mut self, md: impl Into<String>) -> Self {
         let (text, ents) = crate::parsers::parse_markdown(md.into().as_str());
         self.caption = text;

@@ -17,6 +17,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use super::core::BoxFilter;
+#[cfg(feature = "fsm")]
 use crate::fsm::{FsmState, StateContext, StateKey, StateKeyStrategy, StateStorage};
 use crate::middleware::{BoxFuture, DispatchResult, Middleware, Next, PanicRecoveryMiddleware};
 use crate::update::{IncomingMessage, Update};
@@ -25,6 +26,7 @@ use crate::update::{IncomingMessage, Update};
 
 type MsgFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 type HandlerFn = Arc<dyn Fn(IncomingMessage) -> MsgFuture + Send + Sync + 'static>;
+#[cfg(feature = "fsm")]
 type FsmHandlerFn = Arc<dyn Fn(IncomingMessage, StateContext) -> MsgFuture + Send + Sync + 'static>;
 
 #[derive(Clone)]
@@ -33,6 +35,7 @@ pub(crate) struct MessageHandler {
     handler: HandlerFn,
 }
 
+#[cfg(feature = "fsm")]
 #[derive(Clone)]
 pub(crate) struct FsmMessageHandler {
     filter: BoxFilter,
@@ -67,7 +70,9 @@ pub struct Router {
     scope: Option<BoxFilter>,
     new_msg: Vec<MessageHandler>,
     edited_msg: Vec<MessageHandler>,
+    #[cfg(feature = "fsm")]
     fsm_new_msg: Vec<FsmMessageHandler>,
+    #[cfg(feature = "fsm")]
     fsm_edited_msg: Vec<FsmMessageHandler>,
     children: Vec<Router>,
 }
@@ -79,7 +84,9 @@ impl Router {
             scope: None,
             new_msg: Vec::new(),
             edited_msg: Vec::new(),
+            #[cfg(feature = "fsm")]
             fsm_new_msg: Vec::new(),
+            #[cfg(feature = "fsm")]
             fsm_edited_msg: Vec::new(),
             children: Vec::new(),
         }
@@ -120,6 +127,7 @@ impl Router {
 
     /// Register an FSM handler for `NewMessage` updates that fires only when the
     /// stored state for the conversation slot matches `state` and `filter` passes.
+    #[cfg(feature = "fsm")]
     pub fn on_message_fsm<S, H, Fut>(&mut self, filter: BoxFilter, state: S, handler: H)
     where
         S: FsmState,
@@ -136,6 +144,7 @@ impl Router {
     }
 
     /// Register an FSM handler for `MessageEdited` updates.
+    #[cfg(feature = "fsm")]
     pub fn on_edit_fsm<S, H, Fut>(&mut self, filter: BoxFilter, state: S, handler: H)
     where
         S: FsmState,
@@ -169,10 +178,12 @@ impl Router {
         for h in self.edited_msg {
             flat.edited_msg.push(scoped(h, combined_scope.as_ref()));
         }
+        #[cfg(feature = "fsm")]
         for h in self.fsm_new_msg {
             flat.fsm_new_msg
                 .push(scoped_fsm(h, combined_scope.as_ref()));
         }
+        #[cfg(feature = "fsm")]
         for h in self.fsm_edited_msg {
             flat.fsm_edited_msg
                 .push(scoped_fsm(h, combined_scope.as_ref()));
@@ -182,7 +193,9 @@ impl Router {
             let child_flat = child.flatten(combined_scope.clone());
             flat.new_msg.extend(child_flat.new_msg);
             flat.edited_msg.extend(child_flat.edited_msg);
+            #[cfg(feature = "fsm")]
             flat.fsm_new_msg.extend(child_flat.fsm_new_msg);
+            #[cfg(feature = "fsm")]
             flat.fsm_edited_msg.extend(child_flat.fsm_edited_msg);
         }
 
@@ -208,6 +221,7 @@ fn scoped(h: MessageHandler, scope: Option<&BoxFilter>) -> MessageHandler {
     }
 }
 
+#[cfg(feature = "fsm")]
 fn scoped_fsm(h: FsmMessageHandler, scope: Option<&BoxFilter>) -> FsmMessageHandler {
     match scope {
         Some(s) => FsmMessageHandler {
@@ -229,7 +243,9 @@ impl Default for Router {
 pub(crate) struct FlatHandlers {
     pub new_msg: Vec<MessageHandler>,
     pub edited_msg: Vec<MessageHandler>,
+    #[cfg(feature = "fsm")]
     pub fsm_new_msg: Vec<FsmMessageHandler>,
+    #[cfg(feature = "fsm")]
     pub fsm_edited_msg: Vec<FsmMessageHandler>,
 }
 
@@ -266,10 +282,14 @@ pub(crate) struct FlatHandlers {
 pub struct Dispatcher {
     new_msg: Vec<MessageHandler>,
     edited_msg: Vec<MessageHandler>,
+    #[cfg(feature = "fsm")]
     fsm_new_msg: Vec<FsmMessageHandler>,
+    #[cfg(feature = "fsm")]
     fsm_edited_msg: Vec<FsmMessageHandler>,
     middlewares: Vec<Arc<dyn Middleware>>,
+    #[cfg(feature = "fsm")]
     state_storage: Option<Arc<dyn StateStorage>>,
+    #[cfg(feature = "fsm")]
     key_strategy: StateKeyStrategy,
 }
 
@@ -279,10 +299,14 @@ impl Dispatcher {
         Self {
             new_msg: Vec::new(),
             edited_msg: Vec::new(),
+            #[cfg(feature = "fsm")]
             fsm_new_msg: Vec::new(),
+            #[cfg(feature = "fsm")]
             fsm_edited_msg: Vec::new(),
             middlewares: vec![Arc::new(PanicRecoveryMiddleware::new())],
+            #[cfg(feature = "fsm")]
             state_storage: None,
+            #[cfg(feature = "fsm")]
             key_strategy: StateKeyStrategy::default(),
         }
     }
@@ -293,11 +317,13 @@ impl Dispatcher {
     }
 
     /// Configure the [`StateStorage`] backend for FSM handlers.
+    #[cfg(feature = "fsm")]
     pub fn with_state_storage(&mut self, storage: Arc<dyn StateStorage>) {
         self.state_storage = Some(storage);
     }
 
     /// Override the default [`StateKeyStrategy`] (`PerUserPerChat`).
+    #[cfg(feature = "fsm")]
     pub fn with_key_strategy(&mut self, strategy: StateKeyStrategy) {
         self.key_strategy = strategy;
     }
@@ -337,6 +363,7 @@ impl Dispatcher {
     ///
     /// FSM handlers shadow regular handlers: if a state match is found, no
     /// regular handlers are checked for that update.
+    #[cfg(feature = "fsm")]
     pub fn on_message_fsm<S, H, Fut>(&mut self, filter: BoxFilter, state: S, handler: H)
     where
         S: FsmState,
@@ -359,6 +386,7 @@ impl Dispatcher {
     }
 
     /// Register an FSM handler for `MessageEdited` updates.
+    #[cfg(feature = "fsm")]
     pub fn on_edit_fsm<S, H, Fut>(&mut self, filter: BoxFilter, state: S, handler: H)
     where
         S: FsmState,
@@ -385,7 +413,9 @@ impl Dispatcher {
         let flat = router.flatten(None);
         self.new_msg.extend(flat.new_msg);
         self.edited_msg.extend(flat.edited_msg);
+        #[cfg(feature = "fsm")]
         self.fsm_new_msg.extend(flat.fsm_new_msg);
+        #[cfg(feature = "fsm")]
         self.fsm_edited_msg.extend(flat.fsm_edited_msg);
     }
 
@@ -394,17 +424,24 @@ impl Dispatcher {
     pub async fn dispatch(&self, update: Update) {
         let new_msg = Arc::new(self.new_msg.clone());
         let edited_msg = Arc::new(self.edited_msg.clone());
+        #[cfg(feature = "fsm")]
         let fsm_new = Arc::new(self.fsm_new_msg.clone());
+        #[cfg(feature = "fsm")]
         let fsm_edited = Arc::new(self.fsm_edited_msg.clone());
+        #[cfg(feature = "fsm")]
         let storage = self.state_storage.clone();
+        #[cfg(feature = "fsm")]
         let strategy = self.key_strategy;
 
         let endpoint: Arc<dyn Fn(Update) -> BoxFuture + Send + Sync> =
             Arc::new(move |upd: Update| {
                 let new_msg = Arc::clone(&new_msg);
                 let edited_msg = Arc::clone(&edited_msg);
+                #[cfg(feature = "fsm")]
                 let fsm_new = Arc::clone(&fsm_new);
+                #[cfg(feature = "fsm")]
                 let fsm_edited = Arc::clone(&fsm_edited);
+                #[cfg(feature = "fsm")]
                 let storage = storage.clone();
 
                 Box::pin(async move {
@@ -412,9 +449,13 @@ impl Dispatcher {
                         upd,
                         &new_msg,
                         &edited_msg,
+                        #[cfg(feature = "fsm")]
                         &fsm_new,
+                        #[cfg(feature = "fsm")]
                         &fsm_edited,
+                        #[cfg(feature = "fsm")]
                         storage,
+                        #[cfg(feature = "fsm")]
                         strategy,
                     )
                     .await;
@@ -448,17 +489,37 @@ async fn dispatch_to_handlers(
     update: Update,
     new_msg: &[MessageHandler],
     edited_msg: &[MessageHandler],
-    fsm_new: &[FsmMessageHandler],
-    fsm_edited: &[FsmMessageHandler],
-    storage: Option<Arc<dyn StateStorage>>,
-    strategy: StateKeyStrategy,
+    #[cfg(feature = "fsm")] fsm_new: &[FsmMessageHandler],
+    #[cfg(feature = "fsm")] fsm_edited: &[FsmMessageHandler],
+    #[cfg(feature = "fsm")] storage: Option<Arc<dyn StateStorage>>,
+    #[cfg(feature = "fsm")] strategy: StateKeyStrategy,
 ) {
     match update {
         Update::NewMessage(msg) => {
-            run_message(msg, new_msg, fsm_new, storage, strategy).await;
+            run_message(
+                msg,
+                new_msg,
+                #[cfg(feature = "fsm")]
+                fsm_new,
+                #[cfg(feature = "fsm")]
+                storage,
+                #[cfg(feature = "fsm")]
+                strategy,
+            )
+            .await;
         }
         Update::MessageEdited(msg) => {
-            run_message(msg, edited_msg, fsm_edited, storage, strategy).await;
+            run_message(
+                msg,
+                edited_msg,
+                #[cfg(feature = "fsm")]
+                fsm_edited,
+                #[cfg(feature = "fsm")]
+                storage,
+                #[cfg(feature = "fsm")]
+                strategy,
+            )
+            .await;
         }
         _ => {}
     }
@@ -473,10 +534,11 @@ async fn dispatch_to_handlers(
 async fn run_message(
     msg: IncomingMessage,
     regular: &[MessageHandler],
-    fsm: &[FsmMessageHandler],
-    storage: Option<Arc<dyn StateStorage>>,
-    strategy: StateKeyStrategy,
+    #[cfg(feature = "fsm")] fsm: &[FsmMessageHandler],
+    #[cfg(feature = "fsm")] storage: Option<Arc<dyn StateStorage>>,
+    #[cfg(feature = "fsm")] strategy: StateKeyStrategy,
 ) {
+    #[cfg(feature = "fsm")]
     if let Some(ref arc_storage) = storage
         && !fsm.is_empty()
     {

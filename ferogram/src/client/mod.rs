@@ -4039,6 +4039,7 @@ impl Client {
             effect: None,
             allow_paid_stars: None,
             suggested_post: None,
+            rich_message: None,
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         Ok(self.parse_send_response(&body, msg, &peer).await)
@@ -4163,6 +4164,7 @@ impl Client {
                     from_boosts_applied: None,
                     schedule_repeat_period: None,
                     summary_from_language: None,
+                    rich_message: None,
                 };
                 return update::IncomingMessage::from_raw(tl::enums::Message::Message(msg))
                     .with_client(self.clone());
@@ -4222,6 +4224,7 @@ impl Client {
                     quote_offset: None,
                     todo_item_id: None,
                     poll_option: None,
+                    reply_to_ephemeral: false,
                 })
             }),
             date: sent.date,
@@ -4246,6 +4249,7 @@ impl Client {
             suggested_post: None,
             schedule_repeat_period: None,
             summary_from_language: None,
+            rich_message: None,
         };
         update::IncomingMessage::from_raw(tl::enums::Message::Message(msg))
             .with_client(self.clone())
@@ -4301,6 +4305,7 @@ impl Client {
                     quote_offset: None,
                     todo_item_id: None,
                     poll_option: None,
+                    reply_to_ephemeral: false,
                 })
             }),
             date,
@@ -4325,6 +4330,7 @@ impl Client {
             suggested_post: None,
             schedule_repeat_period: None,
             summary_from_language: None,
+            rich_message: None,
         };
         update::IncomingMessage::from_raw(tl::enums::Message::Message(msg))
             .with_client(self.clone())
@@ -4454,6 +4460,7 @@ impl Client {
             effect: None,
             allow_paid_stars: None,
             suggested_post: None,
+            rich_message: None,
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let self_peer = tl::enums::Peer::User(tl::types::PeerUser { user_id: 0 });
@@ -4482,6 +4489,7 @@ impl Client {
             schedule_date: msg.schedule_date,
             quick_reply_shortcut_id: None,
             schedule_repeat_period: None,
+            rich_message: None,
         };
         self.rpc_write(&req).await
     }
@@ -7263,6 +7271,7 @@ impl Client {
             media: None,
             reply_markup,
             entities: None,
+            rich_message: None,
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         Ok(body.len() >= 4 && u32::from_le_bytes(body[..4].try_into().unwrap()) == 0x997275b5)
@@ -7601,21 +7610,85 @@ impl Client {
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
         let raw = tl::enums::messages::Dialogs::deserialize(&mut cur)?;
-        let (dialogs_raw, users, chats, count) = match raw {
-            tl::enums::messages::Dialogs::Dialogs(d) => (d.dialogs, d.users, d.chats, None),
-            tl::enums::messages::Dialogs::Slice(d) => (d.dialogs, d.users, d.chats, Some(d.count)),
+        let (dialogs_raw, messages, users, chats, count) = match raw {
+            tl::enums::messages::Dialogs::Dialogs(d) => {
+                (d.dialogs, d.messages, d.users, d.chats, None)
+            }
+            tl::enums::messages::Dialogs::Slice(d) => {
+                (d.dialogs, d.messages, d.users, d.chats, Some(d.count))
+            }
             tl::enums::messages::Dialogs::NotModified(d) => return Ok((vec![], Some(d.count))),
         };
+
         self.cache_users_and_chats(&users, &chats).await;
-        let dialogs: Vec<Dialog> = dialogs_raw
+
+        let msg_map: std::collections::HashMap<i32, tl::enums::Message> = messages
             .into_iter()
-            .map(|d| Dialog {
-                raw: d,
-                message: None,
-                entity: None,
-                chat: None,
+            .map(|m| {
+                let id = match &m {
+                    tl::enums::Message::Message(x) => x.id,
+                    tl::enums::Message::Service(x) => x.id,
+                    tl::enums::Message::Empty(x) => x.id,
+                };
+                (id, m)
             })
             .collect();
+
+        let user_map: std::collections::HashMap<i64, tl::enums::User> = users
+            .into_iter()
+            .filter_map(|u| {
+                if let tl::enums::User::User(ref uu) = u {
+                    Some((uu.id, u))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let chat_map: std::collections::HashMap<i64, tl::enums::Chat> = chats
+            .into_iter()
+            .map(|c| {
+                let id = match &c {
+                    tl::enums::Chat::Chat(x) => x.id,
+                    tl::enums::Chat::Forbidden(x) => x.id,
+                    tl::enums::Chat::Channel(x) => x.id,
+                    tl::enums::Chat::ChannelForbidden(x) => x.id,
+                    tl::enums::Chat::Empty(x) => x.id,
+                };
+                (id, c)
+            })
+            .collect();
+
+        let dialogs: Vec<Dialog> = dialogs_raw
+            .into_iter()
+            .map(|d| {
+                let top_id = match &d {
+                    tl::enums::Dialog::Dialog(x) => x.top_message,
+                    _ => 0,
+                };
+                let peer = match &d {
+                    tl::enums::Dialog::Dialog(x) => Some(&x.peer),
+                    _ => None,
+                };
+                let message = msg_map.get(&top_id).cloned();
+                let entity = peer.and_then(|p| match p {
+                    tl::enums::Peer::User(u) => user_map.get(&u.user_id).cloned(),
+                    _ => None,
+                });
+                let chat = peer.and_then(|p| match p {
+                    tl::enums::Peer::Chat(c) => chat_map.get(&c.chat_id).cloned(),
+                    tl::enums::Peer::Channel(c) => chat_map.get(&c.channel_id).cloned(),
+                    _ => None,
+                });
+                Dialog {
+                    raw: d,
+                    message,
+                    entity,
+                    chat,
+                }
+            })
+            .collect();
+
         Ok((dialogs, count))
     }
 
@@ -7821,6 +7894,7 @@ impl Client {
             media: None,
             effect: None,
             suggested_post: None,
+            rich_message: None,
         };
         self.rpc_write(&req).await
     }
@@ -8886,6 +8960,8 @@ impl Client {
         let req = tl::functions::contacts::Search {
             q: query.into(),
             limit,
+            bots: false,
+            broadcasts: false,
         };
         let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);

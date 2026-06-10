@@ -7,7 +7,7 @@ Async Rust client for the Telegram MTProto API.
 [![Crates.io](https://img.shields.io/crates/v/ferogram?style=flat-square&color=fc8d62)](https://crates.io/crates/ferogram)
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram-5865F2?style=flat-square)](https://docs.rs/ferogram)
 [![License](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue?style=flat-square)](../LICENSE-MIT)
-[![TL Layer](https://img.shields.io/badge/TL%20Layer-225-8b5cf6?style=flat-square)](https://core.telegram.org/schema)
+[![TL Layer](https://img.shields.io/badge/TL%20Layer-227-8b5cf6?style=flat-square)](https://core.telegram.org/schema)
 [![Telegram Channel](https://img.shields.io/badge/channel-%40Ferogram-2CA5E0?style=flat-square&logo=telegram)](https://t.me/Ferogram)
 [![Telegram Chat](https://img.shields.io/badge/chat-%40FerogramChat-2CA5E0?style=flat-square&logo=telegram)](https://t.me/FerogramChat)
 
@@ -226,7 +226,7 @@ See [`ferogram-connect`](../ferogram-connect/) for the framing layer underneath.
 
 ## Raw API
 
-When the high-level API isn't enough, `client.invoke()` takes any Layer 225 TL function directly. It's the escape hatch, not the normal path, but it's always there:
+When the high-level API isn't enough, `client.invoke()` takes any Layer 227 TL function directly. It's the escape hatch, not the normal path, but it's always there:
 
 ```rust
 use ferogram::tl;
@@ -323,7 +323,7 @@ Most people only need this crate. But each crate in the workspace is independent
 | [`ferogram-connect`](../ferogram-connect/) | Raw TCP, MTProto framing, obfuscation, SOCKS5, MTProxy, gzip. |
 | [`ferogram-mtproto`](../ferogram-mtproto/) | MTProto 2.0 session, DH key exchange, message framing, PFS key binding. |
 | [`ferogram-crypto`](../ferogram-crypto/) | AES-IGE, RSA, SHA, Diffie-Hellman, PQ factorization, auth key derivation. |
-| [`ferogram-tl-types`](../ferogram-tl-types/) | Auto-generated TL types, functions, and enums for Layer 225. |
+| [`ferogram-tl-types`](../ferogram-tl-types/) | Auto-generated TL types, functions, and enums for Layer 227. |
 | [`ferogram-tl-gen`](../ferogram-tl-gen/) | Build-time code generator from TL AST to Rust source. |
 | [`ferogram-tl-parser`](../ferogram-tl-parser/) | Parses `.tl` schema text into a Definition AST. |
 

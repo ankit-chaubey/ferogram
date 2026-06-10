@@ -732,7 +732,7 @@ Resolution is cache-first; an RPC is only made on a cache miss.
 <span class="api-card-sig">client.invoke&lt;R: RemoteCall&gt;(req: &R) → Result&lt;R::Return, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Call any Layer 225 API method directly. See <a href="../advanced/raw-api.md">Raw API Access</a> for the full guide.
+Call any Layer 227 API method directly. See <a href="../advanced/raw-api.md">Raw API Access</a> for the full guide.
 <pre><code>use ferogram_tl_types::functions;
 let state = client.invoke(&functions::updates::GetState {}).await?;</code></pre>
 </div>

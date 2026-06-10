@@ -1,14 +1,14 @@
 # ferogram-tl-types
 
-Auto-generated Rust types for all Telegram API Layer 225 constructors, functions, and enums.
+Auto-generated Rust types for all Telegram API Layer 227 constructors, functions, and enums.
 
 [![Crates.io](https://img.shields.io/crates/v/ferogram-tl-types?color=fc8d62)](https://crates.io/crates/ferogram-tl-types)
 [![Telegram](https://img.shields.io/badge/community-%40FerogramChat-2CA5E0?logo=telegram)](https://t.me/FerogramChat) [![Channel](https://img.shields.io/badge/channel-%40Ferogram-2CA5E0?logo=telegram)](https://t.me/Ferogram)
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram--tl--types-5865F2)](https://docs.rs/ferogram-tl-types)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![TL Layer](https://img.shields.io/badge/TL%20Layer-225-8b5cf6)](https://core.telegram.org/schema)
+[![TL Layer](https://img.shields.io/badge/TL%20Layer-227-8b5cf6)](https://core.telegram.org/schema)
 
-2,329 TL definitions generated at build time from Layer 225. All constructors, functions, and abstract types are represented as Rust structs and enums with binary TL serialization and deserialization.
+2,329 TL definitions generated at build time from Layer 227. All constructors, functions, and abstract types are represented as Rust structs and enums with binary TL serialization and deserialization.
 
 Most users get this through `ferogram` directly. For installation instructions see the [ferogram README](https://github.com/ankit-chaubey/ferogram).
 

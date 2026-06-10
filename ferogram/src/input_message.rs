@@ -104,6 +104,7 @@ impl InputMessage {
     ///
     /// let msg = InputMessage::markdown("**Hello** _world_!");
     /// ```
+    #[cfg(feature = "parsers")]
     pub fn markdown(text: impl AsRef<str>) -> Self {
         let (plain, ents) = crate::parsers::parse_markdown(text.as_ref());
         Self {
@@ -123,6 +124,7 @@ impl InputMessage {
     ///
     /// let msg = InputMessage::html("<b>Hello</b> <i>world</i>!");
     /// ```
+    #[cfg(feature = "parsers")]
     pub fn html(text: impl AsRef<str>) -> Self {
         let (plain, ents) = crate::parsers::parse_html(text.as_ref());
         Self {

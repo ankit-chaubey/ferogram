@@ -635,6 +635,8 @@ impl Client {
         let req = tl::functions::contacts::Search {
             q: query.to_string(),
             limit: 20,
+            bots: false,
+            broadcasts: false,
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);

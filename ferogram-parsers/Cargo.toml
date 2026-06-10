@@ -18,7 +18,7 @@ pulldown-cmark    = "0.11"
 html5ever        = { version = "0.38", optional = true }
 
 [features]
-default   = []
+default   = ["html"]
 html      = []
 html5ever = ["dep:html5ever"]
 

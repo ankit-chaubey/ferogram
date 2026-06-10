@@ -380,6 +380,7 @@ impl IncomingMessage {
     /// Reconstruct Markdown from the message text and its formatting entities.
     ///
     /// Returns plain text if there are no entities.
+    #[cfg(feature = "parsers")]
     pub fn markdown_text(&self) -> Option<String> {
         let text = self.text()?;
         let entities = self.entities().map(|e| e.as_slice()).unwrap_or(&[]);
@@ -389,6 +390,7 @@ impl IncomingMessage {
     /// Reconstruct HTML from the message text and its formatting entities.
     ///
     /// Returns plain text if there are no entities.
+    #[cfg(feature = "parsers")]
     pub fn html_text(&self) -> Option<String> {
         let text = self.text()?;
         let entities = self.entities().map(|e| e.as_slice()).unwrap_or(&[]);
@@ -1348,6 +1350,7 @@ impl InlineSend {
             media: None,
             reply_markup,
             entities: None,
+            rich_message: None,
         };
         let body: Vec<u8> = client.rpc_call_raw(&req).await?;
         // Returns Bool
@@ -2004,7 +2007,7 @@ fn tl_constructor_id(upd: &tl::enums::Update) -> u32 {
         BotBusinessConnect(_) => 0x8ae5c97a,
         BotCallbackQuery(_) => 0xb9cfc48d,
         BotChatBoost(_) => 0x904dd49c,
-        BotChatInviteRequester(_) => 0x11dfa986,
+        BotChatInviteRequester(_) => 0x7cb34d79,
         BotGuestChatQuery(_) => 0xcdd4093d,
         BotCommands(_) => 0x4d712f2e,
         BotDeleteBusinessMessage(_) => 0xa02a982e,
@@ -2155,6 +2158,10 @@ fn tl_constructor_id(upd: &tl::enums::Update) -> u32 {
         ChatParticipantRank(_) => 0xbd8367b9,
         ManagedBot(_) => 0x4880ed9a,
         AiComposeTones => 0x8c0f91fb,
+        JoinChatWebViewDecision(_) => 0xbdac7e70,
+        NewBotConnection(_) => 0xb22083a6,
+        WebBrowserSettings(_) => 0xc39a2ade,
+        WebBrowserException(_) => 0x140502d1,
     }
 }
 
@@ -2210,6 +2217,7 @@ pub(crate) fn make_short_dm(m: tl::types::UpdateShortMessage) -> IncomingMessage
         paid_suggested_post_ton: false,
         schedule_repeat_period: None,
         summary_from_language: None,
+        rich_message: None,
     };
     IncomingMessage {
         raw: tl::enums::Message::Message(msg),
@@ -2270,6 +2278,7 @@ pub(crate) fn make_short_chat(m: tl::types::UpdateShortChatMessage) -> IncomingM
         paid_suggested_post_ton: false,
         schedule_repeat_period: None,
         summary_from_language: None,
+        rich_message: None,
     };
     IncomingMessage {
         raw: tl::enums::Message::Message(msg),

@@ -50,7 +50,7 @@ Your App
 **All generated Telegram API types.** Auto-regenerated at `cargo build` from `tl/api.tl`.
 
 ### What it provides
-- `LAYER: i32`: the current layer number (225)
+- `LAYER: i32` (currently 227)
 - `types::*`: 1,200+ concrete structs (`types::Message`, `types::User`, etc.)
 - `enums::*`: 400+ boxed type enums (`enums::Message`, `enums::Peer`, etc.)
 - `functions::*`: 500+ RPC function structs implementing `RemoteCall`

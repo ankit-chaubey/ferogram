@@ -601,13 +601,13 @@ Keys: last seen, profile photo, phone number, bio, birthday, forwards, calls, vo
 
 - `client.invoke(&req)`: call any TL function against the current DC
 - `client.invoke_on_dc(dc_id, &req)`: call any TL function against a specific DC
-- Full Layer 225 type coverage via `ferogram::tl`: `tl::types`, `tl::enums`, `tl::functions`
+- Full Layer 227 type coverage via `ferogram::tl`: `tl::types`, `tl::enums`, `tl::functions`
 
 ---
 
 ## TL Layer Crates
 
-- `ferogram-tl-types`: TL definitions generated at build time from Layer 225; binary TL serialization and deserialization on all types
+- `ferogram-tl-types`: TL definitions generated at build time from Layer 227; binary TL serialization and deserialization on all types
 - `ferogram-tl-gen`: build-time code generator from a TL AST to Rust source
 - `ferogram-tl-parser`: streaming parser for `.tl` schema files; produces a typed `Definition` AST; internal `TlIterator` for low-memory streaming; parse errors include the failing line
 

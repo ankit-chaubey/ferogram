@@ -97,6 +97,7 @@ fn short_message_to_combined(short: tl::types::UpdateShortMessage) -> tl::types:
                 suggested_post: None,
                 schedule_repeat_period: None,
                 summary_from_language: None,
+                rich_message: None,
             }
             .into(),
             pts: short.pts,
@@ -165,6 +166,7 @@ fn short_chat_message_to_combined(
                 suggested_post: None,
                 schedule_repeat_period: None,
                 summary_from_language: None,
+                rich_message: None,
             }
             .into(),
             pts: short.pts,
@@ -291,6 +293,7 @@ pub(super) fn adapt(updates: UpdatesLike) -> Result<tl::types::UpdatesCombined, 
                                 quote_offset: i.quote_offset,
                                 todo_item_id: None,
                                 poll_option: None,
+                                reply_to_ephemeral: false,
                             },
                         ))
                     }
@@ -353,6 +356,7 @@ pub(super) fn adapt(updates: UpdatesLike) -> Result<tl::types::UpdatesCombined, 
                     suggested_post: None,
                     schedule_repeat_period: None,
                     summary_from_language: None,
+                    rich_message: None,
                 };
                 return Ok(wrap_short(tl::types::UpdateShort {
                     update: tl::types::UpdateNewMessage {
