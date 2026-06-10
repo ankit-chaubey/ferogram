@@ -115,7 +115,7 @@ impl EncryptedSession {
         seen_msg_ids: SeenMsgIds,
     ) -> Self {
         let mut rnd = [0u8; 8];
-        getrandom::getrandom(&mut rnd).expect("getrandom");
+        ferogram_crypto::fill_random(&mut rnd);
         Self {
             auth_key: AuthKey::from_bytes(auth_key),
             session_id: i64::from_le_bytes(rnd),
@@ -467,7 +467,7 @@ impl EncryptedSession {
     /// in-flight server responses still decrypt correctly.
     pub fn reset_session(&mut self) {
         let mut rnd = [0u8; 8];
-        getrandom::getrandom(&mut rnd).expect("getrandom");
+        ferogram_crypto::fill_random(&mut rnd);
         let old_session = self.session_id;
         self.session_id = i64::from_le_bytes(rnd);
         self.sequence = 0;

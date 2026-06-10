@@ -356,11 +356,11 @@ fn generate_padding() -> String {
     const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     // Length: PAD_MIN..=PAD_MAX
     let mut len_byte = [0u8; 1];
-    getrandom::getrandom(&mut len_byte).unwrap();
+    ferogram_crypto::fill_random(&mut len_byte);
     let len = PAD_MIN + (len_byte[0] as usize % (PAD_MAX - PAD_MIN + 1));
     let mut result = String::with_capacity(len);
     let mut buf = vec![0u8; len];
-    getrandom::getrandom(&mut buf).unwrap();
+    ferogram_crypto::fill_random(&mut buf);
     for b in buf {
         result.push(CHARSET[b as usize % CHARSET.len()] as char);
     }

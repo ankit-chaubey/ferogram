@@ -551,17 +551,14 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, SpecialConfigError> {
 }
 
 fn sha2_256(data: &[u8]) -> [u8; 32] {
-    use sha2::Digest;
-    let mut h = sha2::Sha256::new();
-    h.update(data);
-    h.finalize().into()
+    ferogram_crypto::sha256!(data)
 }
 
 /// Generate a random Firebase instance ID (22 base64url chars, first nibble 0x7).
 ///
 fn generate_instance_id() -> String {
     let mut fid = [0u8; 17];
-    getrandom::getrandom(&mut fid).expect("getrandom");
+    ferogram_crypto::fill_random(&mut fid);
     fid[0] = (fid[0] & 0xF0) | 0x07;
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(fid)[..22].to_owned()
 }

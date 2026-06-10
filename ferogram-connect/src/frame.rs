@@ -84,14 +84,14 @@ pub async fn send_frame(
         FrameKind::PaddedIntermediate { cipher } => {
             // Intermediate framing + 0-15 random padding bytes, encrypted.
             let mut pad_len_buf = [0u8; 1];
-            getrandom::getrandom(&mut pad_len_buf).ok();
+            ferogram_crypto::fill_random(&mut pad_len_buf);
             let pad_len = (pad_len_buf[0] & 0x0f) as usize;
             let total_payload = data.len() + pad_len;
             let mut frame = Vec::with_capacity(4 + total_payload);
             frame.extend_from_slice(&(total_payload as u32).to_le_bytes());
             frame.extend_from_slice(data);
             let mut pad = vec![0u8; pad_len];
-            getrandom::getrandom(&mut pad).ok();
+            ferogram_crypto::fill_random(&mut pad);
             frame.extend_from_slice(&pad);
             cipher.lock().await.encrypt(&mut frame);
             stream.write_all(&frame).await?;
@@ -242,14 +242,14 @@ pub async fn send_frame_write(
         }
         FrameKind::PaddedIntermediate { cipher } => {
             let mut pad_len_buf = [0u8; 1];
-            getrandom::getrandom(&mut pad_len_buf).ok();
+            ferogram_crypto::fill_random(&mut pad_len_buf);
             let pad_len = (pad_len_buf[0] & 0x0f) as usize;
             let total_payload = data.len() + pad_len;
             let mut frame = Vec::with_capacity(4 + total_payload);
             frame.extend_from_slice(&(total_payload as u32).to_le_bytes());
             frame.extend_from_slice(data);
             let mut pad = vec![0u8; pad_len];
-            getrandom::getrandom(&mut pad).ok();
+            ferogram_crypto::fill_random(&mut pad);
             frame.extend_from_slice(&pad);
             cipher.lock().await.encrypt(&mut frame);
             stream.write_all(&frame).await?;

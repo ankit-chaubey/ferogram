@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-ferogram-tl-types  = { workspace = true, features = ["tl-api", "tl-mtproto"] }
+ferogram-tl-types  = { workspace = true, features = ["tl-mtproto"] }
 ferogram-mtproto   = { workspace = true }
 ferogram-crypto    = { workspace = true }
 ferogram-connect   = { workspace = true }
@@ -17,10 +17,6 @@ ferogram-session   = { workspace = true }
 tokio    = { version = "1", features = ["net", "io-util", "sync", "time", "rt"] }
 tracing  = { version = "0.1", features = ["log"] }
 metrics  = "0.24"
-sha2     = "0.10"
-socket2  = { version = "0.5", features = ["all"] }
-getrandom = "0.2"
-flate2   = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

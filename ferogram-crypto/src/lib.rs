@@ -76,15 +76,24 @@
 pub mod aes;
 mod auth_key;
 mod deque_buffer;
+pub mod dh;
 mod factorize;
 mod obfuscated;
 pub mod rsa;
 mod sha;
+pub mod srp;
 
 pub use auth_key::AuthKey;
 pub use deque_buffer::DequeBuffer;
 pub use factorize::factorize;
-pub use obfuscated::ObfuscatedCipher;
+pub use obfuscated::{ObfuscatedCipher, build_fake_tls_keys, build_obfuscated_init};
+
+/// Fill `buf` with cryptographically secure random bytes.
+///
+/// Panics if the OS RNG is unavailable (this should never happen in practice).
+pub fn fill_random(buf: &mut [u8]) {
+    getrandom::getrandom(buf).expect("OS RNG unavailable");
+}
 
 /// Errors from [`decrypt_data_v2`].
 #[derive(Clone, Debug, PartialEq)]

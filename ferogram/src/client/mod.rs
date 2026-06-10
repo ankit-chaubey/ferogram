@@ -9831,15 +9831,17 @@ pub(crate) fn is_bool_true(body: &[u8]) -> bool {
 
 // Wire-layer types and helpers moved to ferogram-connect.
 pub(crate) use ferogram_connect::connection::FrameKind;
-pub(crate) use ferogram_connect::envelope::{chat_to_peer, updates_entities};
 pub(crate) use ferogram_connect::frame::send_frame_write;
 pub(crate) use ferogram_connect::util::{
     build_container_body, build_msgs_ack_body, jitter_delay, maybe_gz_pack,
 };
 pub(crate) use ferogram_connect::{
-    Connection, ConnectionWriter, EnvelopeResult, FrameOutcome, FutureSalt, gz_inflate, random_i64,
-    recv_frame_with_keepalive, tl_read_bytes, unwrap_envelope,
+    Connection, ConnectionWriter, FrameOutcome, FutureSalt, gz_inflate, random_i64,
+    recv_frame_with_keepalive, tl_read_bytes,
 };
+
+// Envelope types live in crate::envelope (tl-api functions, not in ferogram-connect).
+pub(crate) use crate::envelope::{EnvelopeResult, chat_to_peer, unwrap_envelope, updates_entities};
 
 // Low-level re-exports (merged from the former `layer` shim crate)
 

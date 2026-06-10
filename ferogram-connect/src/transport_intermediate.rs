@@ -10,7 +10,7 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
-use crate::InvocationError;
+use crate::ConnectError;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -29,7 +29,7 @@ pub struct IntermediateTransport {
 
 impl IntermediateTransport {
     /// Connect and send the 4-byte init header.
-    pub async fn connect(addr: &str) -> Result<Self, InvocationError> {
+    pub async fn connect(addr: &str) -> Result<Self, ConnectError> {
         let stream = TcpStream::connect(addr).await?;
         Ok(Self {
             stream,
@@ -46,7 +46,7 @@ impl IntermediateTransport {
     }
 
     /// Send a message with Intermediate framing.
-    pub async fn send(&mut self, data: &[u8]) -> Result<(), InvocationError> {
+    pub async fn send(&mut self, data: &[u8]) -> Result<(), ConnectError> {
         if !self.init_sent {
             self.stream.write_all(&[0xee, 0xee, 0xee, 0xee]).await?;
             self.init_sent = true;
@@ -58,12 +58,12 @@ impl IntermediateTransport {
     }
 
     /// Receive the next Intermediate-framed message.
-    pub async fn recv(&mut self) -> Result<Vec<u8>, InvocationError> {
+    pub async fn recv(&mut self) -> Result<Vec<u8>, ConnectError> {
         let mut len_buf = [0u8; 4];
         self.stream.read_exact(&mut len_buf).await?;
         let raw = i32::from_le_bytes(len_buf);
         if raw < 0 {
-            return Err(InvocationError::Io(std::io::Error::new(
+            return Err(ConnectError::Io(std::io::Error::new(
                 std::io::ErrorKind::ConnectionRefused,
                 format!("transport error: {raw}"),
             )));
@@ -96,7 +96,7 @@ pub struct PaddedIntermediateTransport {
 
 impl PaddedIntermediateTransport {
     /// Connect to `addr` and lazily send the `0xDDDDDDDD` init tag on first [`send`].
-    pub async fn connect(addr: &str) -> Result<Self, InvocationError> {
+    pub async fn connect(addr: &str) -> Result<Self, ConnectError> {
         let stream = TcpStream::connect(addr).await?;
         Ok(Self {
             stream,
@@ -116,34 +116,32 @@ impl PaddedIntermediateTransport {
     ///
     /// Frame layout: `[total_len: u32 LE][data][random_pad: 0-15 bytes]`
     /// where `total_len = data.len() + pad_len`.
-    pub async fn send(&mut self, data: &[u8]) -> Result<(), InvocationError> {
+    pub async fn send(&mut self, data: &[u8]) -> Result<(), ConnectError> {
         if !self.init_sent {
             self.stream.write_all(&[0xdd, 0xdd, 0xdd, 0xdd]).await?;
             self.init_sent = true;
         }
         let mut pad_len_buf = [0u8; 1];
-        getrandom::getrandom(&mut pad_len_buf)
-            .map_err(|_| InvocationError::Deserialize("getrandom failed".into()))?;
+        ferogram_crypto::fill_random(&mut pad_len_buf);
         let pad_len = (pad_len_buf[0] & 0x0f) as usize;
         let total_len = (data.len() + pad_len) as u32;
         self.stream.write_all(&total_len.to_le_bytes()).await?;
         self.stream.write_all(data).await?;
         if pad_len > 0 {
             let mut pad = vec![0u8; pad_len];
-            getrandom::getrandom(&mut pad)
-                .map_err(|_| InvocationError::Deserialize("getrandom failed".into()))?;
+            ferogram_crypto::fill_random(&mut pad);
             self.stream.write_all(&pad).await?;
         }
         Ok(())
     }
 
     /// Receive the next Padded Intermediate message, stripping the random padding.
-    pub async fn recv(&mut self) -> Result<Vec<u8>, InvocationError> {
+    pub async fn recv(&mut self) -> Result<Vec<u8>, ConnectError> {
         let mut len_buf = [0u8; 4];
         self.stream.read_exact(&mut len_buf).await?;
         let raw = i32::from_le_bytes(len_buf);
         if raw < 0 {
-            return Err(InvocationError::Io(std::io::Error::new(
+            return Err(ConnectError::Io(std::io::Error::new(
                 std::io::ErrorKind::ConnectionRefused,
                 format!("transport error: {raw}"),
             )));
@@ -185,7 +183,7 @@ pub struct FullTransport {
 }
 
 impl FullTransport {
-    pub async fn connect(addr: &str) -> Result<Self, InvocationError> {
+    pub async fn connect(addr: &str) -> Result<Self, ConnectError> {
         let stream = TcpStream::connect(addr).await?;
         Ok(Self {
             stream,
@@ -203,7 +201,7 @@ impl FullTransport {
     }
 
     /// Send a message with Full framing (length + seqno + payload + crc32).
-    pub async fn send(&mut self, data: &[u8]) -> Result<(), InvocationError> {
+    pub async fn send(&mut self, data: &[u8]) -> Result<(), ConnectError> {
         let total_len = (data.len() + 12) as u32; // len field + seqno + payload + crc
         let seq = self.send_seqno;
         self.send_seqno = self.send_seqno.wrapping_add(1);
@@ -213,7 +211,7 @@ impl FullTransport {
         packet.extend_from_slice(&seq.to_le_bytes());
         packet.extend_from_slice(data);
 
-        let crc = crc32_ieee(&packet);
+        let crc = crate::crc32_ieee(&packet);
         packet.extend_from_slice(&crc.to_le_bytes());
 
         self.stream.write_all(&packet).await?;
@@ -221,20 +219,20 @@ impl FullTransport {
     }
 
     /// Receive the next Full-framed message; validates the CRC-32.
-    pub async fn recv(&mut self) -> Result<Vec<u8>, InvocationError> {
+    pub async fn recv(&mut self) -> Result<Vec<u8>, ConnectError> {
         let mut len_buf = [0u8; 4];
         self.stream.read_exact(&mut len_buf).await?;
         // Negative value = transport-level error code from Telegram.
         let raw = i32::from_le_bytes(len_buf);
         if raw < 0 {
-            return Err(InvocationError::Io(std::io::Error::new(
+            return Err(ConnectError::Io(std::io::Error::new(
                 std::io::ErrorKind::ConnectionRefused,
                 format!("transport error: {raw}"),
             )));
         }
         let total_len = raw as usize;
         if total_len < 12 {
-            return Err(InvocationError::Deserialize(
+            return Err(ConnectError::Other(
                 "Full transport: packet too short".into(),
             ));
         }
@@ -246,9 +244,9 @@ impl FullTransport {
         let expected_crc = u32::from_le_bytes(crc_bytes.try_into().unwrap());
         let mut check_input = len_buf.to_vec();
         check_input.extend_from_slice(body);
-        let actual_crc = crc32_ieee(&check_input);
+        let actual_crc = crate::crc32_ieee(&check_input);
         if actual_crc != expected_crc {
-            return Err(InvocationError::Deserialize(format!(
+            return Err(ConnectError::Other(format!(
                 "Full transport: CRC mismatch (got {actual_crc:#010x}, expected {expected_crc:#010x})"
             )));
         }
@@ -256,7 +254,7 @@ impl FullTransport {
         // seq_no is the first 4 bytes of `body`
         let recv_seq = u32::from_le_bytes(body[..4].try_into().unwrap());
         if recv_seq != self.recv_seqno {
-            return Err(InvocationError::Deserialize(format!(
+            return Err(ConnectError::Other(format!(
                 "Full transport: seq_no mismatch (got {recv_seq}, expected {})",
                 self.recv_seqno
             )));
@@ -269,24 +267,4 @@ impl FullTransport {
     pub fn into_inner(self) -> TcpStream {
         self.stream
     }
-}
-
-// CRC-32 (IEEE 802.3 polynomial)
-
-/// Compute CRC-32 using the standard IEEE 802.3 polynomial.
-pub(crate) fn crc32_ieee(data: &[u8]) -> u32 {
-    const POLY: u32 = 0xedb88320;
-    let mut crc: u32 = 0xffffffff;
-    for &byte in data {
-        let mut b = byte as u32;
-        for _ in 0..8 {
-            let mix = (crc ^ b) & 1;
-            crc >>= 1;
-            if mix != 0 {
-                crc ^= POLY;
-            }
-            b >>= 1;
-        }
-    }
-    crc ^ 0xffffffff
 }

@@ -137,7 +137,7 @@ impl ObfuscatedAbridged {
     pub fn new(stream: TcpStream, dc_id: i16) -> std::io::Result<Self> {
         let mut init = [0u8; 64];
         loop {
-            getrandom::getrandom(&mut init).expect("getrandom");
+            ferogram_crypto::fill_random(&mut init);
             if init[0] == 0xef {
                 continue;
             }

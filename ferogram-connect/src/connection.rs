@@ -21,9 +21,9 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use ferogram_mtproto::{EncryptedSession, Session, authentication as auth};
 use ferogram_tl_types as tl;
 
-use crate::envelope::decode_bind_response;
 use crate::error::ConnectError;
 use crate::frame::{recv_frame_plain, send_frame};
+use crate::pfs::decode_bind_response;
 use crate::transport::recv_raw_frame;
 use crate::transport_kind::TransportKind;
 
@@ -269,140 +269,17 @@ impl Connection {
                 ))
             }
             TransportKind::Obfuscated { secret } => {
-                use sha2::Digest;
-
-                // Random 64-byte nonce: retry until it passes the reserved-pattern
-                // Reject reserved nonce patterns that could be misidentified as HTTP
-                // or another MTProto framing tag by a proxy or DPI filter.
-                let mut nonce = [0u8; 64];
-                loop {
-                    getrandom::getrandom(&mut nonce)
-                        .map_err(|_| ConnectError::other("getrandom"))?;
-                    let first = u32::from_le_bytes(nonce[0..4].try_into().expect("4-byte slice"));
-                    let second = u32::from_le_bytes(nonce[4..8].try_into().expect("4-byte slice"));
-                    let bad = nonce[0] == 0xEF
-                        || first == 0x44414548 // HEAD
-                        || first == 0x54534F50 // POST
-                        || first == 0x20544547 // GET
-                        || first == 0x4954504f // OPTIONS
-                        || first == 0xEEEEEEEE
-                        || first == 0xDDDDDDDD
-                        || first == 0x02010316
-                        || second == 0x00000000;
-                    if !bad {
-                        break;
-                    }
-                }
-
-                // Key derivation from nonce[8..56]:
-                //   TX: key=nonce[8..40]  iv=nonce[40..56]
-                //   RX: key=rev[0..32]    iv=rev[32..48]   (rev = nonce[8..56] reversed)
-                // When an MTProxy secret is present, each 32-byte key becomes
-                // SHA-256(raw_key_slice || secret) for MTProxy key derivation.
-                let tx_raw: [u8; 32] = nonce[8..40].try_into().expect("32-byte slice");
-                let tx_iv: [u8; 16] = nonce[40..56].try_into().expect("16-byte slice");
-                let mut rev48 = nonce[8..56].to_vec();
-                rev48.reverse();
-                let rx_raw: [u8; 32] = rev48[0..32].try_into().expect("32-byte slice");
-                let rx_iv: [u8; 16] = rev48[32..48].try_into().expect("16-byte slice");
-
-                let (tx_key, rx_key): ([u8; 32], [u8; 32]) = if let Some(s) = secret {
-                    let mut h = sha2::Sha256::new();
-                    h.update(tx_raw);
-                    h.update(s.as_ref());
-                    let tx: [u8; 32] = h.finalize().into();
-
-                    let mut h = sha2::Sha256::new();
-                    h.update(rx_raw);
-                    h.update(s.as_ref());
-                    let rx: [u8; 32] = h.finalize().into();
-                    (tx, rx)
-                } else {
-                    (tx_raw, rx_raw)
-                };
-
-                // Stamp protocol id (Abridged = 0xEFEFEFEF) at nonce[56..60]
-                // and DC id as little-endian i16 at nonce[60..62].
-                nonce[56] = 0xef;
-                nonce[57] = 0xef;
-                nonce[58] = 0xef;
-                nonce[59] = 0xef;
-                let dc_bytes = dc_id.to_le_bytes();
-                nonce[60] = dc_bytes[0];
-                nonce[61] = dc_bytes[1];
-
-                // Encrypt nonce[56..64] in-place using the TX cipher advanced
-                // past the first 56 bytes (which are sent as plaintext).
-                //
-                // The same cipher instance must be used for both the nonce tail
-                // encryption and all subsequent TX data: AES-CTR is a single continuous
-                // stream; the TX position after encrypting the full 64-byte nonce is 64.
-                let mut cipher =
-                    ferogram_crypto::ObfuscatedCipher::from_keys(&tx_key, &tx_iv, &rx_key, &rx_iv);
-                // Advance TX past nonce[0..56] (sent as plaintext, not encrypted).
-                let mut skip = [0u8; 56];
-                cipher.encrypt(&mut skip);
-                // Encrypt nonce[56..64] in-place; cipher TX is now at position 64.
-                cipher.encrypt(&mut nonce[56..64]);
-
+                let proxy_secret = secret.as_ref().map(|s| s.as_ref());
+                let (nonce, cipher) =
+                    ferogram_crypto::build_obfuscated_init(0xef, dc_id, proxy_secret);
                 stream.write_all(&nonce).await?;
-
                 let cipher_arc = std::sync::Arc::new(tokio::sync::Mutex::new(cipher));
                 Ok((stream, FrameKind::Obfuscated { cipher: cipher_arc }))
             }
             TransportKind::PaddedIntermediate { secret } => {
-                use sha2::Digest;
-                let mut nonce = [0u8; 64];
-                loop {
-                    getrandom::getrandom(&mut nonce)
-                        .map_err(|_| ConnectError::other("getrandom"))?;
-                    let first = u32::from_le_bytes(nonce[0..4].try_into().expect("4-byte slice"));
-                    let second = u32::from_le_bytes(nonce[4..8].try_into().expect("4-byte slice"));
-                    let bad = nonce[0] == 0xEF
-                        || first == 0x44414548
-                        || first == 0x54534F50
-                        || first == 0x20544547
-                        || first == 0x4954504f
-                        || first == 0xEEEEEEEE
-                        || first == 0xDDDDDDDD
-                        || first == 0x02010316
-                        || second == 0x00000000;
-                    if !bad {
-                        break;
-                    }
-                }
-                let tx_raw: [u8; 32] = nonce[8..40].try_into().expect("32-byte slice");
-                let tx_iv: [u8; 16] = nonce[40..56].try_into().expect("16-byte slice");
-                let mut rev48 = nonce[8..56].to_vec();
-                rev48.reverse();
-                let rx_raw: [u8; 32] = rev48[0..32].try_into().expect("32-byte slice");
-                let rx_iv: [u8; 16] = rev48[32..48].try_into().expect("16-byte slice");
-                let (tx_key, rx_key): ([u8; 32], [u8; 32]) = if let Some(s) = secret {
-                    let mut h = sha2::Sha256::new();
-                    h.update(tx_raw);
-                    h.update(s.as_ref());
-                    let tx: [u8; 32] = h.finalize().into();
-                    let mut h = sha2::Sha256::new();
-                    h.update(rx_raw);
-                    h.update(s.as_ref());
-                    let rx: [u8; 32] = h.finalize().into();
-                    (tx, rx)
-                } else {
-                    (tx_raw, rx_raw)
-                };
-                // PaddedIntermediate tag = 0xDDDDDDDD
-                nonce[56] = 0xdd;
-                nonce[57] = 0xdd;
-                nonce[58] = 0xdd;
-                nonce[59] = 0xdd;
-                let dc_bytes = dc_id.to_le_bytes();
-                nonce[60] = dc_bytes[0];
-                nonce[61] = dc_bytes[1];
-                let mut cipher =
-                    ferogram_crypto::ObfuscatedCipher::from_keys(&tx_key, &tx_iv, &rx_key, &rx_iv);
-                let mut skip = [0u8; 56];
-                cipher.encrypt(&mut skip);
-                cipher.encrypt(&mut nonce[56..64]);
+                let proxy_secret = secret.as_ref().map(|s| s.as_ref());
+                let (nonce, cipher) =
+                    ferogram_crypto::build_obfuscated_init(0xdd, dc_id, proxy_secret);
                 stream.write_all(&nonce).await?;
                 let cipher_arc = std::sync::Arc::new(tokio::sync::Mutex::new(cipher));
                 Ok((stream, FrameKind::PaddedIntermediate { cipher: cipher_arc }))
@@ -413,8 +290,7 @@ impl Connection {
                 // over a shared Obfuscated2 cipher seeded from the secret+HMAC.
                 let domain_bytes = domain.as_bytes();
                 let mut session_id = [0u8; 32];
-                getrandom::getrandom(&mut session_id)
-                    .map_err(|_| ConnectError::other("getrandom"))?;
+                ferogram_crypto::fill_random(&mut session_id);
 
                 // Build ClientHello body (random placeholder = zeros)
                 let cipher_suites: &[u8] = &[0x00, 0x04, 0x13, 0x01, 0x13, 0x02];
@@ -465,28 +341,15 @@ impl Connection {
                 record.extend_from_slice(&rec_len.to_be_bytes());
                 record.extend_from_slice(&handshake);
 
-                // HMAC-SHA256(secret, record) -> fill random field at offset 11
-                use sha2::Digest;
+                // Derive HMAC and obfuscation cipher via ferogram-crypto.
+                // build_fake_tls_keys returns (hmac_result, cipher):
+                //   hmac_result → written into ClientHello random field at offset 11
+                //   cipher      → AES-CTR pair for all subsequent I/O on this connection
                 let random_offset = 5 + 4 + 2; // TLS-rec(5) + HS-hdr(4) + version(2)
-                let hmac_result: [u8; 32] = {
-                    use hmac::{Hmac, Mac};
-                    type HmacSha256 = Hmac<sha2::Sha256>;
-                    let mut mac = HmacSha256::new_from_slice(secret)
-                        .map_err(|_| ConnectError::other("HMAC key error"))?;
-                    mac.update(&record);
-                    mac.finalize().into_bytes().into()
-                };
+                let (hmac_result, cipher) = ferogram_crypto::build_fake_tls_keys(secret, &record);
                 record[random_offset..random_offset + 32].copy_from_slice(&hmac_result);
                 stream.write_all(&record).await?;
 
-                // Derive Obfuscated2 key from secret + HMAC
-                let mut h = sha2::Sha256::new();
-                h.update(secret.as_ref());
-                h.update(hmac_result);
-                let derived: [u8; 32] = h.finalize().into();
-                let iv = [0u8; 16];
-                let cipher =
-                    ferogram_crypto::ObfuscatedCipher::from_keys(&derived, &iv, &derived, &iv);
                 let cipher_arc = std::sync::Arc::new(tokio::sync::Mutex::new(cipher));
                 Ok((stream, FrameKind::FakeTls { cipher: cipher_arc }))
             }
@@ -495,6 +358,24 @@ impl Connection {
                 stream.write_all(&[0xef]).await?;
                 Ok((stream, FrameKind::Abridged))
             }
+        }
+    }
+
+    /// Open a TCP stream and apply transport framing, returning the stream and FrameKind.
+    ///
+    /// Used by `ferogram-mtsender` for the connect-with-key path where DH is not needed
+    /// (the auth key is already known). Socket options and transport init are handled here.
+    pub async fn open_stream_pub(
+        addr: &str,
+        dc_id: i16,
+        transport: &TransportKind,
+        socks5: Option<&crate::socks5::Socks5Config>,
+        mtproxy: Option<&crate::proxy::MtProxyConfig>,
+    ) -> Result<(TcpStream, FrameKind), ConnectError> {
+        if let Some(mp) = mtproxy {
+            Self::open_stream_mtproxy(mp, dc_id).await
+        } else {
+            Self::open_stream(addr, socks5, transport, dc_id).await
         }
     }
 
@@ -758,7 +639,7 @@ impl Connection {
         let perm_key_id = auth_key_id_from_key(perm_auth_key);
 
         let mut nonce_buf = [0u8; 8];
-        getrandom::getrandom(&mut nonce_buf).map_err(|_| ConnectError::other("getrandom nonce"))?;
+        ferogram_crypto::fill_random(&mut nonce_buf);
         let nonce = i64::from_le_bytes(nonce_buf);
 
         let server_now = std::time::SystemTime::now()
@@ -829,6 +710,22 @@ impl Connection {
             .unwrap_or_else(|| self.enc.auth_key_bytes())
     }
 
+    /// Open a TCP connection, negotiate transport framing, and complete the MTProto DH handshake.
+    ///
+    /// Returns `(stream, frame_kind, session)` as owned values. The caller is responsible for
+    /// setting up reader/writer tasks. This is the single authoritative connection path;
+    /// `ferogram-mtsender` delegates here instead of reimplementing the DH sequence.
+    pub async fn connect_to_dc(
+        addr: &str,
+        dc_id: i16,
+        transport: &TransportKind,
+        socks5: Option<&crate::socks5::Socks5Config>,
+        mtproxy: Option<&crate::proxy::MtProxyConfig>,
+    ) -> Result<(TcpStream, FrameKind, EncryptedSession), ConnectError> {
+        let conn = Self::connect_raw(addr, socks5, mtproxy, transport, dc_id).await?;
+        Ok((conn.stream, conn.frame_kind, conn.enc))
+    }
+
     /// Split into a write-only `ConnectionWriter` and the TCP read half.
     pub fn into_writer(self) -> (ConnectionWriter, OwnedWriteHalf, OwnedReadHalf, FrameKind) {
         let (read_half, write_half) = self.stream.into_split();
@@ -845,4 +742,18 @@ impl Connection {
         };
         (writer, write_half, read_half, self.frame_kind)
     }
+}
+
+/// Free-function wrapper around [`Connection::connect_to_dc`].
+///
+/// Opens a TCP connection, negotiates transport framing, and completes the
+/// MTProto DH handshake. Returns `(stream, frame_kind, session)`.
+pub async fn connect_to_dc(
+    addr: &str,
+    dc_id: i16,
+    transport: &TransportKind,
+    socks5: Option<&crate::socks5::Socks5Config>,
+    mtproxy: Option<&crate::proxy::MtProxyConfig>,
+) -> Result<(TcpStream, FrameKind, EncryptedSession), ConnectError> {
+    Connection::connect_to_dc(addr, dc_id, transport, socks5, mtproxy).await
 }

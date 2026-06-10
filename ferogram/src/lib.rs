@@ -152,6 +152,7 @@
 pub mod builder;
 mod client;
 mod dialog;
+mod envelope;
 mod errors;
 mod input_message;
 pub mod media;
@@ -181,8 +182,10 @@ pub mod search;
 pub mod session_backend;
 pub mod socks5;
 pub mod special_config;
-pub mod transport_intermediate;
-pub mod transport_obfuscated;
+pub use ferogram_connect::{
+    FullTransport, IntermediateTransport, ObfuscatedFraming, ObfuscatedStream,
+    PaddedIntermediateTransport,
+};
 pub mod types;
 pub mod typing_guard;
 

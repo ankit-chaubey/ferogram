@@ -41,7 +41,7 @@ const ID_MSG_CONTAINER: u32 = 0x73f1f8dc;
 
 pub fn random_i64() -> i64 {
     let mut b = [0u8; 8];
-    getrandom::getrandom(&mut b).expect("getrandom");
+    ferogram_crypto::fill_random(&mut b);
     i64::from_le_bytes(b)
 }
 
@@ -51,7 +51,7 @@ pub fn random_i64() -> i64 {
 pub fn jitter_delay(base_ms: u64) -> Duration {
     // Use two random bytes for the jitter factor (0..=65535 -> 0.80 … 1.20).
     let mut b = [0u8; 2];
-    getrandom::getrandom(&mut b).unwrap_or(());
+    ferogram_crypto::fill_random(&mut b);
     let rand_frac = u16::from_le_bytes(b) as f64 / 65535.0; // 0.0 … 1.0
     let factor = 0.80 + rand_frac * 0.40; // 0.80 … 1.20
     Duration::from_millis((base_ms as f64 * factor) as u64)

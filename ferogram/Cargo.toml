@@ -28,13 +28,7 @@ tokio          = { version = "1",   features = ["net", "io-util", "sync", "time"
 tokio-util     = "0.7"
 parking_lot    = "0.12"
 dashmap        = "6"
-getrandom      = "0.2"
 md5            = "0.7"
-num-bigint     = "0.4"
-num-traits     = "0.2"
-sha2           = "0.10"
-hmac           = "0.12"
-pbkdf2         = "0.12"
 metrics        = "0.24"
 tracing        = { version = "0.1", features = ["log"] }
 serde          = "1"
@@ -45,6 +39,8 @@ reqwest        = { version = "0.12", default-features = false, features = ["rust
 serde_json     = "1"
 infer          = { version = "0.19", default-features = false }
 mp4            = { version = "0.14", optional = true }
+sha1           = "0.10.6"
+sha2           = "0.10.9"
 
 [features]
 default = ["parsers", "html"]

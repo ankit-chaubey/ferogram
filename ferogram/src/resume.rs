@@ -156,27 +156,22 @@ impl CheckpointStore {
 
 /// Build a stable download key from dc_id and the serialized location.
 pub fn download_key(dc_id: i32, location: &tl::enums::InputFileLocation) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(dc_id.to_le_bytes());
-    // Use debug repr as a stable-enough key. A real impl would TL-serialize.
-    h.update(format!("{location:?}").as_bytes());
-    format!("{:x}", h.finalize())
+    let hash = ferogram_crypto::sha256!(&dc_id.to_le_bytes(), format!("{location:?}").as_bytes());
+    hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Build a stable upload key from the first 64 KB of data + file name.
 pub fn upload_key(data: &[u8], name: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(&data[..data.len().min(65536)]);
-    h.update(name.as_bytes());
-    format!("{:x}", h.finalize())
+    let hash = ferogram_crypto::sha256!(&data[..data.len().min(65536)], name.as_bytes());
+    hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Compute SHA-256 of a byte slice. Returns hex string.
 pub fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(data))
+    ferogram_crypto::sha256!(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Current unix milliseconds.

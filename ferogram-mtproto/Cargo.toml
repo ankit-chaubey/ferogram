@@ -15,11 +15,10 @@ categories    = ["network-programming", "api-bindings"]
 [dependencies]
 ferogram-tl-types = { workspace = true, features = ["tl-mtproto"] }
 ferogram-crypto   = { workspace = true }
-getrandom  = "0.2"
+num-bigint = "0.4"
 log        = "0.4"
-num-bigint = "0.4.6"
-num-traits = "0.2.19"
 sha1       = "0.10.6"
+sha2       = "0.10.9"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]

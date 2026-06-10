@@ -16,8 +16,10 @@ categories    = ["cryptography", "api-bindings"]
 aes        = "0.8.4"
 ctr        = "0.9"
 getrandom  = "0.2"
+hmac       = "0.12"
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
+pbkdf2     = "0.12"
 sha1       = "0.10.6"
 sha2       = "0.10.9"
 

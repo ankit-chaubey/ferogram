@@ -13,10 +13,11 @@
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ferogram_crypto::{AuthKey, aes, check_p_and_g, factorize, generate_key_data_from_nonce, rsa};
+use ferogram_crypto::{
+    AuthKey, aes, check_p_and_g, factorize, fill_random, generate_key_data_from_nonce, rsa,
+};
 use ferogram_tl_types::{Cursor, Deserializable, Serializable};
 use num_bigint::BigUint;
-use sha1::{Digest, Sha1};
 
 // Manual TL serialization helper for PQInnerDataDc
 // Constructor: p_q_inner_data_dc#a9f55f95
@@ -262,7 +263,7 @@ pub struct Finished {
 /// Generate a `req_pq_multi` request. Returns the request + opaque state.
 pub fn step1() -> Result<(ferogram_tl_types::functions::ReqPqMulti, Step1), Error> {
     let mut buf = [0u8; 16];
-    getrandom::getrandom(&mut buf).expect("getrandom");
+    fill_random(&mut buf);
     do_step1(&buf)
 }
 
@@ -285,7 +286,7 @@ pub fn step2(
     dc_id: i32,
 ) -> Result<(ferogram_tl_types::functions::ReqDhParams, Step2), Error> {
     let mut rnd = [0u8; 256];
-    getrandom::getrandom(&mut rnd).expect("getrandom");
+    fill_random(&mut rnd);
     do_step2(data, response, &rnd, dc_id)
 }
 
@@ -299,7 +300,7 @@ pub fn step2_temp(
     expires_in: i32,
 ) -> Result<(ferogram_tl_types::functions::ReqDhParams, Step2), Error> {
     let mut rnd = [0u8; 256];
-    getrandom::getrandom(&mut rnd).expect("getrandom");
+    fill_random(&mut rnd);
     do_step2_temp(data, response, &rnd, dc_id, expires_in)
 }
 
@@ -456,7 +457,7 @@ pub fn step3(
     response: ferogram_tl_types::enums::ServerDhParams,
 ) -> Result<(ferogram_tl_types::functions::SetClientDhParams, Step3), Error> {
     let mut rnd = [0u8; 272];
-    getrandom::getrandom(&mut rnd).expect("getrandom");
+    fill_random(&mut rnd);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -475,7 +476,7 @@ pub fn retry_step3(
     retry_id: i64,
 ) -> Result<(ferogram_tl_types::functions::SetClientDhParams, Step3), Error> {
     let mut rnd = [0u8; 272];
-    getrandom::getrandom(&mut rnd).expect("getrandom");
+    fill_random(&mut rnd);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -523,11 +524,7 @@ fn generate_client_dh_params(
     )
     .to_bytes();
 
-    let digest: [u8; 20] = {
-        let mut sha = Sha1::new();
-        sha.update(&client_dh_inner);
-        sha.finalize().into()
-    };
+    let digest: [u8; 20] = ferogram_crypto::sha1!(&client_dh_inner);
 
     let pad_len = (16 - ((20 + client_dh_inner.len()) % 16)) % 16;
     let rnd16 = &random[256..256 + pad_len.min(16)];
@@ -607,11 +604,7 @@ fn do_step3(
         Err(e) => return Err(Error::InvalidDhInnerData { error: e }),
     };
 
-    let expected_hash: [u8; 20] = {
-        let mut sha = Sha1::new();
-        sha.update(&plain[20..20 + cursor.pos()]);
-        sha.finalize().into()
-    };
+    let expected_hash: [u8; 20] = ferogram_crypto::sha1!(&plain[20..20 + cursor.pos()]);
     if got_hash != expected_hash {
         return Err(Error::InvalidAnswerHash {
             got: got_hash,
@@ -715,11 +708,7 @@ pub fn finish(
         })),
         2 => {
             // dh_gen_retry: compute auth_key_aux_hash = SHA1(auth_key)[0..8] as i64 LE.
-            let aux_hash: [u8; 20] = {
-                let mut sha = Sha1::new();
-                sha.update(auth_key.to_bytes());
-                sha.finalize().into()
-            };
+            let aux_hash: [u8; 20] = ferogram_crypto::sha1!(auth_key.to_bytes());
             let retry_id = i64::from_le_bytes(aux_hash[..8].try_into().unwrap());
             Ok(FinishResult::Retry {
                 retry_id,

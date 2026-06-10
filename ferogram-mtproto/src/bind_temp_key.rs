@@ -10,8 +10,7 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
-use ferogram_crypto::{aes, derive_aes_key_iv_v1};
-use sha1::{Digest, Sha1};
+use ferogram_crypto::{aes, derive_aes_key_iv_v1, fill_random};
 
 fn serialize_inner(
     nonce: i64,
@@ -54,7 +53,7 @@ pub fn encrypt_bind_inner(
     let total = content_len + pad_len;
 
     let mut rnd = [0u8; 24];
-    getrandom::getrandom(&mut rnd).expect("getrandom");
+    fill_random(&mut rnd);
 
     let mut plaintext = Vec::with_capacity(total);
     plaintext.extend_from_slice(&rnd[..8]);
@@ -66,22 +65,14 @@ pub fn encrypt_bind_inner(
     plaintext.extend_from_slice(&rnd[16..16 + pad_len]);
     assert_eq!(plaintext.len(), total);
 
-    let hash: [u8; 20] = {
-        let mut h = Sha1::new();
-        h.update(&plaintext[..content_len]);
-        h.finalize().into()
-    };
+    let hash: [u8; 20] = ferogram_crypto::sha1!(&plaintext[..content_len]);
     let mut msg_key = [0u8; 16];
     msg_key.copy_from_slice(&hash[4..20]);
 
     let (aes_key, aes_iv) = derive_aes_key_iv_v1(perm_auth_key, &msg_key);
     aes::ige_encrypt(&mut plaintext, &aes_key, &aes_iv);
 
-    let key_sha: [u8; 20] = {
-        let mut h = Sha1::new();
-        h.update(perm_auth_key);
-        h.finalize().into()
-    };
+    let key_sha: [u8; 20] = ferogram_crypto::sha1!(perm_auth_key);
 
     let mut result = Vec::with_capacity(8 + 16 + plaintext.len());
     result.extend_from_slice(&key_sha[12..20]);
@@ -108,8 +99,7 @@ pub fn serialize_bind_temp_auth_key(
 
 /// Returns the auth-key ID: SHA-1(key)[12..20] as little-endian i64.
 pub fn auth_key_id_from_key(key: &[u8; 256]) -> i64 {
-    use sha1::{Digest, Sha1};
-    let hash: [u8; 20] = Sha1::new().chain_update(key).finalize().into();
+    let hash: [u8; 20] = ferogram_crypto::sha1!(key);
     i64::from_le_bytes(hash[12..20].try_into().unwrap())
 }
 

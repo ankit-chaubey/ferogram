@@ -10,6 +10,7 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
+use ferogram_connect::FrameKind;
 use ferogram_mtproto::{
     EncryptedSession, SeenMsgIds, Session, authentication as auth, new_seen_msg_ids, step2_temp,
 };
@@ -43,6 +44,28 @@ pub struct DcConnection {
     /// Persistent dedup ring that outlives individual EncryptedSessions.
     #[allow(dead_code)]
     seen_msg_ids: SeenMsgIds,
+}
+
+/// Extract the ObfuscatedCipher from a FrameKind, if any.
+///
+/// DcConnection uses a bare `Option<ObfuscatedCipher>` for its I/O loop,
+/// while `ferogram-connect` uses `FrameKind`. This bridges the two.
+///
+/// Takes ownership of `fk` because `ObfuscatedCipher` is not Clone; we unwrap
+/// the Arc (refcount is always 1 here — the FrameKind was just created by
+/// `connect_to_dc`) and consume the Mutex.
+fn frame_kind_to_cipher(fk: FrameKind) -> Option<ferogram_crypto::ObfuscatedCipher> {
+    match fk {
+        FrameKind::Obfuscated { cipher }
+        | FrameKind::PaddedIntermediate { cipher }
+        | FrameKind::FakeTls { cipher } => {
+            // Arc was just created; try_unwrap succeeds when refcount is 1.
+            std::sync::Arc::try_unwrap(cipher)
+                .ok()
+                .map(|m| m.into_inner())
+        }
+        _ => None,
+    }
 }
 
 impl DcConnection {
@@ -125,90 +148,18 @@ impl DcConnection {
         dc_id: i16,
     ) -> Result<Self, InvocationError> {
         tracing::debug!("[dc_pool] Connecting to {addr} …");
-        let mut stream = Self::open_tcp(addr, socks5).await?;
-        let mut cipher = Self::send_transport_init(&mut stream, transport, dc_id).await?;
-
-        let mut plain = Session::new();
-
-        let (req1, s1) = auth::step1().map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-        Self::send_plain_frame(
-            &mut stream,
-            &plain.pack(&req1).to_plaintext_bytes(),
-            cipher.as_mut(),
-        )
-        .await?;
-        let res_pq: tl::enums::ResPq = Self::recv_plain_frame(&mut stream, cipher.as_mut()).await?;
-
-        let (req2, s2) = auth::step2(s1, res_pq, dc_id as i32)
-            .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-        Self::send_plain_frame(
-            &mut stream,
-            &plain.pack(&req2).to_plaintext_bytes(),
-            cipher.as_mut(),
-        )
-        .await?;
-        let dh: tl::enums::ServerDhParams =
-            Self::recv_plain_frame(&mut stream, cipher.as_mut()).await?;
-
-        let (req3, s3) =
-            auth::step3(s2, dh).map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-        Self::send_plain_frame(
-            &mut stream,
-            &plain.pack(&req3).to_plaintext_bytes(),
-            cipher.as_mut(),
-        )
-        .await?;
-        let ans: tl::enums::SetClientDhParamsAnswer =
-            Self::recv_plain_frame(&mut stream, cipher.as_mut()).await?;
-
-        // Retry loop for dh_gen_retry (up to 5 attempts).
-        let done = {
-            let mut result =
-                auth::finish(s3, ans).map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-            let mut attempts = 0u8;
-            loop {
-                match result {
-                    auth::FinishResult::Done(d) => break d,
-                    auth::FinishResult::Retry {
-                        retry_id,
-                        dh_params,
-                        nonce,
-                        server_nonce,
-                        new_nonce,
-                    } => {
-                        attempts += 1;
-                        if attempts >= 5 {
-                            return Err(InvocationError::Deserialize(
-                                "dh_gen_retry exceeded 5 attempts".into(),
-                            ));
-                        }
-                        let (req_retry, s3_retry) =
-                            auth::retry_step3(&dh_params, nonce, server_nonce, new_nonce, retry_id)
-                                .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-                        Self::send_plain_frame(
-                            &mut stream,
-                            &plain.pack(&req_retry).to_plaintext_bytes(),
-                            cipher.as_mut(),
-                        )
-                        .await?;
-                        let ans_retry: tl::enums::SetClientDhParamsAnswer =
-                            Self::recv_plain_frame(&mut stream, cipher.as_mut()).await?;
-                        result = auth::finish(s3_retry, ans_retry)
-                            .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-                    }
-                }
-            }
-        };
+        let (stream, frame_kind, enc) =
+            ferogram_connect::connect_to_dc(addr, dc_id, transport, socks5, None).await?;
+        let cipher = frame_kind_to_cipher(frame_kind);
         tracing::debug!("[dc_pool] DH complete ✓ for {addr}");
-
         let seen = new_seen_msg_ids();
         Ok(Self {
             stream,
             cipher,
             enc: EncryptedSession::with_seen(
-                done.auth_key,
-                done.first_salt,
-                done.time_offset,
+                enc.auth_key_bytes(),
+                enc.salt,
+                enc.time_offset,
                 seen.clone(),
             ),
             pending_acks: Vec::new(),
@@ -231,16 +182,11 @@ impl DcConnection {
         dc_id: i16,
         pfs: bool,
     ) -> Result<Self, InvocationError> {
-        let (mut stream, mut cipher) = if let Some(mp) = mtproxy {
-            let mut s = mp.connect().await?;
-            s.set_nodelay(true)?;
-            let c = Self::send_transport_init(&mut s, &mp.transport, dc_id).await?;
-            (s, c)
-        } else {
-            let mut s = Self::open_tcp(addr, socks5).await?;
-            let c = Self::send_transport_init(&mut s, transport, dc_id).await?;
-            (s, c)
-        };
+        // ferogram-connect owns TCP open + keepalive + transport init.
+        let (mut stream, frame_kind) =
+            ferogram_connect::Connection::open_stream_pub(addr, dc_id, transport, socks5, mtproxy)
+                .await?;
+        let mut cipher = frame_kind_to_cipher(frame_kind);
 
         if pfs {
             tracing::debug!("[dc_pool] PFS: temp DH bind for DC{dc_id}");
@@ -289,7 +235,7 @@ impl DcConnection {
         const TEMP_EXPIRES: i32 = 86_400; // 24 h
 
         // temp-key DH
-        let mut plain = ferogram_mtproto::Session::new();
+        let mut plain = Session::new();
 
         let (req1, s1) = auth::step1().map_err(|e| InvocationError::Deserialize(e.to_string()))?;
         Self::send_plain_frame(
@@ -375,8 +321,7 @@ impl DcConnection {
         let perm_key_id = auth_key_id_from_key(perm_auth_key);
 
         let mut nonce_buf = [0u8; 8];
-        getrandom::getrandom(&mut nonce_buf)
-            .map_err(|_| InvocationError::Deserialize("getrandom nonce".into()))?;
+        ferogram_crypto::fill_random(&mut nonce_buf);
         let nonce = i64::from_le_bytes(nonce_buf);
 
         let server_now = std::time::SystemTime::now()
@@ -414,7 +359,7 @@ impl DcConnection {
             let decrypted = temp_enc.unpack(&mut raw).map_err(|e| {
                 InvocationError::Deserialize(format!("PFS pool bind decrypt: {e:?}"))
             })?;
-            match pfs_pool_decode_bind_response(&decrypted.body) {
+            match ferogram_connect::decode_bind_response(&decrypted.body) {
                 Ok(()) => {
                     // bindTempAuthKey succeeds under the temp key; keep the session
                     // sequence as-is so subsequent RPCs continue from the same MTProto
@@ -440,177 +385,6 @@ impl DcConnection {
         Err(InvocationError::Deserialize(
             "auth.bindTempAuthKey (pool): no boolTrue after 5 frames".into(),
         ))
-    }
-
-    async fn open_tcp(
-        addr: &str,
-        socks5: Option<&ferogram_connect::Socks5Config>,
-    ) -> Result<TcpStream, InvocationError> {
-        let stream = match socks5 {
-            Some(proxy) => proxy.connect(addr).await?,
-            None => TcpStream::connect(addr).await?,
-        };
-        // Disable Nagle for immediate single-frame delivery.
-        stream.set_nodelay(true)?;
-        // SO_KEEPALIVE keeps worker connections alive across idle periods.
-        {
-            let sock = socket2::SockRef::from(&stream);
-            let ka = socket2::TcpKeepalive::new()
-                .with_time(std::time::Duration::from_secs(10))
-                .with_interval(std::time::Duration::from_secs(5));
-            #[cfg(not(target_os = "windows"))]
-            let ka = ka.with_retries(3);
-            sock.set_tcp_keepalive(&ka).ok();
-        }
-        Ok(stream)
-    }
-
-    async fn send_transport_init(
-        stream: &mut TcpStream,
-        transport: &TransportKind,
-        dc_id: i16,
-    ) -> Result<Option<ferogram_crypto::ObfuscatedCipher>, InvocationError> {
-        match transport {
-            TransportKind::Abridged => {
-                stream.write_all(&[0xef]).await?;
-            }
-            TransportKind::Intermediate => {
-                stream.write_all(&[0xee, 0xee, 0xee, 0xee]).await?;
-            }
-            TransportKind::Full => {}
-            TransportKind::Obfuscated { secret } => {
-                use sha2::Digest;
-                let mut nonce = [0u8; 64];
-                loop {
-                    getrandom::getrandom(&mut nonce)
-                        .map_err(|_| InvocationError::Deserialize("getrandom".into()))?;
-                    let first =
-                        u32::from_le_bytes(nonce[0..4].try_into().expect("nonce is [u8;64]"));
-                    let second =
-                        u32::from_le_bytes(nonce[4..8].try_into().expect("nonce is [u8;64]"));
-                    let bad = nonce[0] == 0xEF
-                        || first == 0x44414548
-                        || first == 0x54534F50
-                        || first == 0x20544547
-                        || first == 0x4954504f  // OPTIONS
-                        || first == 0xEEEEEEEE
-                        || first == 0xDDDDDDDD
-                        || first == 0x02010316
-                        || second == 0x00000000;
-                    if !bad {
-                        break;
-                    }
-                }
-                let tx_raw: [u8; 32] = nonce[8..40].try_into().expect("nonce is [u8;64]");
-                let tx_iv: [u8; 16] = nonce[40..56].try_into().expect("nonce is [u8;64]");
-                let mut rev48 = nonce[8..56].to_vec();
-                rev48.reverse();
-                let rx_raw: [u8; 32] = rev48[0..32]
-                    .try_into()
-                    .expect("rev48 is nonce[8..56].reversed(), len=48");
-                let rx_iv: [u8; 16] = rev48[32..48]
-                    .try_into()
-                    .expect("rev48 is nonce[8..56].reversed(), len=48");
-                let (tx_key, rx_key): ([u8; 32], [u8; 32]) = if let Some(s) = secret {
-                    let mut h = sha2::Sha256::new();
-                    h.update(tx_raw);
-                    h.update(s.as_ref());
-                    let tx: [u8; 32] = h.finalize().into();
-                    let mut h = sha2::Sha256::new();
-                    h.update(rx_raw);
-                    h.update(s.as_ref());
-                    let rx: [u8; 32] = h.finalize().into();
-                    (tx, rx)
-                } else {
-                    (tx_raw, rx_raw)
-                };
-                nonce[56] = 0xef;
-                nonce[57] = 0xef;
-                nonce[58] = 0xef;
-                nonce[59] = 0xef;
-                let dc_bytes = dc_id.to_le_bytes();
-                nonce[60] = dc_bytes[0];
-                nonce[61] = dc_bytes[1];
-                let mut enc =
-                    ferogram_crypto::ObfuscatedCipher::from_keys(&tx_key, &tx_iv, &rx_key, &rx_iv);
-                let mut skip = [0u8; 56];
-                enc.encrypt(&mut skip);
-                enc.encrypt(&mut nonce[56..64]);
-                stream.write_all(&nonce).await?;
-                return Ok(Some(enc));
-            }
-            TransportKind::PaddedIntermediate { secret } => {
-                use sha2::Digest;
-                let mut nonce = [0u8; 64];
-                loop {
-                    getrandom::getrandom(&mut nonce)
-                        .map_err(|_| InvocationError::Deserialize("getrandom".into()))?;
-                    let first =
-                        u32::from_le_bytes(nonce[0..4].try_into().expect("nonce is [u8;64]"));
-                    let second =
-                        u32::from_le_bytes(nonce[4..8].try_into().expect("nonce is [u8;64]"));
-                    let bad = nonce[0] == 0xEF
-                        || first == 0x44414548
-                        || first == 0x54534F50
-                        || first == 0x20544547
-                        || first == 0x4954504f
-                        || first == 0xEEEEEEEE
-                        || first == 0xDDDDDDDD
-                        || first == 0x02010316
-                        || second == 0x00000000;
-                    if !bad {
-                        break;
-                    }
-                }
-                let tx_raw: [u8; 32] = nonce[8..40].try_into().expect("nonce is [u8;64]");
-                let tx_iv: [u8; 16] = nonce[40..56].try_into().expect("nonce is [u8;64]");
-                let mut rev48 = nonce[8..56].to_vec();
-                rev48.reverse();
-                let rx_raw: [u8; 32] = rev48[0..32]
-                    .try_into()
-                    .expect("rev48 is nonce[8..56].reversed(), len=48");
-                let rx_iv: [u8; 16] = rev48[32..48]
-                    .try_into()
-                    .expect("rev48 is nonce[8..56].reversed(), len=48");
-                let (tx_key, rx_key): ([u8; 32], [u8; 32]) = if let Some(s) = secret {
-                    let mut h = sha2::Sha256::new();
-                    h.update(tx_raw);
-                    h.update(s.as_ref());
-                    let tx: [u8; 32] = h.finalize().into();
-                    let mut h = sha2::Sha256::new();
-                    h.update(rx_raw);
-                    h.update(s.as_ref());
-                    let rx: [u8; 32] = h.finalize().into();
-                    (tx, rx)
-                } else {
-                    (tx_raw, rx_raw)
-                };
-                nonce[56] = 0xdd;
-                nonce[57] = 0xdd;
-                nonce[58] = 0xdd;
-                nonce[59] = 0xdd;
-                let dc_bytes = dc_id.to_le_bytes();
-                nonce[60] = dc_bytes[0];
-                nonce[61] = dc_bytes[1];
-                let mut enc =
-                    ferogram_crypto::ObfuscatedCipher::from_keys(&tx_key, &tx_iv, &rx_key, &rx_iv);
-                let mut skip = [0u8; 56];
-                enc.encrypt(&mut skip);
-                enc.encrypt(&mut nonce[56..64]);
-                stream.write_all(&nonce).await?;
-                return Ok(Some(enc));
-            }
-            TransportKind::FakeTls { .. } => {
-                // FakeTls requires a full TLS 1.2 ClientHello handshake which is not yet
-                // implemented in DcPool worker connections. Use Obfuscated or
-                // PaddedIntermediate for proxy connections instead.
-                return Err(InvocationError::Deserialize(
-                    "FakeTls transport is not supported for DcPool connections".into(),
-                ));
-            }
-            TransportKind::Http => {}
-        }
-        Ok(None)
     }
 
     pub fn auth_key_bytes(&self) -> [u8; 256] {
@@ -827,13 +601,10 @@ impl DcConnection {
                         return Ok(Some(r));
                     }
                     // Unwrap the gzip directly and return the decompressed bytes.
-                    if let Some(compressed) = tl_read_bytes(&inner[4..]) {
-                        let dec = flate2::read::GzDecoder::new(compressed.as_slice());
-                        let mut limited = std::io::Read::take(dec, 16 * 1024 * 1024);
-                        let mut out = Vec::new();
-                        if std::io::Read::read_to_end(&mut limited, &mut out).is_ok() {
-                            return Ok(Some(out));
-                        }
+                    if let Some(compressed) = ferogram_connect::tl_read_bytes(&inner[4..])
+                        && let Ok(out) = ferogram_connect::gz_inflate(&compressed)
+                    {
+                        return Ok(Some(out));
                     }
                     return Ok(None);
                 }
@@ -841,7 +612,7 @@ impl DcConnection {
                     && u32::from_le_bytes(inner[..4].try_into().expect("inner.len() >= 8 checked above")) == 0x2144ca19
                 {
                     let code = i32::from_le_bytes(inner[4..8].try_into().expect("inner.len() >= 8 checked above"));
-                    let message = tl_read_string(&inner[8..]).unwrap_or_default();
+                    let message = ferogram_connect::tl_read_string(&inner[8..]).unwrap_or_default();
                     return Err(InvocationError::Rpc(
                         crate::errors::RpcError::from_telegram(code, &message),
                     ));
@@ -853,7 +624,7 @@ impl DcConnection {
                     return Err(InvocationError::Deserialize("rpc_error short".into()));
                 }
                 let code = i32::from_le_bytes(body[4..8].try_into().expect("body.len() >= 8 checked above"));
-                let message = tl_read_string(&body[8..]).unwrap_or_default();
+                let message = ferogram_connect::tl_read_string(&body[8..]).unwrap_or_default();
                 Err(InvocationError::Rpc(crate::errors::RpcError::from_telegram(code, &message)))
             }
             0xedab447b /* bad_server_salt */ => {
@@ -998,21 +769,17 @@ impl DcConnection {
             }
             0x3072cfa1 /* gzip_packed */ => {
                 // Decompress and recurse: server wraps large responses in gzip_packed.
-                if let Some(compressed) = tl_read_bytes(&body[4..]) {
-                    let decoder = flate2::read::GzDecoder::new(compressed.as_slice());
-                    let mut limited = std::io::Read::take(decoder, 16 * 1024 * 1024);
-                    let mut decompressed = Vec::new();
-                    if std::io::Read::read_to_end(&mut limited, &mut decompressed).is_ok()
-                        && !decompressed.is_empty()
-                    {
-                        return Self::scan_body(
-                            &decompressed, salt,
-                            need_resend, need_session_reset,
-                            bad_msg_code, bad_msg_server_id,
-                            sent_msg_id,
-                            server_msg_id,
-                        );
-                    }
+                if let Some(compressed) = ferogram_connect::tl_read_bytes(&body[4..])
+                    && let Ok(decompressed) = ferogram_connect::gz_inflate(&compressed)
+                    && !decompressed.is_empty()
+                {
+                    return Self::scan_body(
+                        &decompressed, salt,
+                        need_resend, need_session_reset,
+                        bad_msg_code, bad_msg_server_id,
+                        sent_msg_id,
+                        server_msg_id,
+                    );
                 }
                 Ok(None)
             }
@@ -1317,177 +1084,4 @@ impl DcConnection {
         let mut cur = Cursor::from_slice(&raw[20..20 + body_len]);
         T::deserialize(&mut cur).map_err(Into::into)
     }
-}
-
-/// Check a decrypted PFS bind response body for boolTrue.
-/// Decode one bare MTProto message body for the auth.bindTempAuthKey response (pool path).
-fn pfs_pool_decode_bind_single(body: &[u8]) -> Result<(), String> {
-    const RPC_RESULT: u32 = 0xf35c6d01;
-    const BOOL_TRUE: u32 = 0x9972_75b5;
-    const BOOL_FALSE: u32 = 0xbc79_9737;
-    const RPC_ERROR: u32 = 0x2144_ca19;
-    const BAD_MSG: u32 = 0xa7ef_f811;
-    const BAD_SALT: u32 = 0xedab_447b;
-    const NEW_SESSION: u32 = 0x9ec2_0908;
-    const FUTURE_SALTS: u32 = 0xae50_0895;
-    const MSGS_ACK: u32 = 0x62d6_b459; // msgs_ack#62d6b459
-    const PONG: u32 = 0x0347_73c5;
-
-    if body.len() < 4 {
-        return Err("skip".into());
-    }
-    let ctor = u32::from_le_bytes(body[..4].try_into().expect("body.len() >= 4 checked above"));
-
-    match ctor {
-        BOOL_TRUE => Ok(()),
-        BOOL_FALSE => Err("server returned boolFalse (binding rejected)".into()),
-        NEW_SESSION | FUTURE_SALTS | MSGS_ACK | PONG => Err("skip".into()),
-
-        RPC_RESULT if body.len() >= 16 => {
-            let inner = u32::from_le_bytes(
-                body[12..16]
-                    .try_into()
-                    .expect("body.len() >= 16 from match arm guard"),
-            );
-            match inner {
-                BOOL_TRUE => Ok(()),
-                BOOL_FALSE => Err("rpc_result{boolFalse} (server rejected binding)".into()),
-                RPC_ERROR if body.len() >= 20 => {
-                    let code = i32::from_le_bytes(
-                        body[16..20]
-                            .try_into()
-                            .expect("body.len() >= 20 from match arm guard"),
-                    );
-                    let msg = tl_read_string(body.get(20..).unwrap_or(&[])).unwrap_or_default();
-                    Err(format!("rpc_error code={code} message={msg:?}"))
-                }
-                _ => Err(format!("rpc_result inner ctor={inner:#010x}")),
-            }
-        }
-
-        BAD_MSG if body.len() >= 16 => {
-            let code = u32::from_le_bytes(
-                body[12..16]
-                    .try_into()
-                    .expect("body.len() >= 16 from match arm guard"),
-            );
-            let desc = match code {
-                16 => "msg_id too low (clock skew)",
-                17 => "msg_id too high (clock skew)",
-                18 => "incorrect lower 2 bits of msg_id",
-                19 => "duplicate msg_id",
-                20 => "message too old (>300s)",
-                32 => "msg_seqno too low",
-                33 => "msg_seqno too high",
-                48 => "incorrect server salt",
-                _ => "unknown code",
-            };
-            Err(format!("bad_msg_notification code={code} ({desc})"))
-        }
-
-        BAD_SALT if body.len() >= 24 => {
-            let new_salt = i64::from_le_bytes(
-                body[16..24]
-                    .try_into()
-                    .expect("body.len() >= 24 from match arm guard"),
-            );
-            Err(format!(
-                "bad_server_salt, server wants salt={new_salt:#018x}"
-            ))
-        }
-
-        _ => Err(format!("unknown ctor={ctor:#010x}")),
-    }
-}
-
-/// Decode the server response to auth.bindTempAuthKey (pool path).
-///
-/// Handles bare messages AND msg_container (the server frequently bundles
-/// new_session_created + rpc_result together in a container).
-fn pfs_pool_decode_bind_response(body: &[u8]) -> Result<(), String> {
-    const MSG_CONTAINER: u32 = 0x73f1f8dc;
-
-    if body.len() < 4 {
-        return Err(format!("response body too short ({} bytes)", body.len()));
-    }
-    let ctor = u32::from_le_bytes(body[..4].try_into().expect("body.len() >= 4 checked above"));
-
-    if ctor != MSG_CONTAINER {
-        return pfs_pool_decode_bind_single(body).map_err(|e| {
-            if e == "skip" {
-                "__need_more__".into()
-            } else {
-                e
-            }
-        });
-    }
-
-    if body.len() < 8 {
-        return Err("msg_container too short to read count".into());
-    }
-    let count = u32::from_le_bytes(
-        body[4..8]
-            .try_into()
-            .expect("body.len() >= 8 checked above"),
-    ) as usize;
-    let mut pos = 8usize;
-    let mut last_real_err: Option<String> = None;
-
-    for i in 0..count {
-        if pos + 16 > body.len() {
-            return Err(format!(
-                "msg_container truncated at message {i}/{count} (pos={pos} body_len={})",
-                body.len()
-            ));
-        }
-        let msg_bytes = u32::from_le_bytes(
-            body[pos + 12..pos + 16]
-                .try_into()
-                .expect("pos+16 <= body.len() checked above"),
-        ) as usize;
-        pos += 16;
-
-        if pos + msg_bytes > body.len() {
-            return Err(format!(
-                "msg_container message {i} body overflows (need {msg_bytes}, have {})",
-                body.len() - pos
-            ));
-        }
-        let msg_body = &body[pos..pos + msg_bytes];
-        pos += msg_bytes;
-
-        match pfs_pool_decode_bind_single(msg_body) {
-            Ok(()) => return Ok(()),
-            Err(e) if e == "skip" => continue,
-            Err(e) => {
-                last_real_err = Some(e);
-            }
-        }
-    }
-
-    Err(last_real_err.unwrap_or_else(|| "__need_more__".into()))
-}
-
-fn tl_read_bytes(data: &[u8]) -> Option<Vec<u8>> {
-    if data.is_empty() {
-        return Some(vec![]);
-    }
-    let (len, start) = if data[0] < 254 {
-        (data[0] as usize, 1)
-    } else if data.len() >= 4 {
-        (
-            data[1] as usize | (data[2] as usize) << 8 | (data[3] as usize) << 16,
-            4,
-        )
-    } else {
-        return None;
-    };
-    if data.len() < start + len {
-        return None;
-    }
-    Some(data[start..start + len].to_vec())
-}
-
-fn tl_read_string(data: &[u8]) -> Option<String> {
-    tl_read_bytes(data).map(|b| String::from_utf8_lossy(&b).into_owned())
 }
