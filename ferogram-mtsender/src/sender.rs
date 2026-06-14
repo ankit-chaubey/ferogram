@@ -16,7 +16,7 @@ use ferogram_mtproto::{
 };
 use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable, RemoteCall};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
 use crate::errors::InvocationError;

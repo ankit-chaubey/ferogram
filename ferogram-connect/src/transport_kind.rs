@@ -21,6 +21,7 @@
 /// | `PaddedIntermediate` | random 64B (`0xDDDDDDDD` tag) | Required for `0xDD` MTProxy secrets |
 /// | `FakeTls` | TLS 1.3 ClientHello | Most DPI-resistant; required for `0xEE` MTProxy secrets |
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub enum TransportKind {
     /// MTProto [Abridged] transport: length prefix is 1 or 4 bytes.
     Abridged,
@@ -30,6 +31,7 @@ pub enum TransportKind {
     ///
     /// No init byte is sent. Provides CRC32 integrity and sequence number
     /// validation on every frame. **Default** transport.
+    #[default]
     Full,
     /// [Obfuscated2] transport: AES-256-CTR over Abridged framing.
     /// Required for MTProxy and networks with deep-packet inspection.
@@ -50,8 +52,3 @@ pub enum TransportKind {
     Http,
 }
 
-impl Default for TransportKind {
-    fn default() -> Self {
-        TransportKind::Full
-    }
-}
