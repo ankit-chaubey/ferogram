@@ -36,13 +36,9 @@ use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
-// Assigns a unique monotonically increasing ID to every reader_loop
-// invocation (initial spawn + every supervisor restart). ACTIVE_READERS
-// tracks how many are currently alive. In normal operation it must never
-// exceed 1; two concurrent readers on the same socket will silently
-// consume each other's frames and desync the stream position.
-static READER_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static ACTIVE_READERS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+// READER_ID_COUNTER and ACTIVE_READERS were previously process-global statics,
+// which caused false-positive MULTIPLE ACTIVE READERS errors when more than one
+// Client was instantiated in the same process. They are now per-ClientInner fields.
 
 const ID_RPC_RESULT: u32 = 0xf35c6d01;
 const ID_RPC_ERROR: u32 = 0x2144ca19;
@@ -502,6 +498,15 @@ pub(crate) struct ClientInner {
     /// Experimental feature flags, stored for runtime checks in files.rs etc.
     #[allow(dead_code)]
     pub(crate) experimental: ExperimentalFeatures,
+
+    /// Assigns a unique monotonically increasing ID to every reader_loop invocation
+    /// (initial spawn + every supervisor restart). Per-client to avoid false positives
+    /// when multiple Client instances exist in the same process.
+    reader_id_counter: std::sync::atomic::AtomicU64,
+    /// Tracks how many reader_loop invocations are currently alive for this client.
+    /// In normal operation must never exceed 1; two concurrent readers on the same
+    /// socket will silently consume each other's frames and desync the stream.
+    active_readers: std::sync::atomic::AtomicI64,
 }
 
 /// The main Telegram client. Cheap to clone: internally Arc-wrapped.
@@ -765,6 +770,8 @@ impl Client {
             seen_msg_ids: ferogram_mtproto::new_seen_msg_ids(),
             session_snapshot_dirty: std::sync::atomic::AtomicBool::new(false),
             experimental: config.experimental_features.clone(),
+            reader_id_counter: std::sync::atomic::AtomicU64::new(0),
+            active_readers: std::sync::atomic::AtomicI64::new(0),
         });
 
         let client = Self {
@@ -1872,9 +1879,15 @@ impl Client {
             // Track concurrent reader count for this invocation. ACTIVE_READERS > 1
             // means a previous reader_loop didn't exit before the supervisor
             // spawned a new one; this is logged as a hard warning.
-            let reader_id = READER_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let active_before =
-                ACTIVE_READERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            let reader_id = self
+                .inner
+                .reader_id_counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let active_before = self
+                .inner
+                .active_readers
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
             tracing::debug!(
                 "[ferogram/reader-diag] reader#{reader_id} starting \
                  (conn_gen={} sid={sid:#x} active_readers={active_before})",
@@ -1899,7 +1912,7 @@ impl Client {
                 // Clean shutdown
                 _ = shutdown_token.cancelled() => {
                     tracing::info!("[ferogram] Reader task: shutdown requested, exiting cleanly.");
-                    let remaining = ACTIVE_READERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1;
+                    let remaining = self.inner.active_readers.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1;
                     tracing::debug!(
                         "[ferogram/reader-diag] reader#{reader_id} exiting (shutdown, active_readers={remaining})"
                     );
@@ -1921,8 +1934,11 @@ impl Client {
 
             // reader_loop returned: this reader_id's run is over.
             {
-                let remaining =
-                    ACTIVE_READERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1;
+                let remaining = self
+                    .inner
+                    .active_readers
+                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+                    - 1;
                 tracing::debug!(
                     "[ferogram/reader-diag] reader#{reader_id} exited reader_loop (active_readers={remaining})"
                 );
@@ -4013,6 +4029,18 @@ impl Client {
                     Err(ref e) if e.is("PERSISTENT_TIMESTAMP_OUTDATED") => {
                         tracing::warn!(
                             "[ferogram] getChannelDifference: PERSISTENT_TIMESTAMP_OUTDATED"
+                        );
+                        self.inner
+                            .message_box
+                            .lock()
+                            .await
+                            .end_channel_difference(PrematureEndReason::TemporaryServerIssues);
+                    }
+                    Err(ref e) if e.is("PERSISTENT_TIMESTAMP_INVALID") => {
+                        // pts is stale or was never set; Telegram rejects the diff request.
+                        // Reset the channel state and let the next update trigger a fresh diff.
+                        tracing::warn!(
+                            "[ferogram] getChannelDifference: PERSISTENT_TIMESTAMP_INVALID for {channel_id}, resetting pts"
                         );
                         self.inner
                             .message_box
