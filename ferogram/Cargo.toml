@@ -31,6 +31,7 @@ dashmap        = "6"
 md5            = "0.7"
 metrics        = "0.24"
 tracing        = { version = "0.1", features = ["log"] }
+log            = "0.4"
 serde          = "1"
 mime_guess     = "2"
 base64         = "0.22"

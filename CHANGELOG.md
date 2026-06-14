@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.2] - 2026-06-14
+
+Transport and architecture stabilization release.
+
+### Fixed
+
+- Full transport: fixed several frame parsing bugs, corrected transport error detection and frame validation, and resolved frame sync issues that could cause CRC mismatches. Eliminates recurring desync that was triggering reconnect loops.
+- Reconnects: stabilized the reconnect flow when reusing an existing auth key, improved session recovery after network interruptions, and reduced reconnect storms caused by transient transport failures.
+- Update sync: improved gap detection and diff scheduling during account/channel difference recovery.
+
+### Changed
+
+- Internal refactor of crate ownership boundaries between `ferogram`, `ferogram-connect`, `ferogram-mtsender`, `ferogram-session`, and `ferogram-parsers`. Reduces cross-crate state leakage around transport, session, connection, and RPC dispatch state, moving toward a strict transport → session → client dependency direction instead of the previous tangled transport ↔ session ↔ client ↔ sender relationships.
+- Added tracing for reader lifecycle, connection generation, and session identity (`[reader#N]`, `[conn_gen=X]`, `[sid=...]`), plus frame-level receive diagnostics (`len`, `recv_seq`, `expected_seq`, `crc`) for debugging transport corruption.
+
+### Investigated, ruled out
+
+- Multiple concurrent reader tasks, DiffGuard deadlocks, ChannelDifference lock contention, Full transport CRC algorithm errors, session salt rotation, DH handshake desync.
+
+### Known issues
+
+- Occasional delayed RPC replies despite an active connection, successful update reception, and a healthy MessageBox state. Investigation continues in the pending RPC registry, oneshot wakeups, result routing, and handler scheduling; the diagnostics added above should help narrow this down.
+
+---
+
 ## [0.6.0] - 2026-06-01
 
 ### Added

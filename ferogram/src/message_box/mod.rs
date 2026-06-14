@@ -75,6 +75,7 @@ impl MessageBoxes {
             date: NO_DATE,
             seq: NO_SEQ,
             getting_diff_for: Vec::new(),
+            channel_diff_in_flight: None,
             next_deadline: next_updates_deadline(),
         }
     }
@@ -118,6 +119,7 @@ impl MessageBoxes {
             date: state.date,
             seq: state.seq,
             getting_diff_for,
+            channel_diff_in_flight: None,
             next_deadline: deadline,
         }
     }
@@ -349,10 +351,14 @@ impl MessageBoxes {
     /// The caller must fill in `access_hash` and `limit` before executing.
     /// Call [`apply_channel_difference`] or [`end_channel_difference`] with the result.
     pub fn get_channel_difference(
-        &self,
+        &mut self,
     ) -> Option<(i64, tl::functions::updates::GetChannelDifference)> {
+        // Skip any channel whose request is already in flight (response not
+        // yet applied) - prevents issuing a second concurrent
+        // getChannelDifference for the same channel, e.g. across a
+        // reconnect-generation boundary.
         let (key, channel_id) = self.getting_diff_for.iter().find_map(|&k| match k {
-            Key::Channel(id) => Some((k, id)),
+            Key::Channel(id) if self.channel_diff_in_flight != Some(id) => Some((k, id)),
             _ => None,
         })?;
 
@@ -360,6 +366,8 @@ impl MessageBoxes {
             .entry(key)
             .map(|e| e.pts)
             .expect("Channel entry must exist when diffing it");
+
+        self.channel_diff_in_flight = Some(channel_id);
 
         Some((
             channel_id,
@@ -691,14 +699,25 @@ impl MessageBoxes {
         &mut self,
         difference: tl::enums::updates::ChannelDifference,
     ) -> UpdateAndPeers {
-        let (key, channel_id) = self
-            .getting_diff_for
-            .iter()
-            .find_map(|&k| match k {
-                Key::Channel(id) => Some((k, id)),
-                _ => None,
-            })
-            .expect("apply_channel_difference: no channel in getting_diff_for");
+        let Some(channel_id) = self.channel_diff_in_flight.take() else {
+            tracing::warn!(
+                "[ferogram/msgbox] apply_channel_difference called but no channel diff \
+                 was in flight (stale/duplicate response?); ignoring"
+            );
+            return (Vec::new(), Vec::new(), Vec::new());
+        };
+
+        let key = Key::Channel(channel_id);
+        if !self.getting_diff_for.contains(&key) {
+            // The entry was already finalized by an earlier (duplicate)
+            // response for this same channel; this response is stale.
+            tracing::debug!(
+                "[ferogram/msgbox] apply_channel_difference: channel {} no longer in \
+                 getting_diff_for (stale duplicate response); ignoring",
+                channel_id
+            );
+            return (Vec::new(), Vec::new(), Vec::new());
+        }
 
         tracing::trace!(
             "[ferogram/msgbox] applying channel {} difference",
@@ -793,16 +812,22 @@ impl MessageBoxes {
     }
 
     pub fn end_channel_difference(&mut self, reason: PrematureEndReason) {
-        let Some((key, channel_id)) = self.getting_diff_for.iter().find_map(|&k| match k {
-            Key::Channel(id) => Some((k, id)),
-            _ => None,
-        }) else {
+        let Some(channel_id) = self.channel_diff_in_flight.take() else {
             tracing::warn!(
-                "[ferogram/msgbox] end_channel_difference called but no channel pending \
-                 (already ended? duplicate error path)"
+                "[ferogram/msgbox] end_channel_difference called but no channel diff \
+                 was in flight (already ended? duplicate error path)"
             );
             return;
         };
+        let key = Key::Channel(channel_id);
+        if !self.getting_diff_for.contains(&key) {
+            tracing::debug!(
+                "[ferogram/msgbox] end_channel_difference: channel {} no longer in \
+                 getting_diff_for (stale duplicate response); ignoring",
+                channel_id
+            );
+            return;
+        }
 
         tracing::trace!(
             "[ferogram/msgbox] ending channel {} diff: {:?}",

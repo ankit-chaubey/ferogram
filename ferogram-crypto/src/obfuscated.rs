@@ -146,7 +146,7 @@ pub fn build_obfuscated_init(
 ///
 /// `secret`: the 16-byte MTProxy secret.
 /// `tls_record`: the fully assembled TLS ClientHello record bytes (before the
-///   random field is filled in — the caller fills it after this returns).
+///   random field is filled in; the caller fills it after this returns).
 ///
 /// Returns `(hmac_result, cipher)`:
 /// - `hmac_result` is the 32-byte `HMAC-SHA256(secret, tls_record)` value that

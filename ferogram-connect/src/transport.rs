@@ -17,6 +17,11 @@ use crate::connection::FrameKind;
 use crate::error::ConnectError;
 
 pub async fn send_abridged(stream: &mut TcpStream, data: &[u8]) -> Result<(), ConnectError> {
+    debug_assert_eq!(
+        data.len() % 4,
+        0,
+        "abridged send: payload must be 4-byte aligned"
+    );
     let words = data.len() / 4;
     // Single combined write: header and payload together to avoid partial-frame delivery.
     let mut frame = if words < 0x7f {
@@ -67,6 +72,36 @@ pub async fn recv_raw_frame(
             stream.read_exact(&mut buf).await?;
             cipher.lock().await.decrypt(&mut buf);
             Ok(buf)
+        }
+        FrameKind::Full { .. } => {
+            // Full transport: [total_len(4)][seq(4)][payload][crc32(4)]
+            let mut len_buf = [0u8; 4];
+            stream.read_exact(&mut len_buf).await?;
+            let len_i32 = i32::from_le_bytes(len_buf);
+            if len_i32 < 0 {
+                return Err(ConnectError::TransportCode(len_i32));
+            }
+            if len_i32 < 12 {
+                return Err(ConnectError::other(format!(
+                    "Full transport raw: packet too short ({len_i32})"
+                )));
+            }
+            let total_len = len_i32 as usize;
+            let mut rest = vec![0u8; total_len - 4];
+            stream.read_exact(&mut rest).await?;
+            let (body, crc_bytes) = rest.split_at(rest.len() - 4);
+            let expected_crc = u32::from_le_bytes(crc_bytes.try_into().unwrap());
+            let mut check_input = Vec::with_capacity(4 + body.len());
+            check_input.extend_from_slice(&len_buf);
+            check_input.extend_from_slice(body);
+            let actual_crc = crate::util::crc32_ieee(&check_input);
+            if actual_crc != expected_crc {
+                return Err(ConnectError::other(format!(
+                    "Full transport raw: CRC mismatch (got {actual_crc:#010x}, expected {expected_crc:#010x})"
+                )));
+            }
+            // Strip the 4-byte seqno, return payload only.
+            Ok(body[4..].to_vec())
         }
         // Abridged and all other transports: plain framing, no extra layer.
         _ => recv_abridged(stream).await,

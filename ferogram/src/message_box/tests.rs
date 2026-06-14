@@ -119,7 +119,7 @@ fn get_chan_diff(id: i64, pts: i32) -> tl::functions::updates::GetChannelDiffere
 fn test_load_empty_state() {
     reset_time();
     let snap = UpdatesStateSnap::default();
-    let mb = MessageBoxes::load(snap.clone());
+    let mut mb = MessageBoxes::load(snap.clone());
 
     assert!(mb.is_empty());
     assert_eq!(mb.get_difference(), None);
@@ -138,7 +138,7 @@ fn test_load_state_queues_diff() {
         seq: 78,
         channels: vec![ChannelState { id: 43, pts: 21 }],
     };
-    let mb = MessageBoxes::load(snap.clone());
+    let mut mb = MessageBoxes::load(snap.clone());
 
     assert!(!mb.is_empty());
     assert_eq!(mb.get_difference(), Some(get_diff(56, 12, 34)));

@@ -23,6 +23,11 @@ use crate::error::ConnectError;
 use crate::transport::{recv_abridged, send_abridged};
 use crate::util::random_i64;
 
+/// Counts every entry into `recv_frame_read`'s `FrameKind::Full` branch
+/// across all connections. Incremented before any bytes are consumed so
+/// trace logs can correlate call count against recv_seqno advances.
+static FULL_RECV_CALL_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Outcome of a timed frame read attempt.
 pub enum FrameOutcome {
     Frame(Vec<u8>),
@@ -61,6 +66,11 @@ pub async fn send_frame(
         }
         FrameKind::Obfuscated { cipher } => {
             // Abridged framing with AES-256-CTR encryption over the whole frame.
+            debug_assert_eq!(
+                data.len() % 4,
+                0,
+                "obfuscated send: payload must be 4-byte aligned"
+            );
             let words = data.len() / 4;
             let mut frame = if words < 0x7f {
                 let mut v = Vec::with_capacity(1 + data.len());
@@ -178,6 +188,14 @@ pub async fn send_frame_write(
 ) -> Result<(), ConnectError> {
     match kind {
         FrameKind::Abridged => {
+            // encrypt_data_v2 always produces (24 + 16k) bytes which is always
+            // 4-aligned. This assert can never fire; kept as a debug guard in
+            // case a future caller passes a non-aligned buffer.
+            debug_assert_eq!(
+                data.len() % 4,
+                0,
+                "abridged send: payload must be 4-byte aligned"
+            );
             let words = data.len() / 4;
             // Build header + payload in one allocation -> single syscall.
             let mut frame = if words < 0x7f {
@@ -220,6 +238,11 @@ pub async fn send_frame_write(
         }
         FrameKind::Obfuscated { cipher } => {
             // Abridged framing + AES-256-CTR encryption (cipher stored).
+            debug_assert_eq!(
+                data.len() % 4,
+                0,
+                "obfuscated send: payload must be 4-byte aligned"
+            );
             let words = data.len() / 4;
             let mut frame = if words < 0x7f {
                 let mut v = Vec::with_capacity(1 + data.len());
@@ -310,9 +333,20 @@ pub async fn recv_frame_read(
             stream.read_exact(&mut buf).await?;
             if words == 1 {
                 let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
-                if code < 0 {
-                    return Err(ConnectError::TransportCode(code));
-                }
+                // A valid encrypted MTProto frame is always >= 40 bytes
+                // (key_id=8 + msg_key=16 + 1 AES block=16).  A 1-word frame
+                // is always a transport error code, positive or negative.
+                // Previously only negative codes were caught here; positive
+                // codes slipped into decrypt_data_v2 as InvalidBuffer.
+                log::warn!(
+                    "[ferogram/connect] abridged 4-byte transport code: {code} ({code:#010x}) \
+                     raw=[{:02x} {:02x} {:02x} {:02x}]",
+                    buf[0],
+                    buf[1],
+                    buf[2],
+                    buf[3],
+                );
+                return Err(ConnectError::TransportCode(code));
             }
             Ok(buf)
         }
@@ -321,6 +355,17 @@ pub async fn recv_frame_read(
             stream.read_exact(&mut len_buf).await?;
             let len_i32 = i32::from_le_bytes(len_buf);
             if len_i32 < 0 {
+                let status = (-len_i32) as u32;
+                log::error!(
+                    "[full] transport code triggered raw={:02x} {:02x} {:02x} {:02x} signed={} status={} unsigned={}",
+                    len_buf[0],
+                    len_buf[1],
+                    len_buf[2],
+                    len_buf[3],
+                    len_i32,
+                    status,
+                    u32::from_le_bytes(len_buf)
+                );
                 return Err(ConnectError::TransportCode(len_i32));
             }
             if len_i32 <= 4 {
@@ -335,16 +380,42 @@ pub async fn recv_frame_read(
             Ok(buf)
         }
         FrameKind::Full { recv_seqno, .. } => {
+            // Log before consuming any bytes so early exits (transport error,
+            // short frame, CRC mismatch) still appear in the trace.
+            let full_call_id =
+                FULL_RECV_CALL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            log::trace!(
+                "[full] recv_frame_read entry: call#{full_call_id} recv_seqno={}",
+                recv_seqno.load(std::sync::atomic::Ordering::Relaxed),
+            );
             let mut len_buf = [0u8; 4];
             stream.read_exact(&mut len_buf).await?;
-            let total_len_i32 = i32::from_le_bytes(len_buf);
-            if total_len_i32 < 0 {
-                return Err(ConnectError::TransportCode(total_len_i32));
+            let len_i32 = i32::from_le_bytes(len_buf);
+            if len_i32 < 0 {
+                let status = (-len_i32) as u32;
+                log::error!(
+                    "[full] transport code triggered raw={:02x} {:02x} {:02x} {:02x} signed={} status={} unsigned={} (call#{full_call_id} recv_seqno={})",
+                    len_buf[0],
+                    len_buf[1],
+                    len_buf[2],
+                    len_buf[3],
+                    len_i32,
+                    status,
+                    u32::from_le_bytes(len_buf),
+                    recv_seqno.load(std::sync::atomic::Ordering::Relaxed),
+                );
+                return Err(ConnectError::TransportCode(len_i32));
             }
-            let total_len = total_len_i32 as usize;
-            if total_len < 12 {
-                return Err(ConnectError::other("Full transport: packet too short"));
+            if len_i32 < 12 {
+                log::error!(
+                    "[full] packet too short: len={len_i32} (call#{full_call_id} recv_seqno={})",
+                    recv_seqno.load(std::sync::atomic::Ordering::Relaxed),
+                );
+                return Err(ConnectError::other(format!(
+                    "Full transport: packet too short ({len_i32})"
+                )));
             }
+            let total_len = len_i32 as usize;
             let mut rest = vec![0u8; total_len - 4];
             stream.read_exact(&mut rest).await?;
             let (body, crc_bytes) = rest.split_at(rest.len() - 4);
@@ -354,17 +425,50 @@ pub async fn recv_frame_read(
             check_input.extend_from_slice(body);
             let actual_crc = crate::util::crc32_ieee(&check_input);
             if actual_crc != expected_crc {
+                log::error!(
+                    "[full] CRC mismatch: got {actual_crc:#010x}, expected {expected_crc:#010x} (call#{full_call_id} len={total_len} recv_seqno={})",
+                    recv_seqno.load(std::sync::atomic::Ordering::Relaxed),
+                );
                 return Err(ConnectError::other(format!(
                     "Full transport: CRC mismatch (got {actual_crc:#010x}, expected {expected_crc:#010x})"
                 )));
             }
-            let recv_seq = u32::from_le_bytes(body[..4].try_into().unwrap());
-            let expected_seq = recv_seqno.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Grammers-style strict receive sequence validation.
+            let recv_seq = i32::from_le_bytes(body[..4].try_into().unwrap());
+            let expected_seq = recv_seqno.load(std::sync::atomic::Ordering::Relaxed) as i32;
+
+            log::trace!(
+                "[full] recv frame: call#{full_call_id} len={} recv_seq={} expected_seq={} crc={:#010x}",
+                total_len,
+                recv_seq,
+                expected_seq,
+                actual_crc
+            );
+
             if recv_seq != expected_seq {
+                let hex: String = len_buf
+                    .iter()
+                    .chain(body.iter().take(16))
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                tracing::error!(
+                    "[ferogram/frame] Full transport: seqno mismatch \
+                     (got {recv_seq}, expected {expected_seq}, call#{full_call_id}, \
+                     gap={}) first_bytes=[{hex}]",
+                    recv_seq.wrapping_sub(expected_seq),
+                );
                 return Err(ConnectError::other(format!(
-                    "Full transport: seqno mismatch (got {recv_seq}, expected {expected_seq})"
+                    "Full transport: bad seq (got {}, expected {})",
+                    recv_seq, expected_seq
                 )));
             }
+
+            recv_seqno.store(
+                expected_seq.wrapping_add(1) as u32,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+
             Ok(body[4..].to_vec())
         }
         FrameKind::Obfuscated { cipher } => {
@@ -399,9 +503,17 @@ pub async fn recv_frame_read(
             cipher.lock().await.decrypt(&mut buf);
             if words == 1 {
                 let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
-                if code < 0 {
-                    return Err(ConnectError::TransportCode(code));
-                }
+                // Same as plain abridged: a 1-word frame is always a transport
+                // error code regardless of sign.
+                log::warn!(
+                    "[ferogram/connect] obfuscated 4-byte transport code: {code} ({code:#010x}) \
+                     raw=[{:02x} {:02x} {:02x} {:02x}]",
+                    buf[0],
+                    buf[1],
+                    buf[2],
+                    buf[3],
+                );
+                return Err(ConnectError::TransportCode(code));
             }
             Ok(buf)
         }
@@ -465,6 +577,14 @@ pub async fn recv_frame_plain<T: Deserializable>(
         }
         FrameKind::Full { recv_seqno, .. } => {
             // Full: [total_len(4)][seq(4)][payload][crc32(4)]
+            // DH handshake frames use the same seqno counter as encrypted frames.
+            // Shares FULL_RECV_CALL_COUNTER with recv_frame_read for tracing.
+            let full_call_id =
+                FULL_RECV_CALL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            log::trace!(
+                "[full-plain] recv_frame_plain entry: call#{full_call_id} recv_seqno={}",
+                recv_seqno.load(std::sync::atomic::Ordering::Relaxed),
+            );
             let mut len_buf = [0u8; 4];
             stream.read_exact(&mut len_buf).await?;
             let total_len = u32::from_le_bytes(len_buf) as usize;
@@ -491,12 +611,19 @@ pub async fn recv_frame_plain<T: Deserializable>(
 
             // Validate and advance seqno.
             let recv_seq = u32::from_le_bytes(body[..4].try_into().unwrap());
-            let expected_seq = recv_seqno.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let expected_seq = recv_seqno.load(std::sync::atomic::Ordering::Relaxed);
+            log::trace!(
+                "[full-plain] recv frame: call#{full_call_id} len={total_len} recv_seq={recv_seq} expected_seq={expected_seq}"
+            );
             if recv_seq != expected_seq {
                 return Err(ConnectError::other(format!(
                     "Full plaintext: seqno mismatch (got {recv_seq}, expected {expected_seq})"
                 )));
             }
+            recv_seqno.store(
+                expected_seq.wrapping_add(1),
+                std::sync::atomic::Ordering::Relaxed,
+            );
 
             body[4..].to_vec()
         }

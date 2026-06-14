@@ -63,3 +63,28 @@ fn crc32_derived_id() {
     let defs: Vec<_> = parse_tl_file(src).collect::<Result<_, _>>().unwrap();
     assert_eq!(defs[0].id, 0xbc799737);
 }
+
+#[test]
+fn inline_comment_stripped() {
+    let src = "boolFalse#bc799737 = Bool; // trailing comment";
+    let defs: Vec<_> = parse_tl_file(src).collect::<Result<_, _>>().unwrap();
+    assert_eq!(defs.len(), 1);
+    assert_eq!(defs[0].name, "boolFalse");
+}
+
+#[test]
+fn multi_defs_one_line() {
+    let src = "boolTrue#997275b5 = Bool; boolFalse#bc799737 = Bool;";
+    let defs: Vec<_> = parse_tl_file(src).collect::<Result<_, _>>().unwrap();
+    assert_eq!(defs.len(), 2);
+    assert_eq!(defs[0].name, "boolTrue");
+    assert_eq!(defs[1].name, "boolFalse");
+}
+
+#[test]
+fn missing_final_semicolon() {
+    let src = "boolFalse#bc799737 = Bool";
+    let defs: Vec<_> = parse_tl_file(src).collect::<Result<_, _>>().unwrap();
+    assert_eq!(defs.len(), 1);
+    assert_eq!(defs[0].name, "boolFalse");
+}

@@ -84,6 +84,11 @@ impl ObfuscatedStream {
     pub async fn send(&mut self, data: &[u8]) -> Result<(), ConnectError> {
         match self.framing {
             ObfuscatedFraming::Abridged => {
+                debug_assert_eq!(
+                    data.len() % 4,
+                    0,
+                    "obfuscated send: payload must be 4-byte aligned"
+                );
                 let words = data.len() / 4;
                 let mut frame = if words < 0x7f {
                     let mut v = Vec::with_capacity(1 + data.len());

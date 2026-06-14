@@ -39,33 +39,11 @@ pub struct DcConnection {
     enc: EncryptedSession,
     pending_acks: Vec<i64>,
     call_count: u32,
-    /// AES-256-CTR cipher for obfuscated transport; None for plain transports.
-    cipher: Option<ferogram_crypto::ObfuscatedCipher>,
+    /// Active framing kind for this connection.
+    frame_kind: FrameKind,
     /// Persistent dedup ring that outlives individual EncryptedSessions.
     #[allow(dead_code)]
     seen_msg_ids: SeenMsgIds,
-}
-
-/// Extract the ObfuscatedCipher from a FrameKind, if any.
-///
-/// DcConnection uses a bare `Option<ObfuscatedCipher>` for its I/O loop,
-/// while `ferogram-connect` uses `FrameKind`. This bridges the two.
-///
-/// Takes ownership of `fk` because `ObfuscatedCipher` is not Clone; we unwrap
-/// the Arc (refcount is always 1 here — the FrameKind was just created by
-/// `connect_to_dc`) and consume the Mutex.
-fn frame_kind_to_cipher(fk: FrameKind) -> Option<ferogram_crypto::ObfuscatedCipher> {
-    match fk {
-        FrameKind::Obfuscated { cipher }
-        | FrameKind::PaddedIntermediate { cipher }
-        | FrameKind::FakeTls { cipher } => {
-            // Arc was just created; try_unwrap succeeds when refcount is 1.
-            std::sync::Arc::try_unwrap(cipher)
-                .ok()
-                .map(|m| m.into_inner())
-        }
-        _ => None,
-    }
 }
 
 impl DcConnection {
@@ -79,7 +57,7 @@ impl DcConnection {
         use tokio::task::JoinSet;
         let addr = addr.to_owned();
         let socks5 = socks5.cloned();
-        tracing::debug!("[dc_pool] probing {addr} with 3 transports");
+        tracing::debug!("[dc_pool] probing {addr} with Full / Obfuscated / Abridged transports");
         let mut set: JoinSet<Result<(DcConnection, &'static str), InvocationError>> =
             JoinSet::new();
 
@@ -87,6 +65,17 @@ impl DcConnection {
             let a = addr.clone();
             let s = socks5.clone();
             set.spawn(async move {
+                Ok((
+                    DcConnection::connect_raw(&a, s.as_ref(), &TransportKind::Full, dc_id).await?,
+                    "Full",
+                ))
+            });
+        }
+        {
+            let a = addr.clone();
+            let s = socks5.clone();
+            set.spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 Ok((
                     DcConnection::connect_raw(
                         &a,
@@ -103,7 +92,7 @@ impl DcConnection {
             let a = addr.clone();
             let s = socks5.clone();
             set.spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
                 Ok((
                     DcConnection::connect_raw(&a, s.as_ref(), &TransportKind::Abridged, dc_id)
                         .await?,
@@ -150,12 +139,12 @@ impl DcConnection {
         tracing::debug!("[dc_pool] Connecting to {addr} …");
         let (stream, frame_kind, enc) =
             ferogram_connect::connect_to_dc(addr, dc_id, transport, socks5, None).await?;
-        let cipher = frame_kind_to_cipher(frame_kind);
+
         tracing::debug!("[dc_pool] DH complete ✓ for {addr}");
         let seen = new_seen_msg_ids();
         Ok(Self {
             stream,
-            cipher,
+            frame_kind,
             enc: EncryptedSession::with_seen(
                 enc.auth_key_bytes(),
                 enc.salt,
@@ -183,19 +172,18 @@ impl DcConnection {
         pfs: bool,
     ) -> Result<Self, InvocationError> {
         // ferogram-connect owns TCP open + keepalive + transport init.
-        let (mut stream, frame_kind) =
+        let (mut stream, mut frame_kind) =
             ferogram_connect::Connection::open_stream_pub(addr, dc_id, transport, socks5, mtproxy)
                 .await?;
-        let mut cipher = frame_kind_to_cipher(frame_kind);
 
         if pfs {
             tracing::debug!("[dc_pool] PFS: temp DH bind for DC{dc_id}");
-            match Self::do_pool_pfs_bind(&mut stream, cipher.as_mut(), &auth_key, dc_id).await {
+            match Self::do_pool_pfs_bind(&mut stream, &mut frame_kind, &auth_key, dc_id).await {
                 Ok(temp_enc) => {
                     tracing::info!("[dc_pool] PFS bind complete DC{dc_id}");
                     return Ok(Self {
                         stream,
-                        cipher,
+                        frame_kind,
                         enc: temp_enc,
                         pending_acks: Vec::new(),
                         call_count: 0,
@@ -212,7 +200,7 @@ impl DcConnection {
         let seen = new_seen_msg_ids();
         Ok(Self {
             stream,
-            cipher,
+            frame_kind,
             enc: EncryptedSession::with_seen(auth_key, first_salt, time_offset, seen.clone()),
             pending_acks: Vec::new(),
             call_count: 0,
@@ -221,10 +209,9 @@ impl DcConnection {
     }
 
     /// Temp-key DH handshake + auth.bindTempAuthKey on an existing stream.
-    #[allow(clippy::needless_option_as_deref)]
     async fn do_pool_pfs_bind(
         stream: &mut tokio::net::TcpStream,
-        mut cipher: Option<&mut ferogram_crypto::ObfuscatedCipher>,
+        kind: &mut FrameKind,
         perm_auth_key: &[u8; 256],
         dc_id: i16,
     ) -> Result<EncryptedSession, InvocationError> {
@@ -238,36 +225,18 @@ impl DcConnection {
         let mut plain = Session::new();
 
         let (req1, s1) = auth::step1().map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-        Self::send_plain_frame(
-            stream,
-            &plain.pack(&req1).to_plaintext_bytes(),
-            cipher.as_deref_mut(),
-        )
-        .await?;
-        let res_pq: tl::enums::ResPq =
-            Self::recv_plain_frame(stream, cipher.as_deref_mut()).await?;
+        Self::send_plain_frame(stream, &plain.pack(&req1).to_plaintext_bytes(), kind).await?;
+        let res_pq: tl::enums::ResPq = Self::recv_plain_frame(stream, kind).await?;
 
         let (req2, s2) = step2_temp(s1, res_pq, dc_id as i32, TEMP_EXPIRES)
             .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-        Self::send_plain_frame(
-            stream,
-            &plain.pack(&req2).to_plaintext_bytes(),
-            cipher.as_deref_mut(),
-        )
-        .await?;
-        let dh: tl::enums::ServerDhParams =
-            Self::recv_plain_frame(stream, cipher.as_deref_mut()).await?;
+        Self::send_plain_frame(stream, &plain.pack(&req2).to_plaintext_bytes(), kind).await?;
+        let dh: tl::enums::ServerDhParams = Self::recv_plain_frame(stream, kind).await?;
 
         let (req3, s3) =
             auth::step3(s2, dh).map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-        Self::send_plain_frame(
-            stream,
-            &plain.pack(&req3).to_plaintext_bytes(),
-            cipher.as_deref_mut(),
-        )
-        .await?;
-        let ans: tl::enums::SetClientDhParamsAnswer =
-            Self::recv_plain_frame(stream, cipher.as_deref_mut()).await?;
+        Self::send_plain_frame(stream, &plain.pack(&req3).to_plaintext_bytes(), kind).await?;
+        let ans: tl::enums::SetClientDhParamsAnswer = Self::recv_plain_frame(stream, kind).await?;
 
         let done = {
             let mut result =
@@ -297,14 +266,10 @@ impl DcConnection {
                             retry_id,
                         )
                         .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-                        Self::send_plain_frame(
-                            stream,
-                            &plain.pack(&rr).to_plaintext_bytes(),
-                            cipher.as_deref_mut(),
-                        )
-                        .await?;
+                        Self::send_plain_frame(stream, &plain.pack(&rr).to_plaintext_bytes(), kind)
+                            .await?;
                         let ar: tl::enums::SetClientDhParamsAnswer =
-                            Self::recv_plain_frame(stream, cipher.as_deref_mut()).await?;
+                            Self::recv_plain_frame(stream, kind).await?;
                         result = auth::finish(s3r, ar)
                             .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
                     }
@@ -349,13 +314,13 @@ impl DcConnection {
 
         // send encrypted bind request
         let wire = temp_enc.pack_body_at_msg_id(&bind_body, msg_id);
-        Self::send_abridged(stream, &wire, cipher.as_deref_mut()).await?;
+        Self::send_abridged(stream, &wire, kind).await?;
 
         // Receive and verify response.
         // The server may send informational frames first (msgs_ack, new_session_created)
         // before the actual rpc_result{boolTrue}, so we loop up to 5 frames.
         for attempt in 0u8..5 {
-            let mut raw = Self::recv_abridged(stream, cipher.as_deref_mut()).await?;
+            let mut raw = Self::recv_abridged(stream, kind).await?;
             let decrypted = temp_enc.unpack(&mut raw).map_err(|e| {
                 InvocationError::Deserialize(format!("PFS pool bind decrypt: {e:?}"))
             })?;
@@ -415,24 +380,24 @@ impl DcConnection {
             // Telegram to close the connection. A dedicated always-running reader task
             // that drains and acks all server messages would fix this permanently; for
             // now the next rpc_call iteration receives and acks the Pong via pending_acks.
-            let _ = Self::send_abridged(&mut self.stream, &ping_wire, self.cipher.as_mut()).await;
+            let _ = Self::send_abridged(&mut self.stream, &ping_wire, &mut self.frame_kind).await;
         }
 
         // Flush pending acks.
         if !self.pending_acks.is_empty() {
             let ack_body = build_msgs_ack_body(&self.pending_acks);
             let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-            let _ = Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut()).await;
+            let _ = Self::send_abridged(&mut self.stream, &ack_wire, &mut self.frame_kind).await;
             self.pending_acks.clear();
         }
 
         // Track sent msg_id to verify rpc_result.req_msg_id and discard stale responses.
         let (wire, mut sent_msg_id) = self.enc.pack_with_msg_id(req);
-        Self::send_abridged(&mut self.stream, &wire, self.cipher.as_mut()).await?;
+        Self::send_abridged(&mut self.stream, &wire, &mut self.frame_kind).await?;
         let mut salt_retries = 0u8;
         let mut session_resets = 0u8;
         loop {
-            let mut raw = Self::recv_abridged(&mut self.stream, self.cipher.as_mut()).await?;
+            let mut raw = Self::recv_abridged(&mut self.stream, &mut self.frame_kind).await?;
             let msg = self
                 .enc
                 .unpack(&mut raw)
@@ -445,7 +410,7 @@ impl DcConnection {
                 let ack_body = build_msgs_ack_body(&self.pending_acks);
                 let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
                 let _ =
-                    Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut()).await;
+                    Self::send_abridged(&mut self.stream, &ack_wire, &mut self.frame_kind).await;
                 self.pending_acks.clear();
             }
             // Salt is updated only on explicit bad_server_salt, not on every message.
@@ -479,7 +444,7 @@ impl DcConnection {
                 if !self.pending_acks.is_empty() {
                     let ack_body = build_msgs_ack_body(&self.pending_acks);
                     let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-                    let _ = Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut())
+                    let _ = Self::send_abridged(&mut self.stream, &ack_wire, &mut self.frame_kind)
                         .await;
                     self.pending_acks.clear();
                 }
@@ -493,7 +458,7 @@ impl DcConnection {
                     );
                     let (wire, new_id) = self.enc.pack_with_msg_id(req);
                     sent_msg_id = new_id;
-                    Self::send_abridged(&mut self.stream, &wire, self.cipher.as_mut()).await?;
+                    Self::send_abridged(&mut self.stream, &wire, &mut self.frame_kind).await?;
                 }
                 // If scan_result.is_some(), the result arrived in the same container
                 // as new_session_created; session has been reset for future calls,
@@ -533,13 +498,13 @@ impl DcConnection {
                 if !self.pending_acks.is_empty() {
                     let ack_body = build_msgs_ack_body(&self.pending_acks);
                     let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-                    let _ = Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut())
+                    let _ = Self::send_abridged(&mut self.stream, &ack_wire, &mut self.frame_kind)
                         .await;
                     self.pending_acks.clear();
                 }
                 let (wire, new_id) = self.enc.pack_with_msg_id(req);
                 sent_msg_id = new_id;
-                Self::send_abridged(&mut self.stream, &wire, self.cipher.as_mut()).await?;
+                Self::send_abridged(&mut self.stream, &wire, &mut self.frame_kind).await?;
             }
             if let Some(result) = scan_result {
                 metrics::counter!("ferogram.rpc_calls_total", "result" => "ok").increment(1);
@@ -795,15 +760,15 @@ impl DcConnection {
         if !self.pending_acks.is_empty() {
             let ack_body = build_msgs_ack_body(&self.pending_acks);
             let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-            let _ = Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut()).await;
+            let _ = Self::send_abridged(&mut self.stream, &ack_wire, &mut self.frame_kind).await;
             self.pending_acks.clear();
         }
         let (wire, mut sent_msg_id) = self.enc.pack_serializable_with_msg_id(req);
-        Self::send_abridged(&mut self.stream, &wire, self.cipher.as_mut()).await?;
+        Self::send_abridged(&mut self.stream, &wire, &mut self.frame_kind).await?;
         let mut salt_retries = 0u8;
         let mut session_resets = 0u8;
         loop {
-            let mut raw = Self::recv_abridged(&mut self.stream, self.cipher.as_mut()).await?;
+            let mut raw = Self::recv_abridged(&mut self.stream, &mut self.frame_kind).await?;
             let msg = self
                 .enc
                 .unpack(&mut raw)
@@ -813,7 +778,7 @@ impl DcConnection {
                 let ack_body = build_msgs_ack_body(&self.pending_acks);
                 let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
                 let _ =
-                    Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut()).await;
+                    Self::send_abridged(&mut self.stream, &ack_wire, &mut self.frame_kind).await;
                 self.pending_acks.clear();
             }
             // Salt updated only on explicit bad_server_salt, not on every message.
@@ -845,14 +810,14 @@ impl DcConnection {
                 if !self.pending_acks.is_empty() {
                     let ack_body = build_msgs_ack_body(&self.pending_acks);
                     let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-                    let _ = Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut())
+                    let _ = Self::send_abridged(&mut self.stream, &ack_wire, &mut self.frame_kind)
                         .await;
                     self.pending_acks.clear();
                 }
                 if scan_result.is_none() {
                     let (wire, new_id) = self.enc.pack_serializable_with_msg_id(req);
                     sent_msg_id = new_id;
-                    Self::send_abridged(&mut self.stream, &wire, self.cipher.as_mut()).await?;
+                    Self::send_abridged(&mut self.stream, &wire, &mut self.frame_kind).await?;
                 }
             } else if need_resend {
                 match bad_msg_code {
@@ -882,13 +847,13 @@ impl DcConnection {
                 if !self.pending_acks.is_empty() {
                     let ack_body = build_msgs_ack_body(&self.pending_acks);
                     let (ack_wire, _) = self.enc.pack_body_with_msg_id(&ack_body, false);
-                    let _ = Self::send_abridged(&mut self.stream, &ack_wire, self.cipher.as_mut())
+                    let _ = Self::send_abridged(&mut self.stream, &ack_wire, &mut self.frame_kind)
                         .await;
                     self.pending_acks.clear();
                 }
                 let (wire, new_id) = self.enc.pack_serializable_with_msg_id(req);
                 sent_msg_id = new_id;
-                Self::send_abridged(&mut self.stream, &wire, self.cipher.as_mut()).await?;
+                Self::send_abridged(&mut self.stream, &wire, &mut self.frame_kind).await?;
             }
             if let Some(result) = scan_result {
                 return Ok(result);
@@ -899,156 +864,315 @@ impl DcConnection {
     /// Send pre-serialized raw bytes and receive the raw response.
     /// Used by CDN download connections (no MTProto encryption layer).
     pub async fn rpc_call_raw(&mut self, body: &[u8]) -> Result<Vec<u8>, InvocationError> {
-        Self::send_abridged(&mut self.stream, body, self.cipher.as_mut()).await?;
-        Self::recv_abridged(&mut self.stream, self.cipher.as_mut()).await
+        Self::send_abridged(&mut self.stream, body, &mut self.frame_kind).await?;
+        Self::recv_abridged(&mut self.stream, &mut self.frame_kind).await
     }
 
+    /// Send a framed message using the active FrameKind.
+    /// All transport variants (Abridged, Intermediate, Full, Obfuscated, …) are handled.
     async fn send_abridged(
         stream: &mut TcpStream,
         data: &[u8],
-        cipher: Option<&mut ferogram_crypto::ObfuscatedCipher>,
+        kind: &mut FrameKind,
     ) -> Result<(), InvocationError> {
-        // Single write_all: avoids Nagle stalls and partial-write corruption.
-        let words = data.len() / 4;
-        let mut frame = if words < 0x7f {
-            let mut v = Vec::with_capacity(1 + data.len());
-            v.push(words as u8);
-            v
-        } else {
-            let mut v = Vec::with_capacity(4 + data.len());
-            v.extend_from_slice(&[
-                0x7f,
-                (words & 0xff) as u8,
-                ((words >> 8) & 0xff) as u8,
-                ((words >> 16) & 0xff) as u8,
-            ]);
-            v
-        };
-        frame.extend_from_slice(data);
-        if let Some(c) = cipher {
-            c.encrypt(&mut frame);
+        use tokio::io::AsyncWriteExt as _;
+        match kind {
+            FrameKind::Abridged => {
+                let words = data.len() / 4;
+                let mut frame = if words < 0x7f {
+                    let mut v = Vec::with_capacity(1 + data.len());
+                    v.push(words as u8);
+                    v
+                } else {
+                    let mut v = Vec::with_capacity(4 + data.len());
+                    v.extend_from_slice(&[
+                        0x7f,
+                        (words & 0xff) as u8,
+                        ((words >> 8) & 0xff) as u8,
+                        ((words >> 16) & 0xff) as u8,
+                    ]);
+                    v
+                };
+                frame.extend_from_slice(data);
+                stream.write_all(&frame).await?;
+            }
+            FrameKind::Intermediate => {
+                let mut frame = Vec::with_capacity(4 + data.len());
+                frame.extend_from_slice(&(data.len() as u32).to_le_bytes());
+                frame.extend_from_slice(data);
+                stream.write_all(&frame).await?;
+            }
+            FrameKind::Full { send_seqno, .. } => {
+                let seq = send_seqno.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let total_len = (data.len() as u32) + 12;
+                let mut packet = Vec::with_capacity(total_len as usize);
+                packet.extend_from_slice(&total_len.to_le_bytes());
+                packet.extend_from_slice(&seq.to_le_bytes());
+                packet.extend_from_slice(data);
+                let crc = ferogram_connect::crc32_ieee(&packet);
+                packet.extend_from_slice(&crc.to_le_bytes());
+                stream.write_all(&packet).await?;
+            }
+            FrameKind::Obfuscated { cipher } => {
+                let words = data.len() / 4;
+                let mut frame = if words < 0x7f {
+                    let mut v = Vec::with_capacity(1 + data.len());
+                    v.push(words as u8);
+                    v
+                } else {
+                    let mut v = Vec::with_capacity(4 + data.len());
+                    v.extend_from_slice(&[
+                        0x7f,
+                        (words & 0xff) as u8,
+                        ((words >> 8) & 0xff) as u8,
+                        ((words >> 16) & 0xff) as u8,
+                    ]);
+                    v
+                };
+                frame.extend_from_slice(data);
+                cipher.lock().await.encrypt(&mut frame);
+                stream.write_all(&frame).await?;
+            }
+            FrameKind::PaddedIntermediate { cipher } => {
+                let mut pad_len_buf = [0u8; 1];
+                ferogram_crypto::fill_random(&mut pad_len_buf);
+                let pad_len = (pad_len_buf[0] & 0x0f) as usize;
+                let total_payload = data.len() + pad_len;
+                let mut frame = Vec::with_capacity(4 + total_payload);
+                frame.extend_from_slice(&(total_payload as u32).to_le_bytes());
+                frame.extend_from_slice(data);
+                let mut pad = vec![0u8; pad_len];
+                ferogram_crypto::fill_random(&mut pad);
+                frame.extend_from_slice(&pad);
+                cipher.lock().await.encrypt(&mut frame);
+                stream.write_all(&frame).await?;
+            }
+            FrameKind::FakeTls { cipher } => {
+                const TLS_APP_DATA: u8 = 0x17;
+                const TLS_VER: [u8; 2] = [0x03, 0x03];
+                const CHUNK: usize = 2878;
+                let mut locked = cipher.lock().await;
+                for chunk in data.chunks(CHUNK) {
+                    let chunk_len = chunk.len() as u16;
+                    let mut record = Vec::with_capacity(5 + chunk.len());
+                    record.push(TLS_APP_DATA);
+                    record.extend_from_slice(&TLS_VER);
+                    record.extend_from_slice(&chunk_len.to_be_bytes());
+                    record.extend_from_slice(chunk);
+                    locked.encrypt(&mut record[5..]);
+                    stream.write_all(&record).await?;
+                }
+            }
         }
-        stream.write_all(&frame).await?;
         Ok(())
     }
 
+    /// Receive a framed message using the active FrameKind (with 60-second timeout).
     async fn recv_abridged(
         stream: &mut TcpStream,
-        mut cipher: Option<&mut ferogram_crypto::ObfuscatedCipher>,
+        kind: &mut FrameKind,
     ) -> Result<Vec<u8>, InvocationError> {
-        // 60-second recv timeout: prevents hung reads on silently closed connections.
         use tokio::time::{Duration, timeout};
         const RECV_TIMEOUT: Duration = Duration::from_secs(60);
 
-        let mut h = [0u8; 1];
-        timeout(RECV_TIMEOUT, stream.read_exact(&mut h))
-            .await
-            .map_err(|_| {
-                InvocationError::Io(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "transfer recv: header timeout (60 s)",
-                ))
-            })??;
-        if let Some(ref mut c) = cipher.as_mut() {
-            c.decrypt(&mut h);
-        }
-
-        // 0x7f = extended length; next 3 bytes are the LE word count.
-        let words = if h[0] == 0x7f {
-            let mut b = [0u8; 3];
-            timeout(RECV_TIMEOUT, stream.read_exact(&mut b))
-                .await
-                .map_err(|_| {
-                    InvocationError::Io(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "transfer recv: length timeout (60 s)",
-                    ))
-                })??;
-            if let Some(ref mut c) = cipher.as_mut() {
-                c.decrypt(&mut b);
-            }
-            let w = b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16;
-            // word count of 1 after 0x7f = Telegram 4-byte transport error code
-            if w == 1 {
-                let mut code_buf = [0u8; 4];
-                timeout(RECV_TIMEOUT, stream.read_exact(&mut code_buf))
+        macro_rules! tread {
+            ($buf:expr) => {
+                timeout(RECV_TIMEOUT, stream.read_exact($buf))
                     .await
                     .map_err(|_| {
                         InvocationError::Io(std::io::Error::new(
                             std::io::ErrorKind::TimedOut,
-                            "transfer recv: error code timeout (60 s)",
+                            "transfer recv: timeout (60 s)",
                         ))
-                    })??;
-                if let Some(c) = cipher.as_mut() {
-                    c.decrypt(&mut code_buf);
+                    })??
+            };
+        }
+
+        match kind {
+            FrameKind::Abridged => {
+                let mut h = [0u8; 1];
+                tread!(&mut h);
+                let words = if h[0] == 0x7f {
+                    let mut b = [0u8; 3];
+                    tread!(&mut b);
+                    let w = b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16;
+                    if w == 1 {
+                        let mut code_buf = [0u8; 4];
+                        tread!(&mut code_buf);
+                        let code = i32::from_le_bytes(code_buf);
+                        return Err(InvocationError::Rpc(
+                            crate::errors::RpcError::from_telegram(code, "transport error"),
+                        ));
+                    }
+                    w
+                } else {
+                    h[0] as usize
+                };
+                let mut buf = vec![0u8; words * 4];
+                tread!(&mut buf);
+                if buf.len() == 4 {
+                    let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
+                    if code < 0 {
+                        return Err(InvocationError::Rpc(
+                            crate::errors::RpcError::from_telegram(code, "transport error"),
+                        ));
+                    }
                 }
-                let code = i32::from_le_bytes(code_buf);
-                return Err(InvocationError::Rpc(
-                    crate::errors::RpcError::from_telegram(code, "transport error"),
-                ));
+                Ok(buf)
             }
-            w
-        } else {
-            h[0] as usize
-        };
-
-        let mut buf = vec![0u8; words * 4];
-        timeout(RECV_TIMEOUT, stream.read_exact(&mut buf))
-            .await
-            .map_err(|_| {
-                InvocationError::Io(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "transfer recv: body timeout (60 s)",
-                ))
-            })??;
-        if let Some(c) = cipher {
-            c.decrypt(&mut buf);
-        }
-
-        // Transport errors are exactly 4 bytes (negative LE i32).
-        // This handles the short-frame path (h[0] == 1, not 0x7f).
-        // A valid encrypted MTProto frame is always >= 68 bytes, so buf.len() == 4
-        // unambiguously means a transport error code.
-        if buf.len() == 4 {
-            let code =
-                i32::from_le_bytes(buf[..4].try_into().expect("buf.len() == 4 checked above"));
-            if code < 0 {
-                return Err(InvocationError::Rpc(
-                    crate::errors::RpcError::from_telegram(code, "transport error"),
-                ));
+            FrameKind::Intermediate => {
+                let mut len_buf = [0u8; 4];
+                tread!(&mut len_buf);
+                let len_i32 = i32::from_le_bytes(len_buf);
+                if len_i32 < 0 {
+                    return Err(InvocationError::Rpc(
+                        crate::errors::RpcError::from_telegram(len_i32, "transport error"),
+                    ));
+                }
+                let mut buf = vec![0u8; len_i32 as usize];
+                tread!(&mut buf);
+                Ok(buf)
+            }
+            FrameKind::Full { recv_seqno, .. } => {
+                let mut len_buf = [0u8; 4];
+                tread!(&mut len_buf);
+                let total_len_i32 = i32::from_le_bytes(len_buf);
+                if total_len_i32 < 0 {
+                    return Err(InvocationError::Rpc(
+                        crate::errors::RpcError::from_telegram(total_len_i32, "transport error"),
+                    ));
+                }
+                let total_len = total_len_i32 as usize;
+                if total_len < 12 {
+                    return Err(InvocationError::Deserialize(
+                        "Full transport: packet too short".into(),
+                    ));
+                }
+                let mut rest = vec![0u8; total_len - 4];
+                tread!(&mut rest);
+                let (body, crc_bytes) = rest.split_at(rest.len() - 4);
+                let expected_crc = u32::from_le_bytes(crc_bytes.try_into().unwrap());
+                let mut check_input = Vec::with_capacity(4 + body.len());
+                check_input.extend_from_slice(&len_buf);
+                check_input.extend_from_slice(body);
+                let actual_crc = ferogram_connect::crc32_ieee(&check_input);
+                if actual_crc != expected_crc {
+                    return Err(InvocationError::Deserialize(format!(
+                        "Full transport: CRC mismatch (got {actual_crc:#010x}, expected {expected_crc:#010x})"
+                    )));
+                }
+                let recv_seq = u32::from_le_bytes(body[..4].try_into().unwrap());
+                let expected_seq = recv_seqno.load(std::sync::atomic::Ordering::Relaxed);
+                if recv_seq != expected_seq {
+                    return Err(InvocationError::Deserialize(format!(
+                        "Full transport: seqno mismatch (got {recv_seq}, expected {expected_seq})"
+                    )));
+                }
+                recv_seqno.store(
+                    expected_seq.wrapping_add(1),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                Ok(body[4..].to_vec())
+            }
+            FrameKind::Obfuscated { cipher } => {
+                let mut h = [0u8; 1];
+                tread!(&mut h);
+                cipher.lock().await.decrypt(&mut h);
+                let words = if h[0] == 0x7f {
+                    let mut b = [0u8; 3];
+                    tread!(&mut b);
+                    cipher.lock().await.decrypt(&mut b);
+                    let w = b[0] as usize | (b[1] as usize) << 8 | (b[2] as usize) << 16;
+                    if w == 1 {
+                        let mut code_buf = [0u8; 4];
+                        tread!(&mut code_buf);
+                        cipher.lock().await.decrypt(&mut code_buf);
+                        let code = i32::from_le_bytes(code_buf);
+                        return Err(InvocationError::Rpc(
+                            crate::errors::RpcError::from_telegram(code, "transport error"),
+                        ));
+                    }
+                    w
+                } else {
+                    h[0] as usize
+                };
+                let mut buf = vec![0u8; words * 4];
+                tread!(&mut buf);
+                cipher.lock().await.decrypt(&mut buf);
+                if buf.len() == 4 {
+                    let code = i32::from_le_bytes(buf[..4].try_into().unwrap());
+                    if code < 0 {
+                        return Err(InvocationError::Rpc(
+                            crate::errors::RpcError::from_telegram(code, "transport error"),
+                        ));
+                    }
+                }
+                Ok(buf)
+            }
+            FrameKind::PaddedIntermediate { cipher } => {
+                let mut len_buf = [0u8; 4];
+                tread!(&mut len_buf);
+                cipher.lock().await.decrypt(&mut len_buf);
+                let total_len = i32::from_le_bytes(len_buf);
+                if total_len < 0 {
+                    return Err(InvocationError::Rpc(
+                        crate::errors::RpcError::from_telegram(total_len, "transport error"),
+                    ));
+                }
+                let mut buf = vec![0u8; total_len as usize];
+                tread!(&mut buf);
+                cipher.lock().await.decrypt(&mut buf);
+                if buf.len() >= 24 {
+                    let pad = (buf.len() - 24) % 16;
+                    buf.truncate(buf.len() - pad);
+                }
+                Ok(buf)
+            }
+            FrameKind::FakeTls { cipher } => {
+                let mut hdr = [0u8; 5];
+                tread!(&mut hdr);
+                if hdr[0] != 0x17 {
+                    return Err(InvocationError::Deserialize(format!(
+                        "FakeTLS: unexpected record type 0x{:02x}",
+                        hdr[0]
+                    )));
+                }
+                let payload_len = u16::from_be_bytes([hdr[3], hdr[4]]) as usize;
+                let mut buf = vec![0u8; payload_len];
+                tread!(&mut buf);
+                cipher.lock().await.decrypt(&mut buf);
+                Ok(buf)
             }
         }
-
-        Ok(buf)
     }
 
+    /// Send a plaintext (DH handshake) frame, padding to 4-byte alignment for
+    /// abridged-family transports. Full and Intermediate don't need padding.
     async fn send_plain_frame(
         stream: &mut TcpStream,
         data: &[u8],
-        cipher: Option<&mut ferogram_crypto::ObfuscatedCipher>,
+        kind: &mut FrameKind,
     ) -> Result<(), InvocationError> {
-        // Abridged framing uses word-count (len/4): pad to 4-byte boundary.
-        // TL parsers ignore trailing zero bytes.
-        if !data.len().is_multiple_of(4) {
+        // Abridged/Obfuscated use word-count (len/4); must be 4-byte aligned.
+        // Full and Intermediate carry the exact byte length so no padding needed.
+        let needs_align = matches!(kind, FrameKind::Abridged | FrameKind::Obfuscated { .. });
+        if needs_align && !data.len().is_multiple_of(4) {
             let mut padded = data.to_vec();
             let pad = 4 - (data.len() % 4);
             padded.resize(data.len() + pad, 0);
-            Self::send_abridged(stream, &padded, cipher).await
+            Self::send_abridged(stream, &padded, kind).await
         } else {
-            Self::send_abridged(stream, data, cipher).await
+            Self::send_abridged(stream, data, kind).await
         }
     }
 
     async fn recv_plain_frame<T: Deserializable>(
         stream: &mut TcpStream,
-        cipher: Option<&mut ferogram_crypto::ObfuscatedCipher>,
+        kind: &mut FrameKind,
     ) -> Result<T, InvocationError> {
-        let raw = Self::recv_abridged(stream, cipher).await?;
-        // A 4-byte negative payload is a transport error code from the server.
-        // Surface it directly rather than masking it with "plain frame too short".
+        let raw = Self::recv_abridged(stream, kind).await?;
         if raw.len() == 4 {
-            let code =
-                i32::from_le_bytes(raw[..4].try_into().expect("raw.len() == 4 checked above"));
+            let code = i32::from_le_bytes(raw[..4].try_into().unwrap());
             if code < 0 {
                 return Err(InvocationError::Deserialize(format!(
                     "server transport error during DH: code {code}"
@@ -1058,22 +1182,12 @@ impl DcConnection {
         if raw.len() < 20 {
             return Err(InvocationError::Deserialize("plain frame too short".into()));
         }
-        // auth_key_id must be 0 in plaintext frames; checked after length guard above.
-        if u64::from_le_bytes(
-            raw[..8]
-                .try_into()
-                .expect("raw.len() >= 20 checked above, >= 8 implied"),
-        ) != 0
-        {
+        if u64::from_le_bytes(raw[..8].try_into().unwrap()) != 0 {
             return Err(InvocationError::Deserialize(
                 "expected auth_key_id=0 in plaintext".into(),
             ));
         }
-        let body_len = u32::from_le_bytes(
-            raw[16..20]
-                .try_into()
-                .expect("raw.len() >= 20 checked above"),
-        ) as usize;
+        let body_len = u32::from_le_bytes(raw[16..20].try_into().unwrap()) as usize;
         if raw.len() < 20 + body_len {
             return Err(InvocationError::Deserialize(format!(
                 "plain frame truncated: have {} bytes, need {}",

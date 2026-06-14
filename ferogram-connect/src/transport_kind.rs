@@ -16,8 +16,8 @@
 /// |---------|-----------|-------|
 /// | `Abridged` | `0xEF` | Lightest framing |
 /// | `Intermediate` | `0xEEEEEEEE` | 4-byte length prefix |
-/// | `Full` | none | length + seqno + CRC32 |
-/// | `Obfuscated` | random 64B | Bypasses DPI / MTProxy: **default** |
+/// | `Full` | none | length + seqno + CRC32: **default** |
+/// | `Obfuscated` | random 64B | Bypasses DPI / MTProxy |
 /// | `PaddedIntermediate` | random 64B (`0xDDDDDDDD` tag) | Required for `0xDD` MTProxy secrets |
 /// | `FakeTls` | TLS 1.3 ClientHello | Most DPI-resistant; required for `0xEE` MTProxy secrets |
 #[derive(Clone, Debug)]
@@ -27,10 +27,12 @@ pub enum TransportKind {
     /// MTProto [Intermediate] transport: 4-byte LE length prefix.
     Intermediate,
     /// MTProto [Full] transport: 4-byte length + seqno + CRC32.
+    ///
+    /// No init byte is sent. Provides CRC32 integrity and sequence number
+    /// validation on every frame. **Default** transport.
     Full,
     /// [Obfuscated2] transport: AES-256-CTR over Abridged framing.
     /// Required for MTProxy and networks with deep-packet inspection.
-    /// **Default**: works on all networks, bypasses DPI, negligible CPU cost.
     ///
     /// `secret` is the 16-byte MTProxy secret, or `None` for keyless obfuscation.
     Obfuscated { secret: Option<[u8; 16]> },
@@ -50,6 +52,6 @@ pub enum TransportKind {
 
 impl Default for TransportKind {
     fn default() -> Self {
-        TransportKind::Obfuscated { secret: None }
+        TransportKind::Full
     }
 }

@@ -102,6 +102,8 @@ pub use authentication::{
 pub use bind_temp_key::{
     auth_key_id_from_key, encrypt_bind_inner, gen_msg_id, serialize_bind_temp_auth_key,
 };
-pub use encrypted::{DecryptedMessage, EncryptedSession, SeenMsgIds, new_seen_msg_ids};
+pub use encrypted::{
+    DecryptError, DecryptedMessage, EncryptedSession, SeenMsgIds, new_seen_msg_ids,
+};
 pub use message::{Message, MessageId};
 pub use session::Session;

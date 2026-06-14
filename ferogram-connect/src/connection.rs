@@ -46,7 +46,6 @@ const TCP_KEEPALIVE_PROBES: u32 = 3;
 pub enum FrameKind {
     Abridged,
     Intermediate,
-    #[allow(dead_code)]
     Full {
         send_seqno: Arc<std::sync::atomic::AtomicU32>,
         recv_seqno: Arc<std::sync::atomic::AtomicU32>,

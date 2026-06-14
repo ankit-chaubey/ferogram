@@ -155,6 +155,16 @@ pub struct MessageBoxes {
     /// Entries for which we must currently fetch difference.
     pub(super) getting_diff_for: Vec<Key>,
 
+    /// Channel diff request currently in flight (RPC sent, response not yet
+    /// applied).  Distinct from `getting_diff_for`, which controls update
+    /// suppression and survives across the RTT.  This flag prevents
+    /// `get_channel_difference()` from handing out a second concurrent
+    /// request for the same channel (e.g. across a reconnect generation
+    /// boundary), and is cleared whenever the response (or its premature-end
+    /// equivalent) is consumed - by `apply_channel_difference` or
+    /// `end_channel_difference` - regardless of which generation issued it.
+    pub(super) channel_diff_in_flight: Option<i64>,
+
     /// Cached minimum deadline across all entries.
     pub(super) next_deadline: Instant,
 }

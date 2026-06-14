@@ -26,7 +26,7 @@ use crate::{
     PeerCache, PeerRef, RetryContext, RetryPolicy, dc_pool, message_box, persist,
 };
 use ferogram_connect::SALT_USE_DELAY;
-use ferogram_mtproto::EncryptedSession;
+use ferogram_mtproto::{DecryptError, EncryptedSession};
 use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable, RemoteCall};
 
@@ -35,6 +35,14 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
+
+// Assigns a unique monotonically increasing ID to every reader_loop
+// invocation (initial spawn + every supervisor restart). ACTIVE_READERS
+// tracks how many are currently alive. In normal operation it must never
+// exceed 1; two concurrent readers on the same socket will silently
+// consume each other's frames and desync the stream position.
+static READER_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ACTIVE_READERS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
 const ID_RPC_RESULT: u32 = 0xf35c6d01;
 const ID_RPC_ERROR: u32 = 0x2144ca19;
@@ -394,10 +402,13 @@ pub(crate) struct ClientInner {
     mtproxy: Option<crate::proxy::MtProxyConfig>,
     allow_ipv6: bool,
     transport: TransportKind,
+    /// The transport actually negotiated on the current connection.
+    /// Updated by do_reconnect after deriving from the active FrameKind.
+    /// Used by the supervisor reconnect path which doesn't have access to fk.
+    active_transport: std::sync::Mutex<TransportKind>,
     session_backend: Arc<dyn crate::session_backend::SessionBackend>,
     dc_pool: Mutex<dc_pool::DcPool>,
-    /// Dedicated pool for file transfer connections (upload/download).
-    /// Isolated from the main session to prevent crypto state contamination.
+    /// Dedicated pool for file transfer connections (upload/download).\n    /// Isolated from the main session to prevent crypto state contamination.
     transfer_pool: Mutex<dc_pool::DcPool>,
     update_tx: mpsc::Sender<update::Update>,
     /// Whether this client is signed in as a bot (set in `bot_sign_in`).
@@ -419,6 +430,15 @@ pub(crate) struct ClientInner {
     /// spawns an additional task.  The underlying MessageBoxes state machine
     /// already serialises the actual RPC calls, but redundant spawns waste resources.
     diff_in_flight: std::sync::atomic::AtomicBool,
+    /// Incremented on every reconnect.  `DiffGuard` captures the generation at
+    /// construction and only resets `diff_in_flight` when the generation still
+    /// matches, so ghost diff tasks from prior connections become no-ops on drop.
+    diff_generation: std::sync::atomic::AtomicU64,
+    /// Monotonic connection epoch. Incremented inside do_reconnect() each time
+    /// writer and write_half are replaced. Every send site snapshots this before
+    /// building the wire and re-checks after acquiring write_half; if the value
+    /// changed the wire belongs to the old session and must not be written.
+    conn_generation: std::sync::atomic::AtomicU64,
     /// Prevents two concurrent fresh-DH handshakes racing each other.
     /// A double-DH results in one key being unregistered on Telegram's servers,
     /// causing AUTH_KEY_UNREGISTERED immediately after reconnect.
@@ -716,7 +736,8 @@ impl Client {
             socks5: config.socks5,
             mtproxy: config.mtproxy,
             allow_ipv6: config.allow_ipv6,
-            transport: config.transport,
+            transport: config.transport.clone(),
+            active_transport: std::sync::Mutex::new(config.transport),
             session_backend: config.session_backend,
             dc_pool: Mutex::new(pool),
             transfer_pool: Mutex::new(transfer_pool),
@@ -728,6 +749,8 @@ impl Client {
             stream_active: std::sync::atomic::AtomicBool::new(false),
             salt_request_in_flight: std::sync::atomic::AtomicBool::new(false),
             diff_in_flight: std::sync::atomic::AtomicBool::new(false),
+            diff_generation: std::sync::atomic::AtomicU64::new(0),
+            conn_generation: std::sync::atomic::AtomicU64::new(0),
             dh_in_progress: std::sync::atomic::AtomicBool::new(false),
             pfs_enabled: config.use_pfs,
             update_config: config.update_config,
@@ -886,16 +909,27 @@ impl Client {
                         w.pending_ack.drain(..).collect()
                     };
                     // Pack a standalone msgs_ack frame (non-content-related, no
-                    // sent_bodies entry needed  - the server never acks an ack).
-                    let (wire, fk) = {
+                    // sent_bodies entry needed - the server never acks an ack.
+                    let (wire, fk, conn_gen) = {
                         let mut w = client_ack.inner.writer.lock().await;
                         let ack_body = build_msgs_ack_body(&acks);
+                        let conn_gen = client_ack
+                            .inner
+                            .conn_generation
+                            .load(std::sync::atomic::Ordering::Acquire);
                         let (wire, _msg_id) = w.enc.pack_body_with_msg_id(&ack_body, false);
-                        (wire, w.frame_kind.clone())
+                        (wire, w.frame_kind.clone(), conn_gen)
                     };
-                    send_frame_write(&mut *client_ack.inner.write_half.lock().await, &wire, &fk)
-                        .await
-                        .ok(); // TCP error here will surface on the next real send
+                    {
+                        let mut wh = client_ack.inner.write_half.lock().await;
+                        let cur = client_ack
+                            .inner
+                            .conn_generation
+                            .load(std::sync::atomic::Ordering::Acquire);
+                        if cur == conn_gen {
+                            send_frame_write(&mut *wh, &wire, &fk).await.ok(); // TCP error here will surface on the next real send
+                        }
+                    }
                 }
             });
         }
@@ -1835,10 +1869,40 @@ impl Client {
         let mut restart_count: u32 = 0;
 
         loop {
+            // Track concurrent reader count for this invocation. ACTIVE_READERS > 1
+            // means a previous reader_loop didn't exit before the supervisor
+            // spawned a new one; this is logged as a hard warning.
+            let reader_id = READER_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let active_before =
+                ACTIVE_READERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            tracing::debug!(
+                "[ferogram/reader-diag] reader#{reader_id} starting \
+                 (conn_gen={} sid={sid:#x} active_readers={active_before})",
+                self.inner
+                    .conn_generation
+                    .load(std::sync::atomic::Ordering::Acquire),
+            );
+            if active_before > 1 {
+                tracing::error!(
+                    "[ferogram/reader-diag] MULTIPLE ACTIVE READERS DETECTED: \
+                     reader#{reader_id} starting while {} reader(s) already active \
+                     (conn_gen={} sid={sid:#x}). This indicates concurrent socket \
+                     consumers and is a likely cause of frame-stream desync.",
+                    active_before - 1,
+                    self.inner
+                        .conn_generation
+                        .load(std::sync::atomic::Ordering::Acquire),
+                );
+            }
+
             tokio::select! {
                 // Clean shutdown
                 _ = shutdown_token.cancelled() => {
                     tracing::info!("[ferogram] Reader task: shutdown requested, exiting cleanly.");
+                    let remaining = ACTIVE_READERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1;
+                    tracing::debug!(
+                        "[ferogram/reader-diag] reader#{reader_id} exiting (shutdown, active_readers={remaining})"
+                    );
                     let mut pending = self.inner.pending.lock().await;
                     for (_, tx) in pending.drain() {
                         let _ = tx.send(Err(InvocationError::Dropped));
@@ -1848,10 +1912,20 @@ impl Client {
 
                 // reader_loop
                 _ = self.reader_loop(
+                        reader_id,
                         rh, fk, ak, sid,
                         restart_init_rx.take(),
                         &mut new_conn_rx, &mut network_hint_rx,
                     ) => {}
+            }
+
+            // reader_loop returned: this reader_id's run is over.
+            {
+                let remaining =
+                    ACTIVE_READERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1;
+                tracing::debug!(
+                    "[ferogram/reader-diag] reader#{reader_id} exited reader_loop (active_readers={remaining})"
+                );
             }
 
             // If we reach here, reader_loop returned without a shutdown signal.
@@ -1868,6 +1942,13 @@ impl Client {
 
             {
                 let mut pending = self.inner.pending.lock().await;
+                tracing::debug!(
+                    "[ferogram] Supervisor: draining {} pending RPC(s) before reconnect (conn_gen={})",
+                    pending.len(),
+                    self.inner
+                        .conn_generation
+                        .load(std::sync::atomic::Ordering::Acquire),
+                );
                 for (_, tx) in pending.drain() {
                     let _ = tx.send(Err(InvocationError::Io(std::io::Error::new(
                         std::io::ErrorKind::ConnectionReset,
@@ -1893,12 +1974,26 @@ impl Client {
                     _ = sleep(Duration::from_millis(delay_ms)) => {}
                 }
 
-                // do_reconnect ignores both params (_old_auth_key, _old_frame_kind)
-                // it re-reads everything from ClientInner. rh/fk/ak/sid were moved
-                // into reader_loop, so we pass dummies here; fresh values come back
-                // from the Ok result and replace them below.
+                // do_reconnect now derives transport from _old_frame_kind.
+                // The supervisor doesn't have access to rh/fk/ak/sid (moved into
+                // reader_loop), so pass a dummy_ak and dummy_fk; do_reconnect will
+                // fall back to active_transport (updated on every normal reconnect).
                 let dummy_ak = [0u8; 256];
-                let dummy_fk = FrameKind::Abridged;
+                let dummy_fk = self
+                    .inner
+                    .active_transport
+                    .lock()
+                    .ok()
+                    .map(|t| match &*t {
+                        TransportKind::Abridged => FrameKind::Abridged,
+                        TransportKind::Intermediate => FrameKind::Intermediate,
+                        TransportKind::Full => FrameKind::Abridged, // rare
+                        TransportKind::Obfuscated { .. } => FrameKind::Abridged, // will re-negotiate
+                        TransportKind::PaddedIntermediate { .. } => FrameKind::Abridged,
+                        TransportKind::Http => FrameKind::Abridged,
+                        TransportKind::FakeTls { .. } => FrameKind::Abridged,
+                    })
+                    .unwrap_or(FrameKind::Abridged);
                 match self.do_reconnect(&dummy_ak, &dummy_fk).await {
                     Ok(conn) => break conn,
                     Err(e) => {
@@ -1914,6 +2009,12 @@ impl Client {
             fk = new_fk;
             ak = new_ak;
             sid = new_sid;
+
+            // Bump generation to invalidate ghost diff tasks; do NOT reset
+            // diff_in_flight here; see do_reconnect_loop comment above.
+            self.inner
+                .diff_generation
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
 
             // be running to route the RPC response, or we deadlock).
             let (init_tx, init_rx) = oneshot::channel();
@@ -1947,6 +2048,10 @@ impl Client {
                         let mut mb = c.inner.message_box.lock().await;
                         let _ = mb.process_updates(message_box::UpdatesLike::ConnectionClosed);
                     }
+                    // Open the diff gate only after initConnection is live.
+                    c.inner
+                        .diff_in_flight
+                        .store(false, std::sync::atomic::Ordering::Release);
                     c.run_pending_differences().await;
                 }
                 let _ = init_tx.send(result);
@@ -1963,6 +2068,7 @@ impl Client {
     #[allow(clippy::too_many_arguments)]
     async fn reader_loop(
         &self,
+        reader_id: u64,
         mut rh: OwnedReadHalf,
 
         mut fk: FrameKind,
@@ -2001,25 +2107,36 @@ impl Client {
                 // check_deadlines() returns now() when difference is pending, so this
                 // arm fires immediately when a gap was detected; otherwise it sleeps
                 // until the next no-update timeout (15 min default).
-                _ = tokio::time::sleep_until({
-                    let mut mb = self.inner.message_box.lock().await;
-                    mb.check_deadlines().into()
-                }) => {
+                //
+                // When diff_in_flight is already true we substitute pending() so the
+                // select does not spin: check_deadlines() returns Instant::now() while
+                // getting_diff_for is non-empty, which would cause the arm to win every
+                // iteration (13 000+ recv_frame_read calls per second at the same seqno).
+                // The in-flight diff task resets diff_in_flight=false and calls
+                // run_pending_differences() itself, so nothing is lost.
+                _ = {
+                    let diff_busy = self.inner.diff_in_flight.load(std::sync::atomic::Ordering::Acquire);
+                    let deadline = if diff_busy {
+                        None
+                    } else {
+                        let mut mb = self.inner.message_box.lock().await;
+                        Some(mb.check_deadlines())
+                    };
+                    async move {
+                        match deadline {
+                            Some(t) => tokio::time::sleep_until(t.into()).await,
+                            None => std::future::pending::<()>().await,
+                        }
+                    }
+                } => {
                     // IMPORTANT: never await run_pending_differences() directly here.
                     // This arm runs inside the reader_loop select!, which is the only
                     // task reading TCP frames and routing RPC responses.  If we await
                     // run_pending_differences() inline, the getDifference RPC is sent
                     // but the response frame can never arrive (reader_loop is blocked)
-                    // → 30-second self-deadlock.  Spawn a separate task instead, exactly
+                    // -> 30-second self-deadlock.  Spawn a separate task instead, exactly
                     // like the Keepalive arm below.  run_pending_differences() owns the
                     // diff_in_flight guard internally, so concurrent spawns are safe.
-                    //
-                    // Guard: when diff_in_flight is already true (a getDifference RPC is
-                    // in progress), skip the spawn entirely.  Without this guard, the
-                    // deadline arm fires on every select iteration (check_deadlines()
-                    // returns Instant::now() while getting_diff_for is non-empty) and
-                    // spawns hundreds of tasks per second that all hit the in-flight flag
-                    // and log "diff already in flight".
                     if !self.inner.diff_in_flight.load(std::sync::atomic::Ordering::Acquire) {
                         let c = self.clone();
                         tokio::spawn(async move {
@@ -2038,15 +2155,101 @@ impl Client {
                 }
                 // Normal frame (or application-level keepalive timeout)
                 outcome = recv_frame_with_keepalive(&mut rh, &fk, &self.inner.writer, &self.inner.write_half) => {
+                    // Tag every frame outcome with reader_id/conn_gen/sid so we can
+                    // tell, frame-by-frame, which reader instance and connection
+                    // generation produced it. If garbage "transport code" frames
+                    // ever show a different reader_id/conn_gen than the preceding
+                    // good frames, that's direct proof of a stale/second reader
+                    // still consuming this (or another) socket.
+                    let diag_gen = self.inner.conn_generation.load(std::sync::atomic::Ordering::Acquire);
+                    match &outcome {
+                        FrameOutcome::Frame(raw) => {
+                            tracing::trace!(
+                                "[ferogram/reader-diag] [reader#{reader_id} gen={diag_gen} sid={sid:#x}] frame received: {} bytes",
+                                raw.len(),
+                            );
+                        }
+                        FrameOutcome::Error(e) => {
+                            tracing::trace!(
+                                "[ferogram/reader-diag] [reader#{reader_id} gen={diag_gen} sid={sid:#x}] frame error: {e}",
+                            );
+                        }
+                        FrameOutcome::Keepalive => {
+                            tracing::trace!(
+                                "[ferogram/reader-diag] [reader#{reader_id} gen={diag_gen} sid={sid:#x}] keepalive ping sent",
+                            );
+                        }
+                    }
                     match outcome {
                         FrameOutcome::Frame(mut raw) => {
+                            // Fix 1: validate frame geometry before touching crypto.
+                            // An impossible frame (< 24 bytes or length not a multiple of 16
+                            // after the 24-byte header) can never decrypt correctly.  Passing
+                            // it to decrypt_data_v2 produces a misleading Crypto(InvalidBuffer)
+                            // log entry and an unnecessary crypto round-trip.  Reject here,
+                            // log the raw bytes for diagnosis, and reconnect immediately.
+                            if raw.len() < 24 || (raw.len() - 24) % 16 != 0 {
+                                let hex: String = raw
+                                    .iter()
+                                    .take(32)
+                                    .map(|b| format!("{b:02x}"))
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                log::warn!(
+                                    "[ferogram/connect] invalid frame geometry before crypto: \
+                                     len={} (need >=24 and (len-24)%16==0) first_bytes=[{hex}]",
+                                    raw.len(),
+                                );
+                                drop(init_rx.take());
+                                {
+                                    let mut pending = self.inner.pending.lock().await;
+                                    let msg = "invalid frame geometry";
+                                    for (_, tx) in pending.drain() {
+                                        let _ = tx.send(Err(InvocationError::Io(
+                                            std::io::Error::new(
+                                                std::io::ErrorKind::InvalidData,
+                                                msg,
+                                            )
+                                        )));
+                                    }
+                                }
+                                {
+                                    let mut w = self.inner.writer.lock().await;
+                                    w.sent_bodies.clear();
+                                    w.container_map.clear();
+                                }
+                                // Reconnect: bump generation so any ghost diff task from
+                                // this connection becomes a no-op.  diff_in_flight is reset
+                                // inside the init task after initConnection succeeds.
+                                self.inner.diff_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                                match self.do_reconnect_loop(
+                                    RECONNECT_BASE_MS, &mut rh, &mut fk, &mut ak, &mut sid,
+                                    network_hint_rx,
+                                ).await {
+                                    Some(rx) => { init_rx = Some(rx); }
+                                    None     => return,
+                                }
+                                continue;
+                            }
+
                             let msg = match EncryptedSession::decrypt_frame_dedup(&ak, sid, &mut raw, &self.inner.seen_msg_ids) {
                                 Ok(m)  => m,
                                 Err(e) => {
-                                    // A decrypt failure (e.g. Crypto(InvalidBuffer) from a
-                                    // 4-byte transport error that slipped through) means our
-                                    // auth key is stale or the framing is broken. Treat it as
-                                    // Fatal: unblock pending RPCs immediately.
+                                    // Fix 2: on AuthKeyMismatch the socket is carrying bytes
+                                    // from a stale session (old reader task or TCP stream
+                                    // re-use).  Shut the write half down immediately so the
+                                    // kernel tears the connection; do not wait for backoff.
+                                    let is_key_mismatch = matches!(
+                                        &e,
+                                        DecryptError::Crypto(ferogram_crypto::DecryptError::AuthKeyMismatch)
+                                    );
+                                    if is_key_mismatch {
+                                        log::warn!(
+                                            "[ferogram/connect] AuthKeyMismatch: \
+                                             dead socket detected, shutting down write half immediately"
+                                        );
+                                        let _ = self.inner.write_half.lock().await.shutdown().await;
+                                    }
                                     tracing::warn!("[ferogram] Decrypt error: {e:?}: failing pending waiters and reconnecting");
                                     drop(init_rx.take());
                                     {
@@ -2066,8 +2269,12 @@ impl Client {
                                         w.sent_bodies.clear();
                                         w.container_map.clear();
                                     }
+                                    // Use delay=0 for AuthKeyMismatch (already told server
+                                    // the socket is dead); normal backoff for other errors.
+                                    let delay = if is_key_mismatch { 0 } else { RECONNECT_BASE_MS };
+                                    self.inner.diff_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                                     match self.do_reconnect_loop(
-                                        RECONNECT_BASE_MS, &mut rh, &mut fk, &mut ak, &mut sid,
+                                        delay, &mut rh, &mut fk, &mut ak, &mut sid,
                                         network_hint_rx,
                                     ).await {
                                         Some(rx) => { init_rx = Some(rx); }
@@ -2090,7 +2297,12 @@ impl Client {
 
                         FrameOutcome::Error(e) => {
                             let ie: InvocationError = InvocationError::from(e);
-                            tracing::warn!("[ferogram] Reader: connection error: {ie}");
+                            let pending_count = self.inner.pending.lock().await.len();
+                            tracing::warn!(
+                                "[ferogram] Reader: connection error: {ie} \
+                                 (conn_gen={} sid={sid:#x} pending_rpcs={pending_count})",
+                                self.inner.conn_generation.load(std::sync::atomic::Ordering::Acquire),
+                            );
                             drop(init_rx.take()); // discard any in-flight init
 
                             // Detect definitive auth-key rejection.  Telegram signals
@@ -2129,6 +2341,12 @@ impl Client {
                             // retries them as soon as we reconnect.
                             {
                                 let mut pending = self.inner.pending.lock().await;
+                                tracing::debug!(
+                                    "[ferogram] Reader: canceling {} pending RPC(s) due to transport error \
+                                     (conn_gen={} sid={sid:#x})",
+                                    pending.len(),
+                                    self.inner.conn_generation.load(std::sync::atomic::Ordering::Acquire),
+                                );
                                 let msg = ie.to_string();
                                 for (_, tx) in pending.drain() {
                                     let _ = tx.send(Err(InvocationError::Io(
@@ -2146,6 +2364,7 @@ impl Client {
                             // Skip backoff when the key is stale: no point waiting before
                             // fresh DH: the server told us directly to renegotiate.
                             let reconnect_delay = if clear_key { 0 } else { RECONNECT_BASE_MS };
+                            self.inner.diff_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                             match self.do_reconnect_loop(
                                 reconnect_delay, &mut rh, &mut fk, &mut ak, &mut sid,
                                 network_hint_rx,
@@ -2178,8 +2397,13 @@ impl Client {
                 // DC migration / deliberate reconnect
                 maybe = new_conn_rx.recv() => {
                     if let Some((new_rh, new_fk, new_ak, new_sid)) = maybe {
+                        let old_sid = sid;
                         rh = new_rh; fk = new_fk; ak = new_ak; sid = new_sid;
-                        tracing::debug!("[ferogram] Reader: switched to new connection.");
+                        tracing::debug!(
+                            "[ferogram] Reader: switched to new connection \
+                             (old_sid={old_sid:#x} new_sid={new_sid:#x} conn_gen={}).",
+                            self.inner.conn_generation.load(std::sync::atomic::Ordering::Acquire),
+                        );
                     } else {
                         break; // reconnect_tx dropped -> client is shutting down
                     }
@@ -2254,6 +2478,7 @@ impl Client {
                         Err(_) => {
                             // init task was dropped (shouldn't normally happen).
                             tracing::warn!("[ferogram] init_connection task dropped unexpectedly, reconnecting …");
+                            self.inner.diff_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                             match self.do_reconnect_loop(
                                 RECONNECT_BASE_MS, &mut rh, &mut fk, &mut ak, &mut sid,
                                 network_hint_rx,
@@ -2456,6 +2681,10 @@ impl Client {
                         if let Some(orig_body) = w.sent_bodies.remove(&resolved_id) {
                             let (wire, new_msg_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
                             let fk = w.frame_kind.clone();
+                            let conn_gen = self
+                                .inner
+                                .conn_generation
+                                .load(std::sync::atomic::Ordering::Acquire);
                             // Intentionally NOT re-inserting into sent_bodies: a second
                             // bad_server_salt for new_msg_id finds nothing -> stops chain.
                             drop(w);
@@ -2463,12 +2692,19 @@ impl Client {
                             if let Some(tx) = pending.remove(&resolved_id) {
                                 pending.insert(new_msg_id, tx);
                                 drop(pending);
-                                if let Err(e) = send_frame_write(
-                                    &mut *self.inner.write_half.lock().await,
-                                    &wire,
-                                    &fk,
-                                )
-                                .await
+                                let mut wh = self.inner.write_half.lock().await;
+                                let cur = self
+                                    .inner
+                                    .conn_generation
+                                    .load(std::sync::atomic::Ordering::Acquire);
+                                if cur != conn_gen {
+                                    // reconnect raced: drop the resend, waiter gets
+                                    // ConnectionReset from the reconnect path anyway
+                                    tracing::debug!(
+                                        "[ferogram] bad_server_salt: dropping resend of \
+                                         {resolved_id}→{new_msg_id} (stale conn_gen old={conn_gen} new={cur})"
+                                    );
+                                } else if let Err(e) = send_frame_write(&mut *wh, &wire, &fk).await
                                 {
                                     tracing::warn!(
                                         "[ferogram] bad_server_salt re-send failed: {e}"
@@ -2476,7 +2712,7 @@ impl Client {
                                 } else {
                                     tracing::debug!(
                                         "[ferogram] bad_server_salt re-sent \
-                                         {resolved_id}→{new_msg_id}"
+                                         {resolved_id}→{new_msg_id} (conn_gen={cur})"
                                     );
                                 }
                             }
@@ -2687,7 +2923,15 @@ impl Client {
                     std::mem::take(&mut w.new_session_resend_queue)
                 }; // writer lock drops here
                 if !resend_queue.is_empty() {
-                    let fk = self.inner.writer.lock().await.frame_kind.clone();
+                    let (fk, conn_gen) = {
+                        let w = self.inner.writer.lock().await;
+                        let fk = w.frame_kind.clone();
+                        let conn_gen = self
+                            .inner
+                            .conn_generation
+                            .load(std::sync::atomic::Ordering::Acquire);
+                        (fk, conn_gen)
+                    };
                     for (old_id, new_id, wire) in resend_queue {
                         {
                             let mut pending = self.inner.pending.lock().await;
@@ -2695,10 +2939,17 @@ impl Client {
                                 pending.insert(new_id, tx);
                             }
                         }
-                        if let Err(e) =
-                            send_frame_write(&mut *self.inner.write_half.lock().await, &wire, &fk)
-                                .await
-                        {
+                        let mut wh = self.inner.write_half.lock().await;
+                        let cur = self
+                            .inner
+                            .conn_generation
+                            .load(std::sync::atomic::Ordering::Acquire);
+                        if cur != conn_gen {
+                            tracing::debug!(
+                                "[ferogram] new_session resend {old_id}->{new_id} dropped (stale conn_gen)"
+                            );
+                            self.inner.writer.lock().await.sent_bodies.remove(&new_id);
+                        } else if let Err(e) = send_frame_write(&mut *wh, &wire, &fk).await {
                             tracing::warn!(
                                 "[ferogram] new_session resend {old_id}->{new_id} failed: {e}"
                             );
@@ -2774,7 +3025,7 @@ impl Client {
                 // Phase 1: hold writer only for enc-state mutations + packing.
                 // The lock is dropped BEFORE we touch `pending`, eliminating the
                 // writer→pending lock-order deadlock.
-                let resend: Option<(Vec<u8>, i64, i64, FrameKind)> = {
+                let resend: Option<(Vec<u8>, i64, i64, FrameKind, u64)> = {
                     let mut w = self.inner.writer.lock().await;
 
                     // correct clock skew on codes 16/17.
@@ -2802,9 +3053,13 @@ impl Client {
                         if let Some(orig_body) = w.sent_bodies.remove(&resolved_id) {
                             let (wire, new_msg_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
                             let fk = w.frame_kind.clone();
+                            let conn_gen = self
+                                .inner
+                                .conn_generation
+                                .load(std::sync::atomic::Ordering::Acquire);
                             w.sent_bodies.insert(new_msg_id, orig_body);
                             // resolved_id is the inner msg_id we move in pending
-                            Some((wire, resolved_id, new_msg_id, fk))
+                            Some((wire, resolved_id, new_msg_id, fk, conn_gen))
                         } else {
                             None
                         }
@@ -2820,7 +3075,7 @@ impl Client {
                 }; // ← writer lock released here
 
                 match resend {
-                    Some((wire, old_msg_id, new_msg_id, fk)) => {
+                    Some((wire, old_msg_id, new_msg_id, fk, conn_gen)) => {
                         // Phase 2: re-key pending (no writer lock held).
                         let has_waiter = {
                             let mut pending = self.inner.pending.lock().await;
@@ -2832,14 +3087,23 @@ impl Client {
                             }
                         };
                         if has_waiter {
-                            // Phase 3: TCP send : no writer lock needed.
-                            if let Err(e) = send_frame_write(
-                                &mut *self.inner.write_half.lock().await,
-                                &wire,
-                                &fk,
-                            )
-                            .await
-                            {
+                            // Phase 3: TCP send, check generation before writing.
+                            let mut wh = self.inner.write_half.lock().await;
+                            let cur = self
+                                .inner
+                                .conn_generation
+                                .load(std::sync::atomic::Ordering::Acquire);
+                            if cur != conn_gen {
+                                tracing::debug!(
+                                    "[ferogram] re-send {old_msg_id}->{new_msg_id} dropped (stale conn_gen)"
+                                );
+                                self.inner
+                                    .writer
+                                    .lock()
+                                    .await
+                                    .sent_bodies
+                                    .remove(&new_msg_id);
+                            } else if let Err(e) = send_frame_write(&mut *wh, &wire, &fk).await {
                                 tracing::warn!("[ferogram] re-send failed: {e}");
                                 self.inner
                                     .writer
@@ -2905,8 +3169,12 @@ impl Client {
                 // body[12..]   = msg_ids
                 let count = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
                 let mut resends: Vec<(Vec<u8>, i64, i64)> = Vec::new();
-                {
+                let conn_gen = {
                     let mut w = self.inner.writer.lock().await;
+                    let conn_gen = self
+                        .inner
+                        .conn_generation
+                        .load(std::sync::atomic::Ordering::Acquire);
                     let fk = w.frame_kind.clone();
                     for i in 0..count {
                         let off = 12 + i * 8;
@@ -2924,19 +3192,34 @@ impl Client {
                             w.sent_bodies.insert(new_id, orig_body);
                             resends.push((wire, resend_id, new_id));
                         }
-                        let _ = fk; // fk captured above, writer lock drops here
+                        let _ = fk;
                     }
+                    conn_gen
+                };
+                {
                     // TCP sends outside writer lock
                     let fk = self.inner.writer.lock().await.frame_kind.clone();
                     for (wire, resend_id, new_id) in resends {
-                        // On TCP send failure, remove the orphaned sent_bodies entry.
-                        if let Err(e) =
-                            send_frame_write(&mut *self.inner.write_half.lock().await, &wire, &fk)
-                                .await
-                        {
+                        let mut wh = self.inner.write_half.lock().await;
+                        let cur = self
+                            .inner
+                            .conn_generation
+                            .load(std::sync::atomic::Ordering::Acquire);
+                        if cur != conn_gen {
                             self.inner.writer.lock().await.sent_bodies.remove(&new_id);
                             if let Some(tx) = self.inner.pending.lock().await.remove(&new_id) {
-                                let _ = tx.send(Err(e.into())); // convert ConnectError → InvocationError
+                                let _ = tx.send(Err(InvocationError::Io(std::io::Error::new(
+                                    std::io::ErrorKind::ConnectionReset,
+                                    "stale wire: reconnect occurred between pack and send",
+                                ))));
+                            }
+                            tracing::debug!(
+                                "[ferogram] MsgResendReq: dropped stale resend {resend_id} -> {new_id}"
+                            );
+                        } else if let Err(e) = send_frame_write(&mut *wh, &wire, &fk).await {
+                            self.inner.writer.lock().await.sent_bodies.remove(&new_id);
+                            if let Some(tx) = self.inner.pending.lock().await.remove(&new_id) {
+                                let _ = tx.send(Err(e.into()));
                             }
                             tracing::warn!(
                                 "[ferogram] MsgResendReq: TCP send failed for {resend_id} -> {new_id}"
@@ -3463,17 +3746,50 @@ impl Client {
             tracing::debug!("[ferogram] diff already in flight, skipping concurrent call");
             return;
         }
-        // RAII guard: always resets diff_in_flight=false when we exit, including on panic.
-        struct DiffGuard(crate::Client);
+        // RAII guard: resets diff_in_flight=false on drop, but only when the generation
+        // still matches.  A reconnect bumps diff_generation, so a ghost diff task that
+        // was spawned on the old connection becomes a no-op; it will not hold
+        // diff_in_flight=true after the new connection is live.
+        let my_gen = self
+            .inner
+            .diff_generation
+            .load(std::sync::atomic::Ordering::Acquire);
+        struct DiffGuard {
+            client: crate::Client,
+            generation: u64,
+        }
         impl Drop for DiffGuard {
             fn drop(&mut self) {
-                self.0
+                // Only reset if we are still the current generation.  If a reconnect
+                // already bumped the counter, the new init task will call
+                // run_pending_differences fresh, so we must not interfere.
+                let current = self
+                    .client
                     .inner
-                    .diff_in_flight
-                    .store(false, std::sync::atomic::Ordering::Release);
+                    .diff_generation
+                    .load(std::sync::atomic::Ordering::Acquire);
+                if current == self.generation {
+                    tracing::debug!(
+                        "[ferogram] DiffGuard: clearing diff_in_flight (gen {})",
+                        current,
+                    );
+                    self.client
+                        .inner
+                        .diff_in_flight
+                        .store(false, std::sync::atomic::Ordering::Release);
+                } else {
+                    tracing::debug!(
+                        "[ferogram] DiffGuard: skipping stale guard (old_gen={} new_gen={})",
+                        self.generation,
+                        current,
+                    );
+                }
             }
         }
-        let _guard = DiffGuard(self.clone());
+        let _guard = DiffGuard {
+            client: self.clone(),
+            generation: my_gen,
+        };
 
         loop {
             let get_diff_req = self.inner.message_box.lock().await.get_difference();
@@ -3803,6 +4119,42 @@ impl Client {
                 }
             }
 
+            // Tear down the old socket fully before dialing. If the old read
+            // half stays alive, the OS can reuse the same 4-tuple and the server
+            // may deliver queued old-session frames onto the new connection,
+            // causing "invalid frame geometry" or "AuthKeyMismatch" right after
+            // reconnect.
+            //
+            // Correct order:
+            //   1. Shut down the write half so the server sees FIN and stops
+            //      sending on the old session.
+            //   2. Drain whatever the server already sent (bounded by 50 ms) so
+            //      the OS flushes its receive buffer before we close.
+            //   3. Drop the read half, fully closing the old socket.
+            //   4. Only then open the new connection.
+            {
+                let _ = self.inner.write_half.lock().await.shutdown().await;
+            }
+            {
+                use tokio::io::AsyncReadExt;
+                let mut drain_buf = [0u8; 4096];
+                let drain_deadline =
+                    tokio::time::Instant::now() + tokio::time::Duration::from_millis(50);
+                loop {
+                    match tokio::time::timeout_at(drain_deadline, rh.read(&mut drain_buf)).await {
+                        Ok(Ok(0)) | Err(_) => break,
+                        Ok(Ok(_)) => {}
+                        Ok(Err(_)) => break,
+                    }
+                }
+                // Explicitly reunite and drop the old read half so the kernel
+                // tears down the TCP socket before we dial the new connection.
+                // Without this the 4-tuple can be reused immediately and the
+                // server delivers buffered old-session bytes onto the new socket.
+                // rh (old read half) will be replaced by assignment below;
+                // Rust drops the old value at that point, closing the fd.
+            }
+
             match self.do_reconnect(ak, fk).await {
                 Ok((new_rh, new_fk, new_ak, new_sid)) => {
                     *rh = new_rh;
@@ -3810,6 +4162,17 @@ impl Client {
                     *ak = new_ak;
                     *sid = new_sid;
                     tracing::debug!("[ferogram] TCP reconnected ✓: initialising session …");
+
+                    // Bump generation to invalidate any ghost diff task from the old
+                    // connection; its DiffGuard::drop will see a stale generation and
+                    // become a no-op.  We do NOT reset diff_in_flight here: the deadline
+                    // arm must stay blocked until init_connection succeeds, otherwise it
+                    // fires run_pending_differences on a session that has no initConnection
+                    // and Telegram rejects or ignores the RPC.  The reset happens inside
+                    // the init task below, just before run_pending_differences.
+                    self.inner
+                        .diff_generation
+                        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
 
                     // Spawn init_connection. MUST NOT be awaited inline: the
                     // reader loop must resume so it can route the RPC response.
@@ -3853,6 +4216,13 @@ impl Client {
                                 let _ =
                                     mb.process_updates(message_box::UpdatesLike::ConnectionClosed);
                             }
+                            // Now that initConnection is confirmed live, open the gate
+                            // for run_pending_differences.  Any ghost task from the old
+                            // connection already has a stale generation so its drop is
+                            // a no-op; this store is safe.
+                            c.inner
+                                .diff_in_flight
+                                .store(false, std::sync::atomic::Ordering::Release);
                             c.run_pending_differences().await;
                         }
                         let _ = init_tx.send(result);
@@ -3891,7 +4261,31 @@ impl Client {
         };
         let socks5 = self.inner.socks5.clone();
         let mtproxy = self.inner.mtproxy.clone();
-        let transport = self.inner.transport.clone();
+        // Derive transport from the active FrameKind rather than inner.transport.
+        // inner.transport is the *requested* kind set at startup; if probe_transport
+        // raced and selected a different framing (e.g. Obfuscated won over Abridged),
+        // inner.transport is never updated.  Using it for reconnects means every
+        // reconnect uses the wrong framing → garbled frames → reconnect storm.
+        // The active FrameKind is the ground truth: derive TransportKind from it.
+        let transport = match _old_frame_kind {
+            FrameKind::Abridged => TransportKind::Abridged,
+            FrameKind::Intermediate => TransportKind::Intermediate,
+            FrameKind::Full { .. } => TransportKind::Full,
+            FrameKind::Obfuscated { .. } => TransportKind::Obfuscated { secret: None },
+            FrameKind::PaddedIntermediate { .. } => {
+                TransportKind::PaddedIntermediate { secret: None }
+            }
+            FrameKind::FakeTls { .. } => {
+                // FakeTls requires a secret; fall back to inner.transport which
+                // should already hold the correct secret for MTProxy connections.
+                self.inner.transport.clone()
+            }
+        };
+        // Update active_transport so the supervisor reconnect path (which uses
+        // dummy_fk) also gets the right transport on unexpected restarts.
+        if let Ok(mut at) = self.inner.active_transport.lock() {
+            *at = transport.clone();
+        }
 
         let new_conn = if let Some(key) = saved_key {
             tracing::debug!("[ferogram] Reconnecting to DC{home_dc_id} with saved key …");
@@ -3932,8 +4326,38 @@ impl Client {
         ) = new_conn.into_writer();
         let new_ak = new_writer.enc.auth_key_bytes();
         let new_sid = new_writer.enc.session_id();
+        // Bump the connection epoch BEFORE swapping writer and write_half.
+        // Any task that already snapshotted the old generation and is between
+        // "build wire" and "acquire write_half" will see the mismatch after
+        // acquiring the lock and discard its wire instead of writing it.
+        let new_conn_gen = self
+            .inner
+            .conn_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1;
+        tracing::debug!(
+            "[ferogram] do_reconnect: epoch bump complete \
+             (new_sid={new_sid:#x} conn_gen={new_conn_gen})",
+        );
+        // The old write half is already shut down by do_reconnect_loop before
+        // this function is called, so we just replace writer and write_half.
         *self.inner.writer.lock().await = new_writer;
         *self.inner.write_half.lock().await = new_wh;
+
+        // Reset the seen-msg-ids dedup ring. The ring is keyed by msg_id which
+        // is a monotonically increasing value tied to the session. A new
+        // EncryptedSession generates a fresh session_id, so msg_ids from the
+        // old session are in a completely different namespace. Carrying them
+        // over risks silently dropping the first legitimate messages on the new
+        // session if their msg_ids happen to collide with old entries in the
+        // bounded ring (or, worse, if the ring still holds msg_ids > the new
+        // session's first message and the dedup check fires). Clear on every
+        // hard reconnect so the new session starts with a clean slate.
+        {
+            let mut seen = self.inner.seen_msg_ids.lock().unwrap();
+            seen.0.clear();
+            seen.1.clear();
+        }
 
         // The new writer is fresh (new EncryptedSession) but
         // salt_request_in_flight lives on self.inner and is never reset
@@ -5679,19 +6103,28 @@ impl Client {
             let mut req_body = Vec::with_capacity(8);
             req_body.extend_from_slice(&0xb921bd04_u32.to_le_bytes()); // get_future_salts
             req_body.extend_from_slice(&64_i32.to_le_bytes()); // num
-            let (wire, fk, fs_msg_id) = {
+            let (wire, fk, fs_msg_id, conn_gen) = {
                 let mut w = inner.writer.lock().await;
                 let fk = w.frame_kind.clone();
+                let conn_gen = inner
+                    .conn_generation
+                    .load(std::sync::atomic::Ordering::Acquire);
                 let (wire, id) = w.enc.pack_body_with_msg_id(&req_body, true);
                 w.sent_bodies.insert(id, req_body);
-                (wire, fk, id)
+                (wire, fk, id, conn_gen)
             };
             let (tx, rx) = tokio::sync::oneshot::channel();
             inner.pending.lock().await.insert(fs_msg_id, tx);
             let send_ok = {
-                send_frame_write(&mut *inner.write_half.lock().await, &wire, &fk)
-                    .await
-                    .is_ok()
+                let mut wh = inner.write_half.lock().await;
+                let cur = inner
+                    .conn_generation
+                    .load(std::sync::atomic::Ordering::Acquire);
+                if cur != conn_gen {
+                    false // stale: reconnect happened between pack and send
+                } else {
+                    send_frame_write(&mut *wh, &wire, &fk).await.is_ok()
+                }
             };
             if !send_ok {
                 inner.pending.lock().await.remove(&fs_msg_id);
@@ -5797,6 +6230,14 @@ impl Client {
 
             let fk = w.frame_kind.clone();
 
+            // Snapshot the connection epoch under the writer lock. The check
+            // below (after acquiring write_half) uses this to detect a reconnect
+            // that happened between pack and send.
+            let conn_gen = self
+                .inner
+                .conn_generation
+                .load(std::sync::atomic::Ordering::Acquire);
+
             // +: drain any pending acks; if non-empty bundle them with
             // the request in a MessageContainer so acks piggyback on every send.
             let acks: Vec<i64> = w.pending_ack.drain(..).collect();
@@ -5806,7 +6247,7 @@ impl Client {
                 let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
                 w.sent_bodies.insert(msg_id, body); //
                 self.inner.pending.lock().await.insert(msg_id, tx);
-                (wire, fk)
+                (wire, fk, conn_gen)
             } else {
                 // container path: [MsgsAck, request]
                 let ack_body = build_msgs_ack_body(&acks);
@@ -5827,11 +6268,32 @@ impl Client {
                     "[ferogram] container: bundled {} acks + request (cid={container_msg_id})",
                     acks.len()
                 );
-                (wire, fk)
+                (wire, fk, conn_gen)
             }
         };
-        // TCP send with writer lock free: reader can push pending_ack concurrently
-        send_frame_write(&mut *self.inner.write_half.lock().await, &wire.0, &wire.1).await?;
+        // TCP send with writer lock free: reader can push pending_ack concurrently.
+        // Re-check the connection epoch after acquiring write_half: if a reconnect
+        // happened between pack and here, this wire belongs to the dead session.
+        // Returning an error causes the retry layer to re-issue on the new session.
+        {
+            let mut wh = self.inner.write_half.lock().await;
+            let cur = self
+                .inner
+                .conn_generation
+                .load(std::sync::atomic::Ordering::Acquire);
+            if cur != wire.2 {
+                tracing::debug!(
+                    "[ferogram] do_rpc_call: stale wire detected (pack_gen={} cur_gen={cur}), \
+                     dropping and returning ConnectionReset for retry",
+                    wire.2,
+                );
+                return Err(InvocationError::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "stale wire: reconnect occurred between pack and send",
+                )));
+            }
+            send_frame_write(&mut *wh, &wire.0, &wire.1).await?;
+        }
         match rx.await {
             Ok(result) => result,
             Err(_) => Err(InvocationError::Deserialize(
@@ -5880,6 +6342,10 @@ impl Client {
 
             let mut w = self.inner.writer.lock().await;
             let fk = w.frame_kind.clone();
+            let conn_gen = self
+                .inner
+                .conn_generation
+                .load(std::sync::atomic::Ordering::Acquire);
 
             // +: drain pending acks and bundle into container if any
             let acks: Vec<i64> = w.pending_ack.drain(..).collect();
@@ -5888,7 +6354,7 @@ impl Client {
                 let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
                 w.sent_bodies.insert(msg_id, body); //
                 self.inner.pending.lock().await.insert(msg_id, tx);
-                (wire, fk)
+                (wire, fk, conn_gen)
             } else {
                 let ack_body = build_msgs_ack_body(&acks);
                 let (ack_msg_id, ack_seqno) = w.enc.alloc_msg_seqno(false);
@@ -5905,10 +6371,23 @@ impl Client {
                     "[ferogram] write container: bundled {} acks + write (cid={container_msg_id})",
                     acks.len()
                 );
-                (wire, fk)
+                (wire, fk, conn_gen)
             }
         };
-        send_frame_write(&mut *self.inner.write_half.lock().await, &wire.0, &wire.1).await?;
+        {
+            let mut wh = self.inner.write_half.lock().await;
+            let cur = self
+                .inner
+                .conn_generation
+                .load(std::sync::atomic::Ordering::Acquire);
+            if cur != wire.2 {
+                return Err(InvocationError::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "stale wire: reconnect occurred between pack and send",
+                )));
+            }
+            send_frame_write(&mut *wh, &wire.0, &wire.1).await?;
+        }
         match rx.await {
             Ok(result) => result.map(|_| ()),
             Err(_) => Err(InvocationError::Deserialize(
@@ -6949,12 +7428,16 @@ impl Client {
             let body = maybe_gz_pack(&raw_body); //
             let mut w = self.inner.writer.lock().await;
             let fk = w.frame_kind.clone();
+            let conn_gen = self
+                .inner
+                .conn_generation
+                .load(std::sync::atomic::Ordering::Acquire);
             let acks: Vec<i64> = w.pending_ack.drain(..).collect(); //
             if acks.is_empty() {
                 let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
                 w.sent_bodies.insert(msg_id, body); //
                 self.inner.pending.lock().await.insert(msg_id, tx);
-                (wire, fk)
+                (wire, fk, conn_gen)
             } else {
                 let ack_body = build_msgs_ack_body(&acks);
                 let (ack_msg_id, ack_seqno) = w.enc.alloc_msg_seqno(false);
@@ -6967,10 +7450,23 @@ impl Client {
                 w.sent_bodies.insert(req_msg_id, body); //
                 w.container_map.insert(container_msg_id, req_msg_id); //
                 self.inner.pending.lock().await.insert(req_msg_id, tx);
-                (wire, fk)
+                (wire, fk, conn_gen)
             }
         };
-        send_frame_write(&mut *self.inner.write_half.lock().await, &wire.0, &wire.1).await?;
+        {
+            let mut wh = self.inner.write_half.lock().await;
+            let cur = self
+                .inner
+                .conn_generation
+                .load(std::sync::atomic::Ordering::Acquire);
+            if cur != wire.2 {
+                return Err(InvocationError::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "stale wire: reconnect occurred between pack and send",
+                )));
+            }
+            send_frame_write(&mut *wh, &wire.0, &wire.1).await?;
+        }
         match rx.await {
             Ok(result) => result,
             Err(_) => Err(InvocationError::Deserialize("rpc channel closed".into())),

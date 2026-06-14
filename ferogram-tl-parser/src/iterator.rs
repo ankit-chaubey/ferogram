@@ -21,6 +21,10 @@ pub(crate) struct TlIterator<'a> {
     category: Category,
     /// Accumulates multi-line definitions (lines without `;` terminator).
     pending: String,
+    /// Fully-split definitions ready to emit (result of splitting on `;`).
+    ready: std::collections::VecDeque<Result<Definition, ParseError>>,
+    /// Set to true once `lines` is exhausted, so we flush `pending` once.
+    eof: bool,
 }
 
 impl<'a> TlIterator<'a> {
@@ -29,6 +33,8 @@ impl<'a> TlIterator<'a> {
             lines: src.lines(),
             category: Category::Types,
             pending: String::new(),
+            ready: std::collections::VecDeque::new(),
+            eof: false,
         }
     }
 
@@ -46,6 +52,34 @@ impl<'a> TlIterator<'a> {
             _ => false,
         }
     }
+
+    /// Strip `//` inline comments from a raw line, then trim whitespace.
+    fn strip_comment(line: &str) -> &str {
+        let code = if let Some(idx) = line.find("//") {
+            &line[..idx]
+        } else {
+            line
+        };
+        code.trim()
+    }
+
+    /// Flush `pending` as a complete definition string (no trailing `;` required).
+    /// Splits on `;` so multi-def strings are each emitted separately.
+    fn flush_pending(&mut self) {
+        let raw = std::mem::take(&mut self.pending);
+        for part in raw.split(';') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            let category = self.category;
+            let result = Definition::from_str(part).map(|mut d| {
+                d.category = category;
+                d
+            });
+            self.ready.push_back(result);
+        }
+    }
 }
 
 impl<'a> Iterator for TlIterator<'a> {
@@ -53,45 +87,71 @@ impl<'a> Iterator for TlIterator<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let line = self.lines.next()?;
-            let trimmed = line.trim();
+            // Drain any definitions that are already parsed and queued.
+            if let Some(item) = self.ready.pop_front() {
+                return Some(item);
+            }
 
-            // Skip blanks and comments
-            if trimmed.is_empty() || trimmed.starts_with("//") {
+            // Once EOF is reached, flush any leftover pending text once.
+            if self.eof {
+                if !self.pending.trim().is_empty() {
+                    self.flush_pending();
+                    continue; // loop back to drain ready
+                }
+                return None;
+            }
+
+            let line = match self.lines.next() {
+                Some(l) => l,
+                None => {
+                    self.eof = true;
+                    continue; // loop back to flush pending
+                }
+            };
+
+            // Strip inline `//` comment, then trim whitespace.
+            let trimmed = Self::strip_comment(line);
+
+            // Skip blanks.
+            if trimmed.is_empty() {
                 continue;
             }
 
-            // Category separators
+            // Category separators.
             if self.handle_separator(trimmed) {
                 continue;
             }
 
-            // Accumulate multi-line definitions
-            self.pending.push(' ');
+            // Accumulate into pending.
+            if !self.pending.is_empty() {
+                self.pending.push(' ');
+            }
             self.pending.push_str(trimmed);
 
-            // A definition ends with `;`
-            if !trimmed.ends_with(';') {
-                continue;
+            // If the accumulated text contains a `;`, flush it now so that
+            // multi-def lines (e.g. `foo = A; bar = B;`) are split correctly.
+            if self.pending.contains(';') {
+                // Keep any trailing fragment after the last `;` in pending.
+                let raw = std::mem::take(&mut self.pending);
+                let mut parts = raw.split(';').peekable();
+                while let Some(part) = parts.next() {
+                    let part = part.trim();
+                    if parts.peek().is_none() {
+                        // Last segment: may be incomplete (no `;` yet), keep it.
+                        if !part.is_empty() {
+                            self.pending = part.to_string();
+                        }
+                    } else if !part.is_empty() {
+                        let category = self.category;
+                        let result = Definition::from_str(part).map(|mut d| {
+                            d.category = category;
+                            d
+                        });
+                        self.ready.push_back(result);
+                    }
+                }
+                // Loop back to drain ready queue.
             }
-
-            // We have a complete definition: parse it
-            let raw = std::mem::take(&mut self.pending);
-            let raw = raw.trim();
-
-            // Strip the trailing `;`
-            let raw = raw.trim_end_matches(';').trim();
-
-            if raw.is_empty() {
-                continue;
-            }
-
-            let result = Definition::from_str(raw).map(|mut d| {
-                d.category = self.category;
-                d
-            });
-
-            return Some(result);
         }
     }
 }

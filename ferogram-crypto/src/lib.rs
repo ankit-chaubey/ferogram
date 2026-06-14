@@ -189,10 +189,48 @@ pub fn decrypt_data_v2<'a>(
     buffer: &'a mut [u8],
     auth_key: &AuthKey,
 ) -> Result<&'a mut [u8], DecryptError> {
+    // diagnostic: dump raw frame on any error path
+    let frame_len = buffer.len();
+    let frame_hex: String = buffer
+        .iter()
+        .take(32)
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+
     if buffer.len() < 24 || !(buffer.len() - 24).is_multiple_of(16) {
+        // Expected: frame_len >= 24, (frame_len - 24) % 16 == 0
+        // Minimum valid frame: key_id(8) + msg_key(16) + 1 AES block(16) = 40 bytes
+        log::warn!(
+            "[ferogram/crypto] InvalidBuffer: \
+             frame_len={frame_len} (expected >=24 and (len-24)%16==0) \
+             first_32_bytes=[{frame_hex}]"
+        );
         return Err(DecryptError::InvalidBuffer);
     }
-    if auth_key.key_id != buffer[..8] {
+
+    let our_key_id = auth_key.key_id();
+    let frame_key_id = &buffer[..8];
+    if our_key_id != frame_key_id {
+        // Expected: frame[0..8] == SHA-1(auth_key)[12..20]
+        // Possible causes:
+        //   1. A stale response from old session arriving on new TCP socket
+        //   2. A genuinely different key (wrong DC or session)
+        log::warn!(
+            "[ferogram/crypto] AuthKeyMismatch: \
+             our_key_id={} frame_key_id={} \
+             frame_len={frame_len} first_32_bytes=[{frame_hex}]",
+            our_key_id
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(""),
+            frame_key_id
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(""),
+        );
         return Err(DecryptError::AuthKeyMismatch);
     }
     let mut msg_key = [0u8; 16];

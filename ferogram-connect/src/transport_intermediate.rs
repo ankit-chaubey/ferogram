@@ -225,10 +225,7 @@ impl FullTransport {
         // Negative value = transport-level error code from Telegram.
         let raw = i32::from_le_bytes(len_buf);
         if raw < 0 {
-            return Err(ConnectError::Io(std::io::Error::new(
-                std::io::ErrorKind::ConnectionRefused,
-                format!("transport error: {raw}"),
-            )));
+            return Err(ConnectError::TransportCode(raw));
         }
         let total_len = raw as usize;
         if total_len < 12 {

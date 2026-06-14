@@ -301,7 +301,7 @@ pub struct TransferProgress {
 }
 
 impl TransferProgress {
-    /// Completion percentage (0.0–100.0). Returns 0.0 if total is unknown.
+    /// Completion percentage (0.0-100.0). Returns 0.0 if total is unknown.
     pub fn percent(&self) -> f64 {
         if self.total == 0 {
             return 0.0;

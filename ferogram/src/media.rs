@@ -156,9 +156,9 @@ pub fn upload_part_size(file_size: usize) -> (usize, i32) {
     // | File size        | Part size | Max parts |
     // |------------------|-----------|-----------|
     // | < 1 MB           | 32 KB     | 32        |
-    // | 1 MB  – 32 MB    | 64 KB     | 512       |
-    // | 32 MB – 512 MB   | 128 KB    | 4000      |
-    // | 512 MB – 1 GB    | 256 KB    | 4000      |
+    // | 1 MB  - 32 MB    | 64 KB     | 512       |
+    // | 32 MB - 512 MB   | 128 KB    | 4000      |
+    // | 512 MB - 1 GB    | 256 KB    | 4000      |
     // | > 1 GB           | 512 KB    | ≤ 4000    |
     const MAX_PARTS: usize = 4000;
     let mut ps: usize = if file_size < 1024 * 1024 {

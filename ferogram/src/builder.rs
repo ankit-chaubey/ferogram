@@ -59,7 +59,7 @@ impl Default for ClientBuilder {
             socks5: None,
             mtproxy: None,
             allow_ipv6: false,
-            transport: TransportKind::Abridged,
+            transport: TransportKind::Full,
             session_backend: Arc::new(BinaryFileBackend::new("ferogram.session")),
             catch_up: false,
             device_model: "Linux".to_string(),
@@ -217,7 +217,7 @@ impl ClientBuilder {
         self
     }
 
-    /// Choose the MTProto transport framing (default: [`TransportKind::Abridged`]).
+    /// Choose the MTProto transport framing (default: [`TransportKind::Full`]).
     pub fn transport(mut self, kind: TransportKind) -> Self {
         self.transport = kind;
         self
