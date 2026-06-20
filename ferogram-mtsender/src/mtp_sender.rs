@@ -19,7 +19,9 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use ferogram_connect::util::{build_container_body, build_msgs_ack_body, crc32_ieee, random_i64};
+use ferogram_connect::util::{
+    build_container_body, build_msgs_ack_body, crc32_ieee, random_i64, tl_read_string,
+};
 use ferogram_connect::{FrameKind, FutureSalt};
 use ferogram_mtproto::EncryptedSession;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -417,7 +419,24 @@ impl MtpSender {
                         result = decompressed;
                     }
                 }
-                self.resolve(req_msg_id, result);
+                // rpc_error#2144ca19 error_code:int error_message:string
+                // Telegram wraps RPC errors inside rpc_result just like any other
+                // reply, so they must be unwrapped here. Otherwise the raw
+                // error_code/error_message bytes get handed to the caller as if
+                // they were the expected response type, which then fails with a
+                // confusing "unexpected constructor id" instead of the real error.
+                let outcome = if result.len() >= 8
+                    && u32::from_le_bytes(result[..4].try_into().unwrap()) == 0x2144ca19
+                {
+                    let code = i32::from_le_bytes(result[4..8].try_into().unwrap());
+                    let message = tl_read_string(&result[8..]).unwrap_or_default();
+                    Err(InvocationError::Rpc(
+                        crate::errors::RpcError::from_telegram(code, &message),
+                    ))
+                } else {
+                    Ok(result)
+                };
+                self.resolve(req_msg_id, outcome);
                 Ok(vec![])
             }
 
@@ -528,7 +547,7 @@ impl MtpSender {
             0x347773c5 => {
                 if body.len() >= 12 {
                     let pong_req_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                    self.resolve(pong_req_id, body.to_vec());
+                    self.resolve(pong_req_id, Ok(body.to_vec()));
                 }
                 Ok(vec![])
             }
@@ -539,14 +558,14 @@ impl MtpSender {
     }
 
     /// Fulfill the oneshot for the request with `req_msg_id`.
-    fn resolve(&mut self, req_msg_id: i64, result: Vec<u8>) {
+    fn resolve(&mut self, req_msg_id: i64, result: Result<Vec<u8>, InvocationError>) {
         // Check by msg_id first.
         if let Some(i) = self.requests.iter().position(|r| match &r.state {
             MsgState::Sent { msg_id, .. } => *msg_id == req_msg_id,
             _ => false,
         }) {
             let req = self.requests.remove(i).unwrap();
-            let _ = req.tx.send(Ok(result));
+            let _ = req.tx.send(result);
             return;
         }
         // Fall back to container_msg_id.
@@ -557,7 +576,7 @@ impl MtpSender {
             _ => false,
         }) {
             let req = self.requests.remove(i).unwrap();
-            let _ = req.tx.send(Ok(result));
+            let _ = req.tx.send(result);
         }
     }
 

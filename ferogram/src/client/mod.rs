@@ -1601,6 +1601,7 @@ impl Client {
                 if e.is("AUTH_KEY_UNREGISTERED")
                     || matches!(&e, InvocationError::Rpc(r) if r.code == 401) =>
             {
+                tracing::warn!("[ferogram] is_authorized: GetState rejected: {e}");
                 Ok(false)
             }
             Err(e) => Err(e),
