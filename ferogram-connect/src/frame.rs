@@ -433,7 +433,7 @@ pub async fn recv_frame_read(
                     "Full transport: CRC mismatch (got {actual_crc:#010x}, expected {expected_crc:#010x})"
                 )));
             }
-            // Grammers-style strict receive sequence validation.
+            // Strict receive sequence validation.
             let recv_seq = i32::from_le_bytes(body[..4].try_into().unwrap());
             let expected_seq = recv_seqno.load(std::sync::atomic::Ordering::Relaxed) as i32;
 
@@ -452,29 +452,14 @@ pub async fn recv_frame_read(
                     .map(|b| format!("{b:02x}"))
                     .collect::<Vec<_>>()
                     .join(" ");
-                if recv_seq > expected_seq {
-                    // Forward gap: server skipped seqnos. This can happen legitimately
-                    // after reconnect when the server has already sent frames we didn't
-                    // receive. Resync recv_seqno and continue rather than reconnecting.
-                    tracing::warn!(
-                        "[ferogram/frame] Full transport: forward seqno gap                          (got {recv_seq}, expected {expected_seq}, call#{full_call_id},                          gap={}) first_bytes=[{hex}]; resyncing",
-                        recv_seq.wrapping_sub(expected_seq),
-                    );
-                    recv_seqno.store(
-                        recv_seq.wrapping_add(1) as u32,
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
-                    return Ok(body[4..].to_vec());
-                } else {
-                    // Backward gap: could be replay or stream corruption. Hard error.
-                    tracing::error!(
-                        "[ferogram/frame] Full transport: backward seqno (got {recv_seq},                          expected {expected_seq}, call#{full_call_id}) first_bytes=[{hex}]"
-                    );
-                    return Err(ConnectError::other(format!(
-                        "Full transport: bad seq (got {}, expected {})",
-                        recv_seq, expected_seq
-                    )));
-                }
+                tracing::error!(
+                    "[ferogram/frame] Full transport: seqno mismatch                      (got {recv_seq}, expected {expected_seq}, call#{full_call_id},                      gap={}) first_bytes=[{hex}]",
+                    recv_seq.wrapping_sub(expected_seq),
+                );
+                return Err(ConnectError::other(format!(
+                    "Full transport: bad seq (got {}, expected {})",
+                    recv_seq, expected_seq
+                )));
             }
 
             recv_seqno.store(

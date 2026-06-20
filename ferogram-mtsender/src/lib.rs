@@ -13,11 +13,15 @@
 #![deny(unsafe_code)]
 
 mod errors;
+pub mod mtp_sender;
 mod pool;
 mod retry;
 mod sender;
+pub mod sender_task;
 
 pub use errors::{InvocationError, RpcError};
+pub use mtp_sender::MtpSender;
 pub use pool::{ConnSlot, DcPool};
 pub use retry::{AutoSleep, CircuitBreaker, NoRetries, RetryContext, RetryLoop, RetryPolicy};
 pub use sender::DcConnection;
+pub use sender_task::{FrameEvent, ReconnectRequest, RpcEnqueue, SenderHandle, spawn_sender_task};

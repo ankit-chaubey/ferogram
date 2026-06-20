@@ -25,13 +25,10 @@ use crate::{
     ForwardOptions, InputMessage, InvocationError, LinkKind, MiniApp, MiniAppSession, NeverRestart,
     PeerCache, PeerRef, RetryContext, RetryPolicy, dc_pool, message_box, persist,
 };
-use ferogram_connect::SALT_USE_DELAY;
-use ferogram_mtproto::{DecryptError, EncryptedSession};
 use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable, RemoteCall};
 
 use tokio::io::AsyncWriteExt;
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -347,24 +344,11 @@ impl UpdateStream {
 
 pub(crate) struct ClientInner {
     /// Crypto/state for the connection: EncryptedSession, salts, acks, etc.
-    /// Held only for CPU-bound packing : never while awaiting TCP I/O.
-    writer: Mutex<ConnectionWriter>,
-    /// The TCP send half. Separate from `writer` so the reader task can lock
-    /// `writer` for pending_ack / state while a caller awaits `write_all`.
-    /// This split eliminates the burst-deadlock at 10+ concurrent RPCs.
-    write_half: Mutex<OwnedWriteHalf>,
-    /// Pending RPC replies, keyed by MTProto msg_id.
-    /// RPC callers insert a oneshot::Sender here before sending; the reader
-    /// task routes incoming rpc_result frames to the matching sender.
-    #[allow(clippy::type_complexity)]
-    pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Vec<u8>, InvocationError>>>>>,
-    /// Channel used to hand a new (OwnedReadHalf, FrameKind, auth_key, session_id)
-    /// to the reader task after a reconnect. Capacity 4: at most one reconnect
-    /// is in flight at any time; the bound prevents unbounded memory growth.
-    reconnect_tx: mpsc::Sender<(OwnedReadHalf, FrameKind, [u8; 256], i64)>,
-    /// Send `()` here to wake the reader's reconnect backoff loop immediately.
-    /// Used by [`Client::signal_network_restored`]. Capacity 4: hints are
-    /// best-effort; a full channel means a hint is already pending.
+    /// Enqueue RPC requests to the sender task.
+    rpc_tx: mpsc::Sender<ferogram_mtsender::RpcEnqueue>,
+    /// Send a new stream to the sender task after reconnect.
+    reconnect_tx: mpsc::Sender<ferogram_mtsender::ReconnectRequest>,
+    /// Send () here to wake the network hint backoff.
     network_hint_tx: mpsc::Sender<()>,
     /// Cancelled to signal graceful shutdown to the reader task.
     #[allow(dead_code)]
@@ -421,20 +405,11 @@ pub(crate) struct ClientInner {
     /// Without this guard every bad_server_salt spawns a new task, which causes
     /// an exponential storm when many messages are queued with a stale salt.
     salt_request_in_flight: std::sync::atomic::AtomicBool,
-    /// Prevents spawning more than one `run_pending_differences` task at a time.
-    /// Without this guard, every deadline tick while a diff is already running
-    /// spawns an additional task.  The underlying MessageBoxes state machine
-    /// already serialises the actual RPC calls, but redundant spawns waste resources.
-    diff_in_flight: std::sync::atomic::AtomicBool,
-    /// Incremented on every reconnect.  `DiffGuard` captures the generation at
-    /// construction and only resets `diff_in_flight` when the generation still
-    /// matches, so ghost diff tasks from prior connections become no-ops on drop.
-    diff_generation: std::sync::atomic::AtomicU64,
+
     /// Monotonic connection epoch. Incremented inside do_reconnect() each time
     /// writer and write_half are replaced. Every send site snapshots this before
     /// building the wire and re-checks after acquiring write_half; if the value
     /// changed the wire belongs to the old session and must not be written.
-    conn_generation: std::sync::atomic::AtomicU64,
     /// Prevents two concurrent fresh-DH handshakes racing each other.
     /// A double-DH results in one key being unregistered on Telegram's servers,
     /// causing AUTH_KEY_UNREGISTERED immediately after reconnect.
@@ -498,6 +473,11 @@ pub(crate) struct ClientInner {
     /// Experimental feature flags, stored for runtime checks in files.rs etc.
     #[allow(dead_code)]
     pub(crate) experimental: ExperimentalFeatures,
+
+    /// Wakes the persistent diff task when a deadline fires or a reconnect completes.
+    /// A single long-lived task owns the sequential diff loop, and callers
+    /// just notify it instead of spawning new tasks.
+    diff_notify: std::sync::Arc<tokio::sync::Notify>,
 
     /// Assigns a unique monotonically increasing ID to every reader_loop invocation
     /// (initial spawn + every supervisor restart). Per-client to avoid false positives
@@ -681,44 +661,26 @@ impl Client {
             config.transport.clone(),
         );
 
-        // Split the TCP stream immediately.
-        // The writer (write half + EncryptedSession) stays in ClientInner.
-        // The read half goes to the reader task which we spawn right now so
-        // that RPC calls during init_connection work correctly.
-        let (writer, write_half, read_half, frame_kind): (
-            ferogram_connect::ConnectionWriter,
-            tokio::net::tcp::OwnedWriteHalf,
-            tokio::net::tcp::OwnedReadHalf,
-            ferogram_connect::connection::FrameKind,
-        ) = conn.into_writer();
-        let auth_key = writer.enc.auth_key_bytes();
-        let session_id = writer.enc.session_id();
+        // Hand the TcpStream directly to MtpSender: a single task owns both halves.
+        let perm_auth_key = conn.perm_auth_key;
+        let (sender_handle, frame_rx) = ferogram_mtsender::spawn_sender_task(
+            conn.stream,
+            conn.enc,
+            conn.frame_kind,
+            perm_auth_key,
+        );
 
-        #[allow(clippy::type_complexity)]
-        let pending: Arc<
-            Mutex<HashMap<i64, oneshot::Sender<Result<Vec<u8>, InvocationError>>>>,
-        > = Arc::new(Mutex::new(HashMap::new()));
-
-        // Channel the reconnect logic uses to hand a new read half to the reader task.
-        // Capacity 4: only one reconnect can be in flight; bound prevents unbounded growth.
-        let (reconnect_tx, reconnect_rx) =
-            mpsc::channel::<(OwnedReadHalf, FrameKind, [u8; 256], i64)>(4);
-
-        // Channel for external "network restored" hints: lets Android/iOS callbacks
-        // skip the reconnect backoff and attempt immediately.
-        // Capacity 4: hints are best-effort; a full channel means one is already queued.
+        // Channel for external "network restored" hints.
         let (network_hint_tx, network_hint_rx) = mpsc::channel::<()>(4);
 
-        // Graceful shutdown token: cancel this to stop the reader task cleanly.
+        // Graceful shutdown token.
         let shutdown_token = CancellationToken::new();
         let catch_up = config.catch_up;
         let restart_policy = config.restart_policy;
 
         let inner = Arc::new(ClientInner {
-            writer: Mutex::new(writer),
-            write_half: Mutex::new(write_half),
-            pending: pending.clone(),
-            reconnect_tx,
+            rpc_tx: sender_handle.rpc_tx,
+            reconnect_tx: sender_handle.reconnect_tx,
             network_hint_tx,
             shutdown_token: shutdown_token.clone(),
             catch_up,
@@ -753,9 +715,7 @@ impl Client {
             )),
             stream_active: std::sync::atomic::AtomicBool::new(false),
             salt_request_in_flight: std::sync::atomic::AtomicBool::new(false),
-            diff_in_flight: std::sync::atomic::AtomicBool::new(false),
-            diff_generation: std::sync::atomic::AtomicU64::new(0),
-            conn_generation: std::sync::atomic::AtomicU64::new(0),
+
             dh_in_progress: std::sync::atomic::AtomicBool::new(false),
             pfs_enabled: config.use_pfs,
             update_config: config.update_config,
@@ -770,6 +730,7 @@ impl Client {
             seen_msg_ids: ferogram_mtproto::new_seen_msg_ids(),
             session_snapshot_dirty: std::sync::atomic::AtomicBool::new(false),
             experimental: config.experimental_features.clone(),
+            diff_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
             reader_id_counter: std::sync::atomic::AtomicU64::new(0),
             active_readers: std::sync::atomic::AtomicI64::new(0),
         });
@@ -779,23 +740,43 @@ impl Client {
             _update_rx: Arc::new(Mutex::new(update_rx)),
         };
 
-        // Spawn the reader task immediately so that RPC calls during
-        // init_connection can receive their responses.
+        // Spawn the frame dispatch loop.
+        // Receives FrameEvent from the sender task and routes updates / errors.
+        // This replaces run_reader_task + reader_loop.
         {
-            let client_r = client.clone();
-            let shutdown_r = shutdown_token.clone();
+            let client_d = client.clone();
+            let shutdown_d = shutdown_token.clone();
             tokio::spawn(async move {
-                client_r
-                    .run_reader_task(
-                        read_half,
-                        frame_kind,
-                        auth_key,
-                        session_id,
-                        reconnect_rx,
-                        network_hint_rx,
-                        shutdown_r,
-                    )
+                client_d
+                    .run_frame_dispatch(frame_rx, network_hint_rx, shutdown_d)
                     .await;
+            });
+        }
+
+        // Spawn the single persistent diff task: one sequential loop, woken
+        // by diff_notify, instead of a new task per deadline tick.
+        {
+            let client_diff = client.clone();
+            let shutdown_diff = shutdown_token.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = shutdown_diff.cancelled() => return,
+                        _ = client_diff.inner.diff_notify.notified() => {
+                            client_diff.run_pending_differences().await;
+                        }
+                        _ = {
+                            let deadline = {
+                                let mut mb = client_diff.inner.message_box.lock().await;
+                                mb.check_deadlines()
+                            };
+                            tokio::time::sleep_until(deadline.into())
+                        } => {
+                            client_diff.run_pending_differences().await;
+                        }
+                    }
+                }
             });
         }
 
@@ -892,54 +873,9 @@ impl Client {
             });
         }
 
-        // +: Background ack flush task  - drains pending_ack every 500 ms so that        // content-message acks are never held indefinitely waiting for an outgoing
-        // RPC.  Without this, a bot that receives update bursts without sending any
-        // RPCs will eventually exhaust Telegram's un-acked-message threshold (~512)
-        // causing the server to close the connection.
-        {
-            let client_ack = client.clone();
-            let shutdown_ack = shutdown_token.clone();
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_millis(500));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                loop {
-                    tokio::select! {
-                        _ = shutdown_ack.cancelled() => break,
-                        _ = interval.tick() => {}
-                    }
-                    // Drain under writer lock; skip the send entirely if empty.
-                    let acks: Vec<i64> = {
-                        let mut w = client_ack.inner.writer.lock().await;
-                        if w.pending_ack.is_empty() {
-                            continue;
-                        }
-                        w.pending_ack.drain(..).collect()
-                    };
-                    // Pack a standalone msgs_ack frame (non-content-related, no
-                    // sent_bodies entry needed - the server never acks an ack.
-                    let (wire, fk, conn_gen) = {
-                        let mut w = client_ack.inner.writer.lock().await;
-                        let ack_body = build_msgs_ack_body(&acks);
-                        let conn_gen = client_ack
-                            .inner
-                            .conn_generation
-                            .load(std::sync::atomic::Ordering::Acquire);
-                        let (wire, _msg_id) = w.enc.pack_body_with_msg_id(&ack_body, false);
-                        (wire, w.frame_kind.clone(), conn_gen)
-                    };
-                    {
-                        let mut wh = client_ack.inner.write_half.lock().await;
-                        let cur = client_ack
-                            .inner
-                            .conn_generation
-                            .load(std::sync::atomic::Ordering::Acquire);
-                        if cur == conn_gen {
-                            send_frame_write(&mut *wh, &wire, &fk).await.ok(); // TCP error here will surface on the next real send
-                        }
-                    }
-                }
-            });
-        }
+        // Background ACK flush task removed: MtpSender::step() flushes pending_ack
+        // on every outgoing frame automatically, so a separate timer-based
+        // flush is no longer needed.
 
         // Only clear the auth key on definitive bad-key signals from Telegram.
         // Network errors (EOF mid-session, ConnectionReset, Rpc(-404)) mean the
@@ -981,7 +917,7 @@ impl Client {
                     }
                 }
                 client.save_session().await.ok();
-                client.inner.pending.lock().await.clear();
+                // Pending RPCs are owned by the sender task; fail_all() handles this on error.
 
                 let socks5_r = client.inner.socks5.clone();
                 let mtproxy_r = client.inner.mtproxy.clone();
@@ -1007,13 +943,10 @@ impl Client {
                 )
                 .await?;
 
-                // Split first so we can read the new key/salt from the writer.
-                let (new_writer, new_wh, new_read, new_fk): (
-                    ferogram_connect::ConnectionWriter,
-                    tokio::net::tcp::OwnedWriteHalf,
-                    tokio::net::tcp::OwnedReadHalf,
-                    ferogram_connect::connection::FrameKind,
-                ) = new_conn.into_writer();
+                // Read key/salt directly from the connection (single TcpStream owner now).
+                let new_ak = new_conn.enc.auth_key_bytes();
+                let new_first_salt = new_conn.enc.salt;
+                let new_time_offset = new_conn.enc.time_offset;
                 // Update ONLY the home DC entry: all other DC keys are preserved.
                 {
                     let mut opts_guard: tokio::sync::MutexGuard<
@@ -1021,20 +954,23 @@ impl Client {
                         std::collections::HashMap<i32, DcEntry>,
                     > = client.inner.dc_options.lock().await;
                     if let Some(entry) = opts_guard.get_mut(&home_dc_id_r) {
-                        entry.auth_key = Some(new_writer.auth_key_bytes());
-                        entry.first_salt = new_writer.first_salt();
-                        entry.time_offset = new_writer.time_offset();
+                        entry.auth_key = Some(new_ak);
+                        entry.first_salt = new_first_salt;
+                        entry.time_offset = new_time_offset;
                     }
                 }
                 // home_dc_id stays unchanged: we reconnected to the same DC.
-                let new_ak = new_writer.enc.auth_key_bytes();
-                let new_sid = new_writer.enc.session_id();
-                *client.inner.writer.lock().await = new_writer;
-                *client.inner.write_half.lock().await = new_wh;
+                let perm_auth_key = new_conn.perm_auth_key;
                 let _ = client
                     .inner
                     .reconnect_tx
-                    .try_send((new_read, new_fk, new_ak, new_sid));
+                    .send(ferogram_mtsender::ReconnectRequest {
+                        stream: new_conn.stream,
+                        enc: new_conn.enc,
+                        frame_kind: new_conn.frame_kind,
+                        perm_auth_key,
+                    })
+                    .await;
                 tokio::task::yield_now().await;
 
                 // Brief pause so the new key propagates to all of Telegram's
@@ -1163,11 +1099,8 @@ impl Client {
             // We do NOT call prefetch_channel_access_hashes() (messages.getDialogs) here.
             // That call forces deep deserialization of Dialog/DraftMessage/PollResults/Story
             // which are high-churn Telegram objects and break on every new beta layer.
-            let c = client.clone();
-            tokio::spawn(async move {
-                tracing::info!("[ferogram] catch_up: driving MessageBoxes diff");
-                c.run_pending_differences().await;
-            });
+            tracing::info!("[ferogram] catch_up: scheduling diff");
+            client.inner.diff_notify.notify_one();
         } else {
             // If there is a loaded session the client is already authorised.
             // Mark signed_in so sync_state_after_dh can run after reconnects,
@@ -1444,34 +1377,11 @@ impl Client {
     async fn build_persisted_session(&self) -> PersistedSession {
         use crate::session::{CachedPeer, UpdatesStateSnap};
 
-        let writer_guard = self.inner.writer.lock().await;
         let home_dc_id = *self.inner.home_dc_id.lock().await;
         let dc_options: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> =
             self.inner.dc_options.lock().await;
 
-        let mut dcs: Vec<DcEntry> = dc_options
-            .values()
-            .map(|e| DcEntry {
-                dc_id: e.dc_id,
-                addr: e.addr.clone(),
-                auth_key: if e.dc_id == home_dc_id {
-                    Some(writer_guard.auth_key_bytes())
-                } else {
-                    e.auth_key
-                },
-                first_salt: if e.dc_id == home_dc_id {
-                    writer_guard.first_salt()
-                } else {
-                    e.first_salt
-                },
-                time_offset: if e.dc_id == home_dc_id {
-                    writer_guard.time_offset()
-                } else {
-                    e.time_offset
-                },
-                flags: e.flags,
-            })
-            .collect();
+        let mut dcs: Vec<DcEntry> = dc_options.values().map(|e| e.clone()).collect();
         // Also persist media DCs so they survive restart.
         {
             let media_opts: tokio::sync::MutexGuard<
@@ -1853,1431 +1763,142 @@ impl Client {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn run_reader_task(
+    /// Frame dispatch loop, receives [`FrameEvent`] from the sender task and
+    /// routes updates, connection errors, and reconnects. Replaces the old
+    /// `run_reader_task` + `reader_loop` split-architecture pair.
+    ///
+    /// The sender task owns the TCP stream; this task just dispatches what
+    /// comes out of it.
+    async fn run_frame_dispatch(
         &self,
-        read_half: OwnedReadHalf,
-
-        frame_kind: FrameKind,
-        auth_key: [u8; 256],
-
-        session_id: i64,
-        mut new_conn_rx: mpsc::Receiver<(OwnedReadHalf, FrameKind, [u8; 256], i64)>,
-
-        mut network_hint_rx: mpsc::Receiver<()>,
-        shutdown_token: CancellationToken,
+        mut frame_rx: tokio::sync::mpsc::Receiver<ferogram_mtsender::FrameEvent>,
+        mut network_hint_rx: tokio::sync::mpsc::Receiver<()>,
+        shutdown_token: tokio_util::sync::CancellationToken,
     ) {
-        let mut rh = read_half;
-        let mut fk = frame_kind;
-        let mut ak = auth_key;
-        let mut sid = session_id;
-        // On first start no init is needed (connect() already called it).
-        // On restarts we pass the spawned init task so reader_loop handles it.
-        let mut restart_init_rx: Option<oneshot::Receiver<Result<(), InvocationError>>> = None;
-        let mut restart_count: u32 = 0;
+        use ferogram_mtsender::FrameEvent;
 
         loop {
-            // Track concurrent reader count for this invocation. ACTIVE_READERS > 1
-            // means a previous reader_loop didn't exit before the supervisor
-            // spawned a new one; this is logged as a hard warning.
-            let reader_id = self
-                .inner
-                .reader_id_counter
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let active_before = self
-                .inner
-                .active_readers
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                + 1;
-            tracing::debug!(
-                "[ferogram/reader-diag] reader#{reader_id} starting \
-                 (conn_gen={} sid={sid:#x} active_readers={active_before})",
-                self.inner
-                    .conn_generation
-                    .load(std::sync::atomic::Ordering::Acquire),
-            );
-            if active_before > 1 {
-                tracing::error!(
-                    "[ferogram/reader-diag] MULTIPLE ACTIVE READERS DETECTED: \
-                     reader#{reader_id} starting while {} reader(s) already active \
-                     (conn_gen={} sid={sid:#x}). This indicates concurrent socket \
-                     consumers and is a likely cause of frame-stream desync.",
-                    active_before - 1,
-                    self.inner
-                        .conn_generation
-                        .load(std::sync::atomic::Ordering::Acquire),
-                );
-            }
-
             tokio::select! {
-                // Clean shutdown
+                biased;
                 _ = shutdown_token.cancelled() => {
-                    tracing::info!("[ferogram] Reader task: shutdown requested, exiting cleanly.");
-                    let remaining = self.inner.active_readers.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1;
-                    tracing::debug!(
-                        "[ferogram/reader-diag] reader#{reader_id} exiting (shutdown, active_readers={remaining})"
-                    );
-                    let mut pending = self.inner.pending.lock().await;
-                    for (_, tx) in pending.drain() {
-                        let _ = tx.send(Err(InvocationError::Dropped));
-                    }
+                    tracing::info!("[ferogram] frame dispatch: shutdown");
                     return;
                 }
-
-                // reader_loop
-                _ = self.reader_loop(
-                        reader_id,
-                        rh, fk, ak, sid,
-                        restart_init_rx.take(),
-                        &mut new_conn_rx, &mut network_hint_rx,
-                    ) => {}
-            }
-
-            // reader_loop returned: this reader_id's run is over.
-            {
-                let remaining = self
-                    .inner
-                    .active_readers
-                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
-                    - 1;
-                tracing::debug!(
-                    "[ferogram/reader-diag] reader#{reader_id} exited reader_loop (active_readers={remaining})"
-                );
-            }
-
-            // If we reach here, reader_loop returned without a shutdown signal.
-            // This should never happen in normal operation: treat it as a fault.
-            if shutdown_token.is_cancelled() {
-                tracing::debug!("[ferogram] Reader task: exiting after loop (shutdown).");
-                return;
-            }
-
-            restart_count += 1;
-            tracing::error!(
-                "[ferogram] Reader loop exited unexpectedly (restart #{restart_count}):                  supervisor reconnecting …"
-            );
-
-            {
-                let mut pending = self.inner.pending.lock().await;
-                tracing::debug!(
-                    "[ferogram] Supervisor: draining {} pending RPC(s) before reconnect (conn_gen={})",
-                    pending.len(),
-                    self.inner
-                        .conn_generation
-                        .load(std::sync::atomic::Ordering::Acquire),
-                );
-                for (_, tx) in pending.drain() {
-                    let _ = tx.send(Err(InvocationError::Io(std::io::Error::new(
-                        std::io::ErrorKind::ConnectionReset,
-                        "reader task restarted",
-                    ))));
-                }
-            }
-            // drain sent_bodies alongside pending to prevent unbounded growth.
-            {
-                let mut w = self.inner.writer.lock().await;
-                w.sent_bodies.clear();
-                w.container_map.clear();
-            }
-
-            let mut delay_ms = RECONNECT_BASE_MS;
-            let new_conn = loop {
-                tracing::debug!("[ferogram] Supervisor: reconnecting in {delay_ms} ms …");
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => {
-                        tracing::debug!("[ferogram] Supervisor: shutdown during reconnect, exiting.");
-                        return;
+                event = frame_rx.recv() => {
+                    match event {
+                        None => {
+                            tracing::warn!("[ferogram] frame dispatch: sender task exited");
+                            return;
+                        }
+                        Some(FrameEvent::Connected { auth_key, first_salt, time_offset, session_id }) => {
+                            tracing::debug!(
+                                "[ferogram] frame dispatch: connected sid={session_id:#x} salt={first_salt:#018x}"
+                            );
+                            // Keep dc_options[home_dc] in sync so build_persisted_session
+                            // and other readers don't need access to the sender task's
+                            // internal EncryptedSession state.
+                            {
+                                let home_dc_id = *self.inner.home_dc_id.lock().await;
+                                let mut opts = self.inner.dc_options.lock().await;
+                                if let Some(entry) = opts.get_mut(&home_dc_id) {
+                                    entry.auth_key = Some(auth_key);
+                                    entry.first_salt = first_salt;
+                                    entry.time_offset = time_offset;
+                                }
+                            }
+                            // Signal message_box so it queues getDifference.
+                            {
+                                let mut mb = self.inner.message_box.lock().await;
+                                let _ = mb.process_updates(
+                                    crate::message_box::UpdatesLike::ConnectionClosed,
+                                );
+                            }
+                            // Drive catchup diffs on reconnect.
+                            self.inner.diff_notify.notify_one();
+                        }
+                        Some(FrameEvent::Update(body)) => {
+                            self.dispatch_updates(&body).await;
+                        }
+                        Some(FrameEvent::Error(e)) => {
+                            tracing::warn!("[ferogram] frame dispatch: connection error: {e:?}");
+                            // Sender task already called fail_all(); just reconnect.
+                            self.handle_reconnect_after_error().await;
+                        }
                     }
-                    _ = sleep(Duration::from_millis(delay_ms)) => {}
                 }
+                _ = network_hint_rx.recv() => {
+                    // External hint (e.g. Android network-restored callback).
+                    // The sender task will reconnect on its own; just wake the backoff.
+                    tracing::debug!("[ferogram] frame dispatch: network hint received");
+                }
+            }
+        }
+    }
 
-                // do_reconnect now derives transport from _old_frame_kind.
-                // The supervisor doesn't have access to rh/fk/ak/sid (moved into
-                // reader_loop), so pass a dummy_ak and dummy_fk; do_reconnect will
-                // fall back to active_transport (updated on every normal reconnect).
-                let dummy_ak = [0u8; 256];
-                let dummy_fk = self
-                    .inner
-                    .active_transport
-                    .lock()
-                    .ok()
-                    .map(|t| match &*t {
-                        TransportKind::Abridged => FrameKind::Abridged,
-                        TransportKind::Intermediate => FrameKind::Intermediate,
-                        TransportKind::Full => FrameKind::Abridged, // rare
-                        TransportKind::Obfuscated { .. } => FrameKind::Abridged, // will re-negotiate
-                        TransportKind::PaddedIntermediate { .. } => FrameKind::Abridged,
-                        TransportKind::Http => FrameKind::Abridged,
-                        TransportKind::FakeTls { .. } => FrameKind::Abridged,
-                    })
-                    .unwrap_or(FrameKind::Abridged);
-                match self.do_reconnect(&dummy_ak, &dummy_fk).await {
-                    Ok(conn) => break conn,
-                    Err(e) => {
-                        tracing::warn!("[ferogram] Supervisor: reconnect failed ({e})");
-                        let next = (delay_ms * 2).min(RECONNECT_MAX_SECS * 1_000);
-                        delay_ms = jitter_delay(next).as_millis() as u64;
+    /// Reconnect after a connection error from the sender task.
+    /// Uses exponential backoff, then sends the new stream via reconnect_tx.
+    async fn handle_reconnect_after_error(&self) {
+        let mut delay_ms = RECONNECT_BASE_MS;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+
+            let (addr, dc_id) = {
+                let home = *self.inner.home_dc_id.lock().await;
+                let dc_opts = self.inner.dc_options.lock().await;
+                match dc_opts.get(&home) {
+                    Some(e) => (e.addr.clone(), home as i16),
+                    None => {
+                        tracing::warn!("[ferogram] reconnect: no DC entry for home DC {home}");
+                        delay_ms = (delay_ms * 2).min(RECONNECT_MAX_SECS * 1000);
+                        continue;
                     }
                 }
             };
 
-            let (new_rh, new_fk, new_ak, new_sid) = new_conn;
-            rh = new_rh;
-            fk = new_fk;
-            ak = new_ak;
-            sid = new_sid;
+            let socks5 = self.inner.socks5.as_ref().cloned();
+            let mtproxy = self.inner.mtproxy.as_ref().cloned();
+            let transport = self.inner.active_transport.lock().unwrap().clone();
 
-            // Bump generation to invalidate ghost diff tasks; do NOT reset
-            // diff_in_flight here; see do_reconnect_loop comment above.
-            self.inner
-                .diff_generation
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-
-            // be running to route the RPC response, or we deadlock).
-            let (init_tx, init_rx) = oneshot::channel();
-            let c = self.clone();
-            let _utx = self.inner.update_tx.clone();
-            tokio::spawn(async move {
-                // Respect FLOOD_WAIT (same as do_reconnect_loop).
-                let result = loop {
-                    match c.init_connection().await {
-                        Ok(()) => break Ok(()),
-                        Err(InvocationError::Rpc(ref r)) if r.flood_wait_seconds().is_some() => {
-                            let secs = r.flood_wait_seconds().expect("is FLOOD_WAIT error");
-                            tracing::warn!(
-                                "[ferogram] Supervisor init_connection FLOOD_WAIT_{secs}: waiting"
-                            );
-                            sleep(Duration::from_secs(secs + 1)).await;
-                        }
-                        Err(e) => break Err(e),
-                    }
-                };
-                if result.is_ok() {
-                    // After fresh DH, retry GetState with backoff instead of a fixed 2 s sleep.
-                    if c.inner
-                        .dh_in_progress
-                        .load(std::sync::atomic::Ordering::SeqCst)
+            match Connection::connect_raw(
+                &addr,
+                socks5.as_ref(),
+                mtproxy.as_ref(),
+                &transport,
+                dc_id,
+            )
+            .await
+            {
+                Ok(conn) => {
+                    tracing::debug!("[ferogram] reconnect: TCP+DH OK");
                     {
-                        c.sync_state_after_dh().await;
-                    }
-                    // Signal reconnect to message_box so it queues getDifference.
-                    {
-                        let mut mb = c.inner.message_box.lock().await;
-                        let _ = mb.process_updates(message_box::UpdatesLike::ConnectionClosed);
-                    }
-                    // Open the diff gate only after initConnection is live.
-                    c.inner
-                        .diff_in_flight
-                        .store(false, std::sync::atomic::Ordering::Release);
-                    c.run_pending_differences().await;
-                }
-                let _ = init_tx.send(result);
-            });
-            restart_init_rx = Some(init_rx);
-
-            tracing::debug!(
-                "[ferogram] Supervisor: restarting reader loop (restart #{restart_count}) …"
-            );
-            // Loop back -> reader_loop restarts with the fresh connection.
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn reader_loop(
-        &self,
-        reader_id: u64,
-        mut rh: OwnedReadHalf,
-
-        mut fk: FrameKind,
-        mut ak: [u8; 256],
-
-        mut sid: i64,
-        // When Some, the supervisor has already spawned init_connection on our
-        initial_init_rx: Option<oneshot::Receiver<Result<(), InvocationError>>>,
-        new_conn_rx: &mut mpsc::Receiver<(OwnedReadHalf, FrameKind, [u8; 256], i64)>,
-
-        network_hint_rx: &mut mpsc::Receiver<()>,
-    ) {
-        // Tracks an in-flight init_connection task spawned after every reconnect.
-        // The reader loop must keep routing frames while we wait so the RPC
-        // response can reach its oneshot sender (otherwise -> 30 s self-deadlock).
-        // If init fails we re-enter the reconnect loop immediately.
-        let mut init_rx: Option<oneshot::Receiver<Result<(), InvocationError>>> = initial_init_rx;
-        // How many consecutive init_connection failures have occurred on the
-        // *current* auth key.  We retry with the same key up to 2 times before
-        // assuming the key is stale and clearing it for a fresh DH handshake.
-        // This prevents a transient 30 s timeout from nuking a valid session.
-        let mut init_fail_count: u32 = 0;
-
-        let mut restart_interval = self.inner.restart_policy.restart_interval().map(|d| {
-            let mut i = tokio::time::interval(d);
-            i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            i
-        });
-        if let Some(ref mut i) = restart_interval {
-            i.tick().await;
-        }
-
-        loop {
-            tokio::select! {
-
-                // check_deadlines() returns now() when difference is pending, so this
-                // arm fires immediately when a gap was detected; otherwise it sleeps
-                // until the next no-update timeout (15 min default).
-                //
-                // When diff_in_flight is already true we substitute pending() so the
-                // select does not spin: check_deadlines() returns Instant::now() while
-                // getting_diff_for is non-empty, which would cause the arm to win every
-                // iteration (13 000+ recv_frame_read calls per second at the same seqno).
-                // The in-flight diff task resets diff_in_flight=false and calls
-                // run_pending_differences() itself, so nothing is lost.
-                _ = {
-                    let diff_busy = self.inner.diff_in_flight.load(std::sync::atomic::Ordering::Acquire);
-                    let deadline = if diff_busy {
-                        None
-                    } else {
-                        let mut mb = self.inner.message_box.lock().await;
-                        Some(mb.check_deadlines())
-                    };
-                    async move {
-                        match deadline {
-                            Some(t) => tokio::time::sleep_until(t.into()).await,
-                            None => std::future::pending::<()>().await,
+                        let mut opts = self.inner.dc_options.lock().await;
+                        if let Some(entry) = opts.get_mut(&(dc_id as i32)) {
+                            entry.auth_key = Some(conn.enc.auth_key_bytes());
+                            entry.first_salt = conn.enc.salt;
+                            entry.time_offset = conn.enc.time_offset;
                         }
                     }
-                } => {
-                    // IMPORTANT: never await run_pending_differences() directly here.
-                    // This arm runs inside the reader_loop select!, which is the only
-                    // task reading TCP frames and routing RPC responses.  If we await
-                    // run_pending_differences() inline, the getDifference RPC is sent
-                    // but the response frame can never arrive (reader_loop is blocked)
-                    // -> 30-second self-deadlock.  Spawn a separate task instead, exactly
-                    // like the Keepalive arm below.  run_pending_differences() owns the
-                    // diff_in_flight guard internally, so concurrent spawns are safe.
-                    if !self.inner.diff_in_flight.load(std::sync::atomic::Ordering::Acquire) {
-                        let c = self.clone();
-                        tokio::spawn(async move {
-                            c.run_pending_differences().await;
-                        });
-                    }
-                }
-
-                _ = async {
-                    if let Some(ref mut i) = restart_interval { i.tick().await; }
-                    else { std::future::pending::<()>().await; }
-                } => {
-                    tracing::info!("[ferogram] scheduled restart: reconnecting");
-                    let _ = self.inner.write_half.lock().await.shutdown().await;
-                    let _ = self.inner.network_hint_tx.try_send(());
-                }
-                // Normal frame (or application-level keepalive timeout)
-                outcome = recv_frame_with_keepalive(&mut rh, &fk, &self.inner.writer, &self.inner.write_half) => {
-                    // Tag every frame outcome with reader_id/conn_gen/sid so we can
-                    // tell, frame-by-frame, which reader instance and connection
-                    // generation produced it. If garbage "transport code" frames
-                    // ever show a different reader_id/conn_gen than the preceding
-                    // good frames, that's direct proof of a stale/second reader
-                    // still consuming this (or another) socket.
-                    let diag_gen = self.inner.conn_generation.load(std::sync::atomic::Ordering::Acquire);
-                    match &outcome {
-                        FrameOutcome::Frame(raw) => {
-                            tracing::trace!(
-                                "[ferogram/reader-diag] [reader#{reader_id} gen={diag_gen} sid={sid:#x}] frame received: {} bytes",
-                                raw.len(),
-                            );
-                        }
-                        FrameOutcome::Error(e) => {
-                            tracing::trace!(
-                                "[ferogram/reader-diag] [reader#{reader_id} gen={diag_gen} sid={sid:#x}] frame error: {e}",
-                            );
-                        }
-                        FrameOutcome::Keepalive => {
-                            tracing::trace!(
-                                "[ferogram/reader-diag] [reader#{reader_id} gen={diag_gen} sid={sid:#x}] keepalive ping sent",
-                            );
-                        }
-                    }
-                    match outcome {
-                        FrameOutcome::Frame(mut raw) => {
-                            // Fix 1: validate frame geometry before touching crypto.
-                            // An impossible frame (< 24 bytes or length not a multiple of 16
-                            // after the 24-byte header) can never decrypt correctly.  Passing
-                            // it to decrypt_data_v2 produces a misleading Crypto(InvalidBuffer)
-                            // log entry and an unnecessary crypto round-trip.  Reject here,
-                            // log the raw bytes for diagnosis, and reconnect immediately.
-                            if raw.len() < 24 || (raw.len() - 24) % 16 != 0 {
-                                let hex: String = raw
-                                    .iter()
-                                    .take(32)
-                                    .map(|b| format!("{b:02x}"))
-                                    .collect::<Vec<_>>()
-                                    .join(" ");
-                                log::warn!(
-                                    "[ferogram/connect] invalid frame geometry before crypto: \
-                                     len={} (need >=24 and (len-24)%16==0) first_bytes=[{hex}]",
-                                    raw.len(),
-                                );
-                                drop(init_rx.take());
-                                {
-                                    let mut pending = self.inner.pending.lock().await;
-                                    let msg = "invalid frame geometry";
-                                    for (_, tx) in pending.drain() {
-                                        let _ = tx.send(Err(InvocationError::Io(
-                                            std::io::Error::new(
-                                                std::io::ErrorKind::InvalidData,
-                                                msg,
-                                            )
-                                        )));
-                                    }
-                                }
-                                {
-                                    let mut w = self.inner.writer.lock().await;
-                                    w.sent_bodies.clear();
-                                    w.container_map.clear();
-                                }
-                                // Reconnect: bump generation so any ghost diff task from
-                                // this connection becomes a no-op.  diff_in_flight is reset
-                                // inside the init task after initConnection succeeds.
-                                self.inner.diff_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                                match self.do_reconnect_loop(
-                                    RECONNECT_BASE_MS, &mut rh, &mut fk, &mut ak, &mut sid,
-                                    network_hint_rx,
-                                ).await {
-                                    Some(rx) => { init_rx = Some(rx); }
-                                    None     => return,
-                                }
-                                continue;
-                            }
-
-                            let msg = match EncryptedSession::decrypt_frame_dedup(&ak, sid, &mut raw, &self.inner.seen_msg_ids) {
-                                Ok(m)  => m,
-                                Err(e) => {
-                                    // Fix 2: on AuthKeyMismatch the socket is carrying bytes
-                                    // from a stale session (old reader task or TCP stream
-                                    // re-use).  Shut the write half down immediately so the
-                                    // kernel tears the connection; do not wait for backoff.
-                                    let is_key_mismatch = matches!(
-                                        &e,
-                                        DecryptError::Crypto(ferogram_crypto::DecryptError::AuthKeyMismatch)
-                                    );
-                                    if is_key_mismatch {
-                                        log::warn!(
-                                            "[ferogram/connect] AuthKeyMismatch: \
-                                             dead socket detected, shutting down write half immediately"
-                                        );
-                                        let _ = self.inner.write_half.lock().await.shutdown().await;
-                                    }
-                                    tracing::warn!("[ferogram] Decrypt error: {e:?}: failing pending waiters and reconnecting");
-                                    drop(init_rx.take());
-                                    {
-                                        let mut pending = self.inner.pending.lock().await;
-                                        let msg = format!("decrypt error: {e}");
-                                        for (_, tx) in pending.drain() {
-                                            let _ = tx.send(Err(InvocationError::Io(
-                                                std::io::Error::new(
-                                                    std::io::ErrorKind::InvalidData,
-                                                    msg.clone(),
-                                                )
-                                            )));
-                                        }
-                                    }
-                                    {
-                                        let mut w = self.inner.writer.lock().await;
-                                        w.sent_bodies.clear();
-                                        w.container_map.clear();
-                                    }
-                                    // Use delay=0 for AuthKeyMismatch (already told server
-                                    // the socket is dead); normal backoff for other errors.
-                                    let delay = if is_key_mismatch { 0 } else { RECONNECT_BASE_MS };
-                                    self.inner.diff_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                                    match self.do_reconnect_loop(
-                                        delay, &mut rh, &mut fk, &mut ak, &mut sid,
-                                        network_hint_rx,
-                                    ).await {
-                                        Some(rx) => { init_rx = Some(rx); }
-                                        None     => return,
-                                    }
-                                    continue;
-                                }
-                            };
-                            //  discards the frame-level salt entirely
-                            // (it's not the "server salt" we should use: that only comes
-                            // from new_session_created, bad_server_salt, or future_salts).
-                            // Overwriting enc.salt here would clobber the managed salt pool.
-                            self.route_frame(msg.body, msg.msg_id).await;
-
-                            //: Acks are NOT flushed here standalone.
-                            // They accumulate in pending_ack and are bundled into the next
-                            // outgoing request container
-                            // avoiding an extra standalone frame (and extra RTT exposure).
-                        }
-
-                        FrameOutcome::Error(e) => {
-                            let ie: InvocationError = InvocationError::from(e);
-                            let pending_count = self.inner.pending.lock().await.len();
-                            tracing::warn!(
-                                "[ferogram] Reader: connection error: {ie} \
-                                 (conn_gen={} sid={sid:#x} pending_rpcs={pending_count})",
-                                self.inner.conn_generation.load(std::sync::atomic::Ordering::Acquire),
-                            );
-                            drop(init_rx.take()); // discard any in-flight init
-
-                            // Detect definitive auth-key rejection.  Telegram signals
-                            // this with a -404 transport error (now surfaced as Rpc(-404)
-                            // by recv_frame_read).  ONLY in that case do we clear the saved
-                            // key so do_reconnect_loop falls through to connect_raw (fresh DH).
-                            //
-                            // DO NOT treat UnexpectedEof or ConnectionReset as stale-key:
-                            // those are normal TCP disconnects (server-side timeout, network
-                            // blip, download finishing on a transfer conn, etc.).  Auth keys
-                            // live for months  - clearing them on every TCP drop destroys the
-                            // session and produces AUTH_KEY_UNREGISTERED on the next connect.
-                            let key_is_stale = matches!(&ie, InvocationError::Rpc(r) if r.code == -404);
-                            // Only clear the key if no DH is already in progress.
-                            // The startup init_connection path may have already claimed
-                            // dh_in_progress; honour that to avoid a double-DH race.
-                            let clear_key = key_is_stale
-                                && self.inner.dh_in_progress
-                                    .compare_exchange(false, true,
-                                        std::sync::atomic::Ordering::SeqCst,
-                                        std::sync::atomic::Ordering::SeqCst)
-                                    .is_ok();
-                            if clear_key {
-                                let home_dc_id = *self.inner.home_dc_id.lock().await;
-                                let mut opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> = self.inner.dc_options.lock().await;
-                                if let Some(entry) = opts.get_mut(&home_dc_id) {
-                                    tracing::warn!(
-                                        "[ferogram] Stale auth key on DC{home_dc_id} ({ie}) \
-                                        : clearing for fresh DH"
-                                    );
-                                    entry.auth_key = None;
-                                }
-                            }
-
-                            // Fail all in-flight RPCs immediately so AutoSleep
-                            // retries them as soon as we reconnect.
-                            {
-                                let mut pending = self.inner.pending.lock().await;
-                                tracing::debug!(
-                                    "[ferogram] Reader: canceling {} pending RPC(s) due to transport error \
-                                     (conn_gen={} sid={sid:#x})",
-                                    pending.len(),
-                                    self.inner.conn_generation.load(std::sync::atomic::Ordering::Acquire),
-                                );
-                                let msg = ie.to_string();
-                                for (_, tx) in pending.drain() {
-                                    let _ = tx.send(Err(InvocationError::Io(
-                                        std::io::Error::new(
-                                            std::io::ErrorKind::ConnectionReset, msg.clone()))));
-                                }
-                            }
-                            // drain sent_bodies so it doesn't grow unbounded under loss.
-                            {
-                                let mut w = self.inner.writer.lock().await;
-                                w.sent_bodies.clear();
-                                w.container_map.clear();
-                            }
-
-                            // Skip backoff when the key is stale: no point waiting before
-                            // fresh DH: the server told us directly to renegotiate.
-                            let reconnect_delay = if clear_key { 0 } else { RECONNECT_BASE_MS };
-                            self.inner.diff_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                            match self.do_reconnect_loop(
-                                reconnect_delay, &mut rh, &mut fk, &mut ak, &mut sid,
-                                network_hint_rx,
-                            ).await {
-                                Some(rx) => {
-                                    // DH (if any) is complete; release the guard so a future
-                                    // stale-key event can claim it again.
-                                    self.inner.dh_in_progress
-                                        .store(false, std::sync::atomic::Ordering::SeqCst);
-                                    init_rx = Some(rx);
-                                }
-                                None => {
-                                    self.inner.dh_in_progress
-                                        .store(false, std::sync::atomic::Ordering::SeqCst);
-                                    return; // shutdown requested
-                                }
-                            }
-                        }
-
-                        FrameOutcome::Keepalive => {
-                            // Drive any pending diff on keepalive (gap may have been buffered).
-                            let c = self.clone();
-                            tokio::spawn(async move {
-                                c.run_pending_differences().await;
-                            });
-                        }
-                    }
-                }
-
-                // DC migration / deliberate reconnect
-                maybe = new_conn_rx.recv() => {
-                    if let Some((new_rh, new_fk, new_ak, new_sid)) = maybe {
-                        let old_sid = sid;
-                        rh = new_rh; fk = new_fk; ak = new_ak; sid = new_sid;
-                        tracing::debug!(
-                            "[ferogram] Reader: switched to new connection \
-                             (old_sid={old_sid:#x} new_sid={new_sid:#x} conn_gen={}).",
-                            self.inner.conn_generation.load(std::sync::atomic::Ordering::Acquire),
-                        );
-                    } else {
-                        break; // reconnect_tx dropped -> client is shutting down
-                    }
-                }
-
-                // init_connection result (polled only when Some)
-                init_result = async { init_rx.as_mut().expect("guarded by is_some()").await }, if init_rx.is_some() => {
-                    init_rx = None;
-                    match init_result {
-                        Ok(Ok(())) => {
-                            init_fail_count = 0;
-                            // do NOT save_session here.
-                            // We do NOT save the session here on a plain TCP reconnect.
-                            // reconnect: only when a genuinely new auth key is
-                            // generated (fresh DH).  Writing here was the mechanism
-                            // by which bugs S1 and S2 corrupted the on-disk session:
-                            // if fresh DH ran with the wrong DC, the bad key was
-                            // then immediately flushed to disk.  Without the write
-                            // there is nothing to corrupt.
-                            tracing::info!("[ferogram] Reconnected to Telegram ✓: session live, replaying missed updates …");
-                        }
-
-                        Ok(Err(e)) => {
-                            // TCP connected but init RPC failed.
-                            // Only clear auth key on definitive bad-key signals from Telegram.
-                            // -429 = TRANSPORT_FLOOD: key is valid, just throttled: do NOT clear.
-                            let key_is_stale = matches!(&e, InvocationError::Rpc(r) if r.code == -404);
-                            // Use compare_exchange so we don't stomp on another in-progress DH.
-                            let dh_claimed = key_is_stale
-                                && self.inner.dh_in_progress
-                                    .compare_exchange(false, true,
-                                        std::sync::atomic::Ordering::SeqCst,
-                                        std::sync::atomic::Ordering::SeqCst)
-                                    .is_ok();
-
-                            if dh_claimed {
-                                tracing::warn!(
-                                    "[ferogram] init_connection: definitive bad-key ({e}) \
-                                    : clearing auth key for fresh DH …"
-                                );
-                                init_fail_count = 0;
-                                let home_dc_id = *self.inner.home_dc_id.lock().await;
-                                let mut opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> = self.inner.dc_options.lock().await;
-                                if let Some(entry) = opts.get_mut(&home_dc_id) {
-                                    entry.auth_key = None;
-                                }
-                                // dh_in_progress is released by do_reconnect_loop's caller.
-                            } else {
-                                init_fail_count += 1;
-                                tracing::warn!(
-                                    "[ferogram] init_connection failed (attempt {init_fail_count}, {e}) \
-                                    : retrying with same key …"
-                                );
-                            }
-                            {
-                                let mut pending = self.inner.pending.lock().await;
-                                let msg = e.to_string();
-                                for (_, tx) in pending.drain() {
-                                    let _ = tx.send(Err(InvocationError::Io(
-                                        std::io::Error::new(
-                                            std::io::ErrorKind::ConnectionReset, msg.clone()))));
-                                }
-                            }
-                            match self.do_reconnect_loop(
-                                0, &mut rh, &mut fk, &mut ak, &mut sid, network_hint_rx,
-                            ).await {
-                                Some(rx) => { init_rx = Some(rx); }
-                                None     => return,
-                            }
-                        }
-
-                        Err(_) => {
-                            // init task was dropped (shouldn't normally happen).
-                            tracing::warn!("[ferogram] init_connection task dropped unexpectedly, reconnecting …");
-                            self.inner.diff_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                            match self.do_reconnect_loop(
-                                RECONNECT_BASE_MS, &mut rh, &mut fk, &mut ak, &mut sid,
-                                network_hint_rx,
-                            ).await {
-                                Some(rx) => { init_rx = Some(rx); }
-                                None     => return,
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Route a decrypted MTProto frame body to either a pending RPC caller or update_tx.
-    async fn route_frame(&self, body: Vec<u8>, msg_id: i64) {
-        if body.len() < 4 {
-            return;
-        }
-        let cid = u32::from_le_bytes(body[..4].try_into().unwrap());
-
-        match cid {
-            ID_RPC_RESULT => {
-                if body.len() < 12 {
-                    return;
-                }
-                let req_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                let inner = body[12..].to_vec();
-                // ack the rpc_result container message
-                self.inner.writer.lock().await.pending_ack.push(msg_id);
-                let result = unwrap_envelope(inner);
-                if let Some(tx) = self.inner.pending.lock().await.remove(&req_msg_id) {
-                    let sent_body = self
+                    let perm_auth_key = conn.perm_auth_key;
+                    let _ = self
                         .inner
-                        .writer
-                        .lock()
-                        .await
-                        .sent_bodies
-                        .get(&req_msg_id)
-                        .cloned();
-                    // request resolved: remove from sent_bodies and container_map
-                    self.inner
-                        .writer
-                        .lock()
-                        .await
-                        .sent_bodies
-                        .remove(&req_msg_id);
-                    // Remove any container entry that pointed at this request.
-                    self.inner
-                        .writer
-                        .lock()
-                        .await
-                        .container_map
-                        .retain(|_, inner| *inner != req_msg_id);
-                    let to_send = match result {
-                        Ok(EnvelopeResult::Payload(p)) => Ok(p),
-                        Ok(EnvelopeResult::RawUpdates(bodies)) => {
-                            // Return the first body to the invoke() caller so it can
-                            // deserialize the Updates response (fixes "unexpected end of
-                            // buffer" on EditMessage, ForwardMessages, SendMedia, etc.).
-                            // Concurrently dispatch ALL bodies through pts/seq tracking so
-                            // gaps are filled and the update stream stays consistent.
-                            let caller_body = bodies.first().cloned().unwrap_or_default();
-                            let c = self.clone();
-                            tokio::spawn(async move {
-                                for body in bodies {
-                                    c.dispatch_updates(&body).await;
-                                }
-                            });
-                            Ok(caller_body)
-                        }
-                        Ok(EnvelopeResult::SentMessage(update)) => {
-                            let c = self.clone();
-                            let pts = update.pts;
-                            let pts_count = update.pts_count;
-                            let update = *update;
-                            tokio::spawn(async move {
-                                let mut mb = c.inner.message_box.lock().await;
-                                let _ = mb.process_updates(message_box::UpdatesLike::SentMessage {
-                                    pts,
-                                    pts_count,
-                                    request_body: sent_body,
-                                    update: Box::new(update),
-                                });
-                            });
-                            Ok(vec![])
-                        }
-                        Ok(EnvelopeResult::None) => Ok(vec![]),
-                        Err(e) => {
-                            tracing::debug!(
-                                "[ferogram] rpc_result deserialize failure for msg_id={req_msg_id}: {e}"
-                            );
-                            Err(e)
-                        }
-                    };
-                    let _ = tx.send(to_send.map_err(InvocationError::from));
-                }
-            }
-            ID_RPC_ERROR => {
-                tracing::warn!("[ferogram] Unexpected top-level rpc_error (no pending target)");
-            }
-            ID_MSG_CONTAINER => {
-                if body.len() < 8 {
+                        .reconnect_tx
+                        .send(ferogram_mtsender::ReconnectRequest {
+                            stream: conn.stream,
+                            enc: conn.enc,
+                            frame_kind: conn.frame_kind,
+                            perm_auth_key,
+                        })
+                        .await;
                     return;
                 }
-                // MTProto spec max: 1020 items per container.
-                const MAX_CONTAINER_ITEMS: usize = 1020;
-                let count = (u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize)
-                    .min(MAX_CONTAINER_ITEMS);
-                let mut pos = 8usize;
-                for _ in 0..count {
-                    if pos + 16 > body.len() {
-                        break;
-                    }
-                    // Extract inner msg_id for correct ack tracking
-                    let inner_msg_id = i64::from_le_bytes(body[pos..pos + 8].try_into().unwrap());
-                    let inner_len =
-                        u32::from_le_bytes(body[pos + 12..pos + 16].try_into().unwrap()) as usize;
-                    pos += 16;
-                    if pos + inner_len > body.len() {
-                        break;
-                    }
-                    let inner = body[pos..pos + inner_len].to_vec();
-                    pos += inner_len;
-                    // MTProto spec forbids nested containers; drop silently.
-                    if inner.len() >= 4 {
-                        let inner_cid = u32::from_le_bytes(inner[..4].try_into().unwrap());
-                        if inner_cid == ID_MSG_CONTAINER {
-                            tracing::warn!(
-                                "[ferogram] dropping nested msg_container (proto violation)"
-                            );
-                            metrics::counter!("ferogram.updates_dropped").increment(1);
-                            continue;
-                        }
-                    }
-                    Box::pin(self.route_frame(inner, inner_msg_id)).await;
+                Err(e) => {
+                    tracing::warn!("[ferogram] reconnect attempt failed: {e}");
+                    delay_ms = (delay_ms * 2).min(RECONNECT_MAX_SECS * 1000);
                 }
             }
-            ID_GZIP_PACKED => {
-                let bytes = tl_read_bytes(&body[4..]).unwrap_or_default();
-                if let Ok(inflated) = gz_inflate(&bytes) {
-                    // pass same outer msg_id: gzip has no msg_id of its own
-                    Box::pin(self.route_frame(inflated, msg_id)).await;
-                }
-            }
-            ID_BAD_SERVER_SALT if body.len() >= 28 => {
-                // bad_server_salt#edab447b bad_msg_id:long bad_msg_seqno:int error_code:int new_server_salt:long
-                // body[0..4]   = constructor
-                // body[4..12]  = bad_msg_id       (long,  8 bytes)
-                // body[12..16] = bad_msg_seqno     (int,   4 bytes)
-                // body[16..20] = error_code        (int,   4 bytes)  ← NOT the salt!
-                // body[20..28] = new_server_salt   (long,  8 bytes)  ← actual salt
-                let bad_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                let new_salt = i64::from_le_bytes(body[20..28].try_into().unwrap());
-
-                // clear the salt pool and insert new_server_salt
-                // with valid_until=i32::MAX, then updates the active session salt.
-                {
-                    let mut w = self.inner.writer.lock().await;
-                    w.salts.clear();
-                    w.salts.push(FutureSalt {
-                        valid_since: 0,
-                        valid_until: u32::MAX,
-                        salt: new_salt,
-                    });
-                    w.enc.salt = new_salt;
-                }
-                // Propagate to dc_options snapshot so future worker opens see
-                // the fresh salt immediately (not just after the next reconnect).
-                {
-                    let home_id = *self.inner.home_dc_id.lock().await;
-                    let mut opts: tokio::sync::MutexGuard<
-                        '_,
-                        std::collections::HashMap<i32, DcEntry>,
-                    > = self.inner.dc_options.lock().await;
-                    if let Some(e) = opts.get_mut(&home_id) {
-                        e.first_salt = new_salt;
-                    }
-                    tracing::debug!(
-                        "[ferogram] bad_server_salt: bad_msg_id={bad_msg_id} new_salt={new_salt:#x}"
-                    );
-
-                    // Re-transmit the original request under the new salt.
-                    // if bad_msg_id is not in sent_bodies directly, check
-                    // container_map: the server may have sent the notification for
-                    // the outer container msg_id rather than the inner request msg_id.
-                    {
-                        let mut w = self.inner.writer.lock().await;
-
-                        // Resolve: if bad_msg_id points to a container, get the inner id.
-                        let resolved_id = if w.sent_bodies.contains_key(&bad_msg_id) {
-                            bad_msg_id
-                        } else if let Some(&inner_id) = w.container_map.get(&bad_msg_id) {
-                            w.container_map.remove(&bad_msg_id);
-                            inner_id
-                        } else {
-                            bad_msg_id // will fall through to else-branch below
-                        };
-
-                        if let Some(orig_body) = w.sent_bodies.remove(&resolved_id) {
-                            let (wire, new_msg_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
-                            let fk = w.frame_kind.clone();
-                            let conn_gen = self
-                                .inner
-                                .conn_generation
-                                .load(std::sync::atomic::Ordering::Acquire);
-                            // Intentionally NOT re-inserting into sent_bodies: a second
-                            // bad_server_salt for new_msg_id finds nothing -> stops chain.
-                            drop(w);
-                            let mut pending = self.inner.pending.lock().await;
-                            if let Some(tx) = pending.remove(&resolved_id) {
-                                pending.insert(new_msg_id, tx);
-                                drop(pending);
-                                let mut wh = self.inner.write_half.lock().await;
-                                let cur = self
-                                    .inner
-                                    .conn_generation
-                                    .load(std::sync::atomic::Ordering::Acquire);
-                                if cur != conn_gen {
-                                    // reconnect raced: drop the resend, waiter gets
-                                    // ConnectionReset from the reconnect path anyway
-                                    tracing::debug!(
-                                        "[ferogram] bad_server_salt: dropping resend of \
-                                         {resolved_id}→{new_msg_id} (stale conn_gen old={conn_gen} new={cur})"
-                                    );
-                                } else if let Err(e) = send_frame_write(&mut *wh, &wire, &fk).await
-                                {
-                                    tracing::warn!(
-                                        "[ferogram] bad_server_salt re-send failed: {e}"
-                                    );
-                                } else {
-                                    tracing::debug!(
-                                        "[ferogram] bad_server_salt re-sent \
-                                         {resolved_id}→{new_msg_id} (conn_gen={cur})"
-                                    );
-                                }
-                            }
-                        } else {
-                            // Not in sent_bodies (re-sent message rejected again, or unknown).
-                            // Fail the pending caller so it doesn't hang.
-                            drop(w);
-                            if let Some(tx) = self.inner.pending.lock().await.remove(&bad_msg_id) {
-                                let _ = tx.send(Err(InvocationError::Io(std::io::Error::new(
-                                    std::io::ErrorKind::InvalidData,
-                                    "bad_server_salt on re-sent message; caller should retry",
-                                ))));
-                            }
-                        }
-                    }
-
-                    // Reactive refresh after bad_server_salt: reuses the extracted helper.
-                    self.spawn_salt_fetch_if_needed();
-                }
-            }
-            ID_PONG if body.len() >= 20 => {
-                // Pong is the server's reply to Ping: NOT inside rpc_result.
-                // pong#347773c5  msg_id:long  ping_id:long
-                // body[4..12] = msg_id of the original Ping -> key in pending map
-                //
-                // pong has odd seq_no (content-related), must ack it.
-                let ping_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                // Ack the pong frame itself (outer msg_id, not the ping msg_id).
-                self.inner.writer.lock().await.pending_ack.push(msg_id);
-                if let Some(tx) = self.inner.pending.lock().await.remove(&ping_msg_id) {
-                    let mut w = self.inner.writer.lock().await;
-                    w.sent_bodies.remove(&ping_msg_id);
-                    w.container_map.retain(|_, inner| *inner != ping_msg_id);
-                    drop(w);
-                    let _ = tx.send(Ok(body));
-                }
-            }
-            // FutureSalts: maintain the full server-provided salt pool.
-            ID_FUTURE_SALTS => {
-                // future_salts#ae500895
-                // [0..4]   constructor
-                // [4..12]  req_msg_id (long)
-                // [12..16] now (int) : server's current Unix time
-                // [16..20] vector constructor 0x1cb5c415
-                // [20..24] count (int)
-                // per entry (bare FutureSalt, no constructor):
-                // [+0..+4]  valid_since (int)
-                // [+4..+8]  valid_until (int)
-                // [+8..+16] salt (long)
-                // first entry starts at byte 24
-                //
-                // FutureSalts has odd seq_no, must ack it.
-                self.inner.writer.lock().await.pending_ack.push(msg_id);
-
-                if body.len() >= 24 {
-                    let req_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                    let server_now = i32::from_le_bytes(body[12..16].try_into().unwrap());
-                    let count = u32::from_le_bytes(body[20..24].try_into().unwrap()) as usize;
-
-                    // Parse ALL returned salts ( stores the full Vec).
-                    // Each FutureSalt entry is 16 bytes starting at offset 24.
-                    let mut new_salts: Vec<FutureSalt> = Vec::with_capacity(count.clamp(0, 4096));
-                    for i in 0..count {
-                        let base = 24 + i * 16;
-                        if base + 16 > body.len() {
-                            break;
-                        }
-                        // Wire format per TL schema (bare FutureSalt, no constructor):
-                        // [+0..+4]   valid_since (int)
-                        // [+4..+8]   valid_until (int)
-                        // [+8..+16]  salt        (long)
-                        // This matches the official TL definition:
-                        //   futureSalt#0949d9dc valid_since:int valid_until:int salt:long
-                        // futureSalt layout: valid_since, valid_until, salt
-                        new_salts.push(FutureSalt {
-                            valid_since: i32::from_le_bytes(
-                                body[base..base + 4].try_into().unwrap(),
-                            ),
-                            valid_until: u32::from_le_bytes(
-                                body[base + 4..base + 8].try_into().unwrap(),
-                            ),
-                            salt: i64::from_le_bytes(body[base + 8..base + 16].try_into().unwrap()),
-                        });
-                    }
-
-                    if !new_salts.is_empty() {
-                        // Sort newest-last (mirrors  sort_by_key(|s| -s.valid_since)
-                        // which in ascending order puts highest valid_since at the end).
-                        new_salts.sort_by_key(|s| s.valid_since);
-                        let active_salt;
-                        {
-                            let mut w = self.inner.writer.lock().await;
-                            // Drop already-expired salts from the server pool before
-                            // storing -- they will never be usable and would otherwise
-                            // be logged as "pruned" on every subsequent startup.
-                            new_salts.retain(|s| s.valid_until > server_now as u32);
-                            w.salts = new_salts;
-                            w.start_salt_time = Some((server_now, std::time::Instant::now()));
-
-                            // Pick the best currently-usable salt.
-                            // A salt is usable after valid_since + SALT_USE_DELAY (60 s)
-                            // AND must not yet be expired (valid_until > server_now).
-                            //
-                            // CRITICAL: do NOT fall back to an expired salt via
-                            // `.or_else(|| w.salts.first())`.  When the server returns
-                            // an all-expired pool (e.g. stale DC handoff), enc.salt
-                            // already holds the server-canonical value from
-                            // new_session_created or bad_server_salt and must be kept.
-                            // Overwriting it with an expired salt causes every subsequent
-                            // message to be rejected → bad_server_salt → GetFutureSalts
-                            // → same expired pool → infinite loop.
-                            let use_salt = w
-                                .salts
-                                .iter()
-                                .rev()
-                                .find(|s| {
-                                    s.valid_since + SALT_USE_DELAY <= server_now
-                                        && s.valid_until > (server_now as u32)
-                                })
-                                .map(|s| s.salt);
-                            if let Some(salt) = use_salt {
-                                w.enc.salt = salt;
-                                tracing::debug!(
-                                    "[ferogram] FutureSalts: stored {} salts, \
-                                     active salt={salt:#x}",
-                                    w.salts.len()
-                                );
-                            } else {
-                                tracing::debug!(
-                                    "[ferogram] FutureSalts: stored {} salts but none \
-                                     usable yet (valid_since windows not open, valid up to \
-                                     server_now={server_now}) - keeping current enc.salt={:#x}",
-                                    w.salts.len(),
-                                    w.enc.salt
-                                );
-                            }
-                            active_salt = use_salt;
-                        }
-                        // Propagate the newly-active salt to dc_options so that any
-                        // worker conn opened after this FutureSalts rotation starts
-                        // with the correct salt rather than the pre-rotation snapshot.
-                        if let Some(salt) = active_salt {
-                            let home_id = *self.inner.home_dc_id.lock().await;
-                            let mut opts: tokio::sync::MutexGuard<
-                                '_,
-                                std::collections::HashMap<i32, DcEntry>,
-                            > = self.inner.dc_options.lock().await;
-                            if let Some(e) = opts.get_mut(&home_id) {
-                                e.first_salt = salt;
-                            }
-                        }
-                    }
-
-                    if let Some(tx) = self.inner.pending.lock().await.remove(&req_msg_id) {
-                        let mut w = self.inner.writer.lock().await;
-                        w.sent_bodies.remove(&req_msg_id);
-                        w.container_map.retain(|_, inner| *inner != req_msg_id);
-                        drop(w);
-                        let _ = tx.send(Ok(body));
-                    }
-                }
-            }
-            ID_NEW_SESSION if body.len() >= 28 => {
-                // new_session_created#9ec20908 first_msg_id:long unique_id:long server_salt:long
-                //   body[4..12]  = first_msg_id  <- msgs with msg_id < this were NOT received
-                //   body[12..20] = unique_id
-                //   body[20..28] = server_salt
-                let first_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                let server_salt = i64::from_le_bytes(body[20..28].try_into().unwrap());
-                // Acquire writer lock, update state, collect resend queue, then drop lock
-                // before any TCP I/O (can't hold the lock across send_frame_write).
-                let resend_queue: Vec<(i64, i64, Vec<u8>)> = {
-                    let mut w = self.inner.writer.lock().await;
-                    // new_session_created has odd seq_no -> must ack.
-                    w.pending_ack.push(msg_id);
-                    w.salts.clear();
-                    w.salts.push(FutureSalt {
-                        valid_since: 0,
-                        valid_until: u32::MAX,
-                        salt: server_salt,
-                    });
-                    w.enc.salt = server_salt;
-                    tracing::debug!(
-                        "[ferogram] new_session_created: salt={server_salt:#x} first_msg_id={first_msg_id}"
-                    );
-                    // MTProto: msgs with msg_id < first_msg_id were not received
-                    // by the server and must be re-sent.
-                    let stale_ids: Vec<i64> = w
-                        .sent_bodies
-                        .keys()
-                        .filter(|&&id| id < first_msg_id)
-                        .copied()
-                        .collect();
-                    if !stale_ids.is_empty() {
-                        tracing::debug!(
-                            "[ferogram] new_session_created: re-queuing {} stale msg(s) with msg_id < {first_msg_id}",
-                            stale_ids.len()
-                        );
-                    }
-                    for old_id in stale_ids {
-                        if let Some(body_bytes) = w.sent_bodies.remove(&old_id) {
-                            let (wire, new_id) = w.enc.pack_body_with_msg_id(&body_bytes, true);
-                            w.sent_bodies.insert(new_id, body_bytes);
-                            w.new_session_resend_queue.push((old_id, new_id, wire));
-                        }
-                    }
-                    // Take the queue before dropping the lock; TCP I/O runs below.
-                    std::mem::take(&mut w.new_session_resend_queue)
-                }; // writer lock drops here
-                if !resend_queue.is_empty() {
-                    let (fk, conn_gen) = {
-                        let w = self.inner.writer.lock().await;
-                        let fk = w.frame_kind.clone();
-                        let conn_gen = self
-                            .inner
-                            .conn_generation
-                            .load(std::sync::atomic::Ordering::Acquire);
-                        (fk, conn_gen)
-                    };
-                    for (old_id, new_id, wire) in resend_queue {
-                        {
-                            let mut pending = self.inner.pending.lock().await;
-                            if let Some(tx) = pending.remove(&old_id) {
-                                pending.insert(new_id, tx);
-                            }
-                        }
-                        let mut wh = self.inner.write_half.lock().await;
-                        let cur = self
-                            .inner
-                            .conn_generation
-                            .load(std::sync::atomic::Ordering::Acquire);
-                        if cur != conn_gen {
-                            tracing::debug!(
-                                "[ferogram] new_session resend {old_id}->{new_id} dropped (stale conn_gen)"
-                            );
-                            self.inner.writer.lock().await.sent_bodies.remove(&new_id);
-                        } else if let Err(e) = send_frame_write(&mut *wh, &wire, &fk).await {
-                            tracing::warn!(
-                                "[ferogram] new_session resend {old_id}->{new_id} failed: {e}"
-                            );
-                            self.inner.writer.lock().await.sent_bodies.remove(&new_id);
-                        } else {
-                            tracing::debug!("[ferogram] new_session resend {old_id}->{new_id} ok");
-                        }
-                    }
-                }
-                // Propagate to dc_options snapshot so future worker opens use
-                // this session's salt, not the stale pre-session value.
-                {
-                    let home_id = *self.inner.home_dc_id.lock().await;
-                    let mut opts: tokio::sync::MutexGuard<
-                        '_,
-                        std::collections::HashMap<i32, DcEntry>,
-                    > = self.inner.dc_options.lock().await;
-                    if let Some(e) = opts.get_mut(&home_id) {
-                        e.first_salt = server_salt;
-                    }
-                }
-                // Signal message_box that the connection closed (gap may exist).
-                {
-                    let mut mb = self.inner.message_box.lock().await;
-                    let _ = mb.process_updates(message_box::UpdatesLike::ConnectionClosed);
-                }
-                let c = self.clone();
-                let _handle = tokio::spawn(async move {
-                    c.sync_state_after_dh().await;
-                });
-            }
-            // +: bad_msg_notification
-            ID_BAD_MSG_NOTIFY => {
-                // bad_msg_notification#a7eff811 bad_msg_id:long bad_msg_seqno:int error_code:int
-                if body.len() < 20 {
-                    return;
-                }
-                let bad_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                let error_code = u32::from_le_bytes(body[16..20].try_into().unwrap());
-
-                //  description strings for each code
-                let description = match error_code {
-                    16 => "msg_id too low",
-                    17 => "msg_id too high",
-                    18 => "incorrect two lower order msg_id bits (bug)",
-                    19 => "container msg_id is same as previously received (bug)",
-                    20 => "message too old",
-                    32 => "msg_seqno too low",
-                    33 => "msg_seqno too high",
-                    34 => "even msg_seqno expected (bug)",
-                    35 => "odd msg_seqno expected (bug)",
-                    48 => "incorrect server salt",
-                    64 => "invalid container (bug)",
-                    _ => "unknown bad_msg code",
-                };
-
-                // codes 16/17/48 are retryable; 32/33 are non-fatal seq corrections; rest are fatal.
-                let retryable = matches!(error_code, 16 | 17 | 48);
-                let fatal = !retryable && !matches!(error_code, 32 | 33);
-
-                if fatal {
-                    tracing::error!(
-                        "[ferogram] bad_msg_notification (fatal): bad_msg_id={bad_msg_id} \
-                         code={error_code}: {description}"
-                    );
-                } else {
-                    tracing::warn!(
-                        "[ferogram] bad_msg_notification: bad_msg_id={bad_msg_id} \
-                         code={error_code}: {description}"
-                    );
-                }
-
-                // Phase 1: hold writer only for enc-state mutations + packing.
-                // The lock is dropped BEFORE we touch `pending`, eliminating the
-                // writer→pending lock-order deadlock.
-                let resend: Option<(Vec<u8>, i64, i64, FrameKind, u64)> = {
-                    let mut w = self.inner.writer.lock().await;
-
-                    // correct clock skew on codes 16/17.
-                    if error_code == 16 || error_code == 17 {
-                        w.enc.correct_time_offset(msg_id);
-                    }
-                    // correct seq_no on codes 32/33
-                    if error_code == 32 || error_code == 33 {
-                        w.enc.correct_seq_no(error_code);
-                    }
-
-                    if retryable {
-                        // if bad_msg_id is not in sent_bodies directly, check
-                        // container_map: the server sends the notification for the
-                        // outer container msg_id when a whole container was bad.
-                        let resolved_id = if w.sent_bodies.contains_key(&bad_msg_id) {
-                            bad_msg_id
-                        } else if let Some(&inner_id) = w.container_map.get(&bad_msg_id) {
-                            w.container_map.remove(&bad_msg_id);
-                            inner_id
-                        } else {
-                            bad_msg_id
-                        };
-
-                        if let Some(orig_body) = w.sent_bodies.remove(&resolved_id) {
-                            let (wire, new_msg_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
-                            let fk = w.frame_kind.clone();
-                            let conn_gen = self
-                                .inner
-                                .conn_generation
-                                .load(std::sync::atomic::Ordering::Acquire);
-                            w.sent_bodies.insert(new_msg_id, orig_body);
-                            // resolved_id is the inner msg_id we move in pending
-                            Some((wire, resolved_id, new_msg_id, fk, conn_gen))
-                        } else {
-                            None
-                        }
-                    } else {
-                        // Non-retryable: clean up so maps don't grow unbounded.
-                        w.sent_bodies.remove(&bad_msg_id);
-                        if let Some(&inner_id) = w.container_map.get(&bad_msg_id) {
-                            w.sent_bodies.remove(&inner_id);
-                            w.container_map.remove(&bad_msg_id);
-                        }
-                        None
-                    }
-                }; // ← writer lock released here
-
-                match resend {
-                    Some((wire, old_msg_id, new_msg_id, fk, conn_gen)) => {
-                        // Phase 2: re-key pending (no writer lock held).
-                        let has_waiter = {
-                            let mut pending = self.inner.pending.lock().await;
-                            if let Some(tx) = pending.remove(&old_msg_id) {
-                                pending.insert(new_msg_id, tx);
-                                true
-                            } else {
-                                false
-                            }
-                        };
-                        if has_waiter {
-                            // Phase 3: TCP send, check generation before writing.
-                            let mut wh = self.inner.write_half.lock().await;
-                            let cur = self
-                                .inner
-                                .conn_generation
-                                .load(std::sync::atomic::Ordering::Acquire);
-                            if cur != conn_gen {
-                                tracing::debug!(
-                                    "[ferogram] re-send {old_msg_id}->{new_msg_id} dropped (stale conn_gen)"
-                                );
-                                self.inner
-                                    .writer
-                                    .lock()
-                                    .await
-                                    .sent_bodies
-                                    .remove(&new_msg_id);
-                            } else if let Err(e) = send_frame_write(&mut *wh, &wire, &fk).await {
-                                tracing::warn!("[ferogram] re-send failed: {e}");
-                                self.inner
-                                    .writer
-                                    .lock()
-                                    .await
-                                    .sent_bodies
-                                    .remove(&new_msg_id);
-                            } else {
-                                tracing::debug!("[ferogram] re-sent {old_msg_id}→{new_msg_id}");
-                            }
-                        } else {
-                            self.inner
-                                .writer
-                                .lock()
-                                .await
-                                .sent_bodies
-                                .remove(&new_msg_id);
-                        }
-                    }
-                    None => {
-                        // Not re-sending: surface error to the waiter so caller can retry.
-                        if let Some(tx) = self.inner.pending.lock().await.remove(&bad_msg_id) {
-                            let _ = tx.send(Err(InvocationError::Deserialize(format!(
-                                "bad_msg_notification code={error_code} ({description})"
-                            ))));
-                        }
-                    }
-                }
-            }
-            // MsgDetailedInfo -> ack the answer_msg_id
-            ID_MSG_DETAILED_INFO if body.len() >= 20 => {
-                // msg_detailed_info#276d3ec6 msg_id:long answer_msg_id:long bytes:int status:int
-                // body[4..12]  = msg_id (original request)
-                // body[12..20] = answer_msg_id (what to ack)
-                let answer_msg_id = i64::from_le_bytes(body[12..20].try_into().unwrap());
-                self.inner
-                    .writer
-                    .lock()
-                    .await
-                    .pending_ack
-                    .push(answer_msg_id);
-                tracing::trace!(
-                    "[ferogram] MsgDetailedInfo: queued ack for answer_msg_id={answer_msg_id}"
-                );
-            }
-            ID_MSG_NEW_DETAIL_INFO if body.len() >= 12 => {
-                // msg_new_detailed_info#809db6df answer_msg_id:long bytes:int status:int
-                // body[4..12] = answer_msg_id
-                let answer_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
-                self.inner
-                    .writer
-                    .lock()
-                    .await
-                    .pending_ack
-                    .push(answer_msg_id);
-                tracing::trace!("[ferogram] MsgNewDetailedInfo: queued ack for {answer_msg_id}");
-            }
-            // MsgResendReq -> re-send the requested msg_ids
-            ID_MSG_RESEND_REQ if body.len() >= 12 => {
-                // msg_resend_req#7d861a08 msg_ids:Vector<long>
-                // body[4..8]   = 0x1cb5c415 (Vector constructor)
-                // body[8..12]  = count
-                // body[12..]   = msg_ids
-                let count = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
-                let mut resends: Vec<(Vec<u8>, i64, i64)> = Vec::new();
-                let conn_gen = {
-                    let mut w = self.inner.writer.lock().await;
-                    let conn_gen = self
-                        .inner
-                        .conn_generation
-                        .load(std::sync::atomic::Ordering::Acquire);
-                    let fk = w.frame_kind.clone();
-                    for i in 0..count {
-                        let off = 12 + i * 8;
-                        if off + 8 > body.len() {
-                            break;
-                        }
-                        let resend_id = i64::from_le_bytes(body[off..off + 8].try_into().unwrap());
-                        if let Some(orig_body) = w.sent_bodies.remove(&resend_id) {
-                            let (wire, new_id) = w.enc.pack_body_with_msg_id(&orig_body, true);
-                            let mut pending = self.inner.pending.lock().await;
-                            if let Some(tx) = pending.remove(&resend_id) {
-                                pending.insert(new_id, tx);
-                            }
-                            drop(pending);
-                            w.sent_bodies.insert(new_id, orig_body);
-                            resends.push((wire, resend_id, new_id));
-                        }
-                        let _ = fk;
-                    }
-                    conn_gen
-                };
-                {
-                    // TCP sends outside writer lock
-                    let fk = self.inner.writer.lock().await.frame_kind.clone();
-                    for (wire, resend_id, new_id) in resends {
-                        let mut wh = self.inner.write_half.lock().await;
-                        let cur = self
-                            .inner
-                            .conn_generation
-                            .load(std::sync::atomic::Ordering::Acquire);
-                        if cur != conn_gen {
-                            self.inner.writer.lock().await.sent_bodies.remove(&new_id);
-                            if let Some(tx) = self.inner.pending.lock().await.remove(&new_id) {
-                                let _ = tx.send(Err(InvocationError::Io(std::io::Error::new(
-                                    std::io::ErrorKind::ConnectionReset,
-                                    "stale wire: reconnect occurred between pack and send",
-                                ))));
-                            }
-                            tracing::debug!(
-                                "[ferogram] MsgResendReq: dropped stale resend {resend_id} -> {new_id}"
-                            );
-                        } else if let Err(e) = send_frame_write(&mut *wh, &wire, &fk).await {
-                            self.inner.writer.lock().await.sent_bodies.remove(&new_id);
-                            if let Some(tx) = self.inner.pending.lock().await.remove(&new_id) {
-                                let _ = tx.send(Err(e.into()));
-                            }
-                            tracing::warn!(
-                                "[ferogram] MsgResendReq: TCP send failed for {resend_id} -> {new_id}"
-                            );
-                        } else {
-                            tracing::debug!(
-                                "[ferogram] MsgResendReq: resent {resend_id} -> {new_id}"
-                            );
-                        }
-                    }
-                }
-            }
-            // log DestroySession outcomes
-            0xe22045fc => {
-                tracing::warn!(
-                    "[ferogram] destroy_session_ok received: session terminated by server"
-                );
-            }
-            0x62d350c9 => {
-                tracing::warn!(
-                    "[ferogram] destroy_session_none received: session was already gone"
-                );
-            }
-            ID_UPDATES
-            | ID_UPDATE_SHORT
-            | ID_UPDATES_COMBINED
-            | ID_UPDATE_SHORT_MSG
-            | ID_UPDATE_SHORT_CHAT_MSG
-            | ID_UPDATE_SHORT_SENT_MSG
-            | ID_UPDATES_TOO_LONG => {
-                // ack update frames too
-                self.inner.writer.lock().await.pending_ack.push(msg_id);
-                // Route through pts/qts/seq gap-checkers.
-                self.dispatch_updates(&body).await;
-            }
-            _ => {}
         }
     }
 
-    /// Extract the pts-sort key for a single update: `pts - pts_count`.
-    ///
-    ///sorts every update batch by this key before processing.
     /// Without the sort, a container arriving as [pts=5, pts=3, pts=4] produces
     /// a false gap on the first item (expected 3, got 5) and spuriously fires
     /// getDifference even though the filling updates are present in the same batch.
@@ -3315,7 +1936,7 @@ impl Client {
                     let mut mb = c.inner.message_box.lock().await;
                     let _ = mb.process_updates(message_box::UpdatesLike::ConnectionClosed);
                 }
-                c.run_pending_differences().await;
+                c.inner.diff_notify.notify_one();
             });
             return;
         }
@@ -3600,6 +2221,22 @@ impl Client {
                 .await
                 .process_updates(mb_input);
 
+            // Wake the diff task unconditionally. process_updates() may have
+            // shrunk MessageBoxes::next_deadline (a possible-gap was buffered
+            // for some entry, or try_begin_get_diff() populated
+            // getting_diff_for for a hard gap / ChannelTooLong), but the diff
+            // task's select! loop is parked inside a `sleep_until` future that
+            // was constructed from the *previous* (often much later) deadline
+            // - it has no way to notice the new, sooner deadline on its own.
+            // Without this notify, gaps only ever get resolved once the old
+            // stale deadline naturally elapses (up to NO_UPDATES_TIMEOUT =
+            // 15 minutes), which is why channel/common pts gaps could pile up
+            // indefinitely and updates would stop flowing after the first
+            // message. notify_one() is cheap even when nothing is pending:
+            // run_pending_differences() just finds no diff request and
+            // returns immediately.
+            self.inner.diff_notify.notify_one();
+
             match mb_result {
                 Ok((raw_updates, mb_users, mb_chats)) => {
                     // Cache any users/chats returned from getDifference-style paths.
@@ -3703,109 +2340,14 @@ impl Client {
         Ok(())
     }
 
-    /// Retry `sync_pts_state` with exponential backoff after a fresh DH exchange.
-    ///
-    /// After PFS re-keying the server may return `AUTH_KEY_UNREGISTERED` for a
-    /// short window while it propagates the new key.  Retry up to five times.
-    pub(crate) async fn sync_state_after_dh(&self) {
-        if !self
-            .inner
-            .signed_in
-            .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            tracing::debug!("[ferogram] sync_state_after_dh: not signed in yet - skipping");
-            return;
-        }
-        for delay_ms in [0u64, 100, 300, 700, 1500] {
-            if delay_ms > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-            }
-            match self.sync_pts_state().await {
-                Ok(()) => return,
-                Err(ref e) if matches!(e, InvocationError::Rpc(r) if r.code == 401) => {
-                    tracing::debug!(
-                        "[ferogram] sync_state_after_dh: AUTH_KEY_UNREGISTERED \
-                         (delay={delay_ms}ms), retrying"
-                    );
-                    continue;
-                }
-                Err(e) => {
-                    tracing::warn!("[ferogram] sync_state_after_dh failed: {e}");
-                    return;
-                }
-            }
-        }
-        tracing::warn!("[ferogram] sync_state_after_dh: all retries exhausted");
-    }
-
-    /// Drive all pending `getDifference` / `getChannelDifference` calls queued by
-    /// [`MessageBoxes`].  Called from the deadline select arm and after reconnect.
-    ///
-    /// Internally acquires `diff_in_flight` so concurrent callers (reconnect, catch-up,
-    /// deadline arm) are serialised - only one getDifference is ever in flight at a time.
     async fn run_pending_differences(&self) {
         use crate::message_box::PrematureEndReason;
 
-        // Acquire the single-flight guard.  Any concurrent caller (direct or spawned)
-        // exits immediately rather than issuing a second concurrent getDifference.
-        if self
-            .inner
-            .diff_in_flight
-            .compare_exchange(
-                false,
-                true,
-                std::sync::atomic::Ordering::AcqRel,
-                std::sync::atomic::Ordering::Acquire,
-            )
-            .is_err()
-        {
-            tracing::debug!("[ferogram] diff already in flight, skipping concurrent call");
-            return;
-        }
-        // RAII guard: resets diff_in_flight=false on drop, but only when the generation
-        // still matches.  A reconnect bumps diff_generation, so a ghost diff task that
-        // was spawned on the old connection becomes a no-op; it will not hold
-        // diff_in_flight=true after the new connection is live.
-        let my_gen = self
-            .inner
-            .diff_generation
-            .load(std::sync::atomic::Ordering::Acquire);
-        struct DiffGuard {
-            client: crate::Client,
-            generation: u64,
-        }
-        impl Drop for DiffGuard {
-            fn drop(&mut self) {
-                // Only reset if we are still the current generation.  If a reconnect
-                // already bumped the counter, the new init task will call
-                // run_pending_differences fresh, so we must not interfere.
-                let current = self
-                    .client
-                    .inner
-                    .diff_generation
-                    .load(std::sync::atomic::Ordering::Acquire);
-                if current == self.generation {
-                    tracing::debug!(
-                        "[ferogram] DiffGuard: clearing diff_in_flight (gen {})",
-                        current,
-                    );
-                    self.client
-                        .inner
-                        .diff_in_flight
-                        .store(false, std::sync::atomic::Ordering::Release);
-                } else {
-                    tracing::debug!(
-                        "[ferogram] DiffGuard: skipping stale guard (old_gen={} new_gen={})",
-                        self.generation,
-                        current,
-                    );
-                }
-            }
-        }
-        let _guard = DiffGuard {
-            client: self.clone(),
-            generation: my_gen,
-        };
+        // No global diff-in-flight gate: message_box's own getting_diff_for and
+        // channel_diff_in_flight fields serialise concurrent diff tasks.
+        // Multiple spawned tasks are safe because message_box
+        // will return None from get_difference/get_channel_difference when a diff
+        // is already in flight for that channel/session.
 
         loop {
             let get_diff_req = self.inner.message_box.lock().await.get_difference();
@@ -3873,11 +2415,9 @@ impl Client {
                     Err(e) => {
                         tracing::warn!("[ferogram] getDifference RPC failed: {e}");
                         self.inner.message_box.lock().await.abort_difference();
-                        // IO/transport error means the connection is dead.  Break out
-                        // so the RAII DiffGuard resets diff_in_flight=false immediately,
-                        // allowing the reconnect path to start a fresh diff task.
-                        // Sleeping+looping here would hold diff_in_flight=true across
-                        // reconnects, permanently blocking all future diffs.
+                        // IO/transport error means the connection is dead. Break out
+                        // so the reconnect path can notify diff_notify and start a
+                        // fresh diff task once the connection is back.
                         if matches!(&e, InvocationError::Io(_)) {
                             break;
                         }
@@ -4076,7 +2616,7 @@ impl Client {
                             .await
                             .end_channel_difference(PrematureEndReason::TemporaryServerIssues);
                         // Same as getDifference: IO error means dead connection; break so
-                        // DiffGuard resets diff_in_flight=false and reconnect can retry.
+                        // reconnect can notify diff_notify and retry.
                         if matches!(&e, InvocationError::Io(_)) {
                             break;
                         }
@@ -4108,367 +2648,14 @@ impl Client {
 
     /// Route one bare `tl::enums::Update` through the pts/qts gap-checker,
     /// then emit surviving updates to `update_tx`.
-    /// Loops with exponential backoff until a TCP+DH reconnect succeeds, then
-    /// spawns `init_connection` in a background task and returns a oneshot
-    /// receiver for its result.
-    ///
-    /// - `initial_delay_ms = RECONNECT_BASE_MS` for a fresh disconnect.
-    /// - `initial_delay_ms = 0` when TCP already worked but init failed: we
-    ///   want to retry init immediately rather than waiting another full backoff.
-    ///
-    /// Returns `None` if the shutdown token fires (caller should exit).
-    async fn do_reconnect_loop(
-        &self,
-        initial_delay_ms: u64,
-
-        rh: &mut OwnedReadHalf,
-        fk: &mut FrameKind,
-
-        ak: &mut [u8; 256],
-        sid: &mut i64,
-
-        network_hint_rx: &mut mpsc::Receiver<()>,
-    ) -> Option<oneshot::Receiver<Result<(), InvocationError>>> {
-        let mut delay_ms = if initial_delay_ms == 0 {
-            // Caller explicitly requests an immediate first attempt (e.g. init
-            // failed but TCP is up: no reason to wait before the next try).
-            0
-        } else {
-            initial_delay_ms.max(RECONNECT_BASE_MS)
-        };
-        loop {
-            tracing::debug!("[ferogram] Reconnecting in {delay_ms} ms …");
-            metrics::counter!("ferogram.reconnects_total").increment(1);
-            tokio::select! {
-                _ = sleep(Duration::from_millis(delay_ms)) => {}
-                hint = network_hint_rx.recv() => {
-                    hint?; // shutdown
-                    tracing::debug!("[ferogram] Network hint -> skipping backoff, reconnecting now");
-                }
-            }
-
-            // Tear down the old socket fully before dialing. If the old read
-            // half stays alive, the OS can reuse the same 4-tuple and the server
-            // may deliver queued old-session frames onto the new connection,
-            // causing "invalid frame geometry" or "AuthKeyMismatch" right after
-            // reconnect.
-            //
-            // Correct order:
-            //   1. Shut down the write half so the server sees FIN and stops
-            //      sending on the old session.
-            //   2. Drain whatever the server already sent (bounded by 50 ms) so
-            //      the OS flushes its receive buffer before we close.
-            //   3. Drop the read half, fully closing the old socket.
-            //   4. Only then open the new connection.
-            {
-                let _ = self.inner.write_half.lock().await.shutdown().await;
-            }
-            {
-                use tokio::io::AsyncReadExt;
-                let mut drain_buf = [0u8; 4096];
-                let drain_deadline =
-                    tokio::time::Instant::now() + tokio::time::Duration::from_millis(50);
-                loop {
-                    match tokio::time::timeout_at(drain_deadline, rh.read(&mut drain_buf)).await {
-                        Ok(Ok(0)) | Err(_) => break,
-                        Ok(Ok(_)) => {}
-                        Ok(Err(_)) => break,
-                    }
-                }
-                // Explicitly reunite and drop the old read half so the kernel
-                // tears down the TCP socket before we dial the new connection.
-                // Without this the 4-tuple can be reused immediately and the
-                // server delivers buffered old-session bytes onto the new socket.
-                // rh (old read half) will be replaced by assignment below;
-                // Rust drops the old value at that point, closing the fd.
-            }
-
-            match self.do_reconnect(ak, fk).await {
-                Ok((new_rh, new_fk, new_ak, new_sid)) => {
-                    *rh = new_rh;
-                    *fk = new_fk;
-                    *ak = new_ak;
-                    *sid = new_sid;
-                    tracing::debug!("[ferogram] TCP reconnected ✓: initialising session …");
-
-                    // Bump generation to invalidate any ghost diff task from the old
-                    // connection; its DiffGuard::drop will see a stale generation and
-                    // become a no-op.  We do NOT reset diff_in_flight here: the deadline
-                    // arm must stay blocked until init_connection succeeds, otherwise it
-                    // fires run_pending_differences on a session that has no initConnection
-                    // and Telegram rejects or ignores the RPC.  The reset happens inside
-                    // the init task below, just before run_pending_differences.
-                    self.inner
-                        .diff_generation
-                        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-
-                    // Spawn init_connection. MUST NOT be awaited inline: the
-                    // reader loop must resume so it can route the RPC response.
-                    // We give back a oneshot so the reader can act on failure.
-                    let (init_tx, init_rx) = oneshot::channel();
-                    let c = self.clone();
-                    let _utx = self.inner.update_tx.clone();
-                    tokio::spawn(async move {
-                        // Respect FLOOD_WAIT before sending the result back.
-                        // Without this, a FLOOD_WAIT from Telegram during init
-                        // would immediately re-trigger another reconnect attempt,
-                        // which would itself hit FLOOD_WAIT: a ban spiral.
-                        let result = loop {
-                            match c.init_connection().await {
-                                Ok(()) => break Ok(()),
-                                Err(InvocationError::Rpc(ref r))
-                                    if r.flood_wait_seconds().is_some() =>
-                                {
-                                    let secs = r.flood_wait_seconds().expect("is FLOOD_WAIT error");
-                                    tracing::warn!(
-                                        "[ferogram] init_connection FLOOD_WAIT_{secs}:                                          waiting before retry"
-                                    );
-                                    sleep(Duration::from_secs(secs + 1)).await;
-                                    // loop and retry init_connection
-                                }
-                                Err(e) => break Err(e),
-                            }
-                        };
-                        if result.is_ok() {
-                            // Replay any updates missed during the outage.
-                            // After fresh DH, retry GetState with backoff instead of a fixed 2 s sleep.
-                            if c.inner
-                                .dh_in_progress
-                                .load(std::sync::atomic::Ordering::SeqCst)
-                            {
-                                c.sync_state_after_dh().await;
-                            }
-                            // Signal reconnect to message_box then drive diff.
-                            {
-                                let mut mb = c.inner.message_box.lock().await;
-                                let _ =
-                                    mb.process_updates(message_box::UpdatesLike::ConnectionClosed);
-                            }
-                            // Now that initConnection is confirmed live, open the gate
-                            // for run_pending_differences.  Any ghost task from the old
-                            // connection already has a stale generation so its drop is
-                            // a no-op; this store is safe.
-                            c.inner
-                                .diff_in_flight
-                                .store(false, std::sync::atomic::Ordering::Release);
-                            c.run_pending_differences().await;
-                        }
-                        let _ = init_tx.send(result);
-                    });
-                    return Some(init_rx);
-                }
-                Err(e) => {
-                    tracing::warn!("[ferogram] Reconnect attempt failed: {e}");
-                    // Cap at max, then apply ±20 % jitter to avoid thundering herd.
-                    // Ensure the delay always advances by at least RECONNECT_BASE_MS
-                    // so a 0 initial delay on the first attempt doesn't spin-loop.
-                    let next = delay_ms
-                        .saturating_mul(2)
-                        .clamp(RECONNECT_BASE_MS, RECONNECT_MAX_SECS * 1_000);
-                    delay_ms = jitter_delay(next).as_millis() as u64;
-                }
-            }
-        }
-    }
-
-    /// Reconnect to the home DC, replace the writer, and return the new read half.
-    async fn do_reconnect(
-        &self,
-        _old_auth_key: &[u8; 256],
-
-        _old_frame_kind: &FrameKind,
-    ) -> Result<(OwnedReadHalf, FrameKind, [u8; 256], i64), InvocationError> {
-        let home_dc_id = *self.inner.home_dc_id.lock().await;
-        let (addr, saved_key, first_salt, time_offset) = {
-            let opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> =
-                self.inner.dc_options.lock().await;
-            match opts.get(&home_dc_id) {
-                Some(e) => (e.addr.clone(), e.auth_key, e.first_salt, e.time_offset),
-                None => (fallback_dc_addr(home_dc_id).to_string(), None, 0, 0),
-            }
-        };
-        let socks5 = self.inner.socks5.clone();
-        let mtproxy = self.inner.mtproxy.clone();
-        // Derive transport from the active FrameKind rather than inner.transport.
-        // inner.transport is the *requested* kind set at startup; if probe_transport
-        // raced and selected a different framing (e.g. Obfuscated won over Abridged),
-        // inner.transport is never updated.  Using it for reconnects means every
-        // reconnect uses the wrong framing → garbled frames → reconnect storm.
-        // The active FrameKind is the ground truth: derive TransportKind from it.
-        let transport = match _old_frame_kind {
-            FrameKind::Abridged => TransportKind::Abridged,
-            FrameKind::Intermediate => TransportKind::Intermediate,
-            FrameKind::Full { .. } => TransportKind::Full,
-            FrameKind::Obfuscated { .. } => TransportKind::Obfuscated { secret: None },
-            FrameKind::PaddedIntermediate { .. } => {
-                TransportKind::PaddedIntermediate { secret: None }
-            }
-            FrameKind::FakeTls { .. } => {
-                // FakeTls requires a secret; fall back to inner.transport which
-                // should already hold the correct secret for MTProxy connections.
-                self.inner.transport.clone()
-            }
-        };
-        // Update active_transport so the supervisor reconnect path (which uses
-        // dummy_fk) also gets the right transport on unexpected restarts.
-        if let Ok(mut at) = self.inner.active_transport.lock() {
-            *at = transport.clone();
-        }
-
-        let new_conn = if let Some(key) = saved_key {
-            tracing::debug!("[ferogram] Reconnecting to DC{home_dc_id} with saved key …");
-            match Connection::connect_with_key(
-                &addr,
-                key,
-                first_salt,
-                time_offset,
-                socks5.as_ref(),
-                mtproxy.as_ref(),
-                &transport,
-                home_dc_id as i16,
-                self.inner.pfs_enabled,
-            )
-            .await
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    return Err(e.into());
-                }
-            }
-        } else {
-            Connection::connect_raw(
-                &addr,
-                socks5.as_ref(),
-                mtproxy.as_ref(),
-                &transport,
-                home_dc_id as i16,
-            )
-            .await?
-        };
-
-        let (new_writer, new_wh, new_read, new_fk): (
-            ferogram_connect::ConnectionWriter,
-            tokio::net::tcp::OwnedWriteHalf,
-            tokio::net::tcp::OwnedReadHalf,
-            ferogram_connect::connection::FrameKind,
-        ) = new_conn.into_writer();
-        let new_ak = new_writer.enc.auth_key_bytes();
-        let new_sid = new_writer.enc.session_id();
-        // Bump the connection epoch BEFORE swapping writer and write_half.
-        // Any task that already snapshotted the old generation and is between
-        // "build wire" and "acquire write_half" will see the mismatch after
-        // acquiring the lock and discard its wire instead of writing it.
-        let new_conn_gen = self
-            .inner
-            .conn_generation
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
-            + 1;
-        tracing::debug!(
-            "[ferogram] do_reconnect: epoch bump complete \
-             (new_sid={new_sid:#x} conn_gen={new_conn_gen})",
-        );
-        // The old write half is already shut down by do_reconnect_loop before
-        // this function is called, so we just replace writer and write_half.
-        *self.inner.writer.lock().await = new_writer;
-        *self.inner.write_half.lock().await = new_wh;
-
-        // Reset the seen-msg-ids dedup ring. The ring is keyed by msg_id which
-        // is a monotonically increasing value tied to the session. A new
-        // EncryptedSession generates a fresh session_id, so msg_ids from the
-        // old session are in a completely different namespace. Carrying them
-        // over risks silently dropping the first legitimate messages on the new
-        // session if their msg_ids happen to collide with old entries in the
-        // bounded ring (or, worse, if the ring still holds msg_ids > the new
-        // session's first message and the dedup check fires). Clear on every
-        // hard reconnect so the new session starts with a clean slate.
-        {
-            let mut seen = self.inner.seen_msg_ids.lock().unwrap();
-            seen.0.clear();
-            seen.1.clear();
-        }
-
-        // The new writer is fresh (new EncryptedSession) but
-        // salt_request_in_flight lives on self.inner and is never reset
-        // automatically.  If a GetFutureSalts was in flight when the
-        // disconnect happened the flag stays `true` forever, preventing any
-        // future proactive salt refreshes.  Reset it here so the first
-        // bad_server_salt after reconnect can spawn a new request.
-        // because the entire Sender is recreated.
-        self.inner
-            .salt_request_in_flight
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-
-        // Persist the new auth key so subsequent reconnects reuse it instead of
-        // repeating fresh DH.  (Cleared keys cause a fresh-DH loop: clear -> DH →
-        // key not saved -> next disconnect clears nothing -> but dc_options still
-        // None -> DH again -> AUTH_KEY_UNREGISTERED on getDifference forever.)
-        {
-            let mut opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> =
-                self.inner.dc_options.lock().await;
-            if let Some(entry) = opts.get_mut(&home_dc_id) {
-                entry.auth_key = Some(new_ak);
-            }
-        }
-
-        // NOTE: init_connection() is intentionally NOT called here.
-        //
-        // do_reconnect() is always called from inside the reader loop's select!,
-        // which means the reader task is blocked while this function runs.
-        // init_connection() sends an RPC and awaits the response: but only the
-        // reader task can route that response back to the pending caller.
-        // Calling it here creates a self-deadlock that times out after 30 s.
-        //
-        // Instead, callers are responsible for spawning init_connection() in a
-        // separate task AFTER the reader loop has resumed and can process frames.
-
-        Ok((new_read, new_fk, new_ak, new_sid))
-    }
-
-    pub(crate) async fn send_message_impl(
+    pub async fn send_message(
         &self,
         peer: impl Into<PeerRef>,
-
         msg: impl Into<InputMessage>,
     ) -> Result<update::IncomingMessage, InvocationError> {
-        let msg = msg.into();
-        let msg = &msg;
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let schedule = if msg.schedule_once_online {
-            Some(0x7FFF_FFFEi32)
-        } else {
-            msg.schedule_date
-        };
-
-        // if media is attached, route through SendMedia instead of SendMessage.
-        if let Some(media) = &msg.media {
-            let req = tl::functions::messages::SendMedia {
-                silent: msg.silent,
-                background: msg.background,
-                clear_draft: msg.clear_draft,
-                noforwards: false,
-                update_stickersets_order: false,
-                invert_media: msg.invert_media,
-                allow_paid_floodskip: false,
-                peer: input_peer,
-                reply_to: msg.reply_header(),
-                media: media.clone(),
-                message: msg.text.clone(),
-                random_id: random_i64(),
-                reply_markup: msg.reply_markup.clone(),
-                entities: msg.entities.clone(),
-                schedule_date: schedule,
-                schedule_repeat_period: None,
-                send_as: None,
-                quick_reply_shortcut: None,
-                effect: None,
-                allow_paid_stars: None,
-                suggested_post: None,
-            };
-            let body: Vec<u8> = self.rpc_call_raw(&req).await?;
-            return Ok(self.parse_send_response(&body, msg, &peer).await);
-        }
-
+        let msg = msg.into();
         let req = tl::functions::messages::SendMessage {
             no_webpage: msg.no_webpage,
             silent: msg.silent,
@@ -4484,7 +2671,7 @@ impl Client {
             random_id: random_i64(),
             reply_markup: msg.reply_markup.clone(),
             entities: msg.entities.clone(),
-            schedule_date: schedule,
+            schedule_date: msg.schedule_date,
             schedule_repeat_period: None,
             send_as: None,
             quick_reply_shortcut: None,
@@ -4494,15 +2681,7 @@ impl Client {
             rich_message: None,
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
-        Ok(self.parse_send_response(&body, msg, &peer).await)
-    }
-
-    pub async fn send_message(
-        &self,
-        peer: impl Into<PeerRef>,
-        msg: impl Into<InputMessage>,
-    ) -> Result<update::IncomingMessage, InvocationError> {
-        self.send_message_impl(peer, msg).await
+        Ok(self.parse_send_response(&body, &msg, &peer).await)
     }
 
     pub(crate) async fn parse_send_response(
@@ -6125,45 +4304,13 @@ impl Client {
         {
             return; // already in flight
         }
-        let inner = Arc::clone(&self.inner);
+        let client = self.clone();
         tokio::spawn(async move {
             tracing::debug!("[ferogram] proactive GetFutureSalts spawned");
-            let mut req_body = Vec::with_capacity(8);
-            req_body.extend_from_slice(&0xb921bd04_u32.to_le_bytes()); // get_future_salts
-            req_body.extend_from_slice(&64_i32.to_le_bytes()); // num
-            let (wire, fk, fs_msg_id, conn_gen) = {
-                let mut w = inner.writer.lock().await;
-                let fk = w.frame_kind.clone();
-                let conn_gen = inner
-                    .conn_generation
-                    .load(std::sync::atomic::Ordering::Acquire);
-                let (wire, id) = w.enc.pack_body_with_msg_id(&req_body, true);
-                w.sent_bodies.insert(id, req_body);
-                (wire, fk, id, conn_gen)
-            };
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            inner.pending.lock().await.insert(fs_msg_id, tx);
-            let send_ok = {
-                let mut wh = inner.write_half.lock().await;
-                let cur = inner
-                    .conn_generation
-                    .load(std::sync::atomic::Ordering::Acquire);
-                if cur != conn_gen {
-                    false // stale: reconnect happened between pack and send
-                } else {
-                    send_frame_write(&mut *wh, &wire, &fk).await.is_ok()
-                }
-            };
-            if !send_ok {
-                inner.pending.lock().await.remove(&fs_msg_id);
-                inner.writer.lock().await.sent_bodies.remove(&fs_msg_id);
-                inner
-                    .salt_request_in_flight
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                return;
-            }
-            let _ = rx.await;
-            inner
+            let req = tl::functions::GetFutureSalts { num: 64 };
+            let _ = client.rpc_call_raw(&req).await;
+            client
+                .inner
                 .salt_request_in_flight
                 .store(false, std::sync::atomic::Ordering::SeqCst);
         });
@@ -6239,93 +4386,18 @@ impl Client {
     ///5. Await the oneshot Receiver; the reader task will fulfill it when
     ///   the matching rpc_result frame arrives.
     async fn do_rpc_call<R: RemoteCall>(&self, req: &R) -> Result<Vec<u8>, InvocationError> {
+        let raw_body = req.to_bytes();
+        let body = maybe_gz_pack(&raw_body);
         let (tx, rx) = oneshot::channel();
-        let wire = {
-            let raw_body = req.to_bytes();
-            // compress large outgoing bodies
-            let body = maybe_gz_pack(&raw_body);
-
-            let mut w = self.inner.writer.lock().await;
-
-            // Proactive salt cycling on every send (: Encrypted::push() prelude).
-            // Prunes expired salts, cycles enc.salt to newest usable entry,
-            // and triggers a background GetFutureSalts when pool shrinks to 1.
-            if w.advance_salt_if_needed() {
-                drop(w); // release lock before spawning
-                self.spawn_salt_fetch_if_needed();
-                w = self.inner.writer.lock().await;
-            }
-
-            let fk = w.frame_kind.clone();
-
-            // Snapshot the connection epoch under the writer lock. The check
-            // below (after acquiring write_half) uses this to detect a reconnect
-            // that happened between pack and send.
-            let conn_gen = self
-                .inner
-                .conn_generation
-                .load(std::sync::atomic::Ordering::Acquire);
-
-            // +: drain any pending acks; if non-empty bundle them with
-            // the request in a MessageContainer so acks piggyback on every send.
-            let acks: Vec<i64> = w.pending_ack.drain(..).collect();
-
-            if acks.is_empty() {
-                // Simple path: standalone request
-                let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
-                w.sent_bodies.insert(msg_id, body); //
-                self.inner.pending.lock().await.insert(msg_id, tx);
-                (wire, fk, conn_gen)
-            } else {
-                // container path: [MsgsAck, request]
-                let ack_body = build_msgs_ack_body(&acks);
-                let (ack_msg_id, ack_seqno) = w.enc.alloc_msg_seqno(false); // non-content
-                let (req_msg_id, req_seqno) = w.enc.alloc_msg_seqno(true); // content
-
-                let container_payload = build_container_body(&[
-                    (ack_msg_id, ack_seqno, ack_body.as_slice()),
-                    (req_msg_id, req_seqno, body.as_slice()),
-                ]);
-
-                let (wire, container_msg_id) = w.enc.pack_container(&container_payload);
-
-                w.sent_bodies.insert(req_msg_id, body); //
-                w.container_map.insert(container_msg_id, req_msg_id); //
-                self.inner.pending.lock().await.insert(req_msg_id, tx);
-                tracing::debug!(
-                    "[ferogram] container: bundled {} acks + request (cid={container_msg_id})",
-                    acks.len()
-                );
-                (wire, fk, conn_gen)
-            }
-        };
-        // TCP send with writer lock free: reader can push pending_ack concurrently.
-        // Re-check the connection epoch after acquiring write_half: if a reconnect
-        // happened between pack and here, this wire belongs to the dead session.
-        // Returning an error causes the retry layer to re-issue on the new session.
-        {
-            let mut wh = self.inner.write_half.lock().await;
-            let cur = self
-                .inner
-                .conn_generation
-                .load(std::sync::atomic::Ordering::Acquire);
-            if cur != wire.2 {
-                tracing::debug!(
-                    "[ferogram] do_rpc_call: stale wire detected (pack_gen={} cur_gen={cur}), \
-                     dropping and returning ConnectionReset for retry",
-                    wire.2,
-                );
-                return Err(InvocationError::Io(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionReset,
-                    "stale wire: reconnect occurred between pack and send",
-                )));
-            }
-            send_frame_write(&mut *wh, &wire.0, &wire.1).await?;
-        }
+        self.inner
+            .rpc_tx
+            .send(ferogram_mtsender::RpcEnqueue { body, tx })
+            .await
+            .map_err(|_| InvocationError::Deserialize("sender task shut down".into()))?;
         match rx.await {
             Ok(result) => result,
             Err(_) => Err(InvocationError::Deserialize(
-                "RPC channel closed (reader died?)".into(),
+                "RPC channel closed (sender task died?)".into(),
             )),
         }
     }
@@ -6362,64 +4434,18 @@ impl Client {
     }
 
     async fn do_rpc_write<S: tl::Serializable>(&self, req: &S) -> Result<(), InvocationError> {
+        let raw_body = req.to_bytes();
+        let body = maybe_gz_pack(&raw_body);
         let (tx, rx) = oneshot::channel();
-        let wire = {
-            let raw_body = req.to_bytes();
-            // compress large outgoing bodies
-            let body = maybe_gz_pack(&raw_body);
-
-            let mut w = self.inner.writer.lock().await;
-            let fk = w.frame_kind.clone();
-            let conn_gen = self
-                .inner
-                .conn_generation
-                .load(std::sync::atomic::Ordering::Acquire);
-
-            // +: drain pending acks and bundle into container if any
-            let acks: Vec<i64> = w.pending_ack.drain(..).collect();
-
-            if acks.is_empty() {
-                let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
-                w.sent_bodies.insert(msg_id, body); //
-                self.inner.pending.lock().await.insert(msg_id, tx);
-                (wire, fk, conn_gen)
-            } else {
-                let ack_body = build_msgs_ack_body(&acks);
-                let (ack_msg_id, ack_seqno) = w.enc.alloc_msg_seqno(false);
-                let (req_msg_id, req_seqno) = w.enc.alloc_msg_seqno(true);
-                let container_payload = build_container_body(&[
-                    (ack_msg_id, ack_seqno, ack_body.as_slice()),
-                    (req_msg_id, req_seqno, body.as_slice()),
-                ]);
-                let (wire, container_msg_id) = w.enc.pack_container(&container_payload);
-                w.sent_bodies.insert(req_msg_id, body); //
-                w.container_map.insert(container_msg_id, req_msg_id); //
-                self.inner.pending.lock().await.insert(req_msg_id, tx);
-                tracing::debug!(
-                    "[ferogram] write container: bundled {} acks + write (cid={container_msg_id})",
-                    acks.len()
-                );
-                (wire, fk, conn_gen)
-            }
-        };
-        {
-            let mut wh = self.inner.write_half.lock().await;
-            let cur = self
-                .inner
-                .conn_generation
-                .load(std::sync::atomic::Ordering::Acquire);
-            if cur != wire.2 {
-                return Err(InvocationError::Io(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionReset,
-                    "stale wire: reconnect occurred between pack and send",
-                )));
-            }
-            send_frame_write(&mut *wh, &wire.0, &wire.1).await?;
-        }
+        self.inner
+            .rpc_tx
+            .send(ferogram_mtsender::RpcEnqueue { body, tx })
+            .await
+            .map_err(|_| InvocationError::Deserialize("sender task shut down".into()))?;
         match rx.await {
             Ok(result) => result.map(|_| ()),
             Err(_) => Err(InvocationError::Deserialize(
-                "rpc_write channel closed".into(),
+                "rpc_write channel closed (sender task died?)".into(),
             )),
         }
     }
@@ -6568,32 +4594,29 @@ impl Client {
             entry.auth_key = Some(new_key);
         }
 
-        // Split the new connection and replace writer + read half.
-        let (new_writer, new_wh, new_read, new_fk): (
-            ferogram_connect::ConnectionWriter,
-            tokio::net::tcp::OwnedWriteHalf,
-            tokio::net::tcp::OwnedReadHalf,
-            ferogram_connect::connection::FrameKind,
-        ) = conn.into_writer();
-        let new_ak = new_writer.enc.auth_key_bytes();
-        let new_sid = new_writer.enc.session_id();
-        *self.inner.writer.lock().await = new_writer;
-        *self.inner.write_half.lock().await = new_wh;
         *self.inner.home_dc_id.lock().await = new_dc_id;
 
-        // Hand the new read half to the reader task FIRST so it can route
-        // the upcoming init_connection RPC response.
+        // Hand the new connection to the sender task. It will send a
+        // FrameEvent::Connected once the swap completes, which updates
+        // dc_options[home_dc] (now new_dc_id) with the fresh salt/time_offset.
+        let perm_auth_key = conn.perm_auth_key;
         let _ = self
             .inner
             .reconnect_tx
-            .try_send((new_read, new_fk, new_ak, new_sid));
+            .send(ferogram_mtsender::ReconnectRequest {
+                stream: conn.stream,
+                enc: conn.enc,
+                frame_kind: conn.frame_kind,
+                perm_auth_key,
+            })
+            .await;
 
         // migrate_to() is called from user-facing methods (bot_sign_in,
-        // request_login_code, sign_in): NOT from inside the reader loop.
-        // The reader task is a separate tokio task running concurrently, so
-        // awaiting init_connection() here is safe: the reader is free to route
-        // the RPC response while we wait. We must await before returning so
-        // the caller can safely retry the original request on the new DC.
+        // request_login_code, sign_in): NOT from inside the sender task.
+        // The sender task runs concurrently, so awaiting init_connection() here
+        // is safe: it can route the RPC response while we wait. We must await
+        // before returning so the caller can safely retry the original request
+        // on the new DC.
         //
         // Respect FLOOD_WAIT: if Telegram rate-limits init, wait and retry
         // rather than returning an error that would abort the whole auth flow.
@@ -6899,8 +4922,11 @@ impl Client {
                     e.and_then(|e| e.auth_key)
                 };
                 let (salt, time_offset) = {
-                    let w = self.inner.writer.lock().await;
-                    (w.first_salt(), w.time_offset())
+                    let opts = self.inner.dc_options.lock().await;
+                    let home = *self.inner.home_dc_id.lock().await;
+                    opts.get(&home)
+                        .map(|e| (e.first_salt, e.time_offset))
+                        .unwrap_or((0, 0))
                 };
                 let conn = if let Some(key) = key {
                     dc_pool::DcConnection::connect_with_key(
@@ -7214,8 +5240,11 @@ impl Client {
                 opts.get(&target_dc).and_then(|e| e.auth_key)
             };
             let (salt, time_offset) = {
-                let w = self.inner.writer.lock().await;
-                (w.first_salt(), w.time_offset())
+                let opts = self.inner.dc_options.lock().await;
+                let home = *self.inner.home_dc_id.lock().await;
+                opts.get(&home)
+                    .map(|e| (e.first_salt, e.time_offset))
+                    .unwrap_or((0, 0))
             };
             let mut conn = if let Some(key) = key {
                 dc_pool::DcConnection::connect_with_key(
@@ -7450,54 +5479,19 @@ impl Client {
 
         req: &S,
     ) -> Result<Vec<u8>, InvocationError> {
+        let raw_body = req.to_bytes();
+        let body = maybe_gz_pack(&raw_body);
         let (tx, rx) = oneshot::channel();
-        let wire = {
-            let raw_body = req.to_bytes();
-            let body = maybe_gz_pack(&raw_body); //
-            let mut w = self.inner.writer.lock().await;
-            let fk = w.frame_kind.clone();
-            let conn_gen = self
-                .inner
-                .conn_generation
-                .load(std::sync::atomic::Ordering::Acquire);
-            let acks: Vec<i64> = w.pending_ack.drain(..).collect(); //
-            if acks.is_empty() {
-                let (wire, msg_id) = w.enc.pack_body_with_msg_id(&body, true);
-                w.sent_bodies.insert(msg_id, body); //
-                self.inner.pending.lock().await.insert(msg_id, tx);
-                (wire, fk, conn_gen)
-            } else {
-                let ack_body = build_msgs_ack_body(&acks);
-                let (ack_msg_id, ack_seqno) = w.enc.alloc_msg_seqno(false);
-                let (req_msg_id, req_seqno) = w.enc.alloc_msg_seqno(true);
-                let container_payload = build_container_body(&[
-                    (ack_msg_id, ack_seqno, ack_body.as_slice()),
-                    (req_msg_id, req_seqno, body.as_slice()),
-                ]);
-                let (wire, container_msg_id) = w.enc.pack_container(&container_payload);
-                w.sent_bodies.insert(req_msg_id, body); //
-                w.container_map.insert(container_msg_id, req_msg_id); //
-                self.inner.pending.lock().await.insert(req_msg_id, tx);
-                (wire, fk, conn_gen)
-            }
-        };
-        {
-            let mut wh = self.inner.write_half.lock().await;
-            let cur = self
-                .inner
-                .conn_generation
-                .load(std::sync::atomic::Ordering::Acquire);
-            if cur != wire.2 {
-                return Err(InvocationError::Io(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionReset,
-                    "stale wire: reconnect occurred between pack and send",
-                )));
-            }
-            send_frame_write(&mut *wh, &wire.0, &wire.1).await?;
-        }
+        self.inner
+            .rpc_tx
+            .send(ferogram_mtsender::RpcEnqueue { body, tx })
+            .await
+            .map_err(|_| InvocationError::Deserialize("sender task shut down".into()))?;
         match rx.await {
             Ok(result) => result,
-            Err(_) => Err(InvocationError::Deserialize("rpc channel closed".into())),
+            Err(_) => Err(InvocationError::Deserialize(
+                "rpc channel closed (sender task died?)".into(),
+            )),
         }
     }
 
@@ -8468,7 +6462,6 @@ impl Client {
         dc_id: i32,
         path: impl AsRef<std::path::Path>,
     ) -> Result<(), InvocationError> {
-        use tokio::io::AsyncWriteExt;
         let mut file = tokio::fs::File::create(path)
             .await
             .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
@@ -10354,18 +8347,11 @@ pub(crate) fn is_bool_true(body: &[u8]) -> bool {
 }
 
 // Wire-layer types and helpers moved to ferogram-connect.
-pub(crate) use ferogram_connect::connection::FrameKind;
-pub(crate) use ferogram_connect::frame::send_frame_write;
-pub(crate) use ferogram_connect::util::{
-    build_container_body, build_msgs_ack_body, jitter_delay, maybe_gz_pack,
-};
-pub(crate) use ferogram_connect::{
-    Connection, ConnectionWriter, FrameOutcome, FutureSalt, gz_inflate, random_i64,
-    recv_frame_with_keepalive, tl_read_bytes,
-};
+pub(crate) use ferogram_connect::util::maybe_gz_pack;
+pub(crate) use ferogram_connect::{Connection, random_i64};
 
 // Envelope types live in crate::envelope (tl-api functions, not in ferogram-connect).
-pub(crate) use crate::envelope::{EnvelopeResult, chat_to_peer, unwrap_envelope, updates_entities};
+pub(crate) use crate::envelope::{chat_to_peer, updates_entities};
 
 // Low-level re-exports (merged from the former `layer` shim crate)
 
