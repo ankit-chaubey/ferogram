@@ -378,16 +378,11 @@ impl MtpSender {
             self.pending_ack.push(msg.msg_id);
         }
 
-        self.dispatch(&msg.body, msg.msg_id, msg.salt)
+        self.dispatch(&msg.body, msg.msg_id)
     }
 
     /// Route one decrypted message body. Returns raw update bodies.
-    fn dispatch(
-        &mut self,
-        body: &[u8],
-        msg_id: i64,
-        salt: i64,
-    ) -> Result<Vec<Vec<u8>>, InvocationError> {
+    fn dispatch(&mut self, body: &[u8], msg_id: i64) -> Result<Vec<Vec<u8>>, InvocationError> {
         if body.len() < 4 {
             return Ok(vec![]);
         }
@@ -469,7 +464,7 @@ impl MtpSender {
                     if inner_msg_id & 1 == 1 {
                         self.pending_ack.push(inner_msg_id);
                     }
-                    let mut u = self.dispatch(&inner, inner_msg_id, salt)?;
+                    let mut u = self.dispatch(&inner, inner_msg_id)?;
                     updates.append(&mut u);
                 }
                 Ok(updates)
@@ -481,7 +476,7 @@ impl MtpSender {
                 if let Some(compressed) = tl_read_bytes(&body[4..])
                     && let Ok(decompressed) = gz_inflate(&compressed)
                 {
-                    return self.dispatch(&decompressed, msg_id, salt);
+                    return self.dispatch(&decompressed, msg_id);
                 }
                 Ok(vec![])
             }
