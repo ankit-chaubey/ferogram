@@ -294,6 +294,33 @@ impl Client {
         }))
     }
 
+    /// The logged-in account's numeric user ID, if already known.
+    ///
+    /// This is a cheap, synchronous, no-network lookup of a value captured
+    /// automatically the first time a `User` object with `is_self == true`
+    /// was cached (sign-in, `get_me()`, etc.). Returns `None` only if neither
+    /// has happened yet in this session - call `my_id_or_fetch()` for a
+    /// version that falls back to a network call in that case.
+    pub fn my_id(&self) -> Option<i64> {
+        match self
+            .inner
+            .self_user_id
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            0 => None,
+            id => Some(id),
+        }
+    }
+
+    /// Like [`my_id`](Self::my_id), but performs a one-time `get_me()` call
+    /// to populate the cache if it isn't already known.
+    pub async fn my_id_or_fetch(&self) -> Result<i64, InvocationError> {
+        if let Some(id) = self.my_id() {
+            return Ok(id);
+        }
+        Ok(self.get_me().await?.id)
+    }
+
     /// Fetch information about the logged-in user.
     pub async fn get_me(&self) -> Result<tl::types::User, InvocationError> {
         let req = tl::functions::users::GetUsers {

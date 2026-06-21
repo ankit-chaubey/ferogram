@@ -430,6 +430,16 @@ pub(crate) struct ClientInner {
     auth_import_gates:
         parking_lot::Mutex<std::collections::HashMap<i32, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 
+    /// Cached numeric ID of the logged-in account.
+    ///
+    /// Populated the moment any `tl::types::User` with `self_ == true` passes
+    /// through `cache_user`/`cache_users_slice` (sign-in, `get_me()`, contact
+    /// lists, etc.) - no dedicated network call needed in the common case.
+    /// `0` means "not yet known". Used to resolve the sender of private-chat
+    /// (DM) messages, since Telegram omits `from_id` there: with only two
+    /// participants, the sender is derivable from `out` + `peer_id` alone.
+    pub(crate) self_user_id: std::sync::atomic::AtomicI64,
+
     /// Set to true after any peer-cache mutation so the full-snapshot periodic
     /// saver knows a flush to the session backend is needed.
     session_snapshot_dirty: std::sync::atomic::AtomicBool,
@@ -707,6 +717,7 @@ impl Client {
             peer_cache_miss_count: std::sync::atomic::AtomicU32::new(0),
             peer_cache_miss_window_start: parking_lot::Mutex::new(std::time::Instant::now()),
             last_bulk_hydration: parking_lot::Mutex::new(None),
+            self_user_id: std::sync::atomic::AtomicI64::new(0),
             session_snapshot_dirty: std::sync::atomic::AtomicBool::new(false),
             experimental: config.experimental_features.clone(),
             diff_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
@@ -4704,11 +4715,32 @@ impl Client {
     /// need to reset the update gap-detection counters, e.g. after resuming
     /// from a long hibernation.
     async fn cache_user(&self, user: &tl::enums::User) {
+        self.remember_self_id(user);
         self.inner.peer_cache.write().await.cache_user(user);
         self.mark_session_snapshot_dirty();
     }
 
+    /// If `user` is a `User::User` with `is_self == true`, cache its numeric ID
+    /// as the logged-in account's own ID (see `Inner::self_user_id`).
+    ///
+    /// Telegram sets this flag on the account's own `User` object wherever it
+    /// appears (sign-in response, `users.getUsers(InputUser::UserSelf)`,
+    /// contact lists, etc.), so this captures it for free the first time any
+    /// such object is cached - no dedicated network round-trip required.
+    fn remember_self_id(&self, user: &tl::enums::User) {
+        if let tl::enums::User::User(u) = user
+            && u.is_self
+        {
+            self.inner
+                .self_user_id
+                .store(u.id, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     pub(crate) async fn cache_users_slice(&self, users: &[tl::enums::User]) {
+        for u in users {
+            self.remember_self_id(u);
+        }
         let mut cache: tokio::sync::RwLockWriteGuard<'_, PeerCache> =
             self.inner.peer_cache.write().await;
         cache.cache_users(users);
