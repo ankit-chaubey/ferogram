@@ -52,7 +52,7 @@ pub enum FrameEvent {
     Error(InvocationError),
     /// Session info after initial connect or reconnect (for session saving).
     Connected {
-        auth_key: [u8; 256],
+        auth_key: Box<[u8; 256]>,
         first_salt: i64,
         time_offset: i32,
         session_id: i64,
@@ -101,7 +101,7 @@ async fn sender_loop(
     // Notify the client that we are connected and ready.
     let _ = frame_tx
         .send(FrameEvent::Connected {
-            auth_key: sender.auth_key_bytes(),
+            auth_key: Box::new(sender.auth_key_bytes()),
             first_salt: sender.first_salt(),
             time_offset: sender.time_offset(),
             session_id: sender.session_id(),
@@ -137,7 +137,7 @@ async fn sender_loop(
                 sender.set_stream(req.stream, req.enc, req.frame_kind, req.perm_auth_key);
                 let _ = frame_tx
                     .send(FrameEvent::Connected {
-                        auth_key: sender.auth_key_bytes(),
+                        auth_key: Box::new(sender.auth_key_bytes()),
                         first_salt: sender.first_salt(),
                         time_offset: sender.time_offset(),
                         session_id: sender.session_id(),
@@ -177,7 +177,7 @@ async fn sender_loop(
                                 );
                                 let _ = frame_tx
                                     .send(FrameEvent::Connected {
-                                        auth_key: sender.auth_key_bytes(),
+                                        auth_key: Box::new(sender.auth_key_bytes()),
                                         first_salt: sender.first_salt(),
                                         time_offset: sender.time_offset(),
                                         session_id: sender.session_id(),

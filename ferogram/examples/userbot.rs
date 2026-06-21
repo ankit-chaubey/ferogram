@@ -10,18 +10,15 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
-use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::Utc;
 use ferogram::tl;
-use ferogram::{Client, InputMessage, SignInError, TransportKind, update::Update};
+use ferogram::{Client, InputMessage, TransportKind, update::Update};
 
 const API_ID: i32 = 0;
 const API_HASH: &str = "";
-const PHONE: &str = "";
-const BOT_TOKEN: &str = "";
 
 // These values are sent to Telegram in InitConnection and appear
 // in the active sessions list. Customize them for your app.
@@ -65,15 +62,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .resilient_connect(true)
         .connect()
         .await?;
-
-    if !client.is_authorized().await? {
-        println!("🔑 Not signed in, starting login flow…");
-        do_login(&client).await?;
-        client.save_session().await?;
-        println!("💾 Session saved");
-    } else {
-        println!("✅ Already logged in");
-    }
+    println!("✅ Connected and signed in");
 
     let me = client.get_me().await?;
     println!(
@@ -461,43 +450,6 @@ fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
-}
-
-async fn do_login(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
-    if !BOT_TOKEN.is_empty() {
-        client.bot_sign_in(BOT_TOKEN).await?;
-        return Ok(());
-    }
-    if PHONE.is_empty() {
-        eprintln!("Set PHONE or BOT_TOKEN");
-        std::process::exit(1);
-    }
-    let token = client.request_login_code(PHONE).await?;
-    let code = prompt("Enter the code: ")?;
-    match client.sign_in(&token, &code).await {
-        Ok(name) => println!("✅ Signed in as {name}"),
-        Err(SignInError::PasswordRequired(pw)) => {
-            let pass = prompt(&format!(
-                "2FA password (hint: {}): ",
-                pw.hint().unwrap_or("?")
-            ))?;
-            client.check_password(*pw, pass.trim()).await?;
-        }
-        Err(SignInError::SignUpRequired) => {
-            eprintln!("✗ Not registered.");
-            std::process::exit(1);
-        }
-        Err(e) => return Err(e.into()),
-    }
-    Ok(())
-}
-
-fn prompt(msg: &str) -> io::Result<String> {
-    print!("{msg}");
-    io::stdout().flush()?;
-    let mut line = String::new();
-    io::stdin().lock().read_line(&mut line)?;
-    Ok(line.trim().to_string())
 }
 
 fn eval(expr: &str) -> Result<String, String> {

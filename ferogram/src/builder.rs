@@ -450,9 +450,18 @@ impl ClientBuilder {
     ///
     /// Returns `Err(BuilderError::MissingApiId)` / `Err(BuilderError::MissingApiHash)`
     /// before attempting any network I/O if the required fields are absent.
-    pub async fn connect(self) -> Result<(Client, ShutdownToken), BuilderError> {
+    ///
+    /// If the restored (or freshly created) session isn't authorized yet,
+    /// this also prompts interactively (stdin) for a phone number or bot
+    /// token, drives the full auth flow (login code, 2FA password if
+    /// required), and saves the session afterward. If the session is
+    /// already authorized, the prompt is skipped entirely and this only
+    /// connects.
+    pub async fn connect(self) -> Result<(Client, ShutdownToken), crate::QuickConnectError> {
         let cfg = self.build()?;
-        Client::connect(cfg).await.map_err(BuilderError::Connect)
+        let (client, shutdown) = Client::connect(cfg).await.map_err(BuilderError::Connect)?;
+        crate::quick_connect::login_interactive(&client).await?;
+        Ok((client, shutdown))
     }
 }
 

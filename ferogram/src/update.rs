@@ -1769,9 +1769,10 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
             }
         }
 
-        // updateShortSentMessage: pts is now handled by dispatch_updates/route_frame
-        // directly (via EnvelopeResult::Pts or the push branch). parse_updates is only
-        // called for the old code path; we absorb here as a safe fallback.
+        // updateShortSentMessage: pts is handled directly in the frame
+        // dispatch arm in client/mod.rs (0x9015e101), which routes pts/
+        // pts_count through message_box. parse_updates here only covers the
+        // RPC-result path for sent confirmations and is a safe no-op fallback.
         ID_UPDATE_SHORT_SENT_MSG => vec![],
 
         _ => vec![],

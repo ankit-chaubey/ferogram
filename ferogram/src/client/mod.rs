@@ -33,34 +33,6 @@ use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
-// READER_ID_COUNTER and ACTIVE_READERS were previously process-global statics,
-// which caused false-positive MULTIPLE ACTIVE READERS errors when more than one
-// Client was instantiated in the same process. They are now per-ClientInner fields.
-
-const ID_RPC_RESULT: u32 = 0xf35c6d01;
-const ID_RPC_ERROR: u32 = 0x2144ca19;
-const ID_MSG_CONTAINER: u32 = 0x73f1f8dc;
-const ID_GZIP_PACKED: u32 = 0x3072cfa1;
-const ID_PONG: u32 = 0x347773c5;
-const _ID_MSGS_ACK: u32 = 0x62d6b459;
-const ID_BAD_SERVER_SALT: u32 = 0xedab447b;
-const ID_NEW_SESSION: u32 = 0x9ec20908;
-const ID_BAD_MSG_NOTIFY: u32 = 0xa7eff811;
-// FutureSalts arrives as a bare frame (not inside rpc_result)
-const ID_FUTURE_SALTS: u32 = 0xae500895;
-// server confirms our message was received; we must ack its answer_msg_id
-const ID_MSG_DETAILED_INFO: u32 = 0x276d3ec6;
-const ID_MSG_NEW_DETAIL_INFO: u32 = 0x809db6df;
-// server asks us to re-send a specific message
-const ID_MSG_RESEND_REQ: u32 = 0x7d861a08;
-const ID_UPDATES: u32 = 0x74ae4240;
-const ID_UPDATE_SHORT: u32 = 0x78d4dec1;
-const ID_UPDATES_COMBINED: u32 = 0x725b04c3;
-const ID_UPDATE_SHORT_MSG: u32 = 0x313bc7f8;
-const ID_UPDATE_SHORT_CHAT_MSG: u32 = 0x4d6deea5;
-const ID_UPDATE_SHORT_SENT_MSG: u32 = 0x9015e101;
-const ID_UPDATES_TOO_LONG: u32 = 0xe317af7e;
-
 /// Keepalive ping interval.
 const _PING_DELAY_SECS: u64 = 60;
 
@@ -356,6 +328,7 @@ pub(crate) struct ClientInner {
     /// Whether to replay missed updates via getDifference on connect.
     #[allow(dead_code)]
     catch_up: bool,
+    #[allow(dead_code)]
     restart_policy: Arc<dyn ConnectionRestartPolicy>,
     pub(crate) home_dc_id: Mutex<i32>,
     pub(crate) dc_options: Mutex<HashMap<i32, DcEntry>>,
@@ -401,10 +374,6 @@ pub(crate) struct ClientInner {
     pub(crate) worker_semaphore: Arc<tokio::sync::Semaphore>,
     /// Guards against calling `stream_updates()` more than once.
     stream_active: std::sync::atomic::AtomicBool,
-    /// Prevents spawning more than one proactive GetFutureSalts at a time.
-    /// Without this guard every bad_server_salt spawns a new task, which causes
-    /// an exponential storm when many messages are queued with a stale salt.
-    salt_request_in_flight: std::sync::atomic::AtomicBool,
 
     /// Monotonic connection epoch. Incremented inside do_reconnect() each time
     /// writer and write_half are replaced. Every send site snapshots this before
@@ -424,11 +393,6 @@ pub(crate) struct ClientInner {
     /// reconnect-triggered DH completions don't fire GetState before the client
     /// is actually authorised.
     pub signed_in: std::sync::atomic::AtomicBool,
-
-    /// Persistent seen-msg_id dedup ring shared with the reader task.
-    /// Outlives individual EncryptedSession objects so replayed frames
-    /// from prior connections are still rejected after reconnect.
-    seen_msg_ids: ferogram_mtproto::SeenMsgIds,
 
     /// Tracks which foreign DC IDs have had `auth.importAuthorization` called
     /// successfully in the current process session (in-memory only, not persisted).
@@ -478,15 +442,6 @@ pub(crate) struct ClientInner {
     /// A single long-lived task owns the sequential diff loop, and callers
     /// just notify it instead of spawning new tasks.
     diff_notify: std::sync::Arc<tokio::sync::Notify>,
-
-    /// Assigns a unique monotonically increasing ID to every reader_loop invocation
-    /// (initial spawn + every supervisor restart). Per-client to avoid false positives
-    /// when multiple Client instances exist in the same process.
-    reader_id_counter: std::sync::atomic::AtomicU64,
-    /// Tracks how many reader_loop invocations are currently alive for this client.
-    /// In normal operation must never exceed 1; two concurrent readers on the same
-    /// socket will silently consume each other's frames and desync the stream.
-    active_readers: std::sync::atomic::AtomicI64,
 }
 
 /// The main Telegram client. Cheap to clone: internally Arc-wrapped.
@@ -741,7 +696,6 @@ impl Client {
                 crate::media::MAX_GLOBAL_SENDERS,
             )),
             stream_active: std::sync::atomic::AtomicBool::new(false),
-            salt_request_in_flight: std::sync::atomic::AtomicBool::new(false),
 
             dh_in_progress: std::sync::atomic::AtomicBool::new(false),
             pfs_enabled: config.use_pfs,
@@ -753,13 +707,9 @@ impl Client {
             peer_cache_miss_count: std::sync::atomic::AtomicU32::new(0),
             peer_cache_miss_window_start: parking_lot::Mutex::new(std::time::Instant::now()),
             last_bulk_hydration: parking_lot::Mutex::new(None),
-            // Persistent dedup ring for the main connection reader task.
-            seen_msg_ids: ferogram_mtproto::new_seen_msg_ids(),
             session_snapshot_dirty: std::sync::atomic::AtomicBool::new(false),
             experimental: config.experimental_features.clone(),
             diff_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
-            reader_id_counter: std::sync::atomic::AtomicU64::new(0),
-            active_readers: std::sync::atomic::AtomicI64::new(0),
         });
 
         let client = Self {
@@ -1408,7 +1358,7 @@ impl Client {
         let dc_options: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> =
             self.inner.dc_options.lock().await;
 
-        let mut dcs: Vec<DcEntry> = dc_options.values().map(|e| e.clone()).collect();
+        let mut dcs: Vec<DcEntry> = dc_options.values().cloned().collect();
         // Also persist media DCs so they survive restart.
         {
             let media_opts: tokio::sync::MutexGuard<
@@ -1829,7 +1779,7 @@ impl Client {
                                 let home_dc_id = *self.inner.home_dc_id.lock().await;
                                 let mut opts = self.inner.dc_options.lock().await;
                                 if let Some(entry) = opts.get_mut(&home_dc_id) {
-                                    entry.auth_key = Some(auth_key);
+                                    entry.auth_key = Some(*auth_key);
                                     entry.first_salt = first_salt;
                                     entry.time_offset = time_offset;
                                 }
@@ -4313,37 +4263,6 @@ impl Client {
     }
 
     /// Invoke any TL function directly, handling flood-wait retries.
-    /// Spawn a background `GetFutureSalts` if one is not already in flight.
-    ///
-    /// Called from `do_rpc_call` (proactive, pool size <= 1) and from the
-    /// `bad_server_salt` handler (reactive, after salt pool reset).
-    ///
-    fn spawn_salt_fetch_if_needed(&self) {
-        if self
-            .inner
-            .salt_request_in_flight
-            .compare_exchange(
-                false,
-                true,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            )
-            .is_err()
-        {
-            return; // already in flight
-        }
-        let client = self.clone();
-        tokio::spawn(async move {
-            tracing::debug!("[ferogram] proactive GetFutureSalts spawned");
-            let req = tl::functions::GetFutureSalts { num: 64 };
-            let _ = client.rpc_call_raw(&req).await;
-            client
-                .inner
-                .salt_request_in_flight
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-        });
-    }
-
     pub async fn invoke<R: RemoteCall>(&self, req: &R) -> Result<R::Return, InvocationError> {
         let body: Vec<u8> = self.rpc_call_raw(req).await?;
         <R::Return as tl::Deserializable>::from_bytes_exact(&body).map_err(Into::into)
