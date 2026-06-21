@@ -2634,6 +2634,7 @@ impl Client {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let msg = msg.into();
+        let entities = self.resolve_outgoing_entities(msg.entities.clone()).await;
         let req = tl::functions::messages::SendMessage {
             no_webpage: msg.no_webpage,
             silent: msg.silent,
@@ -2648,7 +2649,7 @@ impl Client {
             message: msg.text.clone(),
             random_id: random_i64(),
             reply_markup: msg.reply_markup.clone(),
-            entities: msg.entities.clone(),
+            entities,
             schedule_date: msg.schedule_date,
             schedule_repeat_period: None,
             send_as: None,
@@ -2660,6 +2661,69 @@ impl Client {
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         Ok(self.parse_send_response(&body, &msg, &peer).await)
+    }
+
+    /// Convert `MessageEntity::MentionName` entities (what the markdown/html
+    /// parsers emit for `tg://user?id=N`) into the `InputMessageEntityMentionName`
+    /// constructor that Telegram actually requires on outgoing messages,
+    /// resolving each user's `access_hash` from the peer cache.
+    ///
+    /// `messageEntityMentionName` (bare `user_id:long`, no access_hash) is the
+    /// constructor Telegram sends back to you on *received* messages. Echoing
+    /// it back on a *send* is a no-op server-side: Telegram can't resolve a
+    /// peer from a bare integer, so the entity is silently dropped and the
+    /// mention renders as plain text (0 entities, exactly as reported).
+    ///
+    /// If a mentioned user hasn't been seen yet (no cached access_hash), the
+    /// entity is dropped with a warning rather than sending a request the
+    /// server would reject anyway. The peer cache is populated automatically
+    /// from incoming updates, so mentioning someone who has recently messaged
+    /// the chat (e.g. the sender you're replying to) works as expected.
+    pub(crate) async fn resolve_outgoing_entities(
+        &self,
+        entities: Option<Vec<tl::enums::MessageEntity>>,
+    ) -> Option<Vec<tl::enums::MessageEntity>> {
+        let entities = entities?;
+        if !entities
+            .iter()
+            .any(|e| matches!(e, tl::enums::MessageEntity::MentionName(_)))
+        {
+            return Some(entities);
+        }
+
+        let cache = self.inner.peer_cache.read().await;
+        let mut out = Vec::with_capacity(entities.len());
+        for e in entities {
+            match e {
+                tl::enums::MessageEntity::MentionName(m) => {
+                    match cache.users.get(&m.user_id).copied() {
+                        Some(access_hash) => {
+                            out.push(tl::enums::MessageEntity::InputMessageEntityMentionName(
+                                tl::types::InputMessageEntityMentionName {
+                                    offset: m.offset,
+                                    length: m.length,
+                                    user_id: tl::enums::InputUser::InputUser(
+                                        tl::types::InputUser {
+                                            user_id: m.user_id,
+                                            access_hash,
+                                        },
+                                    ),
+                                },
+                            ));
+                        }
+                        None => {
+                            tracing::warn!(
+                                "[ferogram] dropping mention entity: user {} not in peer cache \
+                                 (access_hash unknown) - Telegram would silently reject it",
+                                m.user_id
+                            );
+                        }
+                    }
+                }
+                other => out.push(other),
+            }
+        }
+        if out.is_empty() { None } else { Some(out) }
     }
 
     pub(crate) async fn parse_send_response(
@@ -2711,10 +2775,23 @@ impl Client {
 
         // updateShortSentMessage#9015e101: server returns id/pts/date/media/entities
         // but not the full message body. Reconstruct from what we know.
+        //
+        // sent.media carries the real media for things sent to private chats
+        // (dice, polls, photos, ...) - it must be threaded through, not dropped,
+        // or callers get a synthetic message with media:None (e.g. send_dice()
+        // would never be able to expose the rolled value).
         if cid == 0x9015e101 {
             let mut cur = Cursor::from_slice(&body[4..]);
             if let Ok(sent) = tl::types::UpdateShortSentMessage::deserialize(&mut cur) {
-                return self.synthetic_sent_from_short(input, peer, sent.id, sent.date);
+                let entities = sent.entities.clone().or_else(|| input.entities.clone());
+                return self.synthetic_sent_from_short_ex(
+                    input,
+                    peer,
+                    sent.id,
+                    sent.date,
+                    sent.media.clone(),
+                    entities,
+                );
             }
         }
 
@@ -2873,6 +2950,21 @@ impl Client {
 
         date: i32,
     ) -> update::IncomingMessage {
+        self.synthetic_sent_from_short_ex(input, peer, id, date, None, input.entities.clone())
+    }
+
+    /// Like [`synthetic_sent_from_short`] but lets the caller supply the real
+    /// `media` and `entities` returned by the server (e.g. from
+    /// `updateShortSentMessage`) instead of always reconstructing from `input`.
+    fn synthetic_sent_from_short_ex(
+        &self,
+        input: &InputMessage,
+        peer: &tl::enums::Peer,
+        id: i32,
+        date: i32,
+        media: Option<tl::enums::MessageMedia>,
+        entities: Option<Vec<tl::enums::MessageEntity>>,
+    ) -> update::IncomingMessage {
         let msg = tl::types::Message {
             out: true,
             mentioned: false,
@@ -2919,9 +3011,9 @@ impl Client {
             }),
             date,
             message: input.text.clone(),
-            media: None,
+            media,
             reply_markup: input.reply_markup.clone(),
-            entities: input.entities.clone(),
+            entities,
             views: None,
             forwards: None,
             replies: None,
@@ -5742,11 +5834,24 @@ impl Client {
         Ok(body.len() >= 4 && u32::from_le_bytes(body[..4].try_into().unwrap()) == 0x997275b5)
     }
 
+    /// Send a dice/dart/basketball/etc animated emoji and return the sent message.
+    ///
+    /// The rolled value is in the returned message's media:
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::{Client, tl};
+    /// # async fn example(client: Client) -> anyhow::Result<()> {
+    /// let msg = client.send_dice(123456789, "🎲").await?;
+    /// if let Some(tl::enums::MessageMedia::Dice(d)) = msg.media() {
+    ///     println!("rolled {}", d.value);
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn send_dice(
         &self,
         peer: impl Into<PeerRef>,
         emoticon: impl Into<String>,
-    ) -> Result<(), InvocationError> {
+    ) -> Result<update::IncomingMessage, InvocationError> {
         use ferogram_tl_types as tl;
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
@@ -5776,8 +5881,10 @@ impl Client {
             allow_paid_stars: None,
             suggested_post: None,
         };
-        self.rpc_call_raw(&req).await?;
-        Ok(())
+        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
+        Ok(self
+            .parse_send_response(&body, &InputMessage::text(""), &peer)
+            .await)
     }
 
     pub async fn send_poll(

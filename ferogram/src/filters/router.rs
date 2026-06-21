@@ -419,8 +419,8 @@ impl Dispatcher {
         self.fsm_edited_msg.extend(flat.fsm_edited_msg);
     }
 
-    /// Dispatch a single update through the middleware chain and into the first
-    /// matching handler.
+    /// Dispatch a single update through the middleware chain and into every
+    /// matching handler (in registration order).
     pub async fn dispatch(&self, update: Update) {
         let new_msg = Arc::new(self.new_msg.clone());
         let edited_msg = Arc::new(self.edited_msg.clone());
@@ -484,7 +484,7 @@ impl Default for Dispatcher {
     }
 }
 
-/// Route a single update to the first matching handler.
+/// Route a single update to every matching handler (see [`run_message`]).
 async fn dispatch_to_handlers(
     update: Update,
     new_msg: &[MessageHandler],
@@ -529,8 +529,13 @@ async fn dispatch_to_handlers(
 ///
 /// Priority:
 /// 1. FSM handlers - if storage is set and the conversation has an active
-///    state that matches, the **first** matching FSM handler fires and we stop.
-/// 2. Regular handlers - first match fires.
+///    state that matches, the **first** matching FSM handler fires and we
+///    stop; regular handlers are not run for this update.
+/// 2. Regular handlers - **every** handler whose filter matches runs, in
+///    registration order (this is what lets a catch-all logging handler and
+///    a specific command handler both fire for the same update). Use a
+///    narrower filter (or split into separate routers/middleware) if you
+///    need only one handler to claim an update.
 async fn run_message(
     msg: IncomingMessage,
     regular: &[MessageHandler],
@@ -565,8 +570,19 @@ async fn run_message(
         }
     }
 
-    let matched_idx = regular.iter().position(|h| h.filter.check(&msg));
-    if let Some(idx) = matched_idx {
-        (regular[idx].handler)(msg).await;
+    let matched_idxs: Vec<usize> = regular
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| h.filter.check(&msg))
+        .map(|(i, _)| i)
+        .collect();
+
+    // Clone for every match but the last, so the common case (zero or one
+    // match) never pays for a clone it doesn't need.
+    if let Some((&last, rest)) = matched_idxs.split_last() {
+        for &idx in rest {
+            (regular[idx].handler)(msg.clone()).await;
+        }
+        (regular[last].handler)(msg).await;
     }
 }
