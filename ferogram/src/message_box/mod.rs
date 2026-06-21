@@ -204,7 +204,7 @@ impl MessageBoxes {
             if self.update_entry(key, |e| e.possible_gap = None) {
                 self.getting_diff_for.push(key);
             } else {
-                tracing::info!(
+                tracing::debug!(
                     "[ferogram/msgbox] tried begin_get_diff but no entry for {:?}",
                     key
                 );

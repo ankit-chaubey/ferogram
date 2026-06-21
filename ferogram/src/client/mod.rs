@@ -549,79 +549,85 @@ impl Client {
         let probe_transport = config.probe_transport;
         let resilient_connect = config.resilient_connect;
 
-        let (conn, home_dc_id, dc_opts, media_dc_opts, loaded_session) =
-            match config.session_backend.load().map_err(InvocationError::Io)? {
-                Some(s) => {
-                    if let Some(dc) = s.dcs.iter().find(|d| d.dc_id == s.home_dc_id) {
-                        if let Some(key) = dc.auth_key {
-                            tracing::info!("[ferogram] Loading session (DC{}) …", s.home_dc_id);
-                            match Connection::connect_with_key(
-                                &dc.addr,
-                                key,
-                                dc.first_salt,
-                                dc.time_offset,
-                                socks5.as_ref(),
-                                mtproxy.as_ref(),
-                                &transport,
-                                s.home_dc_id as i16,
-                                config.use_pfs,
-                            )
-                            .await
-                            {
-                                Ok(c) => {
-                                    let mut opts = session::default_dc_addresses()
-                                        .into_iter()
-                                        .map(|(id, addr)| {
-                                            (
-                                                id,
-                                                DcEntry {
-                                                    dc_id: id,
-                                                    addr,
-                                                    auth_key: None,
-                                                    first_salt: 0,
-                                                    time_offset: 0,
-                                                    flags: DcFlags::NONE,
-                                                },
-                                            )
-                                        })
-                                        .collect::<HashMap<_, _>>();
-                                    let mut media_opts: HashMap<i32, DcEntry> = HashMap::new();
-                                    for d in &s.dcs {
-                                        if d.flags.contains(DcFlags::MEDIA_ONLY)
-                                            || d.flags.contains(DcFlags::CDN)
-                                        {
-                                            media_opts.insert(d.dc_id, d.clone());
-                                        } else {
-                                            opts.insert(d.dc_id, d.clone());
-                                        }
+        let (conn, home_dc_id, dc_opts, media_dc_opts, loaded_session) = match config
+            .session_backend
+            .load()
+            .map_err(InvocationError::Io)?
+        {
+            Some(s) => {
+                if let Some(dc) = s.dcs.iter().find(|d| d.dc_id == s.home_dc_id) {
+                    if let Some(key) = dc.auth_key {
+                        tracing::info!("[ferogram] Loading session (DC{}) …", s.home_dc_id);
+                        tracing::debug!(
+                            "[ferogram] Session DC{} address: {}",
+                            s.home_dc_id,
+                            dc.addr
+                        );
+                        match Connection::connect_with_key(
+                            &dc.addr,
+                            key,
+                            dc.first_salt,
+                            dc.time_offset,
+                            socks5.as_ref(),
+                            mtproxy.as_ref(),
+                            &transport,
+                            s.home_dc_id as i16,
+                            config.use_pfs,
+                        )
+                        .await
+                        {
+                            Ok(c) => {
+                                let mut opts = session::default_dc_addresses()
+                                    .into_iter()
+                                    .map(|(id, addr)| {
+                                        (
+                                            id,
+                                            DcEntry {
+                                                dc_id: id,
+                                                addr,
+                                                auth_key: None,
+                                                first_salt: 0,
+                                                time_offset: 0,
+                                                flags: DcFlags::NONE,
+                                            },
+                                        )
+                                    })
+                                    .collect::<HashMap<_, _>>();
+                                let mut media_opts: HashMap<i32, DcEntry> = HashMap::new();
+                                for d in &s.dcs {
+                                    if d.flags.contains(DcFlags::MEDIA_ONLY)
+                                        || d.flags.contains(DcFlags::CDN)
+                                    {
+                                        media_opts.insert(d.dc_id, d.clone());
+                                    } else {
+                                        opts.insert(d.dc_id, d.clone());
                                     }
-                                    (c, s.home_dc_id, opts, media_opts, Some(s))
                                 }
-                                Err(e) => {
-                                    // never call fresh_connect on a TCP blip during
-                                    // startup: that would silently destroy the saved session
-                                    // by switching to DC2 with a fresh key.  Return the error
-                                    // so the caller gets a clear failure and can retry or
-                                    // prompt for re-auth without corrupting the session file.
-                                    tracing::warn!(
-                                        "[ferogram] Session connect failed ({e}): \
-                                         returning error (delete session file to reset)"
-                                    );
-                                    return Err(e.into());
-                                }
+                                tracing::debug!(
+                                    "[ferogram] Session DC table loaded: {} entries, {} media/CDN",
+                                    opts.len(),
+                                    media_opts.len()
+                                );
+                                (c, s.home_dc_id, opts, media_opts, Some(s))
                             }
-                        } else {
-                            let (c, dc, opts) = Self::fresh_connect_resilient(
-                                socks5.as_ref(),
-                                mtproxy.as_ref(),
-                                &transport,
-                                probe_transport,
-                                resilient_connect,
-                            )
-                            .await?;
-                            (c, dc, opts, HashMap::new(), None)
+                            Err(e) => {
+                                // never call fresh_connect on a TCP blip during
+                                // startup: that would silently destroy the saved session
+                                // by switching to DC2 with a fresh key.  Return the error
+                                // so the caller gets a clear failure and can retry or
+                                // prompt for re-auth without corrupting the session file.
+                                tracing::warn!(
+                                    "[ferogram] Session connect failed ({e}): \
+                                         returning error (delete session file to reset)"
+                                );
+                                return Err(e.into());
+                            }
                         }
                     } else {
+                        tracing::info!(
+                            "[ferogram] Saved session for DC{} has no auth key, fresh login required …",
+                            s.home_dc_id
+                        );
                         let (c, dc, opts) = Self::fresh_connect_resilient(
                             socks5.as_ref(),
                             mtproxy.as_ref(),
@@ -632,8 +638,11 @@ impl Client {
                         .await?;
                         (c, dc, opts, HashMap::new(), None)
                     }
-                }
-                None => {
+                } else {
+                    tracing::info!(
+                        "[ferogram] Saved session has no entry for home DC{}, fresh login required …",
+                        s.home_dc_id
+                    );
                     let (c, dc, opts) = Self::fresh_connect_resilient(
                         socks5.as_ref(),
                         mtproxy.as_ref(),
@@ -644,7 +653,20 @@ impl Client {
                     .await?;
                     (c, dc, opts, HashMap::new(), None)
                 }
-            };
+            }
+            None => {
+                tracing::info!("[ferogram] No saved session found, fresh login required …");
+                let (c, dc, opts) = Self::fresh_connect_resilient(
+                    socks5.as_ref(),
+                    mtproxy.as_ref(),
+                    &transport,
+                    probe_transport,
+                    resilient_connect,
+                )
+                .await?;
+                (c, dc, opts, HashMap::new(), None)
+            }
+        };
 
         // Build DC pool (used for API/federation calls)
         let pool = dc_pool::DcPool::new(
@@ -660,9 +682,14 @@ impl Client {
             config.socks5.clone(),
             config.transport.clone(),
         );
+        tracing::debug!(
+            "[ferogram] DC pool + transfer pool initialized (home=DC{home_dc_id}, {} known DCs)",
+            dc_opts.len()
+        );
 
         // Hand the TcpStream directly to MtpSender: a single task owns both halves.
         let perm_auth_key = conn.perm_auth_key;
+        tracing::debug!("[ferogram] Spawning sender task for DC{home_dc_id} …");
         let (sender_handle, frame_rx) = ferogram_mtsender::spawn_sender_task(
             conn.stream,
             conn.enc,
@@ -1301,7 +1328,7 @@ impl Client {
         }
 
         // Normal direct connect.
-        tracing::debug!("[ferogram] Fresh connect to DC{dc_id} …");
+        tracing::debug!("[ferogram] Fresh connect to DC{dc_id} ({default_addr}) …");
         let direct_result =
             Connection::connect_raw(&default_addr, socks5, mtproxy, transport, dc_id).await;
 
@@ -1520,7 +1547,7 @@ impl Client {
             }
         }
 
-        tracing::debug!("[ferogram] Session saved ✓");
+        tracing::info!("[ferogram] Session saved ✓");
         Ok(())
     }
 

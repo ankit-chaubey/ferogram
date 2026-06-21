@@ -392,6 +392,10 @@ impl MtpSender {
             return Ok(vec![]);
         }
         let cid = u32::from_le_bytes(body[..4].try_into().unwrap());
+        tracing::trace!(
+            "[mtp_sender] dispatch: ctor={cid:#010x} msg_id={msg_id:#x} len={}",
+            body.len()
+        );
 
         match cid {
             // rpc_result#f35c6d01

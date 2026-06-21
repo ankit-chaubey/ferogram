@@ -67,6 +67,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     if !client.is_authorized().await? {
+        println!("🔑 Not signed in, starting login flow…");
         do_login(&client).await?;
         client.save_session().await?;
         println!("💾 Session saved");
