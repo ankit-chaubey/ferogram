@@ -3894,10 +3894,21 @@ impl Client {
         path: impl AsRef<std::path::Path>,
         handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<u64, InvocationError> {
+        let path = path.as_ref();
+        let (loc, dc) = crate::media::location_from_media(media).ok_or_else(|| {
+            InvocationError::Deserialize("media has no downloadable location".into())
+        })?;
+        if let Some(size) = crate::media::size_from_media(media)
+            && size >= crate::media::BIG_FILE_THRESHOLD {
+                return self
+                    .download_media_concurrent_on_dc_to_file(loc, size, dc, path, handle)
+                    .await;
+            }
         let mut file = tokio::fs::File::create(path)
             .await
             .map_err(InvocationError::Io)?;
-        self.download(media, &mut file, handle).await
+        self.download_streaming_on_dc(loc, dc, &mut file, handle)
+            .await
     }
 
     /// Return a lazy chunk iterator for `media`.
@@ -3984,21 +3995,23 @@ impl Client {
         use tokio::io::AsyncReadExt;
         let path = path.as_ref();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+        let meta = tokio::fs::metadata(path)
+            .await
+            .map_err(InvocationError::Io)?;
+        let size = meta.len() as usize;
+        if size >= crate::media::BIG_FILE_THRESHOLD {
+            return self
+                .upload_file_concurrent_streaming(path, name, "", handle)
+                .await;
+        }
         let mut file = tokio::fs::File::open(path)
             .await
             .map_err(InvocationError::Io)?;
-        let meta = file.metadata().await.map_err(InvocationError::Io)?;
-        let size = meta.len() as usize;
         let mut data = Vec::with_capacity(size);
         file.read_to_end(&mut data)
             .await
             .map_err(InvocationError::Io)?;
-        if data.len() > crate::media::BIG_FILE_THRESHOLD {
-            self.upload_file_concurrent(std::sync::Arc::new(data), name, "", handle)
-                .await
-        } else {
-            self.upload_bytes(&data, name, "", handle).await
-        }
+        self.upload_bytes(&data, name, "", handle).await
     }
 
     pub async fn send_chat_action(
@@ -5179,18 +5192,19 @@ impl Client {
                     | "SESSION_EXPIRED"
                     | "AUTH_KEY_INVALID"
                     | "AUTH_KEY_PERM_EMPTY"
-            ) {
-                tracing::warn!(
-                    "[ferogram] Transfer DC{target_dc} auth error ({})  - evicting and clearing cached key",
-                    rpc.name
-                );
-                self.inner.transfer_pool.lock().await.evict(target_dc);
-                let mut opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> =
-                    self.inner.dc_options.lock().await;
-                if let Some(e) = opts.get_mut(&target_dc) {
-                    e.auth_key = None;
-                }
+            )
+        {
+            tracing::warn!(
+                "[ferogram] Transfer DC{target_dc} auth error ({})  - evicting and clearing cached key",
+                rpc.name
+            );
+            self.inner.transfer_pool.lock().await.evict(target_dc);
+            let mut opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> =
+                self.inner.dc_options.lock().await;
+            if let Some(e) = opts.get_mut(&target_dc) {
+                e.auth_key = None;
             }
+        }
         result
     }
 
@@ -6697,67 +6711,6 @@ impl Client {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn download_media_to_file_on_dc(
-        &self,
-        location: tl::enums::InputFileLocation,
-        dc_id: i32,
-        path: impl AsRef<std::path::Path>,
-    ) -> Result<(), InvocationError> {
-        let mut file = tokio::fs::File::create(path)
-            .await
-            .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-        // Get auth key for the target DC
-        let opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, crate::DcEntry>> =
-            self.inner.dc_options.lock().await;
-        let entry = opts.get(&dc_id).cloned();
-        drop(opts);
-        let (addr, auth_key, first_salt) = match entry {
-            Some(e) if e.auth_key.is_some() => (e.addr.clone(), e.auth_key.unwrap(), e.first_salt),
-            _ => {
-                return Err(InvocationError::Deserialize(format!(
-                    "download_media: no auth key for DC {dc_id}"
-                )));
-            }
-        };
-        let _conn = ferogram_connect::Connection::connect_with_key(
-            &addr,
-            auth_key,
-            first_salt,
-            0,
-            None,
-            None,
-            &ferogram_connect::TransportKind::Abridged,
-            dc_id as i16,
-            false,
-        )
-        .await
-        .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-        let _enc = ferogram_mtproto::EncryptedSession::new(auth_key, first_salt, 0);
-        let req = tl::functions::upload::GetFile {
-            precise: false,
-            cdn_supported: false,
-            location,
-            offset: 0,
-            limit: 1024 * 1024,
-        };
-        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
-        let mut cur = ferogram_tl_types::Cursor::from_slice(&body);
-        use ferogram_tl_types::Deserializable;
-        match tl::enums::upload::File::deserialize(&mut cur)? {
-            tl::enums::upload::File::File(f) => {
-                file.write_all(&f.bytes)
-                    .await
-                    .map_err(|e| InvocationError::Deserialize(e.to_string()))?;
-            }
-            tl::enums::upload::File::CdnRedirect(_) => {
-                return Err(InvocationError::Deserialize(
-                    "CDN redirect not supported".into(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
     pub async fn upload_media(
         &self,
         peer: impl Into<PeerRef>,

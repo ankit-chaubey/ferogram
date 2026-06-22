@@ -851,30 +851,6 @@ impl IncomingMessage {
         }
     }
 
-    /// Download attached media to `path` (clientless).
-    #[allow(dead_code)]
-    pub async fn download_media(&self, path: impl AsRef<std::path::Path>) -> Result<bool, Error> {
-        let client = self.require_client("download_media")?.clone();
-        self.download_media_with(&client, path).await
-    }
-
-    /// Download attached media to `path`. Returns `true` if media was found.
-    #[allow(dead_code)]
-    async fn download_media_with(
-        &self,
-        client: &Client,
-        path: impl AsRef<std::path::Path>,
-    ) -> Result<bool, Error> {
-        if let Some((loc, dc_id)) = crate::media::download_location_from_media(self.media()) {
-            client
-                .download_media_to_file_on_dc(loc, dc_id, path)
-                .await?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
     /// Send a reaction (clientless).
     ///
     /// # Example
