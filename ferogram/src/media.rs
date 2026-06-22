@@ -2441,7 +2441,7 @@ impl Client {
         drop(tx);
 
         // Writer task: single tokio::fs::File, seeks to each chunk offset and writes.
-        // This is the only writer — no locking needed.
+        // This is the only writer - no locking needed.
         let path_owned = path.to_path_buf();
         let shared_handle = handle.cloned();
         let writer_task: tokio::task::JoinHandle<Result<u64, InvocationError>> =

@@ -57,8 +57,8 @@ const _TCP_KEEPALIVE_PROBES: u32 = 3;
 /// |---------|-----------|-------|
 /// | `Abridged` | `0xef` | Smallest overhead |
 /// | `Intermediate` | `0xeeeeeeee` | Better proxy compat |
-/// | `Full` | none | Adds seqno + CRC32 |
-/// | `Obfuscated` | random 64B | Bypasses DPI / MTProxy: **default** |
+/// | `Full` | none | Adds seqno + CRC32: **default** |
+/// | `Obfuscated` | random 64B | Bypasses DPI / MTProxy |
 /// | `PaddedIntermediate` | random 64B (`0xDDDDDDDD` tag) | Obfuscated padded intermediate required for `0xDD` MTProxy secrets |
 /// | `FakeTls` | TLS 1.3 ClientHello | Most DPI-resistant; required for `0xEE` MTProxy secrets |
 // TransportKind moved to ferogram-connect; re-export for backward compatibility.
@@ -189,6 +189,7 @@ impl Config {
         }
         let cfg = crate::proxy::parse_proxy_link(url)
             .unwrap_or_else(|| panic!("invalid MTProxy link: {url:?}"));
+        self.transport = cfg.transport.clone();
         self.mtproxy = Some(cfg);
         self
     }
@@ -267,7 +268,7 @@ impl Default for Config {
             socks5: None,
             mtproxy: None,
             allow_ipv6: false,
-            transport: TransportKind::Obfuscated { secret: None },
+            transport: TransportKind::Full,
             session_backend: Arc::new(crate::session_backend::BinaryFileBackend::new(
                 "ferogram.session",
             )),
@@ -510,7 +511,12 @@ impl Client {
         // Load or fresh-connect
         let socks5 = config.socks5.clone();
         let mtproxy = config.mtproxy.clone();
-        let transport = config.transport.clone();
+        // mtproxy always dictates its own transport - ignore any user-set transport.
+        let transport = if let Some(ref proxy) = mtproxy {
+            proxy.transport.clone()
+        } else {
+            config.transport.clone()
+        };
         let probe_transport = config.probe_transport;
         let resilient_connect = config.resilient_connect;
 
@@ -3899,11 +3905,12 @@ impl Client {
             InvocationError::Deserialize("media has no downloadable location".into())
         })?;
         if let Some(size) = crate::media::size_from_media(media)
-            && size >= crate::media::BIG_FILE_THRESHOLD {
-                return self
-                    .download_media_concurrent_on_dc_to_file(loc, size, dc, path, handle)
-                    .await;
-            }
+            && size >= crate::media::BIG_FILE_THRESHOLD
+        {
+            return self
+                .download_media_concurrent_on_dc_to_file(loc, size, dc, path, handle)
+                .await;
+        }
         let mut file = tokio::fs::File::create(path)
             .await
             .map_err(InvocationError::Io)?;

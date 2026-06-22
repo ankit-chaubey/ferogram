@@ -179,13 +179,64 @@ impl ClientBuilder {
         self
     }
 
-    /// Route all connections through a SOCKS5 proxy.
+    /// Route all connections through a SOCKS5 proxy (no authentication).
+    ///
+    /// The default [`TransportKind::Full`] transport is used unless you also
+    /// call `.transport()`.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// let (client, _) = Client::builder()
+    ///     .session("my.session").api_id(ID).api_hash(HASH)
+    ///     .socks5("127.0.0.1:1080")
+    ///     .connect().await?;
+    /// ```
     pub fn socks5(mut self, addr: impl Into<String>) -> Self {
         self.socks5 = Some(crate::socks5::Socks5Config::new(addr));
         self
     }
 
-    /// Route all connections through an MTProxy.
+    /// Route all connections through an authenticated SOCKS5 proxy.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// let (client, _) = Client::builder()
+    ///     .session("my.session").api_id(ID).api_hash(HASH)
+    ///     .socks5_auth("proxy.example.com:1080", "user", "pass")
+    ///     .connect().await?;
+    /// ```
+    pub fn socks5_auth(
+        mut self,
+        addr: impl Into<String>,
+        username: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Self {
+        self.socks5 = Some(crate::socks5::Socks5Config::with_auth(
+            addr, username, password,
+        ));
+        self
+    }
+
+    /// Route all connections through an MTProxy using raw fields.
+    ///
+    /// `secret` is a hex or base64 string. Transport is auto-selected from
+    /// the secret prefix (`dd` → PaddedIntermediate, `ee` → FakeTls, plain → Obfuscated).
+    /// You do not need to call `.transport()`.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// let (client, _) = Client::builder()
+    ///     .session("my.session").api_id(ID).api_hash(HASH)
+    ///     .proxy("proxy.example.com", 443, "dd1234abcdef...")
+    ///     .connect().await?;
+    /// ```
+    pub fn proxy(self, host: impl Into<String>, port: u16, secret: &str) -> Self {
+        let host = host.into();
+        let url = format!("https://t.me/proxy?server={host}&port={port}&secret={secret}");
+        self.proxy_link(&url)
+    }
+
+    /// Route all connections through an MTProxy from a pre-built [`MtProxyConfig`].
     ///
     /// The proxy `transport` is set automatically from the secret prefix;
     /// you do not need to also call `.transport()`.
@@ -207,6 +258,7 @@ impl ClientBuilder {
         }
         let cfg = crate::proxy::parse_proxy_link(url)
             .unwrap_or_else(|| panic!("invalid MTProxy link: {url:?}"));
+        self.transport = cfg.transport.clone();
         self.mtproxy = Some(cfg);
         self
     }
@@ -217,7 +269,22 @@ impl ClientBuilder {
         self
     }
 
-    /// Choose the MTProto transport framing (default: [`TransportKind::Full`]).
+    /// Choose the MTProto transport framing.
+    ///
+    /// **Default: [`TransportKind::Full`]** - recommended for most users.
+    /// Full transport adds seqno + CRC32 integrity on every frame and works
+    /// on all standard Telegram DCs without any special handshake.
+    ///
+    /// Other options:
+    /// - [`TransportKind::Abridged`] - lightest overhead, no integrity check
+    /// - [`TransportKind::Intermediate`] - 4-byte length prefix, no CRC
+    /// - [`TransportKind::Obfuscated`] - AES-256-CTR, bypasses basic DPI
+    /// - [`TransportKind::PaddedIntermediate`] - required for `0xDD` MTProxy secrets
+    /// - [`TransportKind::FakeTls`] - most DPI-resistant, required for `0xEE` MTProxy secrets
+    ///
+    /// **Note:** if you also call `.mtproxy()`, `.proxy()`, or `.proxy_link()`,
+    /// the transport is forced to whatever the proxy secret requires - this call
+    /// is ignored for MTProxy connections.
     pub fn transport(mut self, kind: TransportKind) -> Self {
         self.transport = kind;
         self
@@ -420,6 +487,14 @@ impl ClientBuilder {
         if self.api_hash.is_empty() {
             return Err(BuilderError::MissingApiHash);
         }
+        // Enforce transport consistency: mtproxy always dictates its own transport
+        // regardless of what the user may have called `.transport()` with.
+        // For socks5-only, Full is the correct default (no obfuscation layer needed).
+        let transport = if let Some(ref proxy) = self.mtproxy {
+            proxy.transport.clone()
+        } else {
+            self.transport
+        };
         Ok(Config {
             api_id: self.api_id,
             api_hash: self.api_hash,
@@ -429,7 +504,7 @@ impl ClientBuilder {
             socks5: self.socks5,
             mtproxy: self.mtproxy,
             allow_ipv6: self.allow_ipv6,
-            transport: self.transport,
+            transport,
             session_backend: self.session_backend,
             catch_up: self.catch_up,
             device_model: self.device_model,
