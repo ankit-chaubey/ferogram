@@ -5117,13 +5117,17 @@ impl Client {
                     }
                     // Save the newly obtained foreign-DC auth key so the NEXT
                     // transfer connection (and open_worker_conn) can skip DH.
+                    //
+                    // `ConnSlot` no longer owns a lockable `DcConnection` (the
+                    // pipelined sender task does); `DcPool::collect_keys` is
+                    // the pool's own sanctioned accessor for the auth key /
+                    // salt / time offset snapshot taken when the slot was
+                    // spawned, so we reuse it here for this single DC instead
+                    // of reaching into private `ConnSlot` fields.
                     {
                         {
                             let pool = self.inner.transfer_pool.lock().await;
-                            if let Some(slots) = pool.conns.get(&target_dc)
-                                && let Some(slot) = slots.first()
-                                && let Ok(conn) = slot.conn.try_lock()
-                            {
+                            if pool.has_connection(target_dc) {
                                 let mut opts: tokio::sync::MutexGuard<
                                     '_,
                                     std::collections::HashMap<i32, DcEntry>,
@@ -5138,9 +5142,9 @@ impl Client {
                                         flags: crate::session::DcFlags::NONE,
                                     }
                                 });
-                                entry.auth_key = Some(conn.auth_key_bytes());
-                                entry.first_salt = conn.first_salt();
-                                entry.time_offset = conn.time_offset();
+                                let mut entries = [entry.clone()];
+                                pool.collect_keys(&mut entries);
+                                *entry = entries[0].clone();
                             }
                         }
                     }
@@ -5163,23 +5167,19 @@ impl Client {
             .await
             .invoke_on_dc(target_dc, &dc_entries, req)
             .await;
-        // Evict dead connections on IO error or fatal RPC errors.
-        match &result {
-            Err(InvocationError::Io(_)) => {
-                tracing::debug!(
-                    "[ferogram] Transfer DC{target_dc} IO error  - evicting broken connection from pool"
-                );
-                self.inner.transfer_pool.lock().await.evict(target_dc);
-            }
-            Err(InvocationError::Rpc(rpc))
-                if matches!(
-                    rpc.name.as_str(),
-                    "AUTH_KEY_UNREGISTERED"
-                        | "SESSION_EXPIRED"
-                        | "AUTH_KEY_INVALID"
-                        | "AUTH_KEY_PERM_EMPTY"
-                ) =>
-            {
+        // Evict on fatal auth errors. Connection-death eviction (the old
+        // Io(_) branch here) is now handled inside DcPool::invoke_on_dc
+        // itself: connection failures surface as InvocationError::Deserialize
+        // from the sender task, not Io, since fail_all has already fanned
+        // the original error out to every caller waiting on that connection.
+        if let Err(InvocationError::Rpc(rpc)) = &result
+            && matches!(
+                rpc.name.as_str(),
+                "AUTH_KEY_UNREGISTERED"
+                    | "SESSION_EXPIRED"
+                    | "AUTH_KEY_INVALID"
+                    | "AUTH_KEY_PERM_EMPTY"
+            ) {
                 tracing::warn!(
                     "[ferogram] Transfer DC{target_dc} auth error ({})  - evicting and clearing cached key",
                     rpc.name
@@ -5191,8 +5191,6 @@ impl Client {
                     e.auth_key = None;
                 }
             }
-            _ => {}
-        }
         result
     }
 
@@ -5858,20 +5856,19 @@ impl Client {
             .values()
             .cloned()
             .collect();
-        let result = self
-            .inner
+        // DcPool::invoke_on_dc evicts the broken slot and retries on a fresh
+        // connection internally when the worker's sender task dies, so no
+        // extra eviction is needed here. Connection failures surface as
+        // InvocationError::Deserialize from the sender task (fail_all has no
+        // way to preserve the original Io/etc. kind once it has fanned the
+        // error out to every caller waiting on that connection), not as
+        // InvocationError::Io, so don't match on the Io variant here.
+        self.inner
             .dc_pool
             .lock()
             .await
             .invoke_on_dc(dc_id, &dc_entries, req)
-            .await;
-        if matches!(result, Err(InvocationError::Io(_))) {
-            tracing::debug!(
-                "[ferogram] invoke_on_dc: DC{dc_id} IO error - evicting broken connection"
-            );
-            self.inner.dc_pool.lock().await.evict(dc_id);
-        }
-        result
+            .await
     }
 
     pub async fn answer_precheckout_query(

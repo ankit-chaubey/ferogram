@@ -362,6 +362,19 @@ impl DcConnection {
         self.enc.time_offset
     }
 
+    /// Break the connection into its raw parts so the caller can hand them to
+    /// the pipelined [`crate::sender_task::spawn_sender_task`] instead of using
+    /// this struct's blocking [`rpc_call`](Self::rpc_call).
+    ///
+    /// `DcPool` uses this once a connection has finished its setup (DH, PFS
+    /// bind, initConnection) as a plain `DcConnection`: the pool graduates it
+    /// into a background sender task so every later request on the pool's
+    /// `invoke_on_dc` path pipelines instead of blocking the connection for
+    /// each round trip.
+    pub(crate) fn into_parts(self) -> (TcpStream, FrameKind, EncryptedSession) {
+        (self.stream, self.frame_kind, self.enc)
+    }
+
     #[tracing::instrument(skip(self, req), fields(method = std::any::type_name::<R>()))]
     pub async fn rpc_call<R: RemoteCall>(&mut self, req: &R) -> Result<Vec<u8>, InvocationError> {
         let _t0 = std::time::Instant::now();
