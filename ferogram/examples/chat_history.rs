@@ -81,7 +81,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // This single call is what no Bot API wrapper can replicate.
     // It reads real message history directly over MTProto.
-    let messages = client.get_message_history(PEER, LIMIT, 0).await?;
+    let messages = client.get_message_history(PEER, LIMIT, 0, 0).await?;
 
     if messages.is_empty() {
         println!("(no messages)");

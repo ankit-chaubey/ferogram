@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- `add_offset` parameter on `Client::get_message_history`, `Client::get_history_range`, and `Client::get_replies`. Lets you skip a fixed number of messages past `offset_id` (which can stay 0), so simple limit-based pagination ("page 1, page 2, page 3...") no longer requires resolving an exact offset message ID for each page.
+
+### Changed
+
+- `Client::get_message_history`, `Client::get_history_range`, and `Client::get_replies` now take an extra `add_offset: i32` argument. Existing callers should pass `0` to keep prior behavior.
+
+---
+
 ## [0.6.2] - 2026-06-14
 
 Transport and architecture stabilization release.

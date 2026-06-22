@@ -3805,11 +3805,23 @@ impl Client {
         Ok((result, count))
     }
 
+    /// Fetch message history for a peer, newest first.
+    ///
+    /// recent message). `add_offset` additionally skips this many messages
+    /// past that anchor, which is what makes simple limit-based pagination
+    /// possible without having to track the exact last-seen message ID
+    /// yourself: e.g. `get_message_history(peer, 20, 0, 0)` for the first
+    /// page, then `get_message_history(peer, 20, 0, 20)` for the second,
+    /// `add_offset: 40` for the third, and so on. The server still has to
+    /// walk past the skipped messages internally, so this does not scale
+    /// well to very deep pagination - prefer [`Client::iter_messages`] for
+    /// walking large histories.
     pub async fn get_message_history(
         &self,
         peer: impl Into<PeerRef>,
         limit: i32,
         offset_id: i32,
+        add_offset: i32,
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
@@ -3817,7 +3829,7 @@ impl Client {
             peer: input_peer,
             offset_id,
             offset_date: 0,
-            add_offset: 0,
+            add_offset,
             limit,
             max_id: 0,
             min_id: 0,
@@ -4031,12 +4043,17 @@ impl Client {
         self.send_chat_action_ex(peer, action, None).await
     }
 
+    /// Same as [`Client::get_message_history`], plus `add_offset` for
+    /// limit-based pagination: skip this many messages past `offset_id`
+    /// (which can stay 0) instead of having to resolve an exact offset
+    /// message ID for each page.
     pub async fn get_history_range(
         &self,
         peer: impl Into<PeerRef>,
 
         limit: i32,
         offset_id: i32,
+        add_offset: i32,
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
@@ -4044,7 +4061,7 @@ impl Client {
             peer: input_peer,
             offset_id,
             offset_date: 0,
-            add_offset: 0,
+            add_offset,
             limit,
             max_id: 0,
             min_id: 0,
@@ -7864,12 +7881,16 @@ impl Client {
         )
     }
 
+    /// Fetch replies in a discussion thread. Same `add_offset` pagination
+    /// trick as [`Client::get_message_history`]: skip this many messages
+    /// past `offset_id` (which can stay 0) to jump straight to a given page.
     pub async fn get_replies(
         &self,
         peer: impl Into<PeerRef>,
         msg_id: i32,
         limit: i32,
         offset_id: i32,
+        add_offset: i32,
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
@@ -7878,7 +7899,7 @@ impl Client {
             msg_id,
             offset_id,
             offset_date: 0,
-            add_offset: 0,
+            add_offset,
             limit,
             max_id: 0,
             min_id: 0,
