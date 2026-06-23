@@ -28,7 +28,6 @@ use crate::{
 use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable, RemoteCall};
 
-use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -1884,6 +1883,16 @@ impl Client {
                             perm_auth_key,
                         })
                         .await;
+                    tokio::task::yield_now().await;
+
+                    // The new stream is authenticated but not yet registered with
+                    // Telegram's app servers. Without this, the first RPC on it
+                    // comes back CONNECTION_NOT_INITED.
+                    if let Err(e) = self.init_connection().await {
+                        tracing::warn!(
+                            "[ferogram] reconnect: init_connection after reconnect failed: {e}"
+                        );
+                    }
                     return;
                 }
                 Err(e) => {
@@ -2641,8 +2650,11 @@ impl Client {
         }
     }
 
-    /// Route one bare `tl::enums::Update` through the pts/qts gap-checker,
-    /// then emit surviving updates to `update_tx`.
+    /// Send a message to a peer.
+    ///
+    /// If `msg` carries attached media (set via [`InputMessage::copy_media`]),
+    /// this dispatches through `messages.SendMedia` instead of `messages.SendMessage`,
+    /// since the latter has no media field and would silently drop it.
     pub async fn send_message(
         &self,
         peer: impl Into<PeerRef>,
@@ -2652,31 +2664,60 @@ impl Client {
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let msg = msg.into();
         let entities = self.resolve_outgoing_entities(msg.entities.clone()).await;
-        let req = tl::functions::messages::SendMessage {
-            no_webpage: msg.no_webpage,
-            silent: msg.silent,
-            background: msg.background,
-            clear_draft: msg.clear_draft,
-            noforwards: false,
-            update_stickersets_order: false,
-            invert_media: msg.invert_media,
-            allow_paid_floodskip: false,
-            peer: input_peer,
-            reply_to: msg.reply_header(),
-            message: msg.text.clone(),
-            random_id: random_i64(),
-            reply_markup: msg.reply_markup.clone(),
-            entities,
-            schedule_date: msg.schedule_date,
-            schedule_repeat_period: None,
-            send_as: None,
-            quick_reply_shortcut: None,
-            effect: None,
-            allow_paid_stars: None,
-            suggested_post: None,
-            rich_message: None,
+
+        let body: Vec<u8> = if let Some(media) = msg.media.clone() {
+            let req = tl::functions::messages::SendMedia {
+                silent: msg.silent,
+                background: msg.background,
+                clear_draft: msg.clear_draft,
+                noforwards: false,
+                update_stickersets_order: false,
+                invert_media: msg.invert_media,
+                allow_paid_floodskip: false,
+                peer: input_peer,
+                reply_to: msg.reply_header(),
+                media,
+                message: msg.text.clone(),
+                random_id: random_i64(),
+                reply_markup: msg.reply_markup.clone(),
+                entities,
+                schedule_date: msg.schedule_date,
+                schedule_repeat_period: None,
+                send_as: None,
+                quick_reply_shortcut: None,
+                effect: None,
+                allow_paid_stars: None,
+                suggested_post: None,
+            };
+            self.rpc_call_raw(&req).await?
+        } else {
+            let req = tl::functions::messages::SendMessage {
+                no_webpage: msg.no_webpage,
+                silent: msg.silent,
+                background: msg.background,
+                clear_draft: msg.clear_draft,
+                noforwards: false,
+                update_stickersets_order: false,
+                invert_media: msg.invert_media,
+                allow_paid_floodskip: false,
+                peer: input_peer,
+                reply_to: msg.reply_header(),
+                message: msg.text.clone(),
+                random_id: random_i64(),
+                reply_markup: msg.reply_markup.clone(),
+                entities,
+                schedule_date: msg.schedule_date,
+                schedule_repeat_period: None,
+                send_as: None,
+                quick_reply_shortcut: None,
+                effect: None,
+                allow_paid_stars: None,
+                suggested_post: None,
+                rich_message: None,
+            };
+            self.rpc_call_raw(&req).await?
         };
-        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
+
         Ok(self.parse_send_response(&body, &msg, &peer).await)
     }
 

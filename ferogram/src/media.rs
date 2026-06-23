@@ -1495,6 +1495,10 @@ impl Client {
         let media = media.into();
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        // Same conversion send_message does: a bare MentionName entity has no
+        // access_hash, so Telegram drops it. Resolve it to InputMessageEntityMentionName
+        // first, or markdown/html user-mention links render as plain text.
+        let entities = self.resolve_outgoing_entities(msg.entities.clone()).await;
         let req = tl::functions::messages::SendMedia {
             silent: msg.silent,
             background: msg.background,
@@ -1509,7 +1513,7 @@ impl Client {
             message: msg.text.clone(),
             random_id: crate::random_i64_pub(),
             reply_markup: msg.reply_markup.clone(),
-            entities: msg.entities.clone(),
+            entities,
             schedule_date: msg.schedule_date,
             schedule_repeat_period: None,
             send_as: None,
@@ -1566,21 +1570,25 @@ impl Client {
             })
         });
 
-        let multi: Vec<tl::enums::InputSingleMedia> = items
-            .into_iter()
-            .map(|item| {
-                tl::enums::InputSingleMedia::InputSingleMedia(tl::types::InputSingleMedia {
+        // Same conversion send_message/send_file do: a bare MentionName entity has
+        // no access_hash, so Telegram drops it silently. Resolve per item since
+        // each item in an album can carry its own caption and entities.
+        let mut multi: Vec<tl::enums::InputSingleMedia> = Vec::with_capacity(items.len());
+        for item in items {
+            let entities = if item.entities.is_empty() {
+                None
+            } else {
+                self.resolve_outgoing_entities(Some(item.entities)).await
+            };
+            multi.push(tl::enums::InputSingleMedia::InputSingleMedia(
+                tl::types::InputSingleMedia {
                     media: item.media,
                     random_id: crate::random_i64_pub(),
                     message: item.caption,
-                    entities: if item.entities.is_empty() {
-                        None
-                    } else {
-                        Some(item.entities)
-                    },
-                })
-            })
-            .collect();
+                    entities,
+                },
+            ));
+        }
 
         let req = tl::functions::messages::SendMultiMedia {
             silent: false,
