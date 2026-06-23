@@ -1831,16 +1831,24 @@ impl Client {
 
     /// Reconnect after a connection error from the sender task.
     /// Uses exponential backoff, then sends the new stream via reconnect_tx.
+    /// Tries connect_with_key first (reusing the existing auth key); falls back
+    /// to a fresh DH only if the key is missing or the server rejects it.
     async fn handle_reconnect_after_error(&self) {
         let mut delay_ms = RECONNECT_BASE_MS;
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
 
-            let (addr, dc_id) = {
+            let (addr, dc_id, saved_key, first_salt, time_offset) = {
                 let home = *self.inner.home_dc_id.lock().await;
                 let dc_opts = self.inner.dc_options.lock().await;
                 match dc_opts.get(&home) {
-                    Some(e) => (e.addr.clone(), home as i16),
+                    Some(e) => (
+                        e.addr.clone(),
+                        home as i16,
+                        e.auth_key,
+                        e.first_salt,
+                        e.time_offset,
+                    ),
                     None => {
                         tracing::warn!("[ferogram] reconnect: no DC entry for home DC {home}");
                         delay_ms = (delay_ms * 2).min(RECONNECT_MAX_SECS * 1000);
@@ -1852,22 +1860,66 @@ impl Client {
             let socks5 = self.inner.socks5.as_ref().cloned();
             let mtproxy = self.inner.mtproxy.as_ref().cloned();
             let transport = self.inner.active_transport.lock().unwrap().clone();
+            let pfs = self.inner.pfs_enabled;
 
-            match Connection::connect_raw(
-                &addr,
-                socks5.as_ref(),
-                mtproxy.as_ref(),
-                &transport,
-                dc_id,
-            )
-            .await
-            {
+            // Try existing key first; only do full DH if key is absent or rejected.
+            let conn_result = if let Some(auth_key) = saved_key {
+                tracing::debug!("[ferogram] reconnect: reusing existing auth key for DC{dc_id}");
+                match Connection::connect_with_key(
+                    &addr,
+                    auth_key,
+                    first_salt,
+                    time_offset,
+                    socks5.as_ref(),
+                    mtproxy.as_ref(),
+                    &transport,
+                    dc_id,
+                    pfs,
+                )
+                .await
+                {
+                    Ok(c) => Ok(c),
+                    Err(e @ ferogram_connect::ConnectError::Io(_)) => {
+                        tracing::warn!(
+                            "[ferogram] reconnect: connect_with_key network error ({e}), will retry"
+                        );
+                        Err(e)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "[ferogram] reconnect: connect_with_key key rejected ({e}), fresh DH"
+                        );
+                        {
+                            let mut opts = self.inner.dc_options.lock().await;
+                            if let Some(entry) = opts.get_mut(&(dc_id as i32)) {
+                                entry.auth_key = None;
+                                entry.first_salt = 0;
+                                entry.time_offset = 0;
+                            }
+                        }
+                        Connection::connect_raw(
+                            &addr,
+                            socks5.as_ref(),
+                            mtproxy.as_ref(),
+                            &transport,
+                            dc_id,
+                        )
+                        .await
+                    }
+                }
+            } else {
+                tracing::debug!("[ferogram] reconnect: no saved key, fresh DH for DC{dc_id}");
+                Connection::connect_raw(&addr, socks5.as_ref(), mtproxy.as_ref(), &transport, dc_id)
+                    .await
+            };
+
+            match conn_result {
                 Ok(conn) => {
-                    tracing::debug!("[ferogram] reconnect: TCP+DH OK");
+                    tracing::info!("[ferogram] reconnect: TCP OK");
                     {
                         let mut opts = self.inner.dc_options.lock().await;
                         if let Some(entry) = opts.get_mut(&(dc_id as i32)) {
-                            entry.auth_key = Some(conn.enc.auth_key_bytes());
+                            entry.auth_key = Some(conn.auth_key_bytes());
                             entry.first_salt = conn.enc.salt;
                             entry.time_offset = conn.enc.time_offset;
                         }
@@ -1885,9 +1937,6 @@ impl Client {
                         .await;
                     tokio::task::yield_now().await;
 
-                    // The new stream is authenticated but not yet registered with
-                    // Telegram's app servers. Without this, the first RPC on it
-                    // comes back CONNECTION_NOT_INITED.
                     if let Err(e) = self.init_connection().await {
                         tracing::warn!(
                             "[ferogram] reconnect: init_connection after reconnect failed: {e}"

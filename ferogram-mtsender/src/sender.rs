@@ -180,7 +180,7 @@ impl DcConnection {
             tracing::debug!("[dc_pool] PFS: temp DH bind for DC{dc_id}");
             match Self::do_pool_pfs_bind(&mut stream, &mut frame_kind, &auth_key, dc_id).await {
                 Ok(temp_enc) => {
-                    tracing::info!("[dc_pool] PFS bind complete DC{dc_id}");
+                    tracing::debug!("[dc_pool] PFS bind complete DC{dc_id}");
                     return Ok(Self {
                         stream,
                         frame_kind,

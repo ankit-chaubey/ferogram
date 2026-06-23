@@ -412,7 +412,7 @@ impl Connection {
                 tracing::debug!("[ferogram] PFS: temp DH bind for DC{dc_id}");
                 match Self::do_pfs_bind(&mut stream, &frame_kind, &auth_key, dc_id).await {
                     Ok(temp_enc) => {
-                        tracing::info!("[ferogram] PFS bind complete DC{dc_id}");
+                        tracing::debug!("[ferogram] PFS bind complete DC{dc_id}");
                         return Ok(Self {
                             stream,
                             enc: temp_enc,

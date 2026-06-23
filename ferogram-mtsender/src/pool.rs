@@ -175,7 +175,7 @@ impl DcPool {
 
         // Ensure at least one slot exists.
         if !self.conns.contains_key(&dc_id) || self.conns[&dc_id].is_empty() {
-            tracing::info!("[dc_pool] auto-connecting DC{dc_id} ({addr})");
+            tracing::debug!("[dc_pool] auto-connecting DC{dc_id} ({addr})");
             let conn = if let Some((key, salt, offset)) = auth_key {
                 DcConnection::connect_with_key(
                     &addr,

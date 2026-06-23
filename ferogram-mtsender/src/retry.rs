@@ -119,7 +119,9 @@ impl RetryPolicy for AutoSleep {
                 let secs = rpc.value.unwrap_or(0) as u64;
                 if secs <= self.threshold.as_secs() {
                     let delay = jitter_duration(Duration::from_secs(secs), ctx.fail_count.get(), 2);
-                    tracing::info!("FLOOD_WAIT_{secs}: sleeping {delay:?} before retry");
+                    tracing::debug!(
+                        "[ferogram] FLOOD_WAIT_{secs}: sleeping {delay:?} before retry"
+                    );
                     ControlFlow::Continue(delay)
                 } else {
                     ControlFlow::Break(())
@@ -132,7 +134,9 @@ impl RetryPolicy for AutoSleep {
                 let secs = rpc.value.unwrap_or(0) as u64;
                 if secs <= self.threshold.as_secs() {
                     let delay = jitter_duration(Duration::from_secs(secs), ctx.fail_count.get(), 2);
-                    tracing::info!("SLOWMODE_WAIT_{secs}: sleeping {delay:?} before retry");
+                    tracing::debug!(
+                        "[ferogram] SLOWMODE_WAIT_{secs}: sleeping {delay:?} before retry"
+                    );
                     ControlFlow::Continue(delay)
                 } else {
                     ControlFlow::Break(())
@@ -142,8 +146,8 @@ impl RetryPolicy for AutoSleep {
             // Transient I/O errors: back off briefly and retry once.
             InvocationError::Io(_) if ctx.fail_count.get() <= 1 => {
                 if let Some(d) = self.io_errors_as_flood_of {
-                    tracing::info!(
-                        "I/O error (attempt {}): sleeping {d:?} before retry",
+                    tracing::debug!(
+                        "[ferogram] I/O error (attempt {}): sleeping {d:?} before retry",
                         ctx.fail_count.get()
                     );
                     ControlFlow::Continue(d)

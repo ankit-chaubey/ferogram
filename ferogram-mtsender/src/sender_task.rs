@@ -133,7 +133,7 @@ async fn sender_loop(
 
             // Reconnect request: swap the stream.
             Some(req) = reconnect_rx.recv() => {
-                tracing::debug!("[sender_task] reconnect: swapping stream");
+                tracing::info!("[sender_task] reconnect: swapping stream");
                 sender.set_stream(req.stream, req.enc, req.frame_kind, req.perm_auth_key);
                 let _ = frame_tx
                     .send(FrameEvent::Connected {
@@ -158,7 +158,7 @@ async fn sender_loop(
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("[sender_task] connection error: {e:?}");
+                        tracing::warn!("[sender_task] connection error: {e}");
                         // Fail all pending requests immediately.
                         sender.fail_all(&e);
                         // Notify the client; it will reconnect and send ReconnectRequest.
@@ -168,7 +168,7 @@ async fn sender_loop(
                         // Wait for a reconnect before driving step() again.
                         match reconnect_rx.recv().await {
                             Some(req) => {
-                                tracing::debug!("[sender_task] reconnect received after error");
+                                tracing::info!("[sender_task] reconnect received after error");
                                 sender.set_stream(
                                     req.stream,
                                     req.enc,

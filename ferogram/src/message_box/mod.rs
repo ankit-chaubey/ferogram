@@ -510,7 +510,7 @@ impl MessageBoxes {
                         }
                         Ordering::Less => {
                             // Gap: buffer and wait.
-                            tracing::info!(
+                            tracing::debug!(
                                 "[ferogram/msgbox] gap for {:?} \
                                  (local={}, count={}, remote={})",
                                 info.key,
