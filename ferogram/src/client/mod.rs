@@ -320,8 +320,8 @@ pub(crate) struct ClientInner {
     rpc_tx: mpsc::Sender<ferogram_mtsender::RpcEnqueue>,
     /// Send a new stream to the sender task after reconnect.
     reconnect_tx: mpsc::Sender<ferogram_mtsender::ReconnectRequest>,
-    /// Send () here to wake the network hint backoff.
-    network_hint_tx: mpsc::Sender<()>,
+    /// Notify all waiters (reconnect loop + frame dispatch) that the network is back.
+    network_hint: std::sync::Arc<tokio::sync::Notify>,
     /// Cancelled to signal graceful shutdown to the reader task.
     #[allow(dead_code)]
     shutdown_token: CancellationToken,
@@ -670,8 +670,8 @@ impl Client {
             perm_auth_key,
         );
 
-        // Channel for external "network restored" hints.
-        let (network_hint_tx, network_hint_rx) = mpsc::channel::<()>(4);
+        // Notify for external "network restored" hints.
+        let network_hint = std::sync::Arc::new(tokio::sync::Notify::new());
 
         // Graceful shutdown token.
         let shutdown_token = CancellationToken::new();
@@ -681,7 +681,7 @@ impl Client {
         let inner = Arc::new(ClientInner {
             rpc_tx: sender_handle.rpc_tx,
             reconnect_tx: sender_handle.reconnect_tx,
-            network_hint_tx,
+            network_hint,
             shutdown_token: shutdown_token.clone(),
             catch_up,
             restart_policy,
@@ -743,9 +743,7 @@ impl Client {
             let client_d = client.clone();
             let shutdown_d = shutdown_token.clone();
             tokio::spawn(async move {
-                client_d
-                    .run_frame_dispatch(frame_rx, network_hint_rx, shutdown_d)
-                    .await;
+                client_d.run_frame_dispatch(frame_rx, shutdown_d).await;
             });
         }
 
@@ -1771,7 +1769,7 @@ impl Client {
     /// silently ignored by the reader task; if it is in a backoff loop it
     /// wakes up and tries again right away.
     pub fn signal_network_restored(&self) {
-        let _ = self.inner.network_hint_tx.try_send(());
+        self.inner.network_hint.notify_one();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1784,7 +1782,6 @@ impl Client {
     async fn run_frame_dispatch(
         &self,
         mut frame_rx: tokio::sync::mpsc::Receiver<ferogram_mtsender::FrameEvent>,
-        mut network_hint_rx: tokio::sync::mpsc::Receiver<()>,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) {
         use ferogram_mtsender::FrameEvent;
@@ -1838,11 +1835,6 @@ impl Client {
                         }
                     }
                 }
-                _ = network_hint_rx.recv() => {
-                    // External hint (e.g. Android network-restored callback).
-                    // The sender task will reconnect on its own; just wake the backoff.
-                    tracing::debug!("[ferogram::client] network change detected; triggering reconnect");
-                }
             }
         }
     }
@@ -1854,7 +1846,15 @@ impl Client {
     async fn handle_reconnect_after_error(&self) {
         let mut delay_ms = RECONNECT_BASE_MS;
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            // Wait for backoff to expire OR a network-restored hint from the caller.
+            // signal_network_restored() fires notify_one() which cancels the sleep
+            // immediately so we try the next connect attempt right away.
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(delay_ms)) => {}
+                _ = self.inner.network_hint.notified() => {
+                    tracing::debug!("[ferogram::client] network hint received; skipping backoff");
+                }
+            }
 
             let (addr, dc_id, saved_key, first_salt, time_offset) = {
                 let home = *self.inner.home_dc_id.lock().await;
@@ -1972,7 +1972,21 @@ impl Client {
                 }
                 Err(e) => {
                     tracing::warn!("[ferogram::client] reconnect attempt failed: {e}");
-                    delay_ms = (delay_ms * 2).min(RECONNECT_MAX_SECS * 1000);
+                    // ENETUNREACHABLE (101) and ECONNABORTED (103) are phone-side
+                    // network states (no route, switching towers, airplane mode).
+                    // Exponential backoff is wrong here: the network can come back at
+                    // any moment and we want to reconnect immediately when it does.
+                    // Use a flat short retry instead of doubling the delay.
+                    let is_phone_network_error = matches!(
+                        &e,
+                        ferogram_connect::ConnectError::Io(io_err)
+                            if matches!(io_err.raw_os_error(), Some(101) | Some(103))
+                    );
+                    if !is_phone_network_error {
+                        delay_ms = (delay_ms * 2).min(RECONNECT_MAX_SECS * 1000);
+                    } else {
+                        delay_ms = RECONNECT_BASE_MS;
+                    }
                 }
             }
         }
@@ -2494,10 +2508,12 @@ impl Client {
                     Err(e) => {
                         tracing::warn!("[ferogram::client] getDifference RPC failed: {e}");
                         self.inner.message_box.lock().await.abort_difference();
-                        // IO/transport error means the connection is dead. Break out
-                        // so the reconnect path can notify diff_notify and start a
-                        // fresh diff task once the connection is back.
-                        if matches!(&e, InvocationError::Io(_)) {
+                        // IO/transport error or 401 auth failure means the connection is
+                        // dead or the session was invalidated. Break out so the reconnect
+                        // path can notify diff_notify and start a fresh diff task once
+                        // the connection (and auth key) is back.
+                        let is_auth_error = matches!(&e, InvocationError::Rpc(r) if r.code == 401);
+                        if matches!(&e, InvocationError::Io(_)) || is_auth_error {
                             break;
                         }
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -2696,9 +2712,11 @@ impl Client {
                             .lock()
                             .await
                             .end_channel_difference(PrematureEndReason::TemporaryServerIssues);
-                        // Same as getDifference: IO error means dead connection; break so
-                        // reconnect can notify diff_notify and retry.
-                        if matches!(&e, InvocationError::Io(_)) {
+                        // Same as getDifference: IO error or 401 auth failure means
+                        // dead connection / invalidated session; break so reconnect can
+                        // notify diff_notify and retry with a fresh auth key.
+                        let is_auth_error = matches!(&e, InvocationError::Rpc(r) if r.code == 401);
+                        if matches!(&e, InvocationError::Io(_)) || is_auth_error {
                             break;
                         }
                     }
