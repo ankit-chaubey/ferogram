@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d270a347.js";
+            window.path_to_searchindex_js = "../searchindex-6c28794d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-fccdd209.js"></script>
@@ -192,7 +192,7 @@ build.rs           (reads api.tl, invokes ferogram-tl-gen)
     │
     ▼
 $OUT_DIR/
-  generated_common.rs     ← pub const LAYER: i32 = 225;
+  generated_common.rs     ← pub const LAYER: i32 = 227;
   generated_types.rs      ← pub mod types { ... }
   generated_enums.rs      ← pub mod enums { ... }
   generated_functions.rs  ← pub mod functions { ... }
@@ -202,10 +202,10 @@ $OUT_DIR/
 <pre><code class="language-bash"># Get the new schema from Telegram's official sources
 # (TDLib repository, core.telegram.org, or unofficial mirrors)
 
-cp new-layer-225.tl ferogram-tl-types/tl/api.tl
+cp new-layer-227.tl ferogram-tl-types/tl/api.tl
 </code></pre>
 <p>Make sure the first line of the file is:</p>
-<pre><code>// LAYER 225
+<pre><code>// LAYER 227
 </code></pre>
 <h2 id="step-2-build"><a class="header" href="#step-2-build">Step 2: Build</a></h2>
 <pre><code class="language-bash">cargo build 2&gt;&amp;1 | head -40
@@ -214,7 +214,7 @@ cp new-layer-225.tl ferogram-tl-types/tl/api.tl
 <ul>
 <li>Parses the new schema</li>
 <li>Generates updated Rust source</li>
-<li>Patches <code>pub const LAYER: i32 = 225;</code> into <code>generated_common.rs</code></li>
+<li>Patches <code>pub const LAYER: i32 = 227;</code> into <code>generated_common.rs</code></li>
 </ul>
 <p>If there are no breaking type changes in <code>ferogram</code>, it compiles cleanly.</p>
 <h2 id="step-3-fix-compile-errors"><a class="header" href="#step-3-fix-compile-errors">Step 3: Fix compile errors</a></h2>

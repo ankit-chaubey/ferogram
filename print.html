@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d270a347.js";
+            window.path_to_searchindex_js = "searchindex-6c28794d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-fccdd209.js"></script>
@@ -182,7 +182,7 @@
                         <h1 id="ferogram"><a class="header" href="#ferogram">ferogram</a></h1>
 <p><a href="https://crates.io/crates/ferogram"><img src="https://img.shields.io/crates/v/ferogram?color=fc8d62&amp;label=ferogram&amp;style=flat-square" alt="Crates.io"></a>
 <a href="https://docs.rs/ferogram"><img src="https://img.shields.io/docsrs/ferogram?style=flat-square&amp;color=22c55e" alt="docs.rs"></a>
-<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-225-8b5cf6?style=flat-square" alt="TL Layer"></a>
+<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-227-8b5cf6?style=flat-square" alt="TL Layer"></a>
 <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License"></a></p>
 <p>Hey, glad you’re here.</p>
 <p>ferogram is an async Rust library for Telegram’s MTProto protocol, built by <a href="https://github.com/ankit-chaubey">Ankit Chaubey</a>. It talks to Telegram directly, no Bot API proxy in between, and it works for both bots and user accounts from the same API.</p>
@@ -221,7 +221,7 @@ tokio    = { version = "1", features = ["full"] }
 <tr><td><a href="https://docs.rs/ferogram-connect"><code>ferogram-connect</code></a></td><td>Raw TCP, MTProto framing, obfuscation, SOCKS5, MTProxy, gzip.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-mtproto"><code>ferogram-mtproto</code></a></td><td>MTProto 2.0 session, DH key exchange, message framing, PFS key binding.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-crypto"><code>ferogram-crypto</code></a></td><td>AES-IGE, RSA, SHA, Diffie-Hellman, PQ factorization, auth key derivation.</td></tr>
-<tr><td><a href="https://docs.rs/ferogram-tl-types"><code>ferogram-tl-types</code></a></td><td>Auto-generated TL types, functions, and enums for Layer 225.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-tl-types"><code>ferogram-tl-types</code></a></td><td>Auto-generated TL types, functions, and enums for Layer 227.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-tl-gen"><code>ferogram-tl-gen</code></a></td><td>Build-time code generator from TL AST to Rust source.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-tl-parser"><code>ferogram-tl-parser</code></a></td><td>Parses <code>.tl</code> schema text into a Definition AST.</td></tr>
 </tbody>
@@ -920,7 +920,7 @@ ferogram = { version = "0.6.0", features = ["html5ever"] }
 
 fn main() {
     println!("Using Telegram API Layer {}", LAYER);
-    // → Using Telegram API Layer 225
+    // → Using Telegram API Layer 227
 }</code></pre>
 <hr>
 <h2 id="platform-notes"><a class="header" href="#platform-notes">Platform notes</a></h2>
@@ -5212,7 +5212,7 @@ Resolution is cache-first; an RPC is only made on a cache miss.
 </div>
 
 <div class="api-card-body">
-Call any Layer 225 API method directly. See <a href="#raw-api-access">Raw API Access</a> for the full guide.
+Call any Layer 227 API method directly. See <a href="#raw-api-access">Raw API Access</a> for the full guide.
 <pre><code>use ferogram_tl_types::functions;
 let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></pre>
 
@@ -11740,7 +11740,7 @@ build.rs           (reads api.tl, invokes ferogram-tl-gen)
     │
     ▼
 $OUT_DIR/
-  generated_common.rs     ← pub const LAYER: i32 = 225;
+  generated_common.rs     ← pub const LAYER: i32 = 227;
   generated_types.rs      ← pub mod types { ... }
   generated_enums.rs      ← pub mod enums { ... }
   generated_functions.rs  ← pub mod functions { ... }
@@ -11750,10 +11750,10 @@ $OUT_DIR/
 <pre><code class="language-bash"># Get the new schema from Telegram's official sources
 # (TDLib repository, core.telegram.org, or unofficial mirrors)
 
-cp new-layer-225.tl ferogram-tl-types/tl/api.tl
+cp new-layer-227.tl ferogram-tl-types/tl/api.tl
 </code></pre>
 <p>Make sure the first line of the file is:</p>
-<pre><code>// LAYER 225
+<pre><code>// LAYER 227
 </code></pre>
 <h2 id="step-2-build"><a class="header" href="#step-2-build">Step 2: Build</a></h2>
 <pre><code class="language-bash">cargo build 2&gt;&amp;1 | head -40
@@ -11762,7 +11762,7 @@ cp new-layer-225.tl ferogram-tl-types/tl/api.tl
 <ul>
 <li>Parses the new schema</li>
 <li>Generates updated Rust source</li>
-<li>Patches <code>pub const LAYER: i32 = 225;</code> into <code>generated_common.rs</code></li>
+<li>Patches <code>pub const LAYER: i32 = 227;</code> into <code>generated_common.rs</code></li>
 </ul>
 <p>If there are no breaking type changes in <code>ferogram</code>, it compiles cleanly.</p>
 <h2 id="step-3-fix-compile-errors"><a class="header" href="#step-3-fix-compile-errors">Step 3: Fix compile errors</a></h2>
@@ -12350,7 +12350,7 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <p><strong>All generated Telegram API types.</strong> Auto-regenerated at <code>cargo build</code> from <code>tl/api.tl</code>.</p>
 <h3 id="what-it-provides-1"><a class="header" href="#what-it-provides-1">What it provides</a></h3>
 <ul>
-<li><code>LAYER: i32</code>: the current layer number (225)</li>
+<li><code>LAYER: i32</code> (currently 227)</li>
 <li><code>types::*</code>: 1,200+ concrete structs (<code>types::Message</code>, <code>types::User</code>, etc.)</li>
 <li><code>enums::*</code>: 400+ boxed type enums (<code>enums::Message</code>, <code>enums::Peer</code>, etc.)</li>
 <li><code>functions::*</code>: 500+ RPC function structs implementing <code>RemoteCall</code></li>
