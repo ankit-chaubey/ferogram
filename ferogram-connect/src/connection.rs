@@ -16,7 +16,6 @@ use std::time::Duration;
 use socket2::TcpKeepalive;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 use ferogram_mtproto::{EncryptedSession, Session, authentication as auth};
 use ferogram_tl_types as tl;
@@ -64,7 +63,6 @@ pub enum FrameKind {
     },
 }
 
-/// Write half of a split connection.  Held under `Mutex` in `ClientInner`.
 /// A single server-provided salt with its validity window.
 ///
 #[derive(Clone, Debug)]
@@ -81,118 +79,6 @@ pub struct FutureSalt {
 /// Delay (seconds) before a salt is considered usable after its `valid_since`.
 ///
 pub const SALT_USE_DELAY: i32 = 60;
-
-/// Owns the EncryptedSession (for packing) and the pending-RPC map.
-pub struct ConnectionWriter {
-    pub enc: EncryptedSession,
-    pub frame_kind: FrameKind,
-    /// PFS: permanent auth key to save in session. None when PFS is off.
-    pub perm_auth_key: Option<[u8; 256]>,
-    /// msg_ids of received content messages waiting to be acked.
-    /// Drained into a MsgsAck on every outgoing frame (bundled into container
-    /// when sending an RPC, or sent standalone after route_frame).
-    pub pending_ack: Vec<i64>,
-    /// raw TL body bytes of every sent request, keyed by msg_id.
-    /// On bad_msg_notification the matching body is re-encrypted with a fresh
-    /// msg_id and re-sent transparently.
-    pub sent_bodies: std::collections::HashMap<i64, Vec<u8>>,
-    /// maps container_msg_id -> inner request msg_id.
-    /// When bad_msg_notification / bad_server_salt arrives for a container
-    /// rather than the individual inner message, we look here to find the
-    /// inner request to retry.
-    ///
-    pub container_map: std::collections::HashMap<i64, i64>,
-    /// Stale-msg resends queued under the writer lock and drained after release
-    /// to avoid holding the lock across TCP I/O.
-    pub new_session_resend_queue: Vec<(i64, i64, Vec<u8>)>,
-    /// -style future salt pool.
-    /// Sorted by valid_since ascending so the newest salt is LAST
-    /// (.valid_since), which puts
-    /// the highest valid_since at the end in ascending-key order).
-    pub salts: Vec<FutureSalt>,
-    /// Server-time anchor received with the last GetFutureSalts response.
-    /// (server_now, local_instant) lets us approximate server time at any
-    /// moment so we can check whether a salt's valid_since window has opened.
-    ///
-    pub start_salt_time: Option<(i32, std::time::Instant)>,
-}
-
-impl ConnectionWriter {
-    pub fn auth_key_bytes(&self) -> [u8; 256] {
-        self.perm_auth_key
-            .unwrap_or_else(|| self.enc.auth_key_bytes())
-    }
-    pub fn first_salt(&self) -> i64 {
-        self.enc.salt
-    }
-    pub fn time_offset(&self) -> i32 {
-        self.enc.time_offset
-    }
-
-    /// Proactively advance the active salt and prune expired ones.
-    ///
-    /// Called at the top of every RPC send.
-    /// Salts are sorted ascending by `valid_since` (oldest=index 0, newest=last).
-    ///
-    /// Prunes expired salts, then advances `enc.salt` to the freshest usable one.
-    ///
-    /// Returns `true` when the pool has shrunk to a single entry: caller should
-    /// fire a proactive `GetFutureSalts` via `try_request_salts()`.
-    pub fn advance_salt_if_needed(&mut self) -> bool {
-        let Some((server_now, start_instant)) = self.start_salt_time else {
-            return self.salts.len() <= 1;
-        };
-
-        // Approximate current server time.
-        let now = server_now + start_instant.elapsed().as_secs() as i32;
-
-        // Prune expired salts.
-        while self.salts.len() > 1 && (now as u32) > self.salts[0].valid_until {
-            let expired = self.salts.remove(0);
-            tracing::debug!(
-                "[ferogram] salt {:#x} expired (valid_until={}), pruned",
-                expired.salt,
-                expired.valid_until,
-            );
-        }
-
-        // Advance to the freshest salt whose use-delay has opened AND
-        // which has not yet expired.  The `valid_until > now` guard is the
-        // critical safety: without it we can advance enc.salt to an already-
-        // expired entry from a stale FutureSalts pool, triggering immediate
-        // bad_server_salt rejection and re-entering the fetch loop.
-        if self.salts.len() > 1 {
-            let best = self
-                .salts
-                .iter()
-                .rev()
-                .find(|s| s.valid_since + SALT_USE_DELAY <= now && s.valid_until > (now as u32))
-                .map(|s| s.salt);
-            if let Some(salt) = best
-                && salt != self.enc.salt
-            {
-                tracing::debug!(
-                    "[ferogram] proactive salt cycle: {:#x} -> {:#x}",
-                    self.enc.salt,
-                    salt
-                );
-                self.enc.salt = salt;
-                // Prune salts whose valid_until has passed.
-                self.salts.retain(|s| s.valid_until > (now as u32));
-                if self.salts.is_empty() {
-                    // Safety net: keep a sentinel so we never go saltless.
-                    self.salts.push(FutureSalt {
-                        valid_since: 0,
-                        valid_until: u32::MAX,
-                        salt,
-                    });
-                }
-            }
-        }
-
-        self.salts.len() <= 1
-    }
-}
 
 pub struct Connection {
     pub stream: TcpStream,
@@ -394,7 +280,7 @@ impl Connection {
             TransportKind::Full => "Full",
             TransportKind::FakeTls { .. } => "FakeTls",
         };
-        tracing::debug!("[ferogram] Connecting to {addr} ({t_label}) DH …");
+        tracing::debug!("[ferogram::connect] starting DH handshake with {addr} via {t_label}");
 
         let addr2 = addr.to_string();
         let socks5_c = socks5.cloned();
@@ -482,7 +368,7 @@ impl Connection {
                     }
                 }
             };
-            tracing::debug!("[ferogram] DH complete ✓");
+            tracing::debug!("[ferogram::connect] DH handshake complete, auth key established");
 
             Ok::<Self, ConnectError>(Self {
                 stream,
@@ -523,10 +409,12 @@ impl Connection {
                 Self::open_stream(&addr2, socks5_c.as_ref(), &transport_c, dc_id).await?
             };
             if pfs {
-                tracing::debug!("[ferogram] PFS: temp DH bind for DC{dc_id}");
+                tracing::debug!("[ferogram::connect] PFS: binding temporary key for DC{dc_id}");
                 match Self::do_pfs_bind(&mut stream, &frame_kind, &auth_key, dc_id).await {
                     Ok(temp_enc) => {
-                        tracing::info!("[ferogram] PFS bind complete DC{dc_id}");
+                        tracing::debug!(
+                            "[ferogram::connect] PFS: temporary key bound for DC{dc_id}"
+                        );
                         return Ok(Self {
                             stream,
                             enc: temp_enc,
@@ -536,7 +424,7 @@ impl Connection {
                     }
                     Err(e) => {
                         tracing::warn!(
-                            "[ferogram] PFS bind failed DC{dc_id} ({e}); falling back to perm key"
+                            "[ferogram::connect] PFS bind failed for DC{dc_id} ({e}); falling back to permanent key"
                         );
                         // Graceful fallback: reconnect because DH frames left the stream dirty.
                         // Return error and let the caller handle retry without PFS.
@@ -685,12 +573,14 @@ impl Connection {
                 }
                 Err(ref e) if e == "__need_more__" => {
                     tracing::debug!(
-                        "[ferogram] PFS bind (DC{dc_id}): informational frame {attempt}, reading next"
+                        "[ferogram::connect] PFS (DC{dc_id}): got informational frame on attempt {attempt}, reading next"
                     );
                     continue;
                 }
                 Err(reason) => {
-                    tracing::error!("[ferogram] PFS bind server response (DC{dc_id}): {reason}");
+                    tracing::error!(
+                        "[ferogram::connect] PFS bind rejected by server for DC{dc_id}: {reason}"
+                    );
                     return Err(ConnectError::other(format!(
                         "auth.bindTempAuthKey: {reason}"
                     )));
@@ -723,23 +613,6 @@ impl Connection {
     ) -> Result<(TcpStream, FrameKind, EncryptedSession), ConnectError> {
         let conn = Self::connect_raw(addr, socks5, mtproxy, transport, dc_id).await?;
         Ok((conn.stream, conn.frame_kind, conn.enc))
-    }
-
-    /// Split into a write-only `ConnectionWriter` and the TCP read half.
-    pub fn into_writer(self) -> (ConnectionWriter, OwnedWriteHalf, OwnedReadHalf, FrameKind) {
-        let (read_half, write_half) = self.stream.into_split();
-        let writer = ConnectionWriter {
-            enc: self.enc,
-            frame_kind: self.frame_kind.clone(),
-            perm_auth_key: self.perm_auth_key,
-            pending_ack: Vec::new(),
-            new_session_resend_queue: Vec::new(),
-            sent_bodies: std::collections::HashMap::new(),
-            container_map: std::collections::HashMap::new(),
-            salts: Vec::new(),
-            start_salt_time: None,
-        };
-        (writer, write_half, read_half, self.frame_kind)
     }
 }
 

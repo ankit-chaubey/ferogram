@@ -57,7 +57,9 @@ impl DcConnection {
         use tokio::task::JoinSet;
         let addr = addr.to_owned();
         let socks5 = socks5.cloned();
-        tracing::debug!("[dc_pool] probing {addr} with Full / Obfuscated / Abridged transports");
+        tracing::debug!(
+            "[ferogram::sender] probing {addr} with Full, Obfuscated, and Abridged transports in parallel"
+        );
         let mut set: JoinSet<Result<(DcConnection, &'static str), InvocationError>> =
             JoinSet::new();
 
@@ -136,11 +138,11 @@ impl DcConnection {
         transport: &TransportKind,
         dc_id: i16,
     ) -> Result<Self, InvocationError> {
-        tracing::debug!("[dc_pool] Connecting to {addr} …");
+        tracing::debug!("[ferogram::sender] connecting to {addr} with known auth key");
         let (stream, frame_kind, enc) =
             ferogram_connect::connect_to_dc(addr, dc_id, transport, socks5, None).await?;
 
-        tracing::debug!("[dc_pool] DH complete ✓ for {addr}");
+        tracing::debug!("[ferogram::sender] DH complete, auth key established for {addr}");
         let seen = new_seen_msg_ids();
         Ok(Self {
             stream,
@@ -177,10 +179,10 @@ impl DcConnection {
                 .await?;
 
         if pfs {
-            tracing::debug!("[dc_pool] PFS: temp DH bind for DC{dc_id}");
+            tracing::debug!("[ferogram::sender] PFS: binding temporary key for DC{dc_id}");
             match Self::do_pool_pfs_bind(&mut stream, &mut frame_kind, &auth_key, dc_id).await {
                 Ok(temp_enc) => {
-                    tracing::info!("[dc_pool] PFS bind complete DC{dc_id}");
+                    tracing::debug!("[ferogram::sender] PFS: temporary key bound for DC{dc_id}");
                     return Ok(Self {
                         stream,
                         frame_kind,
@@ -191,7 +193,9 @@ impl DcConnection {
                     });
                 }
                 Err(e) => {
-                    tracing::warn!("[dc_pool] PFS bind failed DC{dc_id} ({e}); falling back");
+                    tracing::warn!(
+                        "[ferogram::sender] PFS bind failed for DC{dc_id} ({e}); using permanent key"
+                    );
                     return Err(e);
                 }
             }
@@ -333,13 +337,13 @@ impl DcConnection {
                 }
                 Err(ref e) if e == "__need_more__" => {
                     tracing::debug!(
-                        "[ferogram] PFS pool bind (DC{dc_id}): informational frame {attempt}, reading next"
+                        "[ferogram::sender] PFS (DC{dc_id}): got informational frame on attempt {attempt}, reading next"
                     );
                     continue;
                 }
                 Err(reason) => {
                     tracing::error!(
-                        "[ferogram] PFS pool bind server response (DC{dc_id}): {reason}"
+                        "[ferogram::sender] PFS bind rejected by server for DC{dc_id}: {reason}"
                     );
                     return Err(InvocationError::Deserialize(format!(
                         "auth.bindTempAuthKey (pool): {reason}"
@@ -360,6 +364,19 @@ impl DcConnection {
     }
     pub fn time_offset(&self) -> i32 {
         self.enc.time_offset
+    }
+
+    /// Break the connection into its raw parts so the caller can hand them to
+    /// the pipelined [`crate::sender_task::spawn_sender_task`] instead of using
+    /// this struct's blocking [`rpc_call`](Self::rpc_call).
+    ///
+    /// `DcPool` uses this once a connection has finished its setup (DH, PFS
+    /// bind, initConnection) as a plain `DcConnection`: the pool graduates it
+    /// into a background sender task so every later request on the pool's
+    /// `invoke_on_dc` path pipelines instead of blocking the connection for
+    /// each round trip.
+    pub(crate) fn into_parts(self) -> (TcpStream, FrameKind, EncryptedSession) {
+        (self.stream, self.frame_kind, self.enc)
     }
 
     #[tracing::instrument(skip(self, req), fields(method = std::any::type_name::<R>()))]
@@ -454,7 +471,7 @@ impl DcConnection {
                 if scan_result.is_none() {
                     // No result yet; resend using the current MTProto sequence.
                     tracing::debug!(
-                        "[dc_pool] new_session_created: resending [{session_resets}/2]"
+                        "[ferogram::sender] new_session_created: resending request (attempt {session_resets}/2)"
                     );
                     let (wire, new_id) = self.enc.pack_with_msg_id(req);
                     sent_msg_id = new_id;
@@ -493,7 +510,7 @@ impl DcConnection {
                     ));
                 }
                 tracing::debug!(
-                    "[dc_pool] resend in transfer conn (code={bad_msg_code:?}) [{salt_retries}/5]"
+                    "[ferogram::sender] resending transfer request after bad_msg correction (code={bad_msg_code:?}, attempt {salt_retries}/5)"
                 );
                 if !self.pending_acks.is_empty() {
                     let ack_body = build_msgs_ack_body(&self.pending_acks);
@@ -548,8 +565,7 @@ impl DcConnection {
                         let resp_id = i64::from_le_bytes(body[4..12].try_into().expect("body.len() >= 12 checked above"));
                         if resp_id != expected {
                             tracing::debug!(
-                                "[dc_pool] rpc_result req_msg_id mismatch \
-                                 (got {resp_id:#018x}, want {expected:#018x}); skipping"
+                                "[ferogram::sender] rpc_result msg_id mismatch (got {resp_id:#018x}, want {expected:#018x}); skipping this frame"
                             );
                             return Ok(None);
                         }
@@ -614,8 +630,10 @@ impl DcConnection {
                     let unique_id    = i64::from_le_bytes(body[12..20].try_into().expect("body.len() >= 28 checked above"));
                     let server_salt  = i64::from_le_bytes(body[20..28].try_into().expect("body.len() >= 28 checked above"));
                     tracing::debug!(
-                        "[dc_pool] new_session_created: unique_id={unique_id:#018x} \
-                         first_msg_id={first_msg_id} salt={server_salt}"
+                        unique_id = format_args!("{unique_id:#018x}"),
+                        first_msg_id,
+                        salt = server_salt,
+                        "[ferogram::sender] new_session_created: server opened fresh session"
                     );
                     *salt = server_salt;
                     // Only reset if the pending request predates the server's new session.
@@ -640,7 +658,9 @@ impl DcConnection {
                     // body[12..16] = bad_msg_seqno, not used for recovery.
                     let error_code  = u32::from_le_bytes(body[16..20].try_into().expect("body.len() >= 20 checked above"));
                     tracing::debug!(
-                        "[dc_pool] bad_msg_notification: bad_msg_id={bad_msg_id:#018x} code={error_code}"
+                        bad_msg_id = format_args!("{bad_msg_id:#018x}"),
+                        error_code,
+                        "[ferogram::sender] bad_msg_notification received"
                     );
                     match error_code {
                         16 | 17 => {
@@ -665,7 +685,7 @@ impl DcConnection {
                             // conservatively; the retry loop's 5-attempt cap prevents a loop.
                             *need_resend = sent_msg_id.is_none_or(|id| id == bad_msg_id);
                             tracing::debug!(
-                                "[dc_pool] bad_msg code 48 (wrong salt): will resend with current salt"
+                                "[ferogram::sender] bad_msg code 48 (wrong server salt): will resend with updated salt"
                             );
                         }
                         _ => {
@@ -842,7 +862,7 @@ impl DcConnection {
                     ));
                 }
                 tracing::debug!(
-                    "[dc_pool] resend serializable (code={bad_msg_code:?}) [{salt_retries}/5]"
+                    "[ferogram::sender] resending serializable request after bad_msg correction (code={bad_msg_code:?}, attempt {salt_retries}/5)"
                 );
                 if !self.pending_acks.is_empty() {
                     let ack_body = build_msgs_ack_body(&self.pending_acks);

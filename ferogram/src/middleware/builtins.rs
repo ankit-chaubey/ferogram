@@ -47,15 +47,20 @@ impl Middleware for TracingMiddleware {
         Box::pin(async move {
             let kind = update_kind(&update);
             let start = Instant::now();
-            tracing::debug!(update_kind = kind, "dispatching update");
+            tracing::debug!(
+                update_kind = kind,
+                "[ferogram::dispatch] dispatching update"
+            );
 
             let result = next.run(update).await;
             let elapsed = start.elapsed();
 
             match &result {
-                Ok(()) => tracing::debug!(update_kind = kind, elapsed = ?elapsed, "update handled"),
+                Ok(()) => {
+                    tracing::debug!(update_kind = kind, elapsed = ?elapsed, "[ferogram::dispatch] update handled")
+                }
                 Err(e) => {
-                    tracing::error!(update_kind = kind, elapsed = ?elapsed, error = %e, "dispatch error")
+                    tracing::error!(update_kind = kind, elapsed = ?elapsed, error = %e, "[ferogram::dispatch] handler returned an error")
                 }
             }
 
@@ -175,7 +180,10 @@ impl Middleware for RateLimitMiddleware {
             if allowed {
                 next.run(update).await
             } else {
-                tracing::debug!(user_id, "rate limit exceeded - update dropped");
+                tracing::debug!(
+                    user_id,
+                    "[ferogram::dispatch] rate limit reached for user; update dropped"
+                );
                 Ok(())
             }
         })
@@ -238,12 +246,12 @@ impl Middleware for PanicRecoveryMiddleware {
 
                     tracing::error!(
                         panic = %msg,
-                        "handler panicked - caught by PanicRecoveryMiddleware"
+                        "[ferogram::dispatch] handler panicked; error recovered by PanicRecoveryMiddleware"
                     );
                     Err(DispatchError::msg(format!("handler panicked: {msg}")))
                 }
                 Err(join_error) => {
-                    tracing::warn!("dispatch task cancelled during shutdown");
+                    tracing::warn!("[ferogram::dispatch] dispatch task cancelled during shutdown");
                     Err(DispatchError::msg(format!(
                         "dispatch task cancelled: {join_error}"
                     )))

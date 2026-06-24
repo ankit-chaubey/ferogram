@@ -69,7 +69,7 @@ impl Default for MessageBoxes {
 impl MessageBoxes {
     /// Create a new, empty [`MessageBoxes`] (no prior state).
     pub fn new() -> Self {
-        tracing::trace!("[ferogram/msgbox] created new (no prior state)");
+        tracing::trace!("[ferogram::msgbox] created new (no prior state)");
         Self {
             entries: Vec::new(),
             date: NO_DATE,
@@ -82,7 +82,7 @@ impl MessageBoxes {
 
     /// Create a [`MessageBoxes`] from a previously-persisted snapshot.
     pub fn load(state: UpdatesStateSnap) -> Self {
-        tracing::trace!("[ferogram/msgbox] loaded from state: {:?}", state);
+        tracing::trace!("[ferogram::msgbox] loaded from state: {:?}", state);
         let mut entries = Vec::with_capacity(2 + state.channels.len());
         let mut getting_diff_for = Vec::with_capacity(2 + state.channels.len());
         let deadline = next_updates_deadline();
@@ -204,8 +204,8 @@ impl MessageBoxes {
             if self.update_entry(key, |e| e.possible_gap = None) {
                 self.getting_diff_for.push(key);
             } else {
-                tracing::info!(
-                    "[ferogram/msgbox] tried begin_get_diff but no entry for {:?}",
+                tracing::debug!(
+                    "[ferogram::msgbox] begin_get_diff skipped for {:?}: no entry exists",
                     key
                 );
             }
@@ -299,7 +299,7 @@ impl MessageBoxes {
                 .extend(self.entries.iter().filter_map(|e| {
                     if now >= e.effective_deadline() {
                         tracing::debug!(
-                            "[ferogram/msgbox] deadline met for {:?}; forcing diff",
+                            "[ferogram::msgbox] deadline met for {:?}; forcing diff",
                             e.key
                         );
                         Some(e.key)
@@ -419,7 +419,7 @@ impl MessageBoxes {
                 Ordering::Equal => {} // apply
                 Ordering::Greater => {
                     tracing::debug!(
-                        "[ferogram/msgbox] duplicate seq (local={}, remote={}), skipping",
+                        "[ferogram::msgbox] duplicate seq (local={}, remote={}), skipping",
                         self.seq,
                         seq_start
                     );
@@ -427,7 +427,7 @@ impl MessageBoxes {
                 }
                 Ordering::Less => {
                     tracing::debug!(
-                        "[ferogram/msgbox] seq gap (local={}, remote={})",
+                        "[ferogram::msgbox] seq gap (local={}, remote={})",
                         self.seq,
                         seq_start
                     );
@@ -472,7 +472,7 @@ impl MessageBoxes {
             // will arrive again via apply_difference / apply_channel_difference).
             if self.getting_diff_for.contains(&info.key) {
                 tracing::debug!(
-                    "[ferogram/msgbox] ignoring update for {:?} (diff in flight)",
+                    "[ferogram::msgbox] update for {:?} suppressed while getDifference is in flight",
                     info.key
                 );
                 self.reset_deadline(info.key, next_updates_deadline());
@@ -500,7 +500,7 @@ impl MessageBoxes {
                         Ordering::Greater => {
                             // Duplicate.
                             tracing::debug!(
-                                "[ferogram/msgbox] duplicate update for {:?} \
+                                "[ferogram::msgbox] duplicate update for {:?} \
                                  (local={}, count={}, remote={})",
                                 info.key,
                                 entry.pts,
@@ -510,8 +510,8 @@ impl MessageBoxes {
                         }
                         Ordering::Less => {
                             // Gap: buffer and wait.
-                            tracing::info!(
-                                "[ferogram/msgbox] gap for {:?} \
+                            tracing::debug!(
+                                "[ferogram::msgbox] gap for {:?} \
                                  (local={}, count={}, remote={})",
                                 info.key,
                                 entry.pts,
@@ -576,12 +576,12 @@ impl MessageBoxes {
         &mut self,
         difference: tl::enums::updates::Difference,
     ) -> UpdateAndPeers {
-        tracing::trace!("[ferogram/msgbox] applying account difference");
+        tracing::trace!("[ferogram::msgbox] applying account difference");
         if !self.getting_diff_for.contains(&Key::Common)
             && !self.getting_diff_for.contains(&Key::Secondary)
         {
             tracing::warn!(
-                "[ferogram/msgbox] apply_difference called but no diff was pending \
+                "[ferogram::msgbox] apply_difference called but no diff was pending \
                  (concurrent call already completed?); ignoring"
             );
             return (Vec::new(), Vec::new(), Vec::new());
@@ -591,7 +591,7 @@ impl MessageBoxes {
         let result = match difference {
             tl::enums::updates::Difference::Empty(e) => {
                 tracing::debug!(
-                    "[ferogram/msgbox] difference empty (date={}, seq={})",
+                    "[ferogram::msgbox] difference empty (date={}, seq={})",
                     e.date,
                     e.seq
                 );
@@ -601,7 +601,9 @@ impl MessageBoxes {
                 (Vec::new(), Vec::new(), Vec::new())
             }
             tl::enums::updates::Difference::Difference(d) => {
-                tracing::debug!("[ferogram/msgbox] full difference");
+                tracing::debug!(
+                    "[ferogram::msgbox] getDifference: received full difference, applying"
+                );
                 finish = true;
                 self.apply_difference_type(d)
             }
@@ -613,7 +615,9 @@ impl MessageBoxes {
                 users,
                 intermediate_state: state,
             }) => {
-                tracing::debug!("[ferogram/msgbox] slice difference");
+                tracing::debug!(
+                    "[ferogram::msgbox] getDifference: received slice, will request another round"
+                );
                 finish = false;
                 self.apply_difference_type(tl::types::updates::Difference {
                     new_messages,
@@ -625,7 +629,10 @@ impl MessageBoxes {
                 })
             }
             tl::enums::updates::Difference::TooLong(d) => {
-                tracing::warn!("[ferogram/msgbox] difference TooLong (pts={})", d.pts);
+                tracing::warn!(
+                    "[ferogram::msgbox] getDifference returned TooLong (pts={}); resetting to server pts",
+                    d.pts
+                );
                 finish = true;
                 self.set_pts(Key::Common, d.pts);
                 (Vec::new(), Vec::new(), Vec::new())
@@ -701,7 +708,7 @@ impl MessageBoxes {
     ) -> UpdateAndPeers {
         let Some(channel_id) = self.channel_diff_in_flight.take() else {
             tracing::warn!(
-                "[ferogram/msgbox] apply_channel_difference called but no channel diff \
+                "[ferogram::msgbox] apply_channel_difference called but no channel diff \
                  was in flight (stale/duplicate response?); ignoring"
             );
             return (Vec::new(), Vec::new(), Vec::new());
@@ -712,7 +719,7 @@ impl MessageBoxes {
             // The entry was already finalized by an earlier (duplicate)
             // response for this same channel; this response is stale.
             tracing::debug!(
-                "[ferogram/msgbox] apply_channel_difference: channel {} no longer in \
+                "[ferogram::msgbox] apply_channel_difference: channel {} no longer in \
                  getting_diff_for (stale duplicate response); ignoring",
                 channel_id
             );
@@ -720,7 +727,7 @@ impl MessageBoxes {
         }
 
         tracing::trace!(
-            "[ferogram/msgbox] applying channel {} difference",
+            "[ferogram::msgbox] applying channel {} difference",
             channel_id
         );
         self.update_entry(key, |e| e.possible_gap = None);
@@ -737,12 +744,15 @@ impl MessageBoxes {
 
         if r#final {
             tracing::debug!(
-                "[ferogram/msgbox] channel {} diff final; no longer getting diff",
+                "[ferogram::msgbox] channel {} diff complete (final=true)",
                 channel_id
             );
             self.try_end_get_diff(key);
         } else {
-            tracing::debug!("[ferogram/msgbox] channel {} diff slice", channel_id);
+            tracing::debug!(
+                "[ferogram::msgbox] channel {} diff slice received; requesting next batch",
+                channel_id
+            );
         }
 
         self.set_pts(key, pts);
@@ -792,7 +802,7 @@ impl MessageBoxes {
             self.try_end_get_diff(key);
         }
         tracing::debug!(
-            "[ferogram/msgbox] abort_difference: cleared Common+Secondary diff pending"
+            "[ferogram::msgbox] getDifference aborted; cleared pending state for Common and Secondary"
         );
     }
 
@@ -807,14 +817,14 @@ impl MessageBoxes {
         self.date = date;
         self.seq = seq;
         tracing::debug!(
-            "[ferogram/msgbox] force_reset_common_pts: pts={pts}, qts={qts}, seq={seq}"
+            "[ferogram::msgbox] force_reset_common_pts: pts={pts}, qts={qts}, seq={seq}"
         );
     }
 
     pub fn end_channel_difference(&mut self, reason: PrematureEndReason) {
         let Some(channel_id) = self.channel_diff_in_flight.take() else {
             tracing::warn!(
-                "[ferogram/msgbox] end_channel_difference called but no channel diff \
+                "[ferogram::msgbox] end_channel_difference called but no channel diff \
                  was in flight (already ended? duplicate error path)"
             );
             return;
@@ -822,7 +832,7 @@ impl MessageBoxes {
         let key = Key::Channel(channel_id);
         if !self.getting_diff_for.contains(&key) {
             tracing::debug!(
-                "[ferogram/msgbox] end_channel_difference: channel {} no longer in \
+                "[ferogram::msgbox] end_channel_difference: channel {} no longer in \
                  getting_diff_for (stale duplicate response); ignoring",
                 channel_id
             );
@@ -830,7 +840,7 @@ impl MessageBoxes {
         }
 
         tracing::trace!(
-            "[ferogram/msgbox] ending channel {} diff: {:?}",
+            "[ferogram::msgbox] ending channel {} diff: {:?}",
             channel_id,
             reason
         );

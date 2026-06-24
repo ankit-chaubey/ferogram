@@ -24,9 +24,9 @@ pub mod transport_kind;
 pub mod transport_obfuscated;
 pub mod util;
 
-pub use connection::{Connection, ConnectionWriter, FrameKind, FutureSalt, connect_to_dc};
+pub use connection::{Connection, FrameKind, FutureSalt, connect_to_dc};
 pub use error::ConnectError;
-pub use frame::{FrameOutcome, recv_frame_with_keepalive};
+pub use frame::send_frame;
 pub use pfs::{decode_bind_response, decode_bind_single};
 pub use proxy::MtProxyConfig;
 pub use socks5::Socks5Config;
@@ -39,8 +39,8 @@ pub use util::{crc32_ieee, gz_inflate, maybe_gz_decompress, random_i64, tl_read_
 
 // Additional exports needed by ferogram crate
 pub use connection::{NO_PING_DISCONNECT, PING_DELAY_SECS, SALT_USE_DELAY};
-pub use frame::{recv_frame_plain, recv_frame_read, send_frame, send_frame_write};
-pub use transport::{recv_abridged, recv_raw_frame, send_abridged};
+pub use frame::recv_frame_plain;
+
 pub use util::{
     COMPRESSION_THRESHOLD, build_container_body, build_msgs_ack_body, gz_pack_body, jitter_delay,
     maybe_gz_pack, tl_read_string, tl_write_bytes,

@@ -32,7 +32,7 @@ impl MtProxyConfig {
     /// Open a TCP connection to the MTProxy host:port.
     pub async fn connect(&self) -> Result<TcpStream, ConnectError> {
         let addr = format!("{}:{}", self.host, self.port);
-        tracing::debug!("[ferogram] MTProxy TCP connect -> {addr}");
+        tracing::debug!("[ferogram::connect] MTProxy: opening TCP connection to {addr}");
         TcpStream::connect(&addr).await.map_err(ConnectError::Io)
     }
 

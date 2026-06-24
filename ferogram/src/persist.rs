@@ -49,8 +49,7 @@ impl BoundedDedupeCache {
         if self.set.contains(&(peer_id, msg_id)) {
             self.suppressed += 1;
             tracing::debug!(
-                "[ferogram/dedup] duplicate suppressed msg_id={msg_id} peer={peer_id} \
-                 (total={})",
+                "[ferogram::persist] duplicate update suppressed (msg_id={msg_id}, peer={peer_id}, total_suppressed={})",
                 self.suppressed
             );
             return true;

@@ -12,19 +12,54 @@
 
 use crate::errors::InvocationError;
 use crate::sender::DcConnection;
+use crate::sender_task::{FrameEvent, RpcEnqueue, spawn_sender_task};
+use ferogram_connect::util::maybe_gz_pack;
 use ferogram_connect::{Socks5Config, TransportKind};
 use ferogram_session::DcEntry;
-use ferogram_tl_types::RemoteCall;
+use ferogram_tl_types::{RemoteCall, Serializable};
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use tokio::sync::{mpsc, oneshot};
 
 // Max simultaneous connections per DC.
 const MAX_CONNS_PER_DC: usize = 3;
 
 /// One slot in the per-DC connection pool.
-/// `in_flight` lets the pool pick the least-busy slot without locking it.
+///
+/// Each slot is backed by a background sender task (see
+/// [`crate::sender_task::spawn_sender_task`]), not a locked `DcConnection`.
+/// Enqueueing a request just posts it to the task's mpsc channel and waits
+/// on a oneshot for the result: no lock is held across the network round
+/// trip, so any number of callers can have requests in flight on the same
+/// slot at once. The task itself batches whatever is pending into as few
+/// frames as possible and matches replies back to callers by msg_id,
+/// regardless of the order responses arrive in.
+///
+/// `in_flight` still lets the pool pick the least-busy slot without needing
+/// to touch the connection itself.
 pub struct ConnSlot {
-    pub conn: tokio::sync::Mutex<DcConnection>,
-    pub in_flight: std::sync::atomic::AtomicUsize,
+    rpc_tx: mpsc::Sender<RpcEnqueue>,
+    pub in_flight: AtomicUsize,
+    /// Set to `false` by the drain task below once the connection's sender
+    /// task reports an error. Callers check this after a failed call to
+    /// decide whether to evict the slot and retry on a fresh one, instead of
+    /// matching on the specific `InvocationError` variant (the sender task
+    /// always reports connection failures as `Deserialize`, since it has no
+    /// way to know whether a given caller still cares about the original
+    /// `Io`/etc. error kind once `fail_all` has fanned it out to everyone
+    /// waiting on this connection).
+    alive: Arc<AtomicBool>,
+    /// Snapshot of the auth key / salt / time offset taken when the slot was
+    /// created. Used by `collect_keys` to persist session info. The auth key
+    /// never changes for a slot's lifetime; salt and time offset can drift a
+    /// little as the connection runs (FutureSalts rotation), but a stale
+    /// value here only costs one bad_server_salt round trip the next time
+    /// this DC is reconnected, since the sender task self-corrects from
+    /// server-supplied corrections either way.
+    auth_key: [u8; 256],
+    first_salt: i64,
+    time_offset: i32,
 }
 
 /// Pool of per-DC authenticated connections.
@@ -32,7 +67,7 @@ pub struct ConnSlot {
 /// before any network I/O so concurrent callers don't serialize on it.
 pub struct DcPool {
     /// Per-DC connection slots; inner Vec holds slot Arcs.
-    pub conns: HashMap<i32, Vec<std::sync::Arc<ConnSlot>>>,
+    pub conns: HashMap<i32, Vec<Arc<ConnSlot>>>,
     addrs: HashMap<i32, String>,
     #[allow(dead_code)]
     home_dc_id: i32,
@@ -70,12 +105,56 @@ impl DcPool {
         self.conns.get(&dc_id).is_some_and(|v| !v.is_empty())
     }
 
-    /// Insert a pre-built connection into the pool as a new slot.
-    pub fn insert(&mut self, dc_id: i32, conn: DcConnection) {
-        let slot = std::sync::Arc::new(ConnSlot {
-            conn: tokio::sync::Mutex::new(conn),
-            in_flight: std::sync::atomic::AtomicUsize::new(0),
+    /// Graduate an already set-up `DcConnection` into a pipelined slot.
+    ///
+    /// The connection has already done its DH / PFS bind / initConnection as
+    /// a plain `DcConnection`. From here on its socket is owned by a single
+    /// background task; this function just spawns that task and wraps the
+    /// resulting handle in a `ConnSlot`.
+    fn spawn_slot(conn: DcConnection) -> Arc<ConnSlot> {
+        let auth_key = conn.auth_key_bytes();
+        let first_salt = conn.first_salt();
+        let time_offset = conn.time_offset();
+        let (stream, frame_kind, enc) = conn.into_parts();
+
+        let (handle, mut frame_rx) = spawn_sender_task(stream, enc, frame_kind, None);
+
+        // Pool slots don't support reconnect: on failure the pool just
+        // evicts the whole DC and a fresh slot is opened from scratch on the
+        // next call. Dropping reconnect_tx here means the sender task's
+        // error branch sees its reconnect channel closed and shuts itself
+        // down cleanly instead of waiting for a reconnect that will never
+        // come.
+        drop(handle.reconnect_tx);
+
+        let alive = Arc::new(AtomicBool::new(true));
+        let alive_for_drain = alive.clone();
+        tokio::spawn(async move {
+            while let Some(event) = frame_rx.recv().await {
+                if let FrameEvent::Error(e) = event {
+                    tracing::warn!("[ferogram::pool] worker connection dropped: {e}");
+                    alive_for_drain.store(false, Ordering::Release);
+                    break;
+                }
+                // FrameEvent::Update / Connected: pool connections don't
+                // dispatch updates, nothing to do.
+            }
         });
+
+        Arc::new(ConnSlot {
+            rpc_tx: handle.rpc_tx,
+            in_flight: AtomicUsize::new(0),
+            alive,
+            auth_key,
+            first_salt,
+            time_offset,
+        })
+    }
+
+    /// Insert a pre-built, already initialized connection into the pool as a
+    /// new slot.
+    pub fn insert(&mut self, dc_id: i32, conn: DcConnection) {
+        let slot = Self::spawn_slot(conn);
         self.conns.entry(dc_id).or_default().push(slot);
         let total: usize = self.conns.values().map(|v| v.len()).sum();
         metrics::gauge!("ferogram.connections_active").set(total as f64);
@@ -89,16 +168,14 @@ impl DcPool {
         dc_id: i32,
         pfs: bool,
         auth_key: Option<([u8; 256], i64, i32)>,
-    ) -> Result<std::sync::Arc<ConnSlot>, InvocationError> {
-        use std::sync::atomic::Ordering;
-
+    ) -> Result<Arc<ConnSlot>, InvocationError> {
         let addr = self.addrs.get(&dc_id).cloned().ok_or_else(|| {
             InvocationError::Deserialize(format!("dc_pool: no address for DC{dc_id}"))
         })?;
 
         // Ensure at least one slot exists.
         if !self.conns.contains_key(&dc_id) || self.conns[&dc_id].is_empty() {
-            tracing::info!("[dc_pool] auto-connecting DC{dc_id} ({addr})");
+            tracing::debug!("[ferogram::pool] opening first connection to DC{dc_id} at {addr}");
             let conn = if let Some((key, salt, offset)) = auth_key {
                 DcConnection::connect_with_key(
                     &addr,
@@ -121,10 +198,7 @@ impl DcPool {
                 )
                 .await?
             };
-            let slot = std::sync::Arc::new(ConnSlot {
-                conn: tokio::sync::Mutex::new(conn),
-                in_flight: std::sync::atomic::AtomicUsize::new(0),
-            });
+            let slot = Self::spawn_slot(conn);
             self.conns.entry(dc_id).or_default().push(slot);
             self.init_done.remove(&dc_id);
             let total: usize = self.conns.values().map(|v| v.len()).sum();
@@ -145,11 +219,15 @@ impl DcPool {
         let min_inflight = best.in_flight.load(Ordering::Relaxed);
 
         // Spawn a new slot if: all are busy AND we have room for more.
+        //
+        // With pipelined slots this matters less than it used to (a single
+        // slot can now happily carry many in-flight requests at once), but
+        // it's still worth spreading load across a few real TCP connections
+        // for very heavy transfers.
         if min_inflight > 0 && slots.len() < MAX_CONNS_PER_DC {
             tracing::debug!(
-                "[dc_pool] DC{dc_id}: all {} slots busy (min_inflight={}), opening new slot",
-                slots.len(),
-                min_inflight
+                "[ferogram::pool] DC{dc_id}: all {} slots busy (min_inflight={min_inflight}), opening extra connection",
+                slots.len()
             );
             let conn = if let Some((key, salt, offset)) = auth_key {
                 DcConnection::connect_with_key(
@@ -173,10 +251,7 @@ impl DcPool {
                 )
                 .await?
             };
-            let new_slot = std::sync::Arc::new(ConnSlot {
-                conn: tokio::sync::Mutex::new(conn),
-                in_flight: std::sync::atomic::AtomicUsize::new(0),
-            });
+            let new_slot = Self::spawn_slot(conn);
             let arc = new_slot.clone();
             self.conns
                 .get_mut(&dc_id)
@@ -190,13 +265,47 @@ impl DcPool {
         Ok(best)
     }
 
-    /// Evict all slots for a DC (called on IO error to force reconnection).
+    /// Evict all slots for a DC (called on connection failure to force
+    /// reconnection on the next call).
     pub fn evict(&mut self, dc_id: i32) {
         self.conns.remove(&dc_id);
         self.init_done.remove(&dc_id);
         let total: usize = self.conns.values().map(|v| v.len()).sum();
         metrics::gauge!("ferogram.connections_active").set(total as f64);
-        tracing::debug!("[dc_pool] evicted all slots for DC{dc_id}");
+        tracing::debug!("[ferogram::pool] evicted all connections for DC{dc_id}");
+    }
+
+    /// Enqueue `body` on `slot` and await the result.
+    ///
+    /// This is the only place that touches `rpc_tx`/the oneshot: no mutex,
+    /// no blocking for the duration of the round trip. Multiple callers can
+    /// call this against the same slot concurrently and their requests will
+    /// pipeline on the wire instead of queueing behind each other.
+    async fn send_via_slot(
+        slot: &Arc<ConnSlot>,
+        body: Vec<u8>,
+    ) -> Result<Vec<u8>, InvocationError> {
+        slot.in_flight.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        let send_result = slot.rpc_tx.send(RpcEnqueue { body, tx }).await;
+        let result = if send_result.is_err() {
+            slot.alive.store(false, Ordering::Release);
+            Err(InvocationError::Deserialize(
+                "worker sender task shut down".into(),
+            ))
+        } else {
+            match rx.await {
+                Ok(r) => r,
+                Err(_) => {
+                    slot.alive.store(false, Ordering::Release);
+                    Err(InvocationError::Deserialize(
+                        "worker rpc channel closed".into(),
+                    ))
+                }
+            }
+        };
+        slot.in_flight.fetch_sub(1, Ordering::Relaxed);
+        result
     }
 
     /// Invoke a raw RPC call on the given DC.
@@ -207,11 +316,10 @@ impl DcPool {
         _dc_entries: &[DcEntry],
         req: &R,
     ) -> Result<Vec<u8>, InvocationError> {
-        use std::sync::atomic::Ordering;
         let slot = self.get_or_create_slot(dc_id, false, None).await?;
-        slot.in_flight.fetch_add(1, Ordering::Relaxed);
-        let result = slot.conn.lock().await.rpc_call(req).await;
-        slot.in_flight.fetch_sub(1, Ordering::Relaxed);
+        let body = maybe_gz_pack(&req.to_bytes());
+        let result = Self::send_via_slot(&slot, body.clone()).await;
+
         if let Err(ref e) = result {
             let kind = match e {
                 InvocationError::Rpc(_) => "rpc",
@@ -220,14 +328,14 @@ impl DcPool {
             };
             metrics::counter!("ferogram.rpc_errors_total", "kind" => kind).increment(1);
         }
-        if matches!(result, Err(InvocationError::Io(_))) {
-            tracing::warn!("[dc_pool] IO error on DC{dc_id}, evicting all slots and retrying");
+
+        if result.is_err() && !slot.alive.load(Ordering::Acquire) {
+            tracing::warn!(
+                "[ferogram::pool] DC{dc_id} connection died mid-request; evicting and retrying on a fresh connection"
+            );
             self.evict(dc_id);
             let retry_slot = self.get_or_create_slot(dc_id, false, None).await?;
-            retry_slot.in_flight.fetch_add(1, Ordering::Relaxed);
-            let r = retry_slot.conn.lock().await.rpc_call(req).await;
-            retry_slot.in_flight.fetch_sub(1, Ordering::Relaxed);
-            return r;
+            return Self::send_via_slot(&retry_slot, body).await;
         }
         result
     }
@@ -243,32 +351,25 @@ impl DcPool {
     }
 
     /// Like `invoke_on_dc` but accepts any `Serializable` type.
-    pub async fn invoke_on_dc_serializable<S: ferogram_tl_types::Serializable>(
+    pub async fn invoke_on_dc_serializable<S: Serializable>(
         &mut self,
         dc_id: i32,
         req: &S,
     ) -> Result<Vec<u8>, InvocationError> {
-        use std::sync::atomic::Ordering;
         let slot = self
             .get_or_create_slot(dc_id, false, None)
             .await
             .map_err(|_| InvocationError::Deserialize(format!("no connection for DC{dc_id}")))?;
-        slot.in_flight.fetch_add(1, Ordering::Relaxed);
-        let result = slot.conn.lock().await.rpc_call_serializable(req).await;
-        slot.in_flight.fetch_sub(1, Ordering::Relaxed);
-        if matches!(result, Err(InvocationError::Io(_))) {
-            tracing::warn!("[dc_pool] serializable IO error on DC{dc_id}, evicting and retrying");
+        let body = maybe_gz_pack(&req.to_bytes());
+        let result = Self::send_via_slot(&slot, body.clone()).await;
+
+        if result.is_err() && !slot.alive.load(Ordering::Acquire) {
+            tracing::warn!(
+                "[ferogram::pool] DC{dc_id} connection died mid-request (serializable path); evicting and retrying"
+            );
             self.evict(dc_id);
             let retry_slot = self.get_or_create_slot(dc_id, false, None).await?;
-            retry_slot.in_flight.fetch_add(1, Ordering::Relaxed);
-            let r = retry_slot
-                .conn
-                .lock()
-                .await
-                .rpc_call_serializable(req)
-                .await;
-            retry_slot.in_flight.fetch_sub(1, Ordering::Relaxed);
-            return r;
+            return Self::send_via_slot(&retry_slot, body).await;
         }
         result
     }
@@ -286,11 +387,10 @@ impl DcPool {
         for e in entries.iter_mut() {
             if let Some(slots) = self.conns.get(&e.dc_id)
                 && let Some(slot) = slots.first()
-                && let Ok(conn) = slot.conn.try_lock()
             {
-                e.auth_key = Some(conn.auth_key_bytes());
-                e.first_salt = conn.first_salt();
-                e.time_offset = conn.time_offset();
+                e.auth_key = Some(slot.auth_key);
+                e.first_salt = slot.first_salt;
+                e.time_offset = slot.time_offset;
             }
         }
     }

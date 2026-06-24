@@ -22,6 +22,7 @@ use ferogram_tl_types::{Cursor, Deserializable};
 impl Client {
     /// Sign in as a bot.
     pub async fn bot_sign_in(&self, token: &str) -> Result<String, InvocationError> {
+        tracing::info!("[ferogram::auth] not signed in; authenticating with bot token");
         let req = tl::functions::auth::ImportBotAuthorization {
             flags: 0,
             api_id: self.inner.api_id,
@@ -42,7 +43,7 @@ impl Client {
                 ));
             }
         };
-        tracing::info!("[ferogram] Bot signed in ✓  ({name})");
+        tracing::info!("[ferogram::auth] bot signed in: {name}");
         self.inner
             .is_bot
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -55,14 +56,38 @@ impl Client {
 
     /// Request a login code for a user account.
     pub async fn request_login_code(&self, phone: &str) -> Result<LoginToken, InvocationError> {
-        use tl::enums::auth::SentCode;
+        use tl::enums::auth::{SentCode, SentCodeType};
 
+        tracing::info!("[ferogram::auth] not signed in; requesting login code from Telegram");
         let req = self.make_send_code_req(phone);
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
 
         let mut cur = Cursor::from_slice(&body);
         let hash = match tl::enums::auth::SentCode::deserialize(&mut cur)? {
-            SentCode::SentCode(s) => s.phone_code_hash,
+            SentCode::SentCode(s) => {
+                let sent_via = match &s.r#type {
+                    SentCodeType::App(_) => {
+                        "a Telegram message on another already-logged-in device/app \
+                         (not SMS)"
+                    }
+                    SentCodeType::Sms(_) => "SMS",
+                    SentCodeType::Call(_) => "a voice call reading out the code",
+                    SentCodeType::FlashCall(_) => "a flash call (read the caller ID digits)",
+                    SentCodeType::MissedCall(_) => "a missed call (read the last digits)",
+                    SentCodeType::FragmentSms(_) => "Fragment SMS (fragment.com anonymous number)",
+                    SentCodeType::FirebaseSms(_) => "SMS (Firebase-verified)",
+                    SentCodeType::SmsWord(_) => "SMS (word code)",
+                    SentCodeType::SmsPhrase(_) => "SMS (phrase code)",
+                    SentCodeType::EmailCode(_) => "email",
+                    SentCodeType::SetUpEmailRequired(_) => "email (setup required first)",
+                };
+                tracing::info!("[ferogram::auth] login code sent via {sent_via}");
+                tracing::debug!(
+                    "[ferogram::auth] phone_code_hash acquired (len={})",
+                    s.phone_code_hash.len()
+                );
+                s.phone_code_hash
+            }
             SentCode::Success(_) => {
                 return Err(InvocationError::Deserialize("unexpected Success".into()));
             }
@@ -72,7 +97,6 @@ impl Client {
                 ));
             }
         };
-        tracing::info!("[ferogram] Login code sent");
         Ok(LoginToken {
             phone: phone.to_string(),
             phone_code_hash: hash,
@@ -81,6 +105,7 @@ impl Client {
 
     /// Complete sign-in with the code sent to the phone.
     pub async fn sign_in(&self, token: &LoginToken, code: &str) -> Result<String, SignInError> {
+        tracing::debug!("[ferogram::auth] submitting auth.signIn");
         let req = tl::functions::auth::SignIn {
             phone_number: token.phone.clone(),
             phone_code_hash: token.phone_code_hash.clone(),
@@ -91,10 +116,14 @@ impl Client {
         let body = match self.rpc_call_raw(&req).await {
             Ok(b) => b,
             Err(e) if e.is("SESSION_PASSWORD_NEEDED") => {
+                tracing::info!("[ferogram::auth] 2FA password required");
                 let t = self.get_password_info().await.map_err(SignInError::Other)?;
                 return Err(SignInError::PasswordRequired(Box::new(t)));
             }
-            Err(e) if e.is("PHONE_CODE_*") => return Err(SignInError::InvalidCode),
+            Err(e) if e.is("PHONE_CODE_*") => {
+                tracing::warn!("[ferogram::auth] login code rejected: {e}");
+                return Err(SignInError::InvalidCode);
+            }
             Err(e) => return Err(SignInError::Other(e)),
         };
 
@@ -105,14 +134,19 @@ impl Client {
             tl::enums::auth::Authorization::Authorization(a) => {
                 self.cache_user(&a.user).await;
                 let name = Self::extract_user_name(&a.user);
-                tracing::info!("[ferogram] Signed in ✓  Welcome, {name}!");
+                tracing::info!("[ferogram::auth] signed in: welcome, {name}");
                 self.inner
                     .signed_in
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 let _ = self.sync_pts_state().await;
                 Ok(name)
             }
-            tl::enums::auth::Authorization::SignUpRequired(_) => Err(SignInError::SignUpRequired),
+            tl::enums::auth::Authorization::SignUpRequired(_) => {
+                tracing::warn!(
+                    "[ferogram::auth] phone number not registered on Telegram; sign-up required"
+                );
+                Err(SignInError::SignUpRequired)
+            }
         }
     }
 
@@ -122,6 +156,7 @@ impl Client {
         token: PasswordToken,
         password: impl AsRef<[u8]>,
     ) -> Result<String, InvocationError> {
+        tracing::debug!("[ferogram::auth] computing SRP 2FA proof");
         let pw = token.password;
         let algo = pw
             .current_algo
@@ -147,6 +182,7 @@ impl Client {
                 },
             ),
         };
+        tracing::debug!("[ferogram::auth] submitting auth.checkPassword");
 
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
@@ -154,7 +190,7 @@ impl Client {
             tl::enums::auth::Authorization::Authorization(a) => {
                 self.cache_user(&a.user).await;
                 let name = Self::extract_user_name(&a.user);
-                tracing::info!("[ferogram] 2FA \u{2713}  Welcome, {name}!");
+                tracing::info!("[ferogram::auth] 2FA verified; signed in: welcome, {name}");
                 self.inner
                     .signed_in
                     .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -172,7 +208,7 @@ impl Client {
         let req = tl::functions::auth::LogOut {};
         match self.rpc_call_raw(&req).await {
             Ok(_) => {
-                tracing::info!("[ferogram] Signed out ✓");
+                tracing::info!("[ferogram::auth] signed out");
                 // Clear all pooled connections and cached auth keys so that
                 // stale sockets cannot survive logout/reset.
                 self.inner.dc_pool.lock().await.conns.clear();
@@ -258,6 +294,33 @@ impl Client {
         }))
     }
 
+    /// The logged-in account's numeric user ID, if already known.
+    ///
+    /// This is a cheap, synchronous, no-network lookup of a value captured
+    /// automatically the first time a `User` object with `is_self == true`
+    /// was cached (sign-in, `get_me()`, etc.). Returns `None` only if neither
+    /// has happened yet in this session - call `my_id_or_fetch()` for a
+    /// version that falls back to a network call in that case.
+    pub fn my_id(&self) -> Option<i64> {
+        match self
+            .inner
+            .self_user_id
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            0 => None,
+            id => Some(id),
+        }
+    }
+
+    /// Like [`my_id`](Self::my_id), but performs a one-time `get_me()` call
+    /// to populate the cache if it isn't already known.
+    pub async fn my_id_or_fetch(&self) -> Result<i64, InvocationError> {
+        if let Some(id) = self.my_id() {
+            return Ok(id);
+        }
+        Ok(self.get_me().await?.id)
+    }
+
     /// Fetch information about the logged-in user.
     pub async fn get_me(&self) -> Result<tl::types::User, InvocationError> {
         let req = tl::functions::users::GetUsers {
@@ -277,6 +340,7 @@ impl Client {
     }
 
     async fn get_password_info(&self) -> Result<PasswordToken, InvocationError> {
+        tracing::debug!("[ferogram::auth] fetching 2FA password parameters");
         let body = self
             .rpc_call_raw(&tl::functions::account::GetPassword {})
             .await?;

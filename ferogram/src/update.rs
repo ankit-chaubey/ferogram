@@ -851,30 +851,6 @@ impl IncomingMessage {
         }
     }
 
-    /// Download attached media to `path` (clientless).
-    #[allow(dead_code)]
-    pub async fn download_media(&self, path: impl AsRef<std::path::Path>) -> Result<bool, Error> {
-        let client = self.require_client("download_media")?.clone();
-        self.download_media_with(&client, path).await
-    }
-
-    /// Download attached media to `path`. Returns `true` if media was found.
-    #[allow(dead_code)]
-    async fn download_media_with(
-        &self,
-        client: &Client,
-        path: impl AsRef<std::path::Path>,
-    ) -> Result<bool, Error> {
-        if let Some((loc, dc_id)) = crate::media::download_location_from_media(self.media()) {
-            client
-                .download_media_to_file_on_dc(loc, dc_id, path)
-                .await?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
     /// Send a reaction (clientless).
     ///
     /// # Example
@@ -917,19 +893,91 @@ impl IncomingMessage {
         client.get_reply_to_message(self).await
     }
 
+    /// The effective sender peer, resolving the private-chat (DM) case.
+    ///
+    /// `sender_id()` returns `None` for DM messages because Telegram's wire
+    /// format omits `from_id` there - with only two participants, the sender
+    /// is always derivable from `out` + `peer_id`, so the server doesn't
+    /// bother sending it. This method fills that gap:
+    ///
+    /// - If `from_id` is present (groups, channels, or some older DM
+    ///   messages), it's used as-is.
+    /// - Otherwise, if this is a private chat: an outgoing message was sent
+    ///   by the logged-in account (`my_id`), and an incoming message was sent
+    ///   by the other party, whose ID is the chat ID itself
+    ///   (`peer_id`/`chat_id()`) - a DM's `Peer::User` *is* the other person.
+    ///
+    /// `my_id` is the logged-in account's numeric ID - pass an explicit one
+    /// if this message has no embedded client (e.g. fetched via a history
+    /// API without `stream_updates()`); otherwise use [`effective_sender_id`]
+    /// which resolves it automatically from the embedded client's cache.
+    ///
+    /// [`effective_sender_id`]: IncomingMessage::effective_sender_id
+    pub fn effective_sender_id_with(&self, my_id: Option<i64>) -> Option<tl::enums::Peer> {
+        if let Some(p) = self.sender_id() {
+            return Some(p.clone());
+        }
+        if !self.is_private() {
+            return None;
+        }
+        if self.outgoing() {
+            my_id.map(|id| tl::enums::Peer::User(tl::types::PeerUser { user_id: id }))
+        } else {
+            self.peer_id().cloned()
+        }
+    }
+
+    /// Like [`effective_sender_id_with`](Self::effective_sender_id_with), but
+    /// resolves `my_id` automatically from the embedded client's cache
+    /// (populated for free at sign-in; see [`Client::my_id`]).
+    ///
+    /// Returns `None` for an *outgoing* DM if the client hasn't seen its own
+    /// `User` object yet in this session (very rare - only before the first
+    /// sign-in/`get_me()` call) - use [`sender_user_id_async`] in that case,
+    /// since it falls back to a one-time `get_me()` network call.
+    ///
+    /// [`sender_user_id_async`]: IncomingMessage::sender_user_id_async
+    pub fn effective_sender_id(&self) -> Option<tl::enums::Peer> {
+        let my_id = self.client.as_ref().and_then(|c| c.my_id());
+        self.effective_sender_id_with(my_id)
+    }
+
     /// The sender's bare user-ID, if this is a user message.
     ///
-    /// Returns `None` for anonymous channel posts.
+    /// Returns `None` for anonymous channel posts. Resolves the private-chat
+    /// (DM) case where Telegram omits `from_id` - see
+    /// [`effective_sender_id`](Self::effective_sender_id) for details.
     pub fn sender_user_id(&self) -> Option<i64> {
-        match self.sender_id()? {
+        match self.effective_sender_id()? {
             tl::enums::Peer::User(u) => Some(u.user_id),
             _ => None,
         }
     }
 
+    /// Like [`sender_user_id`](Self::sender_user_id), guaranteed correct even
+    /// if the embedded client hasn't cached its own ID yet: falls back to a
+    /// one-time `get_me()` call for an outgoing DM whose sender can't be
+    /// resolved from cache alone.
+    pub async fn sender_user_id_async(&self) -> Result<Option<i64>, Error> {
+        if let Some(id) = self.sender_user_id() {
+            return Ok(Some(id));
+        }
+        if self.is_private() && self.outgoing() {
+            let client = self.require_client("sender_user_id_async")?;
+            let my_id = client.my_id_or_fetch().await?;
+            return Ok(self
+                .effective_sender_id_with(Some(my_id))
+                .and_then(|p| match p {
+                    tl::enums::Peer::User(u) => Some(u.user_id),
+                    _ => None,
+                }));
+        }
+        Ok(None)
+    }
+
     /// The chat/channel-ID the sender belongs to (non-user senders).
     pub fn sender_chat_id(&self) -> Option<i64> {
-        match self.sender_id()? {
+        match self.effective_sender_id()? {
             tl::enums::Peer::Chat(c) => Some(c.chat_id),
             tl::enums::Peer::Channel(c) => Some(c.channel_id),
             _ => None,
@@ -939,9 +987,11 @@ impl IncomingMessage {
     /// Fetch the sender as a typed [`User`](crate::types::User) (clientless, async).
     ///
     /// Returns `None` if the sender is not a user, or if the user is not in
-    /// the local peer cache.  Performs a network call if needed.
+    /// the local peer cache. Performs a network call if needed - including,
+    /// for an outgoing DM, a one-time `get_me()` to resolve "myself" if the
+    /// client hasn't cached its own ID yet.
     pub async fn sender_user(&self) -> Result<Option<crate::types::User>, Error> {
-        let uid = match self.sender_user_id() {
+        let uid = match self.sender_user_id_async().await? {
             Some(id) => id,
             None => return Ok(None),
         };
@@ -1693,7 +1743,8 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
     match cid {
         ID_UPDATES_TOO_LONG => {
             tracing::warn!(
-                "[ferogram] updatesTooLong: call client.get_difference() to recover missed updates"
+                "[ferogram::updates] updatesTooLong received; updates may have been missed. \
+                 The client will call getDifference to recover."
             );
             vec![]
         }
@@ -1703,8 +1754,11 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
             match tl::types::UpdateShortMessage::deserialize(&mut cur) {
                 Ok(m) => vec![Update::NewMessage(make_short_dm(m))],
                 Err(e) => {
-                    tracing::debug!(
-                        "[ferogram] updateShortMessage parse error (unknown constructor or newer layer): {e}"
+                    tracing::warn!(
+                        constructor = format_args!("{cid:#010x}"),
+                        error = %e,
+                        "[ferogram::updates] updateShortMessage deserialization failed \
+                         (layer mismatch or new constructor?); update dropped"
                     );
                     vec![]
                 }
@@ -1716,8 +1770,11 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
             match tl::types::UpdateShortChatMessage::deserialize(&mut cur) {
                 Ok(m) => vec![Update::NewMessage(make_short_chat(m))],
                 Err(e) => {
-                    tracing::debug!(
-                        "[ferogram] updateShortChatMessage parse error (unknown constructor or newer layer): {e}"
+                    tracing::warn!(
+                        constructor = format_args!("{cid:#010x}"),
+                        error = %e,
+                        "[ferogram::updates] updateShortChatMessage deserialization failed \
+                         (layer mismatch or new constructor?); update dropped"
                     );
                     vec![]
                 }
@@ -1729,8 +1786,11 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
             match tl::types::UpdateShort::deserialize(&mut cur) {
                 Ok(m) => from_single_update(m.update),
                 Err(e) => {
-                    tracing::debug!(
-                        "[ferogram] updateShort parse error (unknown constructor or newer layer): {e}"
+                    tracing::warn!(
+                        constructor = format_args!("{cid:#010x}"),
+                        error = %e,
+                        "[ferogram::updates] updateShort deserialization failed \
+                         (layer mismatch or new constructor?); update dropped"
                     );
                     vec![]
                 }
@@ -1744,8 +1804,11 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
                     u.updates.into_iter().flat_map(from_single_update).collect()
                 }
                 Err(e) => {
-                    tracing::debug!(
-                        "[ferogram] Updates parse error (unknown constructor or newer layer): {e}"
+                    tracing::warn!(
+                        constructor = format_args!("{cid:#010x}"),
+                        error = %e,
+                        "[ferogram::updates] Updates deserialization failed \
+                         (layer mismatch or new constructor?); update dropped"
                     );
                     vec![]
                 }
@@ -1760,8 +1823,11 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
                     u.updates.into_iter().flat_map(from_single_update).collect()
                 }
                 Err(e) => {
-                    tracing::debug!(
-                        "[ferogram] UpdatesCombined parse error (unknown constructor or newer layer): {e}"
+                    tracing::warn!(
+                        constructor = format_args!("{cid:#010x}"),
+                        error = %e,
+                        "[ferogram::updates] UpdatesCombined deserialization failed \
+                         (layer mismatch or new constructor?); update dropped"
                     );
                     vec![]
                 }
@@ -1769,9 +1835,10 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
             }
         }
 
-        // updateShortSentMessage: pts is now handled by dispatch_updates/route_frame
-        // directly (via EnvelopeResult::Pts or the push branch). parse_updates is only
-        // called for the old code path; we absorb here as a safe fallback.
+        // updateShortSentMessage: pts is handled directly in the frame
+        // dispatch arm in client/mod.rs (0x9015e101), which routes pts/
+        // pts_count through message_box. parse_updates here only covers the
+        // RPC-result path for sent confirmations and is a safe no-op fallback.
         ID_UPDATE_SHORT_SENT_MSG => vec![],
 
         _ => vec![],

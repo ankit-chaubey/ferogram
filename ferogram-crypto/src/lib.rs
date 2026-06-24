@@ -201,10 +201,11 @@ pub fn decrypt_data_v2<'a>(
     if buffer.len() < 24 || !(buffer.len() - 24).is_multiple_of(16) {
         // Expected: frame_len >= 24, (frame_len - 24) % 16 == 0
         // Minimum valid frame: key_id(8) + msg_key(16) + 1 AES block(16) = 40 bytes
-        log::warn!(
-            "[ferogram/crypto] InvalidBuffer: \
-             frame_len={frame_len} (expected >=24 and (len-24)%16==0) \
-             first_32_bytes=[{frame_hex}]"
+        tracing::warn!(
+            frame_len,
+            first_bytes = %frame_hex,
+            "decrypt failed: frame too short or not block-aligned \
+             (need >= 24 bytes and (len-24) % 16 == 0)"
         );
         return Err(DecryptError::InvalidBuffer);
     }
@@ -216,20 +217,22 @@ pub fn decrypt_data_v2<'a>(
         // Possible causes:
         //   1. A stale response from old session arriving on new TCP socket
         //   2. A genuinely different key (wrong DC or session)
-        log::warn!(
-            "[ferogram/crypto] AuthKeyMismatch: \
-             our_key_id={} frame_key_id={} \
-             frame_len={frame_len} first_32_bytes=[{frame_hex}]",
-            our_key_id
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join(""),
-            frame_key_id
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join(""),
+        let our_hex = our_key_id
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join("");
+        let frame_hex_id = frame_key_id
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join("");
+        tracing::warn!(
+            frame_len,
+            our_key_id = %our_hex,
+            frame_key_id = %frame_hex_id,
+            first_bytes = %frame_hex,
+            "decrypt failed: auth_key_id mismatch (stale session or wrong DC key)"
         );
         return Err(DecryptError::AuthKeyMismatch);
     }

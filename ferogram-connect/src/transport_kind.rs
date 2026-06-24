@@ -20,8 +20,7 @@
 /// | `Obfuscated` | random 64B | Bypasses DPI / MTProxy |
 /// | `PaddedIntermediate` | random 64B (`0xDDDDDDDD` tag) | Required for `0xDD` MTProxy secrets |
 /// | `FakeTls` | TLS 1.3 ClientHello | Most DPI-resistant; required for `0xEE` MTProxy secrets |
-#[derive(Clone, Debug)]
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub enum TransportKind {
     /// MTProto [Abridged] transport: length prefix is 1 or 4 bytes.
     Abridged,
@@ -51,4 +50,3 @@ pub enum TransportKind {
     /// HTTP transport fallback: sends raw MTProto frames as HTTP POST to port 80.
     Http,
 }
-

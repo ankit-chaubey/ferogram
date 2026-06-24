@@ -119,7 +119,9 @@ impl RetryPolicy for AutoSleep {
                 let secs = rpc.value.unwrap_or(0) as u64;
                 if secs <= self.threshold.as_secs() {
                     let delay = jitter_duration(Duration::from_secs(secs), ctx.fail_count.get(), 2);
-                    tracing::info!("FLOOD_WAIT_{secs}: sleeping {delay:?} before retry");
+                    tracing::debug!(
+                        "[ferogram::retry] FLOOD_WAIT_{secs}: sleeping {delay:?} before retrying"
+                    );
                     ControlFlow::Continue(delay)
                 } else {
                     ControlFlow::Break(())
@@ -132,7 +134,9 @@ impl RetryPolicy for AutoSleep {
                 let secs = rpc.value.unwrap_or(0) as u64;
                 if secs <= self.threshold.as_secs() {
                     let delay = jitter_duration(Duration::from_secs(secs), ctx.fail_count.get(), 2);
-                    tracing::info!("SLOWMODE_WAIT_{secs}: sleeping {delay:?} before retry");
+                    tracing::debug!(
+                        "[ferogram::retry] SLOWMODE_WAIT_{secs}: sleeping {delay:?} before retrying"
+                    );
                     ControlFlow::Continue(delay)
                 } else {
                     ControlFlow::Break(())
@@ -142,8 +146,8 @@ impl RetryPolicy for AutoSleep {
             // Transient I/O errors: back off briefly and retry once.
             InvocationError::Io(_) if ctx.fail_count.get() <= 1 => {
                 if let Some(d) = self.io_errors_as_flood_of {
-                    tracing::info!(
-                        "I/O error (attempt {}): sleeping {d:?} before retry",
+                    tracing::debug!(
+                        "[ferogram::retry] transient I/O error (attempt {}): sleeping {d:?} before retrying",
                         ctx.fail_count.get()
                     );
                     ControlFlow::Continue(d)
@@ -306,7 +310,8 @@ impl RetryPolicy for CircuitBreaker {
                 let new_count = consecutive_failures + 1;
                 if new_count >= self.threshold {
                     tracing::warn!(
-                        "[ferogram] CircuitBreaker tripped after {new_count} consecutive failures"
+                        "[ferogram::retry] circuit breaker tripped after {new_count} consecutive failures; rejecting requests for {:?}",
+                        self.cooldown
                     );
                     *state = CbState::Open {
                         tripped_at: std::time::Instant::now(),

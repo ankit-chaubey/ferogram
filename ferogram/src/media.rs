@@ -715,9 +715,9 @@ impl Downloadable for Sticker {
 /// Sequential chunk-by-chunk download iterator.
 pub struct DownloadIter {
     client: Client,
+    conn: Option<crate::dc_pool::DcConnection>,
     request: Option<tl::functions::upload::GetFile>,
     done: bool,
-    /// DC that hosts the file  - GetFile is routed here via invoke_on_dc.
     dc_id: i32,
 }
 
@@ -725,10 +725,11 @@ impl DownloadIter {
     pub(crate) fn new(client: Client, location: tl::enums::InputFileLocation, dc_id: i32) -> Self {
         Self {
             client,
+            conn: None,
             done: false,
             dc_id,
             request: Some(tl::functions::upload::GetFile {
-                precise: false,
+                precise: true,
                 cdn_supported: false,
                 location,
                 offset: 0,
@@ -745,7 +746,36 @@ impl DownloadIter {
         self
     }
 
+    /// Start iteration from `offset` bytes into the file.
+    ///
+    /// The offset is aligned down to the nearest chunk boundary so it satisfies
+    /// Telegram's `offset + limit` rule. Use this to implement HTTP range requests:
+    /// pass the `Range` header's start byte and skip any leading bytes that fall
+    /// before the requested range in the first chunk.
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # use ferogram::tl;
+    /// # async fn ex(client: Client, media: tl::enums::MessageMedia) {
+    /// let mut iter = client.iter_download(&media).unwrap().start_at(1024 * 1024);
+    /// while let Some(chunk) = iter.next().await.unwrap() {
+    ///     // stream chunk to HTTP response
+    /// }
+    /// # }
+    /// ```
+    pub fn start_at(mut self, offset: i64) -> Self {
+        if let Some(r) = &mut self.request {
+            let chunk = r.limit as i64;
+            r.offset = (offset / chunk) * chunk;
+        }
+        self
+    }
+
     /// Fetch the next chunk. Returns `None` when the download is complete.
+    ///
+    /// Opens a dedicated worker connection on the first call and reuses it for
+    /// all subsequent chunks. The connection is isolated from the main session
+    /// and the shared transfer pool, so it never contends with other requests.
     pub async fn next(&mut self) -> Result<Option<Vec<u8>>, InvocationError> {
         if self.done {
             return Ok(None);
@@ -754,11 +784,22 @@ impl DownloadIter {
             Some(r) => r.clone(),
             None => return Ok(None),
         };
-        // Route to the file's dedicated transfer connection, isolated from the main session.
-        // Using rpc_on_dc_raw_pub (main session) caused Crypto(InvalidBuffer) on reconnects
-        // because file traffic contaminated the main session's seq_no/msg_id state.
-        let body = self.client.rpc_transfer_on_dc_pub(self.dc_id, &req).await?;
-        let mut cur = Cursor::from_slice(&body);
+        if self.conn.is_none() {
+            self.conn = Some(self.client.open_worker_conn(self.dc_id).await?);
+        }
+        let conn = self.conn.as_mut().expect("conn set above");
+        let raw = match conn.rpc_call(&req).await {
+            Ok(r) => r,
+            Err(InvocationError::Rpc(ref rpc)) if rpc.code == 303 => {
+                let new_dc = rpc.value.unwrap_or(1) as i32;
+                self.dc_id = new_dc;
+                let new_conn = self.client.open_worker_conn(new_dc).await?;
+                self.conn = Some(new_conn);
+                self.conn.as_mut().unwrap().rpc_call(&req).await?
+            }
+            Err(e) => return Err(e),
+        };
+        let mut cur = Cursor::from_slice(&raw);
         match tl::enums::upload::File::deserialize(&mut cur)? {
             tl::enums::upload::File::File(f) => {
                 if (f.bytes.len() as i32) < req.limit {
@@ -772,10 +813,6 @@ impl DownloadIter {
                 }
                 Ok(Some(f.bytes))
             }
-            // CDN redirect: the server wants us to download from a CDN DC.
-            // cdn_supported=false means Telegram should not send this, but some
-            // DCs still do. Treat it as a retriable failure so the caller can
-            // fall back (e.g. switch cdn_supported=true and use CdnDownloader).
             tl::enums::upload::File::CdnRedirect(_) => {
                 self.done = true;
                 Err(InvocationError::Deserialize(
@@ -863,7 +900,7 @@ impl Client {
 
         let inner = make_input_file(big, file_id, total_parts, name, data);
         tracing::info!(
-            "[ferogram] uploaded '{}' ({} bytes, part={}B × {} parts, mime={})",
+            "[ferogram::transfer] upload complete: '{}' ({} bytes, {}B parts x {}, mime={})",
             name,
             total,
             part_size,
@@ -942,12 +979,16 @@ impl Client {
         while let Some(res) = open_set.join_next().await {
             match res {
                 Ok(Ok(c)) => conns.push(c),
-                Ok(Err(e)) => tracing::warn!("[ferogram] upload: worker conn failed: {e}"),
-                Err(e) => tracing::warn!("[ferogram] upload: worker conn join error: {e}"),
+                Ok(Err(e)) => {
+                    tracing::debug!("[ferogram::transfer] upload worker connection failed: {e}")
+                }
+                Err(e) => tracing::debug!("[ferogram::transfer] upload worker task panicked: {e}"),
             }
         }
         if conns.is_empty() {
-            tracing::warn!("[ferogram] upload: no worker conns, falling back to sequential");
+            tracing::debug!(
+                "[ferogram::transfer] no worker connections available; uploading sequentially"
+            );
             return self
                 .upload_bytes(&data, name, mime_type, shared_handle.as_ref())
                 .await;
@@ -1041,8 +1082,7 @@ impl Client {
                             // FLOOD_WAIT: sleep, retry same conn.
                             if rpc.code == 420 {
                                 let secs = rpc.value.unwrap_or(1) as u64;
-                                tracing::info!(
-                                    "[ferogram] upload: FLOOD_WAIT_{secs}; sleeping before retry"
+                                tracing::debug!("[ferogram::transfer] upload throttled by FLOOD_WAIT_{secs}; sleeping before retry"
                                 );
                                 tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
                                 continue;
@@ -1050,9 +1090,7 @@ impl Client {
                             // FILE_MIGRATE: server redirected upload to a different DC.
                             if rpc.code == 303 {
                                 let new_dc = rpc.value.unwrap_or(1) as i32;
-                                tracing::info!(
-                                    "[ferogram] upload: FILE_MIGRATE_{new_dc}; \
-                                     switching worker DC{worker_dc}→DC{new_dc}"
+                                tracing::debug!("[ferogram::transfer] upload redirected by FILE_MIGRATE to DC{new_dc} (was DC{worker_dc})"
                                 );
                                 // On FILE_MIGRATE, use a NEW file_id on
                                 // the new DC. The original DC's partial upload is abandoned.
@@ -1085,8 +1123,7 @@ impl Client {
                             // AUTH_KEY_UNREGISTERED: reopen with fresh DH + importAuth.
                             if rpc.name == "AUTH_KEY_UNREGISTERED" {
                                 tracing::warn!(
-                                    "[ferogram] upload: AUTH_KEY_UNREGISTERED DC{worker_dc}; \
-                                     reopening worker [{}/{MAX_WORKER_RECONNECTS}]",
+                                    "[ferogram::transfer] upload: AUTH_KEY_UNREGISTERED on DC{worker_dc}; re-establishing worker connection (attempt {}/{MAX_WORKER_RECONNECTS})",
                                     total_reconnects + 1
                                 );
                                 total_reconnects += 1;
@@ -1116,8 +1153,7 @@ impl Client {
                         }
                         let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
                         tracing::warn!(
-                            "[ferogram] upload: worker error ({err}), reconnecting \
-                             [{total_reconnects}/{MAX_WORKER_RECONNECTS}] (backoff {backoff_ms}ms)"
+                            "[ferogram::transfer] upload worker error ({err}); reconnecting (attempt {total_reconnects}/{MAX_WORKER_RECONNECTS}, backoff {backoff_ms}ms)"
                         );
                         tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                         conn = match client.open_worker_conn(worker_dc).await {
@@ -1142,7 +1178,299 @@ impl Client {
         let file_id = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
         let inner = make_input_file(big, file_id, total_parts, name, &data);
         tracing::info!(
-            "[ferogram] uploaded '{}' ({} bytes, part={}B x {} parts, {} workers)",
+            "[ferogram::transfer] upload complete: '{}' ({} bytes, {}B parts x {}, {} workers)",
+            name,
+            total,
+            part_size,
+            total_parts,
+            actual_workers
+        );
+        Ok(UploadedFile {
+            inner,
+            mime_type: resolve_mime(name, mime_type),
+            name: name.to_string(),
+        })
+    }
+
+    /// Upload a file from `path` using parallel workers without loading it into RAM.
+    ///
+    /// Each worker opens its own independent file handle, seeks to its part offset,
+    /// reads exactly `part_size` bytes, and sends. Peak RAM usage is
+    /// `n_workers * part_size` (at most 4 x 512 KB = 2 MB) regardless of file size.
+    pub(crate) async fn upload_file_concurrent_streaming(
+        &self,
+        path: &std::path::Path,
+        name: &str,
+        mime_type: &str,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<UploadedFile, InvocationError> {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+        let meta = tokio::fs::metadata(path)
+            .await
+            .map_err(InvocationError::Io)?;
+        let total = meta.len() as usize;
+        if total == 0 {
+            return Err(InvocationError::Deserialize(
+                "cannot upload empty file".into(),
+            ));
+        }
+
+        let (part_size, total_parts) = upload_part_size(total);
+        let big = total > BIG_FILE_THRESHOLD;
+        let n_workers = upload_worker_count(total).min(MAX_WORKERS_PER_FILE);
+
+        if let Some(h) = handle {
+            h.set_total(total as u64);
+            h.reset_start();
+        }
+        let shared_handle: Option<crate::transfer::TransferHandle> = handle.cloned();
+
+        let _global_guard = self
+            .inner
+            .worker_semaphore
+            .acquire_many(n_workers as u32)
+            .await
+            .expect("worker semaphore unexpectedly closed");
+
+        let file_id_atomic =
+            std::sync::Arc::new(std::sync::atomic::AtomicI64::new(crate::random_i64_pub()));
+        let upload_dc = Arc::new(AtomicI32::new(0i32));
+
+        let mut open_set: tokio::task::JoinSet<
+            Result<crate::dc_pool::DcConnection, InvocationError>,
+        > = tokio::task::JoinSet::new();
+        for _ in 0..n_workers {
+            let client = self.clone();
+            open_set.spawn(async move { client.open_worker_conn(0).await });
+        }
+        let mut conns: Vec<crate::dc_pool::DcConnection> = Vec::with_capacity(n_workers);
+        while let Some(res) = open_set.join_next().await {
+            match res {
+                Ok(Ok(c)) => conns.push(c),
+                Ok(Err(e)) => {
+                    tracing::debug!("[ferogram::transfer] upload worker connection failed: {e}")
+                }
+                Err(e) => tracing::debug!("[ferogram::transfer] upload worker task panicked: {e}"),
+            }
+        }
+        if conns.is_empty() {
+            tracing::debug!(
+                "[ferogram::transfer] no worker connections available; uploading sequentially"
+            );
+            let mut data = Vec::with_capacity(total);
+            tokio::fs::File::open(path)
+                .await
+                .map_err(InvocationError::Io)?
+                .read_to_end(&mut data)
+                .await
+                .map_err(InvocationError::Io)?;
+            return self
+                .upload_bytes(&data, name, mime_type, shared_handle.as_ref())
+                .await;
+        }
+        let actual_workers = conns.len();
+
+        let next_part = Arc::new(Mutex::new(0i32));
+        let mut tasks: tokio::task::JoinSet<Result<(), InvocationError>> =
+            tokio::task::JoinSet::new();
+
+        let path_arc = std::sync::Arc::new(path.to_path_buf());
+
+        for mut conn in conns {
+            let next_part = Arc::clone(&next_part);
+            let client = self.clone();
+            let upload_dc = Arc::clone(&upload_dc);
+            let file_id_atomic = std::sync::Arc::clone(&file_id_atomic);
+            let worker_handle = shared_handle.clone();
+            let path_arc = std::sync::Arc::clone(&path_arc);
+
+            tasks.spawn(async move {
+                const MAX_WORKER_RECONNECTS: u8 = 5;
+                let mut total_reconnects = 0u8;
+                let mut worker_dc = 0i32;
+
+                let mut file = tokio::fs::File::open(&*path_arc)
+                    .await
+                    .map_err(InvocationError::Io)?;
+
+                loop {
+                    let (part_num, file_id, current_dc) = {
+                        let mut g = next_part.lock().await;
+                        let fid = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
+                        let dc = upload_dc.load(Ordering::Relaxed);
+                        if *g >= total_parts {
+                            break;
+                        }
+                        let n = *g;
+                        *g += 1;
+                        (n, fid, dc)
+                    };
+                    if current_dc != worker_dc {
+                        worker_dc = current_dc;
+                        conn = match client.open_worker_conn(worker_dc).await {
+                            Ok(c) => c,
+                            Err(e) => return Err(e),
+                        };
+                        file = tokio::fs::File::open(&*path_arc)
+                            .await
+                            .map_err(InvocationError::Io)?;
+                    }
+
+                    let start = part_num as u64 * part_size as u64;
+                    let end = (start + part_size as u64).min(total as u64);
+                    let chunk_len = (end - start) as usize;
+
+                    file.seek(std::io::SeekFrom::Start(start))
+                        .await
+                        .map_err(InvocationError::Io)?;
+                    let mut bytes = vec![0u8; chunk_len];
+                    file.read_exact(&mut bytes)
+                        .await
+                        .map_err(InvocationError::Io)?;
+
+                    let chunk_u64 = chunk_len as u64;
+
+                    if let Some(ref h) = worker_handle {
+                        h.poll_pause_cancel().await?;
+                    }
+
+                    loop {
+                        let result = if big {
+                            conn.rpc_call(&tl::functions::upload::SaveBigFilePart {
+                                file_id,
+                                file_part: part_num,
+                                file_total_parts: total_parts,
+                                bytes: bytes.clone(),
+                            })
+                            .await
+                        } else {
+                            conn.rpc_call(&tl::functions::upload::SaveFilePart {
+                                file_id,
+                                file_part: part_num,
+                                bytes: bytes.clone(),
+                            })
+                            .await
+                        };
+                        let err = match result {
+                            Ok(_) => {
+                                if let Some(ref h) = worker_handle {
+                                    h.add_bytes(chunk_u64);
+                                }
+                                break;
+                            }
+                            Err(e) => e,
+                        };
+                        if let InvocationError::Rpc(ref rpc) = err {
+                            if rpc.code == 420 {
+                                let secs = rpc.value.unwrap_or(1) as u64;
+                                tracing::debug!("[ferogram::transfer] upload throttled by FLOOD_WAIT_{secs}; sleeping before retry"
+                                );
+                                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                                continue;
+                            }
+                            if rpc.code == 303 {
+                                let new_dc = rpc.value.unwrap_or(1) as i32;
+                                tracing::debug!("[ferogram::transfer] upload redirected by FILE_MIGRATE to DC{new_dc} (was DC{worker_dc})"
+                                );
+                                {
+                                    let mut g = next_part.lock().await;
+                                    file_id_atomic.store(
+                                        crate::random_i64_pub(),
+                                        std::sync::atomic::Ordering::SeqCst,
+                                    );
+                                    upload_dc.store(new_dc, Ordering::SeqCst);
+                                    *g = 0;
+                                }
+                                worker_dc = new_dc;
+                                match client.open_worker_conn(new_dc).await {
+                                    Ok(c) => {
+                                        conn = c;
+                                        file = tokio::fs::File::open(&*path_arc)
+                                            .await
+                                            .map_err(InvocationError::Io)?;
+                                        continue;
+                                    }
+                                    Err(e) => return Err(e),
+                                }
+                            }
+                            if rpc.name == "AUTH_KEY_UNREGISTERED" {
+                                tracing::warn!(
+                                    "[ferogram::transfer] upload: AUTH_KEY_UNREGISTERED on DC{worker_dc}; re-establishing worker connection (attempt {}/{MAX_WORKER_RECONNECTS})",
+                                    total_reconnects + 1
+                                );
+                                total_reconnects += 1;
+                                if total_reconnects >= MAX_WORKER_RECONNECTS {
+                                    return Err(err);
+                                }
+                                let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
+                                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms))
+                                    .await;
+                                match client.open_worker_conn(worker_dc).await {
+                                    Ok(c) => {
+                                        conn = c;
+                                        continue;
+                                    }
+                                    Err(e) => return Err(e),
+                                }
+                            }
+                            if rpc.code != -503 {
+                                return Err(err);
+                            }
+                        }
+                        total_reconnects += 1;
+                        if total_reconnects >= MAX_WORKER_RECONNECTS {
+                            return Err(err);
+                        }
+                        let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
+                        tracing::warn!(
+                            "[ferogram::transfer] upload worker error ({err}); reconnecting (attempt {total_reconnects}/{MAX_WORKER_RECONNECTS}, backoff {backoff_ms}ms)"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        conn = match client.open_worker_conn(worker_dc).await {
+                            Ok(c) => c,
+                            Err(e) => return Err(e),
+                        };
+                    }
+                }
+                Ok(())
+            });
+        }
+
+        while let Some(res) = tasks.join_next().await {
+            if let Err(e) =
+                res.map_err(|e| InvocationError::Io(std::io::Error::other(e.to_string())))?
+            {
+                tasks.abort_all();
+                return Err(e);
+            }
+        }
+
+        let file_id = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
+        let inner = if big {
+            tl::enums::InputFile::Big(tl::types::InputFileBig {
+                id: file_id,
+                parts: total_parts,
+                name: name.to_string(),
+            })
+        } else {
+            let mut data = Vec::with_capacity(total);
+            tokio::fs::File::open(path)
+                .await
+                .map_err(InvocationError::Io)?
+                .read_to_end(&mut data)
+                .await
+                .map_err(InvocationError::Io)?;
+            let md5_checksum = format!("{:x}", md5::compute(&data));
+            tl::enums::InputFile::InputFile(tl::types::InputFile {
+                id: file_id,
+                parts: total_parts,
+                name: name.to_string(),
+                md5_checksum,
+            })
+        };
+        tracing::info!(
+            "[ferogram::transfer] upload complete: '{}' ({} bytes, {}B parts x {}, {} workers, streaming)",
             name,
             total,
             part_size,
@@ -1168,6 +1496,10 @@ impl Client {
         let media = media.into();
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        // Same conversion send_message does: a bare MentionName entity has no
+        // access_hash, so Telegram drops it. Resolve it to InputMessageEntityMentionName
+        // first, or markdown/html user-mention links render as plain text.
+        let entities = self.resolve_outgoing_entities(msg.entities.clone()).await;
         let req = tl::functions::messages::SendMedia {
             silent: msg.silent,
             background: msg.background,
@@ -1182,7 +1514,7 @@ impl Client {
             message: msg.text.clone(),
             random_id: crate::random_i64_pub(),
             reply_markup: msg.reply_markup.clone(),
-            entities: msg.entities.clone(),
+            entities,
             schedule_date: msg.schedule_date,
             schedule_repeat_period: None,
             send_as: None,
@@ -1239,21 +1571,25 @@ impl Client {
             })
         });
 
-        let multi: Vec<tl::enums::InputSingleMedia> = items
-            .into_iter()
-            .map(|item| {
-                tl::enums::InputSingleMedia::InputSingleMedia(tl::types::InputSingleMedia {
+        // Same conversion send_message/send_file do: a bare MentionName entity has
+        // no access_hash, so Telegram drops it silently. Resolve per item since
+        // each item in an album can carry its own caption and entities.
+        let mut multi: Vec<tl::enums::InputSingleMedia> = Vec::with_capacity(items.len());
+        for item in items {
+            let entities = if item.entities.is_empty() {
+                None
+            } else {
+                self.resolve_outgoing_entities(Some(item.entities)).await
+            };
+            multi.push(tl::enums::InputSingleMedia::InputSingleMedia(
+                tl::types::InputSingleMedia {
                     media: item.media,
                     random_id: crate::random_i64_pub(),
                     message: item.caption,
-                    entities: if item.entities.is_empty() {
-                        None
-                    } else {
-                        Some(item.entities)
-                    },
-                })
-            })
-            .collect();
+                    entities,
+                },
+            ));
+        }
 
         let req = tl::functions::messages::SendMultiMedia {
             silent: false,
@@ -1282,7 +1618,9 @@ impl Client {
                 let updates_opt = match tl::enums::Updates::from_bytes_exact(&body) {
                     Ok(updates) => Some(updates),
                     Err(e) => {
-                        tracing::warn!("[ferogram] updates parse error: {e}");
+                        tracing::warn!(
+                            "[ferogram::transfer] failed to parse server response as an Updates frame: {e}"
+                        );
                         None
                     }
                 };
@@ -1338,6 +1676,7 @@ impl Client {
         // `.chunk_size()` if needed.
         DownloadIter {
             client: self.clone(),
+            conn: None,
             done: false,
             dc_id,
             request: Some(tl::functions::upload::GetFile {
@@ -1426,7 +1765,7 @@ impl Client {
                         return Err(InvocationError::Rpc(rpc.clone()));
                     }
                     tracing::debug!(
-                        "[ferogram] seq download: FILE_MIGRATE_{new_dc}; reopening worker on DC{new_dc}"
+                        "[ferogram::transfer] sequential download redirected by FILE_MIGRATE to DC{new_dc}"
                     );
                     worker_dc = new_dc;
                     conn = self.open_worker_conn(worker_dc).await?;
@@ -1439,8 +1778,8 @@ impl Client {
                         return Err(InvocationError::Rpc(rpc.clone()));
                     }
                     tracing::debug!(
-                        "[ferogram] seq download: AUTH_KEY_UNREGISTERED DC{worker_dc}; \
-                         reopening worker [{reopen_attempts}/{MAX_REOPEN}]"
+                        "[ferogram::transfer] sequential download: AUTH_KEY_UNREGISTERED on DC{worker_dc}; \
+                         re-establishing connection (attempt {reopen_attempts}/{MAX_REOPEN})"
                     );
                     // Evict the cached foreign key so open_worker_conn does a
                     // fresh DH + import instead of reusing the dead key again.
@@ -1636,12 +1975,18 @@ impl Client {
         while let Some(res) = open_set.join_next().await {
             match res {
                 Ok(Ok(c)) => conns.push(c),
-                Ok(Err(e)) => tracing::warn!("[ferogram] download: worker conn failed: {e}"),
-                Err(e) => tracing::warn!("[ferogram] download: worker conn join error: {e}"),
+                Ok(Err(e)) => {
+                    tracing::debug!("[ferogram::transfer] download worker connection failed: {e}")
+                }
+                Err(e) => {
+                    tracing::debug!("[ferogram::transfer] download worker task panicked: {e}")
+                }
             }
         }
         if conns.is_empty() {
-            tracing::warn!("[ferogram] download: no worker conns, falling back to sequential");
+            tracing::debug!(
+                "[ferogram::transfer] no worker connections available; downloading sequentially"
+            );
             return self.download_media_on_dc(location, dc_id).await;
         }
 
@@ -1713,8 +2058,7 @@ impl Client {
                         if let InvocationError::Rpc(ref rpc) = err {
                             if rpc.code == 420 {
                                 let secs = rpc.value.unwrap_or(1) as u64;
-                                tracing::info!(
-                                    "[ferogram] download: FLOOD_WAIT_{secs}; sleeping before retry"
+                                tracing::debug!("[ferogram::transfer] download throttled by FLOOD_WAIT_{secs}; sleeping before retry"
                                 );
                                 if abort.load(Ordering::Relaxed) {
                                     abort.store(true, Ordering::Relaxed);
@@ -1728,9 +2072,7 @@ impl Client {
                             // Does not count against the reconnect budget.
                             if rpc.code == 303 {
                                 let new_dc = rpc.value.unwrap_or(1) as i32;
-                                tracing::info!(
-                                    "[ferogram] download: FILE_MIGRATE_{new_dc}; \
-                                     switching worker DC{worker_dc}→DC{new_dc}"
+                                tracing::debug!("[ferogram::transfer] download redirected by FILE_MIGRATE to DC{new_dc} (was DC{worker_dc})"
                                 );
                                 worker_dc = new_dc;
                                 match client.open_worker_conn(new_dc).await {
@@ -1749,8 +2091,7 @@ impl Client {
                             // which creates a new registered key. Counts against reconnect budget.
                             if rpc.name == "AUTH_KEY_UNREGISTERED" {
                                 tracing::warn!(
-                                    "[ferogram] download: AUTH_KEY_UNREGISTERED DC{worker_dc}; \
-                                     reopening worker [{}/{MAX_WORKER_RECONNECTS}]",
+                                    "[ferogram::transfer] download: AUTH_KEY_UNREGISTERED on DC{worker_dc}; re-establishing worker connection (attempt {}/{MAX_WORKER_RECONNECTS})",
                                     total_reconnects + 1
                                 );
                                 total_reconnects += 1;
@@ -1790,8 +2131,7 @@ impl Client {
                         // Exponential backoff: 300 ms, 600 ms, 1.2 s, 2.4 s …
                         let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
                         tracing::warn!(
-                            "[ferogram] download: worker error ({err}), reconnecting \
-                             [{total_reconnects}/{MAX_WORKER_RECONNECTS}] (backoff {backoff_ms}ms)"
+                            "[ferogram::transfer] download worker error ({err}); reconnecting (attempt {total_reconnects}/{MAX_WORKER_RECONNECTS}, backoff {backoff_ms}ms)"
                         );
                         // Check abort before sleeping.
                         // full backoff duration when another worker has already failed.
@@ -1889,6 +2229,276 @@ impl Client {
         }
         out.truncate(size);
         Ok(out)
+    }
+
+    /// Parallel download to a file path. Workers write directly to pre-allocated disk space
+    /// via seek + write_all; no in-memory assembly. Use this for large file downloads.
+    ///
+    /// `size` must be the exact byte size of the file (from `size_from_media`).
+    pub(crate) async fn download_media_concurrent_on_dc_to_file(
+        &self,
+        location: tl::enums::InputFileLocation,
+        size: usize,
+        dc_id: i32,
+        path: &std::path::Path,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<u64, InvocationError> {
+        use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+
+        let chunk = download_chunk_size(size) as usize;
+        let n_parts = size.div_ceil(chunk);
+        let n_workers = download_worker_count(size).min(MAX_WORKERS_PER_FILE);
+
+        if let Some(h) = handle {
+            h.set_total(size as u64);
+            h.reset_start();
+        }
+
+        let _global_guard = self
+            .inner
+            .worker_semaphore
+            .acquire_many(n_workers as u32)
+            .await
+            .expect("worker semaphore unexpectedly closed");
+
+        let home = {
+            let _g = self.inner.home_dc_id.lock().await;
+            *_g
+        };
+        let effective_dc = if dc_id == 0 { home } else { dc_id };
+
+        // Single-worker small files: skip parallel setup overhead.
+        if n_workers == 1 && effective_dc == home {
+            drop(_global_guard);
+            let mut file = tokio::fs::File::create(path)
+                .await
+                .map_err(InvocationError::Io)?;
+            return self
+                .download_streaming_on_dc(location, dc_id, &mut file, handle)
+                .await;
+        }
+
+        // Pre-allocate the file to avoid fragmentation on disk.
+        let file_for_alloc = tokio::fs::File::create(path)
+            .await
+            .map_err(InvocationError::Io)?;
+        file_for_alloc
+            .set_len(size as u64)
+            .await
+            .map_err(InvocationError::Io)?;
+        drop(file_for_alloc);
+
+        let mut open_set: tokio::task::JoinSet<
+            Result<crate::dc_pool::DcConnection, InvocationError>,
+        > = tokio::task::JoinSet::new();
+        for _ in 0..n_workers {
+            let client = self.clone();
+            open_set.spawn(async move { client.open_worker_conn(effective_dc).await });
+        }
+        let mut conns: Vec<crate::dc_pool::DcConnection> = Vec::with_capacity(n_workers);
+        while let Some(res) = open_set.join_next().await {
+            match res {
+                Ok(Ok(c)) => conns.push(c),
+                Ok(Err(e)) => {
+                    tracing::debug!("[ferogram::transfer] download worker connection failed: {e}")
+                }
+                Err(e) => {
+                    tracing::debug!("[ferogram::transfer] download worker task panicked: {e}")
+                }
+            }
+        }
+        if conns.is_empty() {
+            tracing::debug!(
+                "[ferogram::transfer] no worker connections available; downloading sequentially"
+            );
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .await
+                .map_err(InvocationError::Io)?;
+            return self
+                .download_streaming_on_dc(location, dc_id, &mut file, handle)
+                .await;
+        }
+
+        let next_part = Arc::new(Mutex::new(0usize));
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(usize, Vec<u8>)>(conns.len() * 2);
+        let mut tasks: tokio::task::JoinSet<Result<(), InvocationError>> =
+            tokio::task::JoinSet::new();
+        let abort = Arc::new(AtomicBool::new(false));
+
+        for mut conn in conns {
+            let location = location.clone();
+            let next_part = Arc::clone(&next_part);
+            let tx = tx.clone();
+            let client = self.clone();
+            let abort = Arc::clone(&abort);
+            let mut worker_dc = effective_dc;
+
+            tasks.spawn(async move {
+                const MAX_WORKER_RECONNECTS: u8 = 5;
+                let mut total_reconnects = 0u8;
+
+                loop {
+                    if abort.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let part = {
+                        let mut g = next_part.lock().await;
+                        if *g >= n_parts {
+                            break;
+                        }
+                        let p = *g;
+                        *g += 1;
+                        p
+                    };
+                    let req = tl::functions::upload::GetFile {
+                        precise: true,
+                        cdn_supported: false,
+                        location: location.clone(),
+                        offset: (part * chunk) as i64,
+                        limit: chunk as i32,
+                    };
+                    let raw = loop {
+                        let err = match conn.rpc_call(&req).await {
+                            Ok(r) => break r,
+                            Err(e) => e,
+                        };
+                        if let InvocationError::Rpc(ref rpc) = err {
+                            if rpc.code == 420 {
+                                let secs = rpc.value.unwrap_or(1) as u64;
+                                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                                continue;
+                            }
+                            if rpc.code == 303 {
+                                let new_dc = rpc.value.unwrap_or(1) as i32;
+                                worker_dc = new_dc;
+                                match client.open_worker_conn(new_dc).await {
+                                    Ok(c) => {
+                                        conn = c;
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        abort.store(true, Ordering::Relaxed);
+                                        return Err(e);
+                                    }
+                                }
+                            }
+                            if rpc.name == "AUTH_KEY_UNREGISTERED" {
+                                total_reconnects += 1;
+                                if total_reconnects >= MAX_WORKER_RECONNECTS {
+                                    abort.store(true, Ordering::Relaxed);
+                                    return Err(err);
+                                }
+                                let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
+                                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms))
+                                    .await;
+                                match client.open_worker_conn(worker_dc).await {
+                                    Ok(c) => {
+                                        conn = c;
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        abort.store(true, Ordering::Relaxed);
+                                        return Err(e);
+                                    }
+                                }
+                            }
+                            if rpc.code != -503 {
+                                abort.store(true, Ordering::Relaxed);
+                                return Err(err);
+                            }
+                        }
+                        total_reconnects += 1;
+                        if total_reconnects >= MAX_WORKER_RECONNECTS {
+                            abort.store(true, Ordering::Relaxed);
+                            return Err(err);
+                        }
+                        let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        match client.open_worker_conn(worker_dc).await {
+                            Ok(c) => {
+                                conn = c;
+                            }
+                            Err(e) => {
+                                abort.store(true, Ordering::Relaxed);
+                                return Err(e);
+                            }
+                        }
+                    };
+                    let mut cur = Cursor::from_slice(&raw);
+                    match tl::enums::upload::File::deserialize(&mut cur)? {
+                        tl::enums::upload::File::File(f) => {
+                            let expected = if part == n_parts - 1 {
+                                size - part * chunk
+                            } else {
+                                chunk
+                            };
+                            if f.bytes.len() != expected {
+                                abort.store(true, Ordering::Relaxed);
+                                return Err(InvocationError::Deserialize(format!(
+                                    "download part {part}: expected {expected} B, got {} B",
+                                    f.bytes.len()
+                                )));
+                            }
+                            if tx.send((part, f.bytes)).await.is_err() {
+                                break;
+                            }
+                        }
+                        tl::enums::upload::File::CdnRedirect(_) => {
+                            abort.store(true, Ordering::Relaxed);
+                            return Err(InvocationError::Deserialize(
+                                "CDN redirect in concurrent download; retry via sequential".into(),
+                            ));
+                        }
+                    }
+                }
+                Ok(())
+            });
+        }
+        drop(tx);
+
+        // Writer task: single tokio::fs::File, seeks to each chunk offset and writes.
+        // This is the only writer - no locking needed.
+        let path_owned = path.to_path_buf();
+        let shared_handle = handle.cloned();
+        let writer_task: tokio::task::JoinHandle<Result<u64, InvocationError>> =
+            tokio::spawn(async move {
+                let mut file = tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&path_owned)
+                    .await
+                    .map_err(InvocationError::Io)?;
+                let mut total_written = 0u64;
+                while let Some((part, data)) = rx.recv().await {
+                    let offset = (part * chunk) as u64;
+                    file.seek(std::io::SeekFrom::Start(offset))
+                        .await
+                        .map_err(InvocationError::Io)?;
+                    file.write_all(&data).await.map_err(InvocationError::Io)?;
+                    let n = data.len() as u64;
+                    total_written += n;
+                    if let Some(ref h) = shared_handle {
+                        h.add_bytes(n);
+                    }
+                }
+                file.flush().await.map_err(InvocationError::Io)?;
+                Ok(total_written)
+            });
+
+        while let Some(res) = tasks.join_next().await {
+            if let Err(e) =
+                res.map_err(|e| InvocationError::Io(std::io::Error::other(e.to_string())))?
+            {
+                tasks.abort_all();
+                writer_task.abort();
+                return Err(e);
+            }
+        }
+
+        writer_task
+            .await
+            .map_err(|e| InvocationError::Io(std::io::Error::other(e.to_string())))?
     }
 
     /// Download any [`Downloadable`] item (internal).
@@ -1993,7 +2603,6 @@ impl crate::update::IncomingMessage {
 
 /// Extract a download [`InputFileLocation`] and DC id from a raw `MessageMedia`.
 ///
-/// Used by [`IncomingMessage::download_media_with`].
 /// Returns `(location, dc_id)` or `None` when the media has no downloadable file.
 pub fn download_location_from_media(
     media: Option<&tl::enums::MessageMedia>,
@@ -2057,6 +2666,19 @@ pub fn location_from_media(
 pub fn size_from_media(media: &tl::enums::MessageMedia) -> Option<usize> {
     if let Some(doc) = Document::from_media(media) {
         return Some(doc.raw.size as usize);
+    }
+    if let Some(photo) = Photo::from_media(media) {
+        let sz = photo
+            .raw
+            .sizes
+            .iter()
+            .filter_map(|s| match s {
+                tl::enums::PhotoSize::PhotoSize(ps) => Some(ps.size as usize),
+                tl::enums::PhotoSize::Progressive(ps) => ps.sizes.last().map(|&s| s as usize),
+                _ => None,
+            })
+            .max();
+        return sz;
     }
     None
 }

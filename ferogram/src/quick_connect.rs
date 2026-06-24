@@ -46,57 +46,75 @@ impl Client {
         api_id: i32,
         api_hash: &str,
     ) -> Result<(Client, ShutdownToken), QuickConnectError> {
-        let (client, shutdown) = Client::builder()
+        Client::builder()
             .session(session)
             .api_id(api_id)
             .api_hash(api_hash)
             .connect()
-            .await?;
-
-        if client
-            .is_authorized()
             .await
-            .map_err(QuickConnectError::Auth)?
-        {
-            return Ok((client, shutdown));
-        }
-
-        let credential = prompt("Enter phone number or bot token: ")?;
-
-        if is_bot_token(&credential) {
-            client
-                .bot_sign_in(&credential)
-                .await
-                .map_err(QuickConnectError::Auth)?;
-        } else {
-            sign_in_user(&client, &credential).await?;
-        }
-
-        client
-            .save_session()
-            .await
-            .map_err(QuickConnectError::Auth)?;
-
-        Ok((client, shutdown))
     }
 }
 
+/// Shared interactive login: skip if already authorized, otherwise prompt for
+/// a phone number or bot token, drive the full auth flow (code, 2FA), and
+/// persist the result. Used by both [`Client::quick_connect`] and
+/// [`crate::builder::ClientBuilder::connect_and_login`] so there is exactly
+/// one implementation of this flow to keep correct.
+pub(crate) async fn login_interactive(client: &Client) -> Result<(), QuickConnectError> {
+    if client
+        .is_authorized()
+        .await
+        .map_err(QuickConnectError::Auth)?
+    {
+        println!("✅ Already signed in");
+        return Ok(());
+    }
+
+    println!("🔑 Not signed in, starting login flow");
+    let credential = prompt("Enter phone number or bot token: ")?;
+
+    if is_bot_token(&credential) {
+        println!("🤖 Detected bot token, authenticating …");
+        let name = client
+            .bot_sign_in(&credential)
+            .await
+            .map_err(QuickConnectError::Auth)?;
+        println!("✅ Signed in as bot: {name}");
+    } else {
+        sign_in_user(client, &credential).await?;
+    }
+
+    client
+        .save_session()
+        .await
+        .map_err(QuickConnectError::Auth)?;
+    println!("💾 Session saved");
+
+    Ok(())
+}
+
 async fn sign_in_user(client: &Client, phone: &str) -> Result<(), QuickConnectError> {
+    println!("📱 Requesting login code for {phone} …");
     let token = client
         .request_login_code(phone)
         .await
         .map_err(QuickConnectError::Auth)?;
+    println!("📨 Code sent, check Telegram (or SMS)");
 
     let code = prompt("Enter the login code: ")?;
 
     match client.sign_in(&token, &code).await {
-        Ok(_) => {}
+        Ok(name) => {
+            println!("✅ Signed in as {name}");
+        }
         Err(SignInError::PasswordRequired(pw_token)) => {
+            println!("🔒 Two-step verification enabled");
             let password = prompt("Enter your 2FA password: ")?;
-            client
+            let name = client
                 .check_password(*pw_token, password.as_bytes())
                 .await
                 .map_err(QuickConnectError::Auth)?;
+            println!("✅ Signed in as {name}");
         }
         Err(SignInError::InvalidCode) => return Err(QuickConnectError::InvalidCode),
         Err(SignInError::SignUpRequired) => return Err(QuickConnectError::SignUpRequired),
@@ -148,11 +166,13 @@ impl From<BuilderError> for QuickConnectError {
 impl std::fmt::Display for QuickConnectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Builder(e) => write!(f, "quick_connect: {e}"),
-            Self::Auth(e) => write!(f, "quick_connect: auth error: {e}"),
-            Self::InvalidCode => f.write_str("quick_connect: invalid login code"),
-            Self::SignUpRequired => f.write_str("quick_connect: phone not registered"),
-            Self::Io(e) => write!(f, "quick_connect: stdin error: {e}"),
+            Self::Builder(e) => write!(f, "connection failed: {e}"),
+            Self::Auth(e) => write!(f, "authentication error: {e}"),
+            Self::InvalidCode => f.write_str("❌ Invalid login code, please try again"),
+            Self::SignUpRequired => f.write_str(
+                "❌ Phone number not registered on Telegram, sign up via the official app first",
+            ),
+            Self::Io(e) => write!(f, "stdin error: {e}"),
         }
     }
 }
