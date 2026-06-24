@@ -144,9 +144,10 @@ pub async fn recv_frame_plain<T: Deserializable>(
                 std::sync::atomic::AtomicU64::new(0);
             let full_call_id =
                 PLAIN_RECV_CALL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            log::trace!(
-                "[full-plain] recv_frame_plain entry: call#{full_call_id} recv_seqno={}",
-                recv_seqno.load(std::sync::atomic::Ordering::Relaxed),
+            tracing::trace!(
+                call_id = full_call_id,
+                recv_seqno = recv_seqno.load(std::sync::atomic::Ordering::Relaxed),
+                "[ferogram::connect] Full transport: recv_frame_plain entered"
             );
             let mut len_buf = [0u8; 4];
             stream.read_exact(&mut len_buf).await?;
@@ -175,8 +176,12 @@ pub async fn recv_frame_plain<T: Deserializable>(
             // Validate and advance seqno.
             let recv_seq = u32::from_le_bytes(body[..4].try_into().unwrap());
             let expected_seq = recv_seqno.load(std::sync::atomic::Ordering::Relaxed);
-            log::trace!(
-                "[full-plain] recv frame: call#{full_call_id} len={total_len} recv_seq={recv_seq} expected_seq={expected_seq}"
+            tracing::trace!(
+                call_id = full_call_id,
+                total_len,
+                recv_seq,
+                expected_seq,
+                "[ferogram::connect] Full transport: frame received, seqno verified"
             );
             if recv_seq != expected_seq {
                 return Err(ConnectError::other(format!(

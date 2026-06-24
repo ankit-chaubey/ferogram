@@ -184,7 +184,10 @@ impl EncryptedSession {
         // Full session reset: new session_id, seq_no = 0.
         // The server will see a brand-new session and accept seq_no starting from 1.
         self.reset_session();
-        log::debug!("[ferogram] seq_no desync (code {_code}): performed full session reset");
+        tracing::debug!(
+            code = _code,
+            "[ferogram::mtproto] seq_no desync: full session reset (new session_id, seq_no=0)"
+        );
     }
 
     /// Undo the last `next_seq_no` increment.
@@ -211,10 +214,11 @@ impl EncryptedSession {
             .unwrap()
             .as_secs() as i32;
         let new_offset = server_time.wrapping_sub(local_now);
-        log::debug!(
-            "[ferogram] time_offset correction: {} → {} (server_time={server_time})",
-            self.time_offset,
-            new_offset
+        tracing::debug!(
+            old_offset = self.time_offset,
+            new_offset,
+            server_time,
+            "[ferogram::mtproto] clock skew corrected from bad_msg_notification"
         );
         self.time_offset = new_offset;
         // Seed last_msg_id from the server's msg_id (bits 1-0 cleared to 0b00)
@@ -474,10 +478,10 @@ impl EncryptedSession {
         self.last_msg_id = 0;
         // Do not clear seen_msg_ids: the ring is shared with the owning
         // DcConnection and must survive session resets to reject replayed frames.
-        log::debug!(
-            "[ferogram] session reset: {:#018x} → {:#018x}",
-            old_session,
-            self.session_id
+        tracing::debug!(
+            old_session = format_args!("{old_session:#018x}"),
+            new_session = format_args!("{:#018x}", self.session_id),
+            "[ferogram::mtproto] session reset: new session_id assigned, seq_no zeroed"
         );
     }
 
@@ -494,9 +498,9 @@ impl EncryptedSession {
     pub fn reset_seq_no_only(&mut self) {
         self.sequence = 0;
         self.last_msg_id = 0;
-        log::debug!(
-            "[ferogram] seq_no reset (session_id unchanged): {:#018x}",
-            self.session_id
+        tracing::debug!(
+            session_id = format_args!("{:#018x}", self.session_id),
+            "[ferogram::mtproto] seq_no reset after new_session_created (session_id unchanged)"
         );
     }
 }

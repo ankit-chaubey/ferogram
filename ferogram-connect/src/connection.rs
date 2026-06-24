@@ -280,7 +280,7 @@ impl Connection {
             TransportKind::Full => "Full",
             TransportKind::FakeTls { .. } => "FakeTls",
         };
-        tracing::debug!("[ferogram] Connecting to {addr} ({t_label}) DH …");
+        tracing::debug!("[ferogram::connect] starting DH handshake with {addr} via {t_label}");
 
         let addr2 = addr.to_string();
         let socks5_c = socks5.cloned();
@@ -368,7 +368,7 @@ impl Connection {
                     }
                 }
             };
-            tracing::debug!("[ferogram] DH complete ✓");
+            tracing::debug!("[ferogram::connect] DH handshake complete, auth key established");
 
             Ok::<Self, ConnectError>(Self {
                 stream,
@@ -409,10 +409,12 @@ impl Connection {
                 Self::open_stream(&addr2, socks5_c.as_ref(), &transport_c, dc_id).await?
             };
             if pfs {
-                tracing::debug!("[ferogram] PFS: temp DH bind for DC{dc_id}");
+                tracing::debug!("[ferogram::connect] PFS: binding temporary key for DC{dc_id}");
                 match Self::do_pfs_bind(&mut stream, &frame_kind, &auth_key, dc_id).await {
                     Ok(temp_enc) => {
-                        tracing::debug!("[ferogram] PFS bind complete DC{dc_id}");
+                        tracing::debug!(
+                            "[ferogram::connect] PFS: temporary key bound for DC{dc_id}"
+                        );
                         return Ok(Self {
                             stream,
                             enc: temp_enc,
@@ -422,7 +424,7 @@ impl Connection {
                     }
                     Err(e) => {
                         tracing::warn!(
-                            "[ferogram] PFS bind failed DC{dc_id} ({e}); falling back to perm key"
+                            "[ferogram::connect] PFS bind failed for DC{dc_id} ({e}); falling back to permanent key"
                         );
                         // Graceful fallback: reconnect because DH frames left the stream dirty.
                         // Return error and let the caller handle retry without PFS.
@@ -571,12 +573,14 @@ impl Connection {
                 }
                 Err(ref e) if e == "__need_more__" => {
                     tracing::debug!(
-                        "[ferogram] PFS bind (DC{dc_id}): informational frame {attempt}, reading next"
+                        "[ferogram::connect] PFS (DC{dc_id}): got informational frame on attempt {attempt}, reading next"
                     );
                     continue;
                 }
                 Err(reason) => {
-                    tracing::error!("[ferogram] PFS bind server response (DC{dc_id}): {reason}");
+                    tracing::error!(
+                        "[ferogram::connect] PFS bind rejected by server for DC{dc_id}: {reason}"
+                    );
                     return Err(ConnectError::other(format!(
                         "auth.bindTempAuthKey: {reason}"
                     )));

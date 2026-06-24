@@ -13,7 +13,7 @@ keywords      = ["telegram", "mtproto", "crypto", "aes", "rsa"]
 categories    = ["cryptography", "api-bindings"]
 
 [dependencies]
-log        = "0.4"
+tracing    = { version = "0.1", features = ["log"] }
 aes        = "0.8.4"
 ctr        = "0.9"
 getrandom  = "0.2"

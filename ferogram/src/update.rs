@@ -1743,7 +1743,8 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
     match cid {
         ID_UPDATES_TOO_LONG => {
             tracing::warn!(
-                "[ferogram] updatesTooLong: call client.get_difference() to recover missed updates"
+                "[ferogram::updates] updatesTooLong received; updates may have been missed. \
+                 The client will call getDifference to recover."
             );
             vec![]
         }
@@ -1753,8 +1754,11 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
             match tl::types::UpdateShortMessage::deserialize(&mut cur) {
                 Ok(m) => vec![Update::NewMessage(make_short_dm(m))],
                 Err(e) => {
-                    tracing::debug!(
-                        "[ferogram] updateShortMessage parse error (unknown constructor or newer layer): {e}"
+                    tracing::warn!(
+                        constructor = format_args!("{cid:#010x}"),
+                        error = %e,
+                        "[ferogram::updates] updateShortMessage deserialization failed \
+                         (layer mismatch or new constructor?); update dropped"
                     );
                     vec![]
                 }
@@ -1766,8 +1770,11 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
             match tl::types::UpdateShortChatMessage::deserialize(&mut cur) {
                 Ok(m) => vec![Update::NewMessage(make_short_chat(m))],
                 Err(e) => {
-                    tracing::debug!(
-                        "[ferogram] updateShortChatMessage parse error (unknown constructor or newer layer): {e}"
+                    tracing::warn!(
+                        constructor = format_args!("{cid:#010x}"),
+                        error = %e,
+                        "[ferogram::updates] updateShortChatMessage deserialization failed \
+                         (layer mismatch or new constructor?); update dropped"
                     );
                     vec![]
                 }
@@ -1779,8 +1786,11 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
             match tl::types::UpdateShort::deserialize(&mut cur) {
                 Ok(m) => from_single_update(m.update),
                 Err(e) => {
-                    tracing::debug!(
-                        "[ferogram] updateShort parse error (unknown constructor or newer layer): {e}"
+                    tracing::warn!(
+                        constructor = format_args!("{cid:#010x}"),
+                        error = %e,
+                        "[ferogram::updates] updateShort deserialization failed \
+                         (layer mismatch or new constructor?); update dropped"
                     );
                     vec![]
                 }
@@ -1794,8 +1804,11 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
                     u.updates.into_iter().flat_map(from_single_update).collect()
                 }
                 Err(e) => {
-                    tracing::debug!(
-                        "[ferogram] Updates parse error (unknown constructor or newer layer): {e}"
+                    tracing::warn!(
+                        constructor = format_args!("{cid:#010x}"),
+                        error = %e,
+                        "[ferogram::updates] Updates deserialization failed \
+                         (layer mismatch or new constructor?); update dropped"
                     );
                     vec![]
                 }
@@ -1810,8 +1823,11 @@ pub(crate) fn parse_updates(bytes: &[u8]) -> Vec<Update> {
                     u.updates.into_iter().flat_map(from_single_update).collect()
                 }
                 Err(e) => {
-                    tracing::debug!(
-                        "[ferogram] UpdatesCombined parse error (unknown constructor or newer layer): {e}"
+                    tracing::warn!(
+                        constructor = format_args!("{cid:#010x}"),
+                        error = %e,
+                        "[ferogram::updates] UpdatesCombined deserialization failed \
+                         (layer mismatch or new constructor?); update dropped"
                     );
                     vec![]
                 }

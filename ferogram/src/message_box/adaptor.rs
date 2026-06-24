@@ -380,7 +380,9 @@ fn adapt_updates(updates: tl::enums::Updates) -> Result<tl::types::UpdatesCombin
     Ok(match updates {
         // updatesTooLong → gap; must getDifference.
         tl::enums::Updates::TooLong => {
-            tracing::info!("[ferogram/msgbox] updatesTooLong → gap");
+            tracing::debug!(
+                "[ferogram::msgbox] updatesTooLong seen in container; scheduling getDifference"
+            );
             return Err(Gap);
         }
         tl::enums::Updates::UpdateShortMessage(s) => short_message_to_combined(s),

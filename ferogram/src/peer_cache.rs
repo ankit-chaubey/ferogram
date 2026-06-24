@@ -441,10 +441,10 @@ impl PeerCache {
             } else if self.channels_min.contains(&peer_id) {
                 if self.experimental.allow_missing_channel_hash {
                     tracing::warn!(
-                        "[ferogram] PeerCache: channel {peer_id} is a min channel \
-                         (contains min user {user_id}), using hash=0. \
-                         This will likely cause CHANNEL_INVALID. \
-                         Resolve the channel first."
+                        "[ferogram::peer_cache] channel {peer_id} is a min peer \
+                         (seen inside message for user {user_id}), using access_hash=0. \
+                         This will likely cause CHANNEL_INVALID on user accounts. \
+                         Call client.resolve_peer() to get a full access_hash first."
                     );
                     tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
                         channel_id: peer_id,
@@ -486,10 +486,9 @@ impl PeerCache {
         // No hash at all.
         if self.experimental.allow_zero_hash {
             tracing::warn!(
-                "[ferogram] PeerCache: no access_hash for user {user_id}, using 0. \
-                 Valid for bots only (Telegram spec). On user accounts this will \
-                 cause USER_ID_INVALID. Resolve the peer first or disable \
-                 ExperimentalFeatures::allow_zero_hash."
+                "[ferogram::peer_cache] no access_hash cached for user {user_id}, using 0. \
+                 This is valid for bots but will cause USER_ID_INVALID on user accounts. \
+                 Disable ExperimentalFeatures::allow_zero_hash or call resolve_peer() first."
             );
             Ok(tl::enums::InputPeer::User(tl::types::InputPeerUser {
                 user_id,
@@ -515,10 +514,9 @@ impl PeerCache {
 
         if self.experimental.allow_zero_hash {
             tracing::warn!(
-                "[ferogram] PeerCache: no access_hash for channel {channel_id}, using 0. \
-                 Valid for bots only (Telegram spec). On user accounts this will \
-                 cause CHANNEL_INVALID. Resolve the peer first or disable \
-                 ExperimentalFeatures::allow_zero_hash."
+                "[ferogram::peer_cache] no access_hash cached for channel {channel_id}, using 0. \
+                 This is valid for bots but will cause CHANNEL_INVALID on user accounts. \
+                 Disable ExperimentalFeatures::allow_zero_hash or call resolve_peer() first."
             );
             Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
                 channel_id,

@@ -47,7 +47,10 @@ impl Socks5Config {
 
     /// Establish a TCP connection through this SOCKS5 proxy.
     pub async fn connect(&self, target: &str) -> Result<TcpStream, ConnectError> {
-        tracing::info!("[socks5] Connecting via {} -> {target}", self.proxy_addr);
+        tracing::debug!(
+            "[ferogram::connect] SOCKS5: relaying through {} to {target}",
+            self.proxy_addr
+        );
         let stream = match &self.auth {
             None => Socks5Stream::connect(self.proxy_addr.as_str(), target)
                 .await

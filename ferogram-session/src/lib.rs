@@ -830,8 +830,8 @@ impl SessionBackend for BinaryFileBackend {
             Err(e) => {
                 let bak = self.path.with_extension("bak");
                 tracing::warn!(
-                    "[ferogram] Session file {:?} is corrupt ({e}); \
-                     renaming to {:?} and starting fresh",
+                    "[ferogram::session] session file {:?} could not be read ({e}); \
+                     backing it up to {:?} and starting a new session",
                     self.path,
                     bak
                 );

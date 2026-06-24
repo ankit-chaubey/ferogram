@@ -372,8 +372,8 @@ impl Dispatcher {
     {
         if self.state_storage.is_none() {
             tracing::warn!(
-                "on_message_fsm registered without a StateStorage - \
-                 this handler will never fire. Call dp.with_state_storage(storage) first."
+                "[ferogram::router] on_message_fsm handler registered but no StateStorage is set -- \
+                 this handler will never fire. Call dp.with_state_storage(storage) before dispatching."
             );
         }
         let expected_state = state.as_key();
@@ -395,8 +395,8 @@ impl Dispatcher {
     {
         if self.state_storage.is_none() {
             tracing::warn!(
-                "on_edit_fsm registered without a StateStorage - \
-                 this handler will never fire. Call dp.with_state_storage(storage) first."
+                "[ferogram::router] on_edit_fsm handler registered but no StateStorage is set -- \
+                 this handler will never fire. Call dp.with_state_storage(storage) before dispatching."
             );
         }
         let expected_state = state.as_key();
@@ -465,7 +465,7 @@ impl Dispatcher {
 
         if self.middlewares.is_empty() {
             if let Err(e) = (endpoint)(update).await {
-                tracing::error!(error = %e, "dispatch error");
+                tracing::error!(error = %e, "[ferogram::router] handler returned an error");
             }
             return;
         }
@@ -473,7 +473,7 @@ impl Dispatcher {
         let chain: Arc<[Arc<dyn Middleware>]> = self.middlewares.clone().into();
         let next = Next::new(chain, endpoint);
         if let Err(e) = next.run(update).await {
-            tracing::error!(error = %e, "dispatch error");
+            tracing::error!(error = %e, "[ferogram::router] handler returned an error");
         }
     }
 }
@@ -552,7 +552,7 @@ async fn run_message(
         let current_state = match arc_storage.get_state(key.clone()).await {
             Ok(s) => s,
             Err(e) => {
-                tracing::error!(error = %e, "FSM: failed to read state");
+                tracing::error!(error = %e, "[ferogram::router] FSM: state storage read failed; skipping FSM handlers for this update");
                 None
             }
         };

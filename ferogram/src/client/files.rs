@@ -63,12 +63,13 @@ impl Client {
         handle: &TransferHandle,
         mut on_progress: impl FnMut(TransferProgress) + Send + 'static,
     ) -> Result<u64, InvocationError> {
-        let span = tracing::info_span!(
+        let _span = tracing::info_span!(
             target: "ferogram::transfer",
             "download",
             total = tracing::field::Empty,
         );
-        let _enter = span.enter();
+        // Note: span is attached via .instrument() on the async block below,
+        // not via span.enter(), which does not work correctly across await points.
 
         let done = Arc::new(AtomicBool::new(false));
         let ctl = handle.clone();
@@ -116,13 +117,14 @@ impl Client {
         handle: &TransferHandle,
         mut on_progress: impl FnMut(TransferProgress) + Send + 'static,
     ) -> Result<media::UploadedFile, InvocationError> {
-        let span = tracing::info_span!(
+        let _span = tracing::info_span!(
             target: "ferogram::transfer",
             "upload",
             name,
             total = tracing::field::Empty,
         );
-        let _enter = span.enter();
+        // Note: span is attached via .instrument() on the async block below,
+        // not via span.enter(), which does not work correctly across await points.
 
         let done = Arc::new(AtomicBool::new(false));
         let ctl = handle.clone();
@@ -409,7 +411,7 @@ impl Client {
                 && cp.total_parts == total_parts
                 && cp.part_size == part_size
             {
-                tracing::info!(
+                tracing::debug!(
                     target: "ferogram::transfer",
                     part = cp.last_part + 1,
                     total_parts,
@@ -421,7 +423,7 @@ impl Client {
                     cp.mime_type.clone(),
                 )
             } else {
-                tracing::info!(target: "ferogram::transfer", "upload: checkpoint expired or incompatible, restarting");
+                tracing::debug!(target: "ferogram::transfer", "upload: checkpoint expired or incompatible; restarting from scratch");
                 store.delete_upload(&key).await;
                 (crate::media::random_file_id_pub(), 0, String::new())
             }
@@ -544,7 +546,7 @@ impl Client {
 
         let inner = crate::media::make_input_file_pub(big, file_id, total_parts, name, &data);
         store.delete_upload(&key).await;
-        tracing::info!(target: "ferogram::transfer", name, total_parts, "upload complete, checkpoint purged");
+        tracing::info!(target: "ferogram::transfer", name, total_parts, "upload complete; checkpoint purged");
 
         Ok(media::UploadedFile::new(
             inner,

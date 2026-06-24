@@ -132,7 +132,7 @@ impl DcPool {
         tokio::spawn(async move {
             while let Some(event) = frame_rx.recv().await {
                 if let FrameEvent::Error(e) = event {
-                    tracing::warn!("[dc_pool] worker connection failed: {e}");
+                    tracing::warn!("[ferogram::pool] worker connection dropped: {e}");
                     alive_for_drain.store(false, Ordering::Release);
                     break;
                 }
@@ -175,7 +175,7 @@ impl DcPool {
 
         // Ensure at least one slot exists.
         if !self.conns.contains_key(&dc_id) || self.conns[&dc_id].is_empty() {
-            tracing::debug!("[dc_pool] auto-connecting DC{dc_id} ({addr})");
+            tracing::debug!("[ferogram::pool] opening first connection to DC{dc_id} at {addr}");
             let conn = if let Some((key, salt, offset)) = auth_key {
                 DcConnection::connect_with_key(
                     &addr,
@@ -226,9 +226,8 @@ impl DcPool {
         // for very heavy transfers.
         if min_inflight > 0 && slots.len() < MAX_CONNS_PER_DC {
             tracing::debug!(
-                "[dc_pool] DC{dc_id}: all {} slots busy (min_inflight={}), opening new slot",
-                slots.len(),
-                min_inflight
+                "[ferogram::pool] DC{dc_id}: all {} slots busy (min_inflight={min_inflight}), opening extra connection",
+                slots.len()
             );
             let conn = if let Some((key, salt, offset)) = auth_key {
                 DcConnection::connect_with_key(
@@ -273,7 +272,7 @@ impl DcPool {
         self.init_done.remove(&dc_id);
         let total: usize = self.conns.values().map(|v| v.len()).sum();
         metrics::gauge!("ferogram.connections_active").set(total as f64);
-        tracing::debug!("[dc_pool] evicted all slots for DC{dc_id}");
+        tracing::debug!("[ferogram::pool] evicted all connections for DC{dc_id}");
     }
 
     /// Enqueue `body` on `slot` and await the result.
@@ -332,7 +331,7 @@ impl DcPool {
 
         if result.is_err() && !slot.alive.load(Ordering::Acquire) {
             tracing::warn!(
-                "[dc_pool] DC{dc_id} worker connection died, evicting all slots and retrying"
+                "[ferogram::pool] DC{dc_id} connection died mid-request; evicting and retrying on a fresh connection"
             );
             self.evict(dc_id);
             let retry_slot = self.get_or_create_slot(dc_id, false, None).await?;
@@ -366,7 +365,7 @@ impl DcPool {
 
         if result.is_err() && !slot.alive.load(Ordering::Acquire) {
             tracing::warn!(
-                "[dc_pool] serializable: DC{dc_id} worker connection died, evicting and retrying"
+                "[ferogram::pool] DC{dc_id} connection died mid-request (serializable path); evicting and retrying"
             );
             self.evict(dc_id);
             let retry_slot = self.get_or_create_slot(dc_id, false, None).await?;

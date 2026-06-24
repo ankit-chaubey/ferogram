@@ -388,8 +388,10 @@ impl MtpSender {
         }
         let cid = u32::from_le_bytes(body[..4].try_into().unwrap());
         tracing::trace!(
-            "[mtp_sender] dispatch: ctor={cid:#010x} msg_id={msg_id:#x} len={}",
-            body.len()
+            ctor = format_args!("{cid:#010x}"),
+            msg_id = format_args!("{msg_id:#x}"),
+            body_len = body.len(),
+            "[ferogram::sender] dispatching received message"
         );
 
         match cid {
@@ -487,7 +489,9 @@ impl MtpSender {
                     let bad_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
                     let new_salt = i64::from_le_bytes(body[20..28].try_into().unwrap());
                     tracing::debug!(
-                        "[mtp_sender] bad_server_salt: bad={bad_msg_id:#018x} new_salt={new_salt:#018x}"
+                        bad_msg_id = format_args!("{bad_msg_id:#018x}"),
+                        new_salt = format_args!("{new_salt:#018x}"),
+                        "[ferogram::sender] bad_server_salt: salt updated, request queued for resend"
                     );
                     self.enc.salt = new_salt;
                     self.queue_resend(bad_msg_id);
@@ -501,7 +505,9 @@ impl MtpSender {
                     let bad_msg_id = i64::from_le_bytes(body[4..12].try_into().unwrap());
                     let error_code = u32::from_le_bytes(body[16..20].try_into().unwrap());
                     tracing::debug!(
-                        "[mtp_sender] bad_msg_notification: bad={bad_msg_id:#018x} code={error_code}"
+                        bad_msg_id = format_args!("{bad_msg_id:#018x}"),
+                        error_code,
+                        "[ferogram::sender] bad_msg_notification received"
                     );
                     match error_code {
                         16 | 17 => {
@@ -524,7 +530,10 @@ impl MtpSender {
             0x9ec20908 => {
                 if body.len() >= 28 {
                     let new_salt = i64::from_le_bytes(body[20..28].try_into().unwrap());
-                    tracing::debug!("[mtp_sender] new_session_created salt={new_salt:#018x}");
+                    tracing::debug!(
+                        salt = format_args!("{new_salt:#018x}"),
+                        "[ferogram::sender] new_session_created: server opened a fresh session, re-queuing pending requests"
+                    );
                     self.enc.salt = new_salt;
                     // Server lost our session: re-queue all sent requests.
                     for req in self.requests.iter_mut() {
@@ -587,7 +596,10 @@ impl MtpSender {
             }
             _ => false,
         }) {
-            tracing::debug!("[mtp_sender] queuing resend for {bad_msg_id:#018x}");
+            tracing::debug!(
+                msg_id = format_args!("{bad_msg_id:#018x}"),
+                "[ferogram::sender] request queued for resend"
+            );
             req.state = MsgState::Pending;
         }
     }

@@ -142,7 +142,7 @@ impl DnsResolver {
                 && entry.expires_at > Instant::now()
             {
                 tracing::debug!(
-                    "[dns] cache hit: {} {} → {:?}",
+                    "[ferogram::dns] cache hit for {} {} -> {:?}",
                     domain,
                     if ipv6 { "AAAA" } else { "A" },
                     entry.ips
@@ -177,7 +177,7 @@ impl DnsResolver {
                     (_, Ok(v)) if !v.is_empty() => v,
                     _ => {
                         tracing::warn!(
-                            "[dns] DoH resolution failed for {} {}",
+                            "[ferogram::dns] all DoH providers failed to resolve {} {} -- returning no addresses",
                             domain,
                             if ipv6 { "AAAA" } else { "A" }
                         );
@@ -198,7 +198,7 @@ impl DnsResolver {
         let ips: Vec<String> = entries.into_iter().map(|e| e.data).collect();
 
         tracing::debug!(
-            "[dns] resolved {} {} → {:?} (TTL={:?})",
+            "[ferogram::dns] resolved {} {} -> {:?} (TTL={:?})",
             domain,
             if ipv6 { "AAAA" } else { "A" },
             ips,
