@@ -901,7 +901,20 @@ async fn h_media_echo(
     .await;
 
     let dl_start = Instant::now();
-    match msg.download_media(&tmp_path).await {
+    let dl_file = match tokio::fs::File::create(&tmp_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            rh(
+                client,
+                peer,
+                msg_id,
+                &format!("❌ <b>Failed to create temp file:</b> <code>{e}</code>"),
+            )
+            .await;
+            return;
+        }
+    };
+    match msg.download(dl_file).await {
         Err(e) => {
             rh(
                 client,
@@ -910,19 +923,10 @@ async fn h_media_echo(
                 &format!("❌ <b>Download error:</b> <code>{e}</code>"),
             )
             .await;
+            let _ = tokio::fs::remove_file(&tmp_path).await;
             return;
         }
-        Ok(false) => {
-            rh(
-                client,
-                peer,
-                msg_id,
-                "❌ No download location for this media.",
-            )
-            .await;
-            return;
-        }
-        Ok(true) => {}
+        Ok(_bytes_written) => {}
     }
     let dl_secs = dl_start.elapsed().as_secs_f64().max(0.001);
 

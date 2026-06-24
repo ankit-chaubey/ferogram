@@ -186,10 +186,16 @@ impl ClientBuilder {
     ///
     /// # Example
     /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # const ID: i32 = 0;
+    /// # const HASH: &str = "";
+    /// # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let (client, _) = Client::builder()
     ///     .session("my.session").api_id(ID).api_hash(HASH)
     ///     .socks5("127.0.0.1:1080")
     ///     .connect().await?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn socks5(mut self, addr: impl Into<String>) -> Self {
         self.socks5 = Some(crate::socks5::Socks5Config::new(addr));
@@ -200,10 +206,16 @@ impl ClientBuilder {
     ///
     /// # Example
     /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # const ID: i32 = 0;
+    /// # const HASH: &str = "";
+    /// # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let (client, _) = Client::builder()
     ///     .session("my.session").api_id(ID).api_hash(HASH)
     ///     .socks5_auth("proxy.example.com:1080", "user", "pass")
     ///     .connect().await?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn socks5_auth(
         mut self,
@@ -225,10 +237,16 @@ impl ClientBuilder {
     ///
     /// # Example
     /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # const ID: i32 = 0;
+    /// # const HASH: &str = "";
+    /// # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let (client, _) = Client::builder()
     ///     .session("my.session").api_id(ID).api_hash(HASH)
     ///     .proxy("proxy.example.com", 443, "dd1234abcdef...")
     ///     .connect().await?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn proxy(self, host: impl Into<String>, port: u16, secret: &str) -> Self {
         let host = host.into();

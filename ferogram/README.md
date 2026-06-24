@@ -28,7 +28,7 @@ If you're starting fresh, this is the only crate you need. Everything else in th
 
 ```toml
 [dependencies]
-ferogram = "0.6.0"
+ferogram = "0.6.2"
 tokio    = { version = "1", features = ["full"] }
 ```
 
@@ -37,7 +37,7 @@ Get `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org).
 Optional feature flags:
 
 ```toml
-ferogram = { version = "0.6.0", features = [
+ferogram = { version = "0.6.2", features = [
     "sqlite-session",  # SqliteBackend via rusqlite
     "libsql-session",  # LibSqlBackend via libsql-client (Turso)
     "html",            # parse_html / generate_html (built-in parser)
