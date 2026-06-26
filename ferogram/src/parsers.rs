@@ -10,4 +10,7 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
-pub use ferogram_parsers::{generate_html, generate_markdown, parse_html, parse_markdown};
+pub use ferogram_parsers::{
+    generate_html, generate_markdown, parse_html, parse_markdown, parse_rich_html,
+    parse_rich_markdown,
+};

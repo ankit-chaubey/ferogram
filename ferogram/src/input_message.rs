@@ -49,6 +49,10 @@ pub struct InputMessage {
     /// Attached media to send alongside the message.
     /// Use [`InputMessage::copy_media`] to attach media copied from an existing message.
     pub media: Option<tl::enums::InputMedia>,
+    /// Structured rich-text content (headings, tables, code blocks, etc).
+    /// Use [`InputMessage::rich_text`] to attach `PageBlock`s, e.g. from
+    /// [`crate::parsers::parse_rich_markdown`].
+    pub rich_message: Option<tl::enums::InputRichMessage>,
 }
 
 /// Options for forwarding messages.
@@ -227,6 +231,32 @@ impl InputMessage {
     /// Remove any previously attached media.
     pub fn clear_media(mut self) -> Self {
         self.media = None;
+        self
+    }
+
+    /// Attach structured rich-text content (headings, tables, code blocks,
+    /// collapsible sections, etc), rendered as a full document inside
+    /// Telegram instead of flat text.
+    ///
+    /// Pass the blocks returned by [`crate::parsers::parse_rich_markdown`] or
+    /// [`crate::parsers::parse_rich_html`].
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::{InputMessage, parsers::parse_rich_markdown};
+    /// let blocks = parse_rich_markdown("# Hello\n\nWorld");
+    /// let msg = InputMessage::text("").rich_text(blocks);
+    /// ```
+    pub fn rich_text(mut self, blocks: Vec<tl::enums::PageBlock>) -> Self {
+        self.rich_message = Some(tl::enums::InputRichMessage::InputRichMessage(
+            tl::types::InputRichMessage {
+                rtl: false,
+                noautolink: false,
+                blocks,
+                photos: None,
+                documents: None,
+                users: None,
+            },
+        ));
         self
     }
 

@@ -23,7 +23,7 @@
 //! Get API credentials from https://my.telegram.org
 //! Get a bot token from @BotFather on Telegram.
 
-use ferogram::{Client, parsers::parse_rich_markdown};
+use ferogram::{Client, InputMessage, parsers::parse_rich_markdown};
 
 const API_ID: i32 = 0; // from https://my.telegram.org
 const API_HASH: &str = ""; // from https://my.telegram.org
@@ -78,7 +78,8 @@ Math works inline too: $E = mc^2$
 ```rust
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let blocks = parse_rich_markdown("# Hello");
-    client.send_message(peer).rich_text(blocks).await?;
+    let msg = InputMessage::text("").rich_text(blocks);
+    client.send_message(peer, msg).await?;
     Ok(())
 }
 ```
@@ -127,11 +128,9 @@ _Sent by ferogram. See docs/src/messaging/rich-messages.md for the full syntax r
 "##;
 
     let blocks = parse_rich_markdown(article.trim());
+    let msg = InputMessage::text("").rich_text(blocks);
 
-    client
-        .send_message(TARGET_USERNAME)
-        .rich_text(blocks)
-        .await?;
+    client.send_message(TARGET_USERNAME, msg).await?;
 
     println!("Rich message sent to @{TARGET_USERNAME}");
 

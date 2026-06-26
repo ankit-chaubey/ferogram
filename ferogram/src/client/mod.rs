@@ -2763,6 +2763,12 @@ impl Client {
         let entities = self.resolve_outgoing_entities(msg.entities.clone()).await;
 
         let body: Vec<u8> = if let Some(media) = msg.media.clone() {
+            if msg.rich_message.is_some() {
+                tracing::warn!(
+                    "[ferogram::client] rich_text() is ignored when media is attached; \
+                     messages.sendMedia has no rich_message field"
+                );
+            }
             let req = tl::functions::messages::SendMedia {
                 silent: msg.silent,
                 background: msg.background,
@@ -2810,7 +2816,7 @@ impl Client {
                 effect: None,
                 allow_paid_stars: None,
                 suggested_post: None,
-                rich_message: None,
+                rich_message: msg.rich_message.clone(),
             };
             self.rpc_call_raw(&req).await?
         };
