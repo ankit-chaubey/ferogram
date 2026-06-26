@@ -30,6 +30,7 @@
 - [Inline Keyboards](./messaging/keyboards.md)
 - [Media & Files](./messaging/media.md)
 - [Message Formatting](./messaging/formatting.md)
+- [Rich Messages](./messaging/rich-messages.md)
 - [Reactions](./messaging/reactions.md)
 
 ---

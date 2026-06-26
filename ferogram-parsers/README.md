@@ -58,6 +58,29 @@ let html = generate_html(&text, &entities);
 
 Supported tags: `<b>`, `<strong>`, `<i>`, `<em>`, `<u>`, `<s>`, `<del>`, `<code>`, `<pre>`, `<tg-spoiler>`, `<a href="url">`, `<tg-emoji emoji-id="id">`
 
+### Rich Messages
+
+Rich messages use `PageBlock` / `RichText` trees instead of flat entity lists. Both Markdown and HTML rich formats are supported.
+
+```rust
+use ferogram_parsers::{parse_rich_markdown, parse_rich_html, parse_rich_html_inline};
+
+// Rich Markdown → Vec<PageBlock>
+let blocks = parse_rich_markdown("# Heading\n\n**bold** text with $math$");
+
+// Rich HTML → Vec<PageBlock>
+let blocks = parse_rich_html("<h1>Heading</h1><p><b>bold</b> text</p>");
+
+// Inline HTML → RichText (for table cells, captions, etc.)
+let rt = parse_rich_html_inline("<b>bold</b> and <tg-spoiler>secret</tg-spoiler>");
+```
+
+Pass the resulting `Vec<PageBlock>` to `inputRichMessage` (or `inputRichMessageHTML` / `inputRichMessageMarkdown`) when calling `messages.sendMessage` with a rich message.
+
+**Supported block types:** Headings H1-H6, Paragraph, Preformatted, Divider, Unordered/Ordered/Task lists, Blockquote, Pullquote/Aside, Table, Details/Summary, Media (Photo/Video/Audio/Voice/Animation), Collage, Slideshow, Map, Math block, Footnotes, Footer, Anchor.
+
+**Supported inline (RichText) types:** Bold, Italic, Underline, Strike, Fixed, Marked, Spoiler, Subscript, Superscript, Inline Math, Url, Email, Phone, MentionName, CustomEmoji, Date/Time, Anchor, Concat.
+
 ---
 
 ## Feature flags

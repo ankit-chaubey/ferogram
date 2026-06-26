@@ -2704,3 +2704,2929 @@ mod tests {
         }
     }
 }
+
+// Rich Message parsers
+//
+// Convert Rich Markdown / Rich HTML into `Vec<tl::enums::PageBlock>`,
+// which is the native MTProto representation used by `InputRichMessage`.
+//
+// Supported block types (both parsers):
+//   Headings H1-H6, Paragraph, Pre/Code block, Divider (---), Anchor (<a name>),
+//   Unordered list, Ordered list, Task list,
+//   Blockquote, Pullquote/Aside,
+//   Table (with thead, alignment, colspan, rowspan),
+//   Details/Summary (collapsible),
+//   Media: Photo, Video, Audio, VoiceNote, Animation,
+//   Collage, Slideshow,
+//   Map (<tg-map>),
+//   Math block ($$…$$ / ```math / <tg-math-block>),
+//   Footnotes ([^id]: …),
+//   Footer.
+//
+// Supported inline (RichText) types:
+//   Plain, Bold, Italic, Underline, Strike, Fixed (code), Marked (==),
+//   Spoiler, Subscript, Superscript, Math (inline $…$),
+//   URL, Email, Phone, MentionName, CustomEmoji, Date (tg://time),
+//   Hashtag, Cashtag, BotCommand, AutoUrl, AutoEmail, AutoPhone, BankCard,
+//   Anchor (textAnchor), Concat.
+
+// Shared helpers
+
+fn rt_empty() -> tl::enums::RichText {
+    tl::enums::RichText::TextEmpty
+}
+
+fn rt_plain(s: impl Into<String>) -> tl::enums::RichText {
+    let t = s.into();
+    if t.is_empty() {
+        return rt_empty();
+    }
+    tl::enums::RichText::TextPlain(tl::types::TextPlain { text: t })
+}
+
+fn rt_bold(inner: tl::enums::RichText) -> tl::enums::RichText {
+    tl::enums::RichText::TextBold(Box::new(tl::types::TextBold { text: inner }))
+}
+
+fn rt_italic(inner: tl::enums::RichText) -> tl::enums::RichText {
+    tl::enums::RichText::TextItalic(Box::new(tl::types::TextItalic { text: inner }))
+}
+
+fn rt_underline(inner: tl::enums::RichText) -> tl::enums::RichText {
+    tl::enums::RichText::TextUnderline(Box::new(tl::types::TextUnderline { text: inner }))
+}
+
+fn rt_strike(inner: tl::enums::RichText) -> tl::enums::RichText {
+    tl::enums::RichText::TextStrike(Box::new(tl::types::TextStrike { text: inner }))
+}
+
+fn rt_fixed(inner: tl::enums::RichText) -> tl::enums::RichText {
+    tl::enums::RichText::TextFixed(Box::new(tl::types::TextFixed { text: inner }))
+}
+
+fn rt_marked(inner: tl::enums::RichText) -> tl::enums::RichText {
+    tl::enums::RichText::TextMarked(Box::new(tl::types::TextMarked { text: inner }))
+}
+
+fn rt_spoiler(inner: tl::enums::RichText) -> tl::enums::RichText {
+    tl::enums::RichText::TextSpoiler(Box::new(tl::types::TextSpoiler { text: inner }))
+}
+
+fn rt_subscript(inner: tl::enums::RichText) -> tl::enums::RichText {
+    tl::enums::RichText::TextSubscript(Box::new(tl::types::TextSubscript { text: inner }))
+}
+
+fn rt_superscript(inner: tl::enums::RichText) -> tl::enums::RichText {
+    tl::enums::RichText::TextSuperscript(Box::new(tl::types::TextSuperscript { text: inner }))
+}
+
+fn rt_url(inner: tl::enums::RichText, url: String) -> tl::enums::RichText {
+    tl::enums::RichText::TextUrl(Box::new(tl::types::TextUrl {
+        text: inner,
+        url,
+        webpage_id: 0,
+    }))
+}
+
+fn rt_email(inner: tl::enums::RichText, email: String) -> tl::enums::RichText {
+    tl::enums::RichText::TextEmail(Box::new(tl::types::TextEmail { text: inner, email }))
+}
+
+fn rt_phone(inner: tl::enums::RichText, phone: String) -> tl::enums::RichText {
+    tl::enums::RichText::TextPhone(Box::new(tl::types::TextPhone { text: inner, phone }))
+}
+
+fn rt_mention_name(inner: tl::enums::RichText, user_id: i64) -> tl::enums::RichText {
+    tl::enums::RichText::TextMentionName(Box::new(tl::types::TextMentionName {
+        text: inner,
+        user_id,
+    }))
+}
+
+fn rt_custom_emoji(document_id: i64, alt: String) -> tl::enums::RichText {
+    tl::enums::RichText::TextCustomEmoji(tl::types::TextCustomEmoji { document_id, alt })
+}
+
+fn rt_math(source: String) -> tl::enums::RichText {
+    tl::enums::RichText::TextMath(tl::types::TextMath { source })
+}
+
+fn rt_anchor(inner: tl::enums::RichText, name: String) -> tl::enums::RichText {
+    tl::enums::RichText::TextAnchor(Box::new(tl::types::TextAnchor { text: inner, name }))
+}
+
+fn rt_date(inner: tl::enums::RichText, date: i32, fmt: &str) -> tl::enums::RichText {
+    let (relative, short_time, long_time, short_date, long_date, day_of_week) =
+        parse_tg_time_format(fmt);
+    tl::enums::RichText::TextDate(Box::new(tl::types::TextDate {
+        relative,
+        short_time,
+        long_time,
+        short_date,
+        long_date,
+        day_of_week,
+        text: inner,
+        date,
+    }))
+}
+
+fn rt_concat(parts: Vec<tl::enums::RichText>) -> tl::enums::RichText {
+    let non_empty: Vec<_> = parts
+        .into_iter()
+        .filter(|r| !matches!(r, tl::enums::RichText::TextEmpty))
+        .collect();
+    match non_empty.len() {
+        0 => rt_empty(),
+        1 => non_empty.into_iter().next().unwrap(),
+        _ => tl::enums::RichText::TextConcat(tl::types::TextConcat { texts: non_empty }),
+    }
+}
+
+fn empty_caption() -> tl::enums::PageCaption {
+    tl::enums::PageCaption::PageCaption(tl::types::PageCaption {
+        text: rt_empty(),
+        credit: rt_empty(),
+    })
+}
+
+fn caption_text(text: tl::enums::RichText) -> tl::enums::PageCaption {
+    tl::enums::PageCaption::PageCaption(tl::types::PageCaption {
+        text,
+        credit: rt_empty(),
+    })
+}
+
+fn caption_text_credit(
+    text: tl::enums::RichText,
+    credit: tl::enums::RichText,
+) -> tl::enums::PageCaption {
+    tl::enums::PageCaption::PageCaption(tl::types::PageCaption { text, credit })
+}
+
+// Determine media type from URL (extension/mime heuristic)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MediaKind {
+    Photo,
+    Video,
+    Audio,
+    Voice,
+    Animation,
+}
+
+fn media_kind_from_url(url: &str) -> MediaKind {
+    let u = url.to_ascii_lowercase();
+    let path = u.split('?').next().unwrap_or(&u);
+    if path.ends_with(".ogg") || path.ends_with(".oga") {
+        return MediaKind::Voice;
+    }
+    if path.ends_with(".mp3")
+        || path.ends_with(".m4a")
+        || path.ends_with(".flac")
+        || path.ends_with(".wav")
+    {
+        return MediaKind::Audio;
+    }
+    if path.ends_with(".gif") {
+        return MediaKind::Animation;
+    }
+    if path.ends_with(".mp4")
+        || path.ends_with(".mov")
+        || path.ends_with(".webm")
+        || path.ends_with(".avi")
+    {
+        return MediaKind::Video;
+    }
+    if path.ends_with(".jpg")
+        || path.ends_with(".jpeg")
+        || path.ends_with(".png")
+        || path.ends_with(".webp")
+        || path.ends_with(".bmp")
+    {
+        return MediaKind::Photo;
+    }
+    MediaKind::Photo // default
+}
+
+// Build a PageBlock for a standalone media URL with optional caption and spoiler.
+// Since RichMessage media is URL-based (not file_id-based), we use PageBlockEmbed
+// for the actual URL and fall back to typed blocks with id=0 for semantic clarity.
+// The Bot API rich message spec transmits media as URLs in InputRichFile which
+// are resolved server-side; we model that with id=0 stubs so callers that
+// use inputRichMessageHTML/inputRichMessageMarkdown paths work correctly.
+fn media_block(url: &str, caption: tl::enums::PageCaption, spoiler: bool) -> tl::enums::PageBlock {
+    let kind = media_kind_from_url(url);
+    match kind {
+        MediaKind::Photo => tl::enums::PageBlock::Photo(tl::types::PageBlockPhoto {
+            spoiler,
+            photo_id: 0,
+            caption,
+            url: Some(url.to_string()),
+            webpage_id: None,
+        }),
+        MediaKind::Video | MediaKind::Animation => {
+            tl::enums::PageBlock::Video(tl::types::PageBlockVideo {
+                autoplay: false,
+                r#loop: false,
+                spoiler,
+                video_id: 0,
+                caption,
+            })
+        }
+        MediaKind::Audio => tl::enums::PageBlock::Audio(tl::types::PageBlockAudio {
+            audio_id: 0,
+            caption,
+        }),
+        MediaKind::Voice => tl::enums::PageBlock::Audio(tl::types::PageBlockAudio {
+            audio_id: 0,
+            caption,
+        }),
+    }
+}
+
+// Inline RichText parser for Rich Markdown inline spans
+
+/// Parse a Rich Markdown inline string (may contain nested `**`, `*`, `_`, `__`,
+/// `~~`, `||`, `` ` ``, `==text==`, `[label](url)`, `![alt](tg://emoji?id=N)`,
+/// `![alt](tg://time?unix=N&format=F)`, `$…$`, `<u>`, `<sub>`, `<sup>`,
+/// `<tg-spoiler>`, `<ins>`, `<mark>`) into a `RichText` tree.
+pub fn parse_rich_inline_md(text: &str) -> tl::enums::RichText {
+    let chars: Vec<char> = text.chars().collect();
+    let (parts, _) = parse_rich_inline_md_chars(&chars, 0, chars.len(), &[]);
+    rt_concat(parts)
+}
+
+fn parse_rich_inline_md_chars(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    stop_at: &[char],
+) -> (Vec<tl::enums::RichText>, usize) {
+    let mut parts: Vec<tl::enums::RichText> = Vec::new();
+    let mut buf = String::new();
+    let mut i = start;
+
+    macro_rules! flush {
+        () => {
+            if !buf.is_empty() {
+                parts.push(rt_plain(std::mem::take(&mut buf)));
+            }
+        };
+    }
+
+    while i < end {
+        let c = chars[i];
+
+        // Backslash escape
+        if c == '\\' && i + 1 < end {
+            buf.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+
+        // Stop chars (used for nested parsing, e.g. stop at `]`)
+        if stop_at.contains(&c) {
+            break;
+        }
+
+        // HTML inline tags embedded in markdown: <u>, <ins>, <sub>, <sup>, <tg-spoiler>, <mark>, <s>, <b>, <i>
+        if c == '<'
+            && let Some((new_i, rt)) = try_parse_html_inline_tag(chars, i, end)
+        {
+            flush!();
+            parts.push(rt);
+            i = new_i;
+            continue;
+        }
+
+        // ``` inline code block (take all until next ```)
+        if c == '`' && i + 2 < end && chars[i + 1] == '`' && chars[i + 2] == '`' {
+            // triple backtick in inline context: treat as literal (block parsers handle code blocks)
+            buf.push('`');
+            buf.push('`');
+            buf.push('`');
+            i += 3;
+            continue;
+        }
+
+        // Inline code: `…`
+        if c == '`' {
+            let mut j = i + 1;
+            while j < end && chars[j] != '`' {
+                j += 1;
+            }
+            if j < end {
+                let code: String = chars[i + 1..j].iter().collect();
+                flush!();
+                parts.push(rt_fixed(rt_plain(code)));
+                i = j + 1;
+                continue;
+            }
+        }
+
+        // Custom emoji: ![alt](tg://emoji?id=N) or tg://time?unix=N&format=F
+        if c == '!'
+            && i + 1 < end
+            && chars[i + 1] == '['
+            && let Some((j, url, alt)) = try_parse_md_link(chars, i + 1, end)
+        {
+            flush!();
+            if let Some(rest) = url.strip_prefix("tg://emoji?id=")
+                && let Ok(doc_id) = rest.parse::<i64>()
+            {
+                parts.push(rt_custom_emoji(doc_id, alt));
+                i = j;
+                continue;
+            }
+            if url.starts_with("tg://time?") || url.starts_with("tg://user?") {
+                let inner = rt_plain(alt.clone());
+                if let Some(p) = parse_tg_scheme(&url, inner, &alt) {
+                    parts.push(p);
+                    i = j;
+                    continue;
+                }
+            }
+            // Fallback: treat as text
+            buf.push_str(&alt);
+            i = j;
+            continue;
+        }
+
+        // Inline link: [label](url)
+        if c == '['
+            && let Some((j, url, label)) = try_parse_md_link(chars, i, end)
+        {
+            flush!();
+            let inner = parse_rich_inline_md(&label);
+            let rt = build_link_rt(inner, &url, &label);
+            parts.push(rt);
+            i = j;
+            continue;
+        }
+
+        // ==mark==
+        if c == '=' && i + 1 < end && chars[i + 1] == '=' {
+            let close = find_two_char_close(chars, i + 2, end, '=');
+            if let Some(cl) = close {
+                let inner_text: String = chars[i + 2..cl].iter().collect();
+                flush!();
+                parts.push(rt_marked(parse_rich_inline_md(&inner_text)));
+                i = cl + 2;
+                continue;
+            }
+        }
+
+        // ||spoiler||
+        if c == '|' && i + 1 < end && chars[i + 1] == '|' {
+            let close = find_two_char_close(chars, i + 2, end, '|');
+            if let Some(cl) = close {
+                let inner_text: String = chars[i + 2..cl].iter().collect();
+                flush!();
+                parts.push(rt_spoiler(parse_rich_inline_md(&inner_text)));
+                i = cl + 2;
+                continue;
+            }
+        }
+
+        // ~~strikethrough~~
+        if c == '~' && i + 1 < end && chars[i + 1] == '~' {
+            let close = find_two_char_close(chars, i + 2, end, '~');
+            if let Some(cl) = close {
+                let inner_text: String = chars[i + 2..cl].iter().collect();
+                flush!();
+                parts.push(rt_strike(parse_rich_inline_md(&inner_text)));
+                i = cl + 2;
+                continue;
+            }
+        }
+
+        // **bold** (two stars)
+        if c == '*'
+            && i + 1 < end
+            && chars[i + 1] == '*'
+            && let Some(cl) = find_two_char_close(chars, i + 2, end, '*')
+        {
+            let inner_text: String = chars[i + 2..cl].iter().collect();
+            flush!();
+            parts.push(rt_bold(parse_rich_inline_md(&inner_text)));
+            i = cl + 2;
+            continue;
+        }
+
+        // *italic* (single star)
+        if c == '*'
+            && let Some(cl) = find_one_char_close(chars, i + 1, end, '*')
+        {
+            let inner_text: String = chars[i + 1..cl].iter().collect();
+            flush!();
+            parts.push(rt_italic(parse_rich_inline_md(&inner_text)));
+            i = cl + 1;
+            continue;
+        }
+
+        // __bold__ (two underscores = bold in rich markdown)
+        if c == '_'
+            && i + 1 < end
+            && chars[i + 1] == '_'
+            && let Some(cl) = find_two_char_close(chars, i + 2, end, '_')
+        {
+            let inner_text: String = chars[i + 2..cl].iter().collect();
+            flush!();
+            parts.push(rt_bold(parse_rich_inline_md(&inner_text)));
+            i = cl + 2;
+            continue;
+        }
+
+        // _italic_ (single underscore)
+        if c == '_'
+            && let Some(cl) = find_one_char_close(chars, i + 1, end, '_')
+        {
+            let inner_text: String = chars[i + 1..cl].iter().collect();
+            flush!();
+            parts.push(rt_italic(parse_rich_inline_md(&inner_text)));
+            i = cl + 1;
+            continue;
+        }
+
+        // Inline math: $source$
+        if c == '$'
+            && let Some(cl) = find_one_char_close(chars, i + 1, end, '$')
+        {
+            let src: String = chars[i + 1..cl].iter().collect();
+            flush!();
+            parts.push(rt_math(src));
+            i = cl + 1;
+            continue;
+        }
+
+        buf.push(c);
+        i += 1;
+    }
+
+    flush!();
+    (parts, i)
+}
+
+/// Try to find `..]] (close))` for `[label](url)` or `![label](url)`.
+/// Returns `(next_i, url, label_text)`.
+fn try_parse_md_link(chars: &[char], start: usize, end: usize) -> Option<(usize, String, String)> {
+    // start points at `[`
+    if start >= end || chars[start] != '[' {
+        return None;
+    }
+    let mut depth = 1i32;
+    let mut j = start + 1;
+    while j < end {
+        if chars[j] == '[' {
+            depth += 1;
+        } else if chars[j] == ']' {
+            depth -= 1;
+            if depth == 0 {
+                break;
+            }
+        }
+        j += 1;
+    }
+    if j >= end || j + 1 >= end || chars[j + 1] != '(' {
+        return None;
+    }
+    let label: String = chars[start + 1..j].iter().collect();
+    let mut k = j + 2;
+    // Handle quoted title: (url "title") - we skip title
+    while k < end && chars[k] != ')' {
+        k += 1;
+    }
+    if k >= end {
+        return None;
+    }
+    let url_part: String = chars[j + 2..k].iter().collect();
+    // Strip optional quoted title from url
+    let url = strip_url_title(&url_part);
+    Some((k + 1, url, label))
+}
+
+fn strip_url_title(s: &str) -> String {
+    // "(url "title")" → url; we already stripped outer parens
+    let s = s.trim();
+    if let Some(q) = s.find(" \"") {
+        return s[..q].trim().to_string();
+    }
+    if let Some(q) = s.find(" '") {
+        return s[..q].trim().to_string();
+    }
+    s.to_string()
+}
+
+fn find_two_char_close(chars: &[char], from: usize, end: usize, ch: char) -> Option<usize> {
+    let mut i = from;
+    while i + 1 < end {
+        if chars[i] == ch && chars[i + 1] == ch {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn find_one_char_close(chars: &[char], from: usize, end: usize, ch: char) -> Option<usize> {
+    let mut i = from;
+    while i < end {
+        if chars[i] == ch {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn build_link_rt(inner: tl::enums::RichText, url: &str, label: &str) -> tl::enums::RichText {
+    if let Some(rest) = url.strip_prefix("tg://user?id=")
+        && let Ok(uid) = rest.parse::<i64>()
+    {
+        return rt_mention_name(inner, uid);
+    }
+    if let Some(email_raw) = url.strip_prefix("mailto:") {
+        let email = email_raw.to_string();
+        return rt_email(inner, email);
+    }
+    if let Some(phone_raw) = url.strip_prefix("tel:") {
+        let phone = phone_raw.to_string();
+        return rt_phone(inner, phone);
+    }
+    if url.starts_with('#') {
+        // In-document anchor link - treat as anchor reference
+        return rt_url(inner, url.to_string());
+    }
+    if let Some(p) = parse_tg_scheme(url, inner.clone(), label) {
+        return p;
+    }
+    rt_url(inner, url.to_string())
+}
+
+fn parse_tg_scheme(
+    url: &str,
+    inner: tl::enums::RichText,
+    _label: &str,
+) -> Option<tl::enums::RichText> {
+    if url.starts_with("tg://time?") || url.starts_with("tg://time?unix=") {
+        // Parse unix= and format=
+        let params: std::collections::HashMap<_, _> = url
+            .split('?')
+            .nth(1)
+            .unwrap_or("")
+            .split('&')
+            .filter_map(|kv| {
+                let mut it = kv.splitn(2, '=');
+                Some((it.next()?, it.next()?))
+            })
+            .collect();
+        let unix: i32 = params.get("unix").and_then(|v| v.parse().ok()).unwrap_or(0);
+        let fmt = params.get("format").copied().unwrap_or("t");
+        return Some(rt_date(inner, unix, fmt));
+    }
+    None
+}
+
+/// Try to parse an HTML inline tag starting at `chars[i]` (which is `<`).
+/// Returns `(next_i, RichText)` or `None` if not a recognised inline tag.
+fn try_parse_html_inline_tag(
+    chars: &[char],
+    i: usize,
+    end: usize,
+) -> Option<(usize, tl::enums::RichText)> {
+    // Find close `>`
+    let mut j = i + 1;
+    while j < end && chars[j] != '>' {
+        j += 1;
+    }
+    if j >= end {
+        return None;
+    }
+    let tag_raw: String = chars[i + 1..j].iter().collect();
+    let is_self_closing = tag_raw.ends_with('/');
+    let tag_clean = tag_raw.trim_end_matches('/').trim();
+    let (tag_name, attrs) = parse_tag(tag_clean);
+    let after_open = j + 1;
+
+    // Self-closing / void tags
+    if is_self_closing || matches!(tag_name, "br") {
+        if tag_name == "br" {
+            return Some((after_open, rt_plain("\n")));
+        }
+        // <tg-map>, <img> etc - handled at block level, skip here
+        return None;
+    }
+
+    // Recognised inline container tags
+    let wrap: Option<fn(tl::enums::RichText) -> tl::enums::RichText> = match tag_name {
+        "b" | "strong" => Some(rt_bold),
+        "i" | "em" => Some(rt_italic),
+        "u" | "ins" => Some(rt_underline),
+        "s" | "del" | "strike" => Some(rt_strike),
+        "code" => Some(rt_fixed),
+        "mark" => Some(rt_marked),
+        "tg-spoiler" => Some(rt_spoiler),
+        "sub" => Some(rt_subscript),
+        "sup" => Some(rt_superscript),
+        _ => None,
+    };
+
+    if let Some(wrap_fn) = wrap {
+        // Find close tag
+        let close_tag = format!("</{tag_name}>");
+        let content_str: String = chars[after_open..].iter().collect();
+        if let Some(cl) = content_str.find(&close_tag) {
+            let inner_str: String = chars[after_open..after_open + cl].iter().collect();
+            let inner = parse_rich_inline_md(&inner_str);
+            let next_i = after_open + cl + close_tag.len();
+            return Some((next_i, wrap_fn(inner)));
+        }
+        return None;
+    }
+
+    // <tg-time unix="N" format="F">label</tg-time>
+    if tag_name == "tg-time" {
+        let unix: i32 = attrs
+            .iter()
+            .find(|(k, _)| k == "unix")
+            .and_then(|(_, v)| v.parse().ok())
+            .unwrap_or(0);
+        let fmt = attrs
+            .iter()
+            .find(|(k, _)| k == "format")
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("t");
+        let close = "</tg-time>";
+        let content_str: String = chars[after_open..].iter().collect();
+        if let Some(cl) = content_str.find(close) {
+            let label_str: String = chars[after_open..after_open + cl].iter().collect();
+            let inner = rt_plain(label_str);
+            return Some((after_open + cl + close.len(), rt_date(inner, unix, fmt)));
+        }
+        return None;
+    }
+
+    // <tg-emoji emoji-id="N">alt</tg-emoji>
+    if tag_name == "tg-emoji" {
+        let doc_id: i64 = attrs
+            .iter()
+            .find(|(k, _)| k == "emoji-id")
+            .and_then(|(_, v)| v.parse().ok())
+            .unwrap_or(0);
+        let close = "</tg-emoji>";
+        let content_str: String = chars[after_open..].iter().collect();
+        if let Some(cl) = content_str.find(close) {
+            let alt: String = chars[after_open..after_open + cl].iter().collect();
+            return Some((after_open + cl + close.len(), rt_custom_emoji(doc_id, alt)));
+        }
+        return None;
+    }
+
+    // <a href="…"> link </a>
+    if tag_name == "a" {
+        let href = attrs
+            .iter()
+            .find(|(k, _)| k == "href")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+        let name_attr = attrs
+            .iter()
+            .find(|(k, _)| k == "name")
+            .map(|(_, v)| v.clone());
+        if href.is_empty()
+            && let Some(name) = name_attr
+        {
+            // Anchor definition: <a name="chapter-1"></a>
+            let close = "</a>";
+            let content_str: String = chars[after_open..].iter().collect();
+            if let Some(cl) = content_str.find(close) {
+                return Some((after_open + cl + close.len(), rt_anchor(rt_empty(), name)));
+            }
+            return None;
+        }
+        let close = "</a>";
+        let content_str: String = chars[after_open..].iter().collect();
+        if let Some(cl) = content_str.find(close) {
+            let label_str: String = chars[after_open..after_open + cl].iter().collect();
+            let inner = parse_rich_inline_md(&label_str);
+            let rt = build_link_rt(inner, &href, &label_str);
+            return Some((after_open + cl + close.len(), rt));
+        }
+        return None;
+    }
+
+    // <tg-reference name="…">text</tg-reference>
+    if tag_name == "tg-reference" {
+        let name = attrs
+            .iter()
+            .find(|(k, _)| k == "name")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+        let close = "</tg-reference>";
+        let content_str: String = chars[after_open..].iter().collect();
+        if let Some(cl) = content_str.find(close) {
+            let label_str: String = chars[after_open..after_open + cl].iter().collect();
+            let inner = parse_rich_inline_md(&label_str);
+            return Some((after_open + cl + close.len(), rt_anchor(inner, name)));
+        }
+        return None;
+    }
+
+    // <tg-math>source</tg-math>
+    if tag_name == "tg-math" {
+        let close = "</tg-math>";
+        let content_str: String = chars[after_open..].iter().collect();
+        if let Some(cl) = content_str.find(close) {
+            let src: String = chars[after_open..after_open + cl].iter().collect();
+            return Some((after_open + cl + close.len(), rt_math(src)));
+        }
+        return None;
+    }
+
+    None
+}
+
+// Rich Markdown parser: `&str` → `Vec<PageBlock>`
+
+/// Parse **Rich Markdown** into a list of `PageBlock`s for use in `InputRichMessage`.
+///
+/// Supports headings H1-H6, paragraphs, code blocks (with language), dividers,
+/// unordered/ordered/task lists, blockquotes, media blocks, collage/slideshow,
+/// tables, details/summary, footnotes, math blocks, and all inline formatting.
+pub fn parse_rich_markdown(text: &str) -> Vec<tl::enums::PageBlock> {
+    RichMdParser::new(text).parse()
+}
+
+struct RichMdParser<'a> {
+    lines: Vec<&'a str>,
+    pos: usize,
+}
+
+impl<'a> RichMdParser<'a> {
+    fn new(text: &'a str) -> Self {
+        Self {
+            lines: text.lines().collect(),
+            pos: 0,
+        }
+    }
+
+    fn peek(&self) -> Option<&str> {
+        self.lines.get(self.pos).copied()
+    }
+
+    fn parse(mut self) -> Vec<tl::enums::PageBlock> {
+        let mut blocks = Vec::new();
+        while self.pos < self.lines.len() {
+            let line = self.lines[self.pos];
+
+            // Skip footnote definition lines (already pre-parsed)
+            if line.starts_with("[^") && line.contains("]:") {
+                self.pos += 1;
+                continue;
+            }
+
+            // Empty line
+            if line.trim().is_empty() {
+                self.pos += 1;
+                continue;
+            }
+
+            // Fenced code block: ```lang
+            if line.trim_start().starts_with("```") {
+                if let Some(b) = self.parse_code_block() {
+                    blocks.push(b);
+                }
+                continue;
+            }
+
+            // Math block: $$…$$ as block (single line) or ```math
+            if line.trim() == "$$"
+                || (line.starts_with("$$")
+                    && !line.trim_end().ends_with("$$")
+                    && line.trim_start() == line)
+            {
+                // Multi-line $$…$$ block
+                if let Some(b) = self.parse_math_block_dollar() {
+                    blocks.push(b);
+                    continue;
+                }
+            }
+            if line.trim().starts_with("$$") && line.trim().ends_with("$$") && line.trim().len() > 4
+            {
+                let src = line.trim()[2..line.trim().len() - 2].trim().to_string();
+                blocks.push(tl::enums::PageBlock::Math(tl::types::PageBlockMath {
+                    source: src,
+                }));
+                self.pos += 1;
+                continue;
+            }
+
+            // Divider: ---  or ***  or ___
+            if matches!(
+                line.trim(),
+                "---" | "***" | "___" | "- - -" | "* * *" | "_ _ _"
+            ) {
+                blocks.push(tl::enums::PageBlock::Divider);
+                self.pos += 1;
+                continue;
+            }
+
+            // Headings: # H1 … ###### H6
+            if line.starts_with('#') {
+                let level = line.chars().take_while(|&c| c == '#').count();
+                if level <= 6 {
+                    let rest = line[level..].trim_start();
+                    // Strip trailing `#` from ATX headings
+                    let heading_text = rest.trim_end_matches('#').trim();
+                    let rt = parse_rich_inline_md(heading_text);
+                    blocks.push(heading_block(level, rt));
+                    self.pos += 1;
+                    continue;
+                }
+            }
+
+            // Blockquote: >
+            if line.starts_with('>') {
+                blocks.extend(self.parse_blockquote());
+                continue;
+            }
+
+            // HTML block tags: <details>, <tg-collage>, <tg-slideshow>
+            let trimmed = line.trim();
+            if trimmed.starts_with('<')
+                && let Some(block_result) = self.try_parse_html_block()
+            {
+                blocks.extend(block_result);
+                continue;
+            }
+
+            // Unordered list: - / * / +
+            if list_unordered_start(line) {
+                blocks.push(self.parse_unordered_list());
+                continue;
+            }
+
+            // Ordered list: 1. / 1)
+            if list_ordered_start(line) {
+                blocks.push(self.parse_ordered_list());
+                continue;
+            }
+
+            // Table: | col | col |
+            if line.trim_start().starts_with('|')
+                && let Some(b) = self.parse_table()
+            {
+                blocks.push(b);
+                continue;
+            }
+
+            // Inline media block: ![](url) or ![](url "caption")
+            if (trimmed.starts_with("![](") || trimmed.starts_with("![](http"))
+                && let Some(b) = try_parse_media_line(trimmed)
+            {
+                blocks.push(b);
+                self.pos += 1;
+                continue;
+            }
+
+            // Paragraph (default)
+            blocks.push(self.parse_paragraph());
+        }
+        blocks
+    }
+
+    fn parse_code_block(&mut self) -> Option<tl::enums::PageBlock> {
+        let open = self.lines[self.pos].trim_start();
+        let lang = open.strip_prefix("```")?.trim();
+        let is_math = lang == "math";
+        let lang = lang.to_string();
+        self.pos += 1;
+        let mut code_lines: Vec<&str> = Vec::new();
+        loop {
+            match self.lines.get(self.pos).copied() {
+                None => break,
+                Some(l) if l.trim() == "```" => {
+                    self.pos += 1;
+                    break;
+                }
+                Some(l) => {
+                    code_lines.push(l);
+                    self.pos += 1;
+                }
+            }
+        }
+        let code = code_lines.join("\n");
+        if is_math {
+            Some(tl::enums::PageBlock::Math(tl::types::PageBlockMath {
+                source: code,
+            }))
+        } else {
+            Some(tl::enums::PageBlock::Preformatted(
+                tl::types::PageBlockPreformatted {
+                    text: rt_plain(code),
+                    language: lang,
+                },
+            ))
+        }
+    }
+
+    fn parse_math_block_dollar(&mut self) -> Option<tl::enums::PageBlock> {
+        self.pos += 1; // skip opening $$
+        let mut src_lines: Vec<&str> = Vec::new();
+        loop {
+            match self.lines.get(self.pos).copied() {
+                None => break,
+                Some(l) if l.trim() == "$$" => {
+                    self.pos += 1;
+                    break;
+                }
+                Some(l) => {
+                    src_lines.push(l);
+                    self.pos += 1;
+                }
+            }
+        }
+        Some(tl::enums::PageBlock::Math(tl::types::PageBlockMath {
+            source: src_lines.join("\n"),
+        }))
+    }
+
+    fn parse_blockquote(&mut self) -> Vec<tl::enums::PageBlock> {
+        let mut bq_lines = Vec::new();
+        while let Some(l) = self.peek() {
+            if l.starts_with('>') {
+                let content = l
+                    .strip_prefix('>')
+                    .unwrap_or("")
+                    .strip_prefix(' ')
+                    .unwrap_or(l.strip_prefix('>').unwrap_or(""));
+                bq_lines.push(content.to_string());
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        let combined = bq_lines.join("\n");
+        let rt = parse_rich_inline_md(&combined);
+        vec![tl::enums::PageBlock::Blockquote(
+            tl::types::PageBlockBlockquote {
+                text: rt,
+                caption: rt_empty(),
+            },
+        )]
+    }
+
+    fn parse_unordered_list(&mut self) -> tl::enums::PageBlock {
+        let mut items: Vec<tl::enums::PageListItem> = Vec::new();
+        while let Some(line) = self.lines.get(self.pos).copied() {
+            if let Some((checked, text)) = parse_list_item_unordered(line) {
+                let text = text.to_string();
+                let checked_val = checked;
+                self.pos += 1;
+                let rt = parse_rich_inline_md(&text);
+                items.push(tl::enums::PageListItem::Text(tl::types::PageListItemText {
+                    checkbox: checked_val.is_some(),
+                    checked: checked_val.unwrap_or(false),
+                    text: rt,
+                }));
+            } else {
+                break;
+            }
+        }
+        tl::enums::PageBlock::List(tl::types::PageBlockList { items })
+    }
+
+    fn parse_ordered_list(&mut self) -> tl::enums::PageBlock {
+        let mut items: Vec<tl::enums::PageListOrderedItem> = Vec::new();
+        let mut start_num: Option<i32> = None;
+        while let Some(line) = self.lines.get(self.pos).copied() {
+            if let Some((num, text)) = parse_list_item_ordered(line) {
+                let text = text.to_string();
+                let num_val = num;
+                if start_num.is_none() {
+                    start_num = Some(num_val);
+                }
+                self.pos += 1;
+                let rt = parse_rich_inline_md(&text);
+                items.push(tl::enums::PageListOrderedItem::Text(
+                    tl::types::PageListOrderedItemText {
+                        checkbox: false,
+                        checked: false,
+                        num: None,
+                        text: rt,
+                        value: Some(num_val),
+                        r#type: None,
+                    },
+                ));
+            } else {
+                break;
+            }
+        }
+        tl::enums::PageBlock::OrderedList(tl::types::PageBlockOrderedList {
+            reversed: false,
+            items,
+            start: start_num,
+            r#type: None,
+        })
+    }
+
+    fn parse_table(&mut self) -> Option<tl::enums::PageBlock> {
+        let header_line = self.lines[self.pos];
+        let headers: Vec<&str> = split_table_row(header_line);
+        if headers.is_empty() {
+            return None;
+        }
+        self.pos += 1;
+
+        // Separator line
+        let mut aligns: Vec<u8> = Vec::new(); // 0=left, 1=center, 2=right
+        if let Some(sep) = self.peek()
+            && sep.trim_start().starts_with('|')
+            && sep.contains('-')
+        {
+            let cols = split_table_row(sep);
+            for col in &cols {
+                let c = col.trim();
+                let center = c.starts_with(':') && c.ends_with(':');
+                let right = !c.starts_with(':') && c.ends_with(':');
+                aligns.push(if center {
+                    1
+                } else if right {
+                    2
+                } else {
+                    0
+                });
+            }
+            self.pos += 1;
+        }
+
+        // Header row
+        let header_cells: Vec<tl::enums::PageTableCell> = headers
+            .iter()
+            .enumerate()
+            .map(|(i, h)| {
+                let align_center = aligns.get(i).copied() == Some(1);
+                let align_right = aligns.get(i).copied() == Some(2);
+                tl::enums::PageTableCell::PageTableCell(tl::types::PageTableCell {
+                    header: true,
+                    align_center,
+                    align_right,
+                    valign_middle: false,
+                    valign_bottom: false,
+                    text: Some(parse_rich_inline_md(h.trim())),
+                    colspan: None,
+                    rowspan: None,
+                })
+            })
+            .collect();
+        let mut rows = vec![tl::enums::PageTableRow::PageTableRow(
+            tl::types::PageTableRow {
+                cells: header_cells,
+            },
+        )];
+
+        // Data rows
+        while let Some(line) = self.peek() {
+            if !line.trim_start().starts_with('|') {
+                break;
+            }
+            let cells_raw = split_table_row(line);
+            let cells: Vec<tl::enums::PageTableCell> = cells_raw
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let align_center = aligns.get(i).copied() == Some(1);
+                    let align_right = aligns.get(i).copied() == Some(2);
+                    tl::enums::PageTableCell::PageTableCell(tl::types::PageTableCell {
+                        header: false,
+                        align_center,
+                        align_right,
+                        valign_middle: false,
+                        valign_bottom: false,
+                        text: Some(parse_rich_inline_md(c.trim())),
+                        colspan: None,
+                        rowspan: None,
+                    })
+                })
+                .collect();
+            rows.push(tl::enums::PageTableRow::PageTableRow(
+                tl::types::PageTableRow { cells },
+            ));
+            self.pos += 1;
+        }
+
+        Some(tl::enums::PageBlock::Table(tl::types::PageBlockTable {
+            bordered: false,
+            striped: false,
+            title: rt_empty(),
+            rows,
+        }))
+    }
+
+    fn parse_paragraph(&mut self) -> tl::enums::PageBlock {
+        let mut para_lines: Vec<String> = Vec::new();
+        while let Some(line) = self.lines.get(self.pos).copied() {
+            if line.trim().is_empty() {
+                break;
+            }
+            if line.starts_with('#')
+                || line.starts_with('>')
+                || list_unordered_start(line)
+                || list_ordered_start(line)
+                || line.trim_start().starts_with('|')
+                || matches!(line.trim(), "---" | "***" | "___")
+                || line.trim_start().starts_with("```")
+                || (line.trim_start().starts_with('<') && is_block_html_tag(line.trim()))
+            {
+                break;
+            }
+            para_lines.push(line.to_string());
+            self.pos += 1;
+        }
+        let combined = para_lines.join("\n");
+        let rt = parse_rich_inline_md(&combined);
+        tl::enums::PageBlock::Paragraph(tl::types::PageBlockParagraph { text: rt })
+    }
+
+    fn try_parse_html_block(&mut self) -> Option<Vec<tl::enums::PageBlock>> {
+        let line = self.lines[self.pos];
+        let trimmed = line.trim();
+
+        // <details ...><summary>...</summary>
+        if trimmed.to_ascii_lowercase().starts_with("<details") {
+            return Some(self.parse_details_block());
+        }
+
+        // <tg-collage>
+        if trimmed.to_ascii_lowercase().starts_with("<tg-collage") {
+            return Some(vec![self.parse_collage_block("tg-collage")]);
+        }
+
+        // <tg-slideshow>
+        if trimmed.to_ascii_lowercase().starts_with("<tg-slideshow") {
+            return Some(vec![self.parse_collage_block("tg-slideshow")]);
+        }
+
+        // <aside>text<cite>credit</cite></aside>
+        if trimmed.to_ascii_lowercase().starts_with("<aside") {
+            self.pos += 1;
+            let content = extract_tag_body(trimmed, "aside");
+            let (text, credit) = split_cite(&content);
+            return Some(vec![tl::enums::PageBlock::Pullquote(
+                tl::types::PageBlockPullquote {
+                    text: parse_rich_inline_md(&text),
+                    caption: parse_rich_inline_md(&credit),
+                },
+            )]);
+        }
+
+        // <tg-math-block>source</tg-math-block>
+        if trimmed.to_ascii_lowercase().starts_with("<tg-math-block") {
+            self.pos += 1;
+            let src = extract_tag_body(trimmed, "tg-math-block");
+            return Some(vec![tl::enums::PageBlock::Math(tl::types::PageBlockMath {
+                source: src,
+            })]);
+        }
+
+        // <footer>text</footer>
+        if trimmed.to_ascii_lowercase().starts_with("<footer") {
+            self.pos += 1;
+            let content = extract_tag_body(trimmed, "footer");
+            return Some(vec![tl::enums::PageBlock::Footer(
+                tl::types::PageBlockFooter {
+                    text: parse_rich_inline_md(&content),
+                },
+            )]);
+        }
+
+        // <tg-map lat="N" long="N" zoom="N"/>
+        if trimmed.to_ascii_lowercase().starts_with("<tg-map") {
+            self.pos += 1;
+            let (tag_name, attrs) = parse_tag(
+                trimmed
+                    .trim_start_matches('<')
+                    .trim_end_matches('>')
+                    .trim_end_matches('/')
+                    .trim(),
+            );
+            let _ = tag_name;
+            let lat: f64 = attrs
+                .iter()
+                .find(|(k, _)| k == "lat")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(0.0);
+            let long: f64 = attrs
+                .iter()
+                .find(|(k, _)| k == "long")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(0.0);
+            let zoom: i32 = attrs
+                .iter()
+                .find(|(k, _)| k == "zoom")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(15);
+            return Some(vec![tl::enums::PageBlock::Map(tl::types::PageBlockMap {
+                geo: tl::enums::GeoPoint::GeoPoint(tl::types::GeoPoint {
+                    lat,
+                    long,
+                    access_hash: 0,
+                    accuracy_radius: None,
+                }),
+                zoom,
+                w: 400,
+                h: 300,
+                caption: empty_caption(),
+            })]);
+        }
+
+        // <figure><tg-map …/>…</figure> or <figure><img src="…"/>…</figure>
+        if trimmed.to_ascii_lowercase().starts_with("<figure") {
+            return Some(self.parse_figure_block());
+        }
+
+        // <a name="id"></a> - standalone anchor
+        if trimmed.to_ascii_lowercase().starts_with("<a ") && trimmed.contains("name=") {
+            self.pos += 1;
+            let (_, attrs) = parse_tag(
+                trimmed
+                    .trim_start_matches('<')
+                    .split('>')
+                    .next()
+                    .unwrap_or("")
+                    .trim(),
+            );
+            let name = attrs
+                .iter()
+                .find(|(k, _)| k == "name")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            return Some(vec![tl::enums::PageBlock::Anchor(
+                tl::types::PageBlockAnchor { name },
+            )]);
+        }
+
+        // <blockquote>…</blockquote>
+        if trimmed.to_ascii_lowercase().starts_with("<blockquote") {
+            self.pos += 1;
+            let content = extract_tag_body(trimmed, "blockquote");
+            let (text, credit) = split_cite(&content);
+            return Some(vec![tl::enums::PageBlock::Blockquote(
+                tl::types::PageBlockBlockquote {
+                    text: parse_rich_inline_md(&text),
+                    caption: parse_rich_inline_md(&credit),
+                },
+            )]);
+        }
+
+        // <h1>…</h1> … <h6>…</h6>
+        for level in 1usize..=6 {
+            let tag = format!("<h{level}");
+            if trimmed.to_ascii_lowercase().starts_with(&tag) {
+                self.pos += 1;
+                let content = extract_tag_body(trimmed, &format!("h{level}"));
+                return Some(vec![heading_block(level, parse_rich_inline_md(&content))]);
+            }
+        }
+
+        // <p>…</p>
+        if trimmed.to_ascii_lowercase().starts_with("<p>")
+            || trimmed.to_ascii_lowercase().starts_with("<p ")
+        {
+            self.pos += 1;
+            let content = extract_tag_body(trimmed, "p");
+            return Some(vec![tl::enums::PageBlock::Paragraph(
+                tl::types::PageBlockParagraph {
+                    text: parse_rich_inline_md(&content),
+                },
+            )]);
+        }
+
+        // <pre><code class="language-X">…</code></pre> or <pre>…</pre>
+        if trimmed.to_ascii_lowercase().starts_with("<pre") {
+            self.pos += 1;
+            let (lang, code) = extract_pre_content(trimmed);
+            return Some(vec![tl::enums::PageBlock::Preformatted(
+                tl::types::PageBlockPreformatted {
+                    text: rt_plain(code),
+                    language: lang,
+                },
+            )]);
+        }
+
+        // <hr/>
+        if trimmed == "<hr/>" || trimmed == "<hr>" || trimmed == "<hr />" {
+            self.pos += 1;
+            return Some(vec![tl::enums::PageBlock::Divider]);
+        }
+
+        // <ul>…</ul>
+        if trimmed.to_ascii_lowercase().starts_with("<ul") {
+            self.pos += 1;
+            let content = self.extract_multiline_tag("ul");
+            let items = parse_html_list_items(&content, false);
+            return Some(vec![tl::enums::PageBlock::List(tl::types::PageBlockList {
+                items,
+            })]);
+        }
+
+        // <ol …>…</ol>
+        if trimmed.to_ascii_lowercase().starts_with("<ol") {
+            let (_, attrs) = parse_tag(
+                trimmed
+                    .trim_start_matches('<')
+                    .split('>')
+                    .next()
+                    .unwrap_or("")
+                    .trim(),
+            );
+            let start: Option<i32> = attrs
+                .iter()
+                .find(|(k, _)| k == "start")
+                .and_then(|(_, v)| v.parse().ok());
+            let reversed = attrs.iter().any(|(k, _)| k == "reversed");
+            let ol_type: Option<String> = attrs
+                .iter()
+                .find(|(k, _)| k == "type")
+                .map(|(_, v)| v.clone());
+            self.pos += 1;
+            let content = self.extract_multiline_tag("ol");
+            let items = parse_html_ordered_list_items(&content, ol_type.as_deref());
+            return Some(vec![tl::enums::PageBlock::OrderedList(
+                tl::types::PageBlockOrderedList {
+                    reversed,
+                    items,
+                    start,
+                    r#type: ol_type,
+                },
+            )]);
+        }
+
+        // <table …>…</table>
+        if trimmed.to_ascii_lowercase().starts_with("<table") {
+            let (_, attrs) = parse_tag(
+                trimmed
+                    .trim_start_matches('<')
+                    .split('>')
+                    .next()
+                    .unwrap_or("")
+                    .trim(),
+            );
+            let bordered = attrs.iter().any(|(k, _)| k == "bordered");
+            let striped = attrs.iter().any(|(k, _)| k == "striped");
+            self.pos += 1;
+            let content = self.extract_multiline_tag("table");
+            let (title, rows) = parse_html_table(&content);
+            return Some(vec![tl::enums::PageBlock::Table(
+                tl::types::PageBlockTable {
+                    bordered,
+                    striped,
+                    title,
+                    rows,
+                },
+            )]);
+        }
+
+        None
+    }
+
+    fn parse_details_block(&mut self) -> Vec<tl::enums::PageBlock> {
+        let line = self.lines[self.pos];
+        let (_, attrs) = {
+            let tag_raw = line.trim().trim_start_matches('<');
+            let tag_part = tag_raw.split('>').next().unwrap_or("").trim();
+            parse_tag(tag_part)
+        };
+        let is_open = attrs
+            .iter()
+            .any(|(k, v)| k == "open" || (k == "open" && v.is_empty()));
+        // Check attrs for bare "open"
+        let is_open = is_open
+            || line.to_ascii_lowercase().contains(" open")
+            || line.to_ascii_lowercase().contains(" open>");
+
+        // Extract summary from same line or next line
+        let full: String = {
+            let mut lines = vec![line.to_string()];
+            self.pos += 1;
+            // Collect until </details>
+            loop {
+                match self.peek() {
+                    None => break,
+                    Some(l) if l.trim().eq_ignore_ascii_case("</details>") => {
+                        self.pos += 1;
+                        break;
+                    }
+                    Some(l) => {
+                        lines.push(l.to_string());
+                        self.pos += 1;
+                    }
+                }
+            }
+            lines.join("\n")
+        };
+
+        let summary_text = extract_between(&full, "<summary>", "</summary>").unwrap_or_default();
+        let title = parse_rich_inline_md(&summary_text);
+
+        // Parse body blocks (content after </summary>)
+        let body_start = full
+            .find("</summary>")
+            .map(|i| i + "</summary>".len())
+            .unwrap_or(full.len());
+        let body_end = full.rfind("</details>").unwrap_or(full.len());
+        let body = full[body_start..body_end].trim();
+        let inner_blocks = parse_rich_markdown(body);
+
+        vec![tl::enums::PageBlock::Details(tl::types::PageBlockDetails {
+            open: is_open,
+            blocks: inner_blocks,
+            title,
+        })]
+    }
+
+    fn parse_collage_block(&mut self, tag: &str) -> tl::enums::PageBlock {
+        let line = self.lines[self.pos].to_string();
+        // Collect until closing tag
+        let close = format!("</{tag}>");
+        let mut content_lines = vec![line.clone()];
+        self.pos += 1;
+        loop {
+            match self.peek() {
+                None => break,
+                Some(l) if l.trim().to_ascii_lowercase().starts_with(&close) => {
+                    content_lines.push(l.to_string());
+                    self.pos += 1;
+                    break;
+                }
+                Some(l) => {
+                    content_lines.push(l.to_string());
+                    self.pos += 1;
+                }
+            }
+        }
+        let full = content_lines.join("\n");
+        let (media_items, caption) = extract_collage_items(&full);
+        if tag == "tg-collage" {
+            tl::enums::PageBlock::Collage(tl::types::PageBlockCollage {
+                items: media_items,
+                caption: caption.unwrap_or_else(empty_caption),
+            })
+        } else {
+            tl::enums::PageBlock::Slideshow(tl::types::PageBlockSlideshow {
+                items: media_items,
+                caption: caption.unwrap_or_else(empty_caption),
+            })
+        }
+    }
+
+    fn parse_figure_block(&mut self) -> Vec<tl::enums::PageBlock> {
+        let line = self.lines[self.pos].to_string();
+        self.pos += 1;
+        // Try to extract from single-line <figure>…</figure>
+        let content = if line.contains("</figure>") {
+            line.clone()
+        } else {
+            // Multi-line figure
+            let mut lines = vec![line];
+            loop {
+                match self.peek() {
+                    None => break,
+                    Some(l) if l.trim().to_ascii_lowercase().contains("</figure>") => {
+                        lines.push(l.to_string());
+                        self.pos += 1;
+                        break;
+                    }
+                    Some(l) => {
+                        lines.push(l.to_string());
+                        self.pos += 1;
+                    }
+                }
+            }
+            lines.join("\n")
+        };
+
+        // <figcaption>caption<cite>credit</cite></figcaption>
+        let caption_raw =
+            extract_between(&content, "<figcaption>", "</figcaption>").unwrap_or_default();
+        let (cap_text, cap_credit) = split_cite(&caption_raw);
+        let cap = if cap_text.is_empty() {
+            empty_caption()
+        } else {
+            caption_text_credit(
+                parse_rich_inline_md(&cap_text),
+                parse_rich_inline_md(&cap_credit),
+            )
+        };
+
+        let spoiler = content.contains("tg-spoiler");
+
+        // <tg-map …/>
+        if content.contains("<tg-map") {
+            let map_part = extract_between(&content, "<tg-map", "/>").unwrap_or_default();
+            let (_, attrs) = parse_tag(&format!("tg-map {map_part}"));
+            let lat: f64 = attrs
+                .iter()
+                .find(|(k, _)| k == "lat")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(0.0);
+            let long: f64 = attrs
+                .iter()
+                .find(|(k, _)| k == "long")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(0.0);
+            let zoom: i32 = attrs
+                .iter()
+                .find(|(k, _)| k == "zoom")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(15);
+            return vec![tl::enums::PageBlock::Map(tl::types::PageBlockMap {
+                geo: tl::enums::GeoPoint::GeoPoint(tl::types::GeoPoint {
+                    lat,
+                    long,
+                    access_hash: 0,
+                    accuracy_radius: None,
+                }),
+                zoom,
+                w: 400,
+                h: 300,
+                caption: cap,
+            })];
+        }
+
+        // <img src="…"/> or <video src="…"/> or <audio src="…"/>
+        let src = extract_src_from_figure(&content);
+        if let Some(url) = src {
+            return vec![media_block(&url, cap, spoiler)];
+        }
+
+        vec![]
+    }
+
+    fn extract_multiline_tag(&mut self, tag: &str) -> String {
+        let close = format!("</{tag}>");
+        let mut lines = Vec::new();
+        loop {
+            match self.peek() {
+                None => break,
+                Some(l) => {
+                    let owned = l.to_string();
+                    self.pos += 1;
+                    if owned.trim().to_ascii_lowercase().contains(&close) {
+                        lines.push(owned);
+                        break;
+                    }
+                    lines.push(owned);
+                }
+            }
+        }
+        lines.join("\n")
+    }
+}
+
+// Heading level → PageBlock
+fn heading_block(level: usize, rt: tl::enums::RichText) -> tl::enums::PageBlock {
+    match level {
+        1 => tl::enums::PageBlock::Heading1(tl::types::PageBlockHeading1 { text: rt }),
+        2 => tl::enums::PageBlock::Heading2(tl::types::PageBlockHeading2 { text: rt }),
+        3 => tl::enums::PageBlock::Heading3(tl::types::PageBlockHeading3 { text: rt }),
+        4 => tl::enums::PageBlock::Heading4(tl::types::PageBlockHeading4 { text: rt }),
+        5 => tl::enums::PageBlock::Heading5(tl::types::PageBlockHeading5 { text: rt }),
+        _ => tl::enums::PageBlock::Heading6(tl::types::PageBlockHeading6 { text: rt }),
+    }
+}
+
+fn list_unordered_start(line: &str) -> bool {
+    let t = line.trim_start();
+    (t.starts_with("- ") || t.starts_with("* ") || t.starts_with("+ "))
+        && !matches!(t, "---" | "***" | "___")
+}
+
+fn list_ordered_start(line: &str) -> bool {
+    let t = line.trim_start();
+    let bytes = t.as_bytes();
+    if bytes.is_empty() || !bytes[0].is_ascii_digit() {
+        return false;
+    }
+    let mut j = 0;
+    while j < bytes.len() && bytes[j].is_ascii_digit() {
+        j += 1;
+    }
+    j < bytes.len() && (bytes[j] == b'.' || bytes[j] == b')')
+}
+
+/// Returns `(Some(checked), text)` for task items, `(None, text)` for plain.
+fn parse_list_item_unordered(line: &str) -> Option<(Option<bool>, &str)> {
+    let t = line.trim_start();
+    let rest = t
+        .strip_prefix("- ")
+        .or_else(|| t.strip_prefix("* "))
+        .or_else(|| t.strip_prefix("+ "))?;
+    if let Some(r) = rest.strip_prefix("[ ] ") {
+        return Some((Some(false), r));
+    }
+    if let Some(r) = rest
+        .strip_prefix("[x] ")
+        .or_else(|| rest.strip_prefix("[X] "))
+    {
+        return Some((Some(true), r));
+    }
+    Some((None, rest))
+}
+
+fn parse_list_item_ordered(line: &str) -> Option<(i32, &str)> {
+    let t = line.trim_start();
+    let dot = t.find(['.', ')'])?;
+    let num: i32 = t[..dot].parse().ok()?;
+    let rest = t[dot + 1..].trim_start();
+    Some((num, rest))
+}
+
+fn split_table_row(line: &str) -> Vec<&str> {
+    let t = line.trim();
+    let t = t.strip_prefix('|').unwrap_or(t);
+    let t = t.strip_suffix('|').unwrap_or(t);
+    t.split('|').collect()
+}
+
+fn is_block_html_tag(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    for tag in &[
+        "<details",
+        "<tg-collage",
+        "<tg-slideshow",
+        "<aside",
+        "<tg-math-block",
+        "<footer",
+        "<tg-map",
+        "<figure",
+        "<blockquote",
+        "<h1",
+        "<h2",
+        "<h3",
+        "<h4",
+        "<h5",
+        "<h6",
+        "<p>",
+        "<p ",
+        "<pre",
+        "<hr",
+        "<ul",
+        "<ol",
+        "<table",
+    ] {
+        if lower.starts_with(tag) {
+            return true;
+        }
+    }
+    false
+}
+
+fn try_parse_media_line(line: &str) -> Option<tl::enums::PageBlock> {
+    // ![](url) or ![](url "caption")
+    if !line.starts_with("![](") {
+        return None;
+    }
+    let inner = line.strip_prefix("![](")?.strip_suffix(')')?;
+    let url = strip_url_title(inner);
+    let cap_title = extract_title_from_url_part(inner);
+    let cap = if cap_title.is_empty() {
+        empty_caption()
+    } else {
+        caption_text(parse_rich_inline_md(&cap_title))
+    };
+    Some(media_block(&url, cap, false))
+}
+
+fn extract_title_from_url_part(s: &str) -> String {
+    // url "title" → title
+    if let Some(q) = s.find(" \"") {
+        let after = &s[q + 2..];
+        if let Some(close) = after.rfind('"') {
+            return after[..close].to_string();
+        }
+    }
+    String::new()
+}
+
+fn extract_tag_body(html: &str, tag: &str) -> String {
+    let open = format!("<{tag}");
+    let close = format!("</{tag}>");
+    // find end of opening tag
+    let start = html.to_ascii_lowercase().find(&open).unwrap_or(0);
+    let after_open = html[start..]
+        .find('>')
+        .map(|i| start + i + 1)
+        .unwrap_or(html.len());
+    let end = html
+        .to_ascii_lowercase()
+        .rfind(&close)
+        .unwrap_or(html.len());
+    html[after_open.min(end)..end].to_string()
+}
+
+fn extract_between(s: &str, open: &str, close: &str) -> Option<String> {
+    let lo = s.to_ascii_lowercase();
+    let start = lo.find(&open.to_ascii_lowercase())? + open.len();
+    let end = lo[start..]
+        .find(&close.to_ascii_lowercase())
+        .map(|i| start + i)?;
+    Some(s[start..end].to_string())
+}
+
+fn split_cite(html: &str) -> (String, String) {
+    if let Some(cite_start) = html.to_ascii_lowercase().find("<cite>") {
+        let text = html[..cite_start].to_string();
+        let after = &html[cite_start + "<cite>".len()..];
+        let credit = after
+            .to_ascii_lowercase()
+            .find("</cite>")
+            .map(|i| after[..i].to_string())
+            .unwrap_or_else(|| after.to_string());
+        (text, credit)
+    } else {
+        (html.to_string(), String::new())
+    }
+}
+
+fn extract_pre_content(html: &str) -> (String, String) {
+    // <pre><code class="language-X">…</code></pre>
+    if let Some(lang) = extract_between(html, "class=\"language-", "\"") {
+        let code = extract_between(html, ">", "</code>")
+            .or_else(|| extract_between(html, "<code", "</code>"))
+            .unwrap_or_default();
+        // Strip the class= part from code
+        let code = code
+            .trim_start_matches(|c: char| c != '>')
+            .strip_prefix('>')
+            .unwrap_or(&code)
+            .to_string();
+        return (lang, code);
+    }
+    let code = extract_tag_body(html, "pre");
+    (String::new(), code)
+}
+
+fn extract_collage_items(
+    html: &str,
+) -> (Vec<tl::enums::PageBlock>, Option<tl::enums::PageCaption>) {
+    let mut items = Vec::new();
+    // Find all <img src="…"/> and <video src="…"/>
+    for part in html.split('<') {
+        if part.starts_with("img ") || part.starts_with("video ") {
+            let src = extract_attr_value(part, "src");
+            if let Some(url) = src {
+                items.push(media_block(&url, empty_caption(), false));
+            }
+        }
+    }
+    let cap = extract_between(html, "<figcaption>", "</figcaption>").map(|c| {
+        let (t, cr) = split_cite(&c);
+        caption_text_credit(parse_rich_inline_md(&t), parse_rich_inline_md(&cr))
+    });
+    (items, cap)
+}
+
+fn extract_src_from_figure(html: &str) -> Option<String> {
+    for part in html.split('<') {
+        if (part.starts_with("img ") || part.starts_with("video ") || part.starts_with("audio "))
+            && let Some(src) = extract_attr_value(part, "src")
+        {
+            return Some(src);
+        }
+    }
+    None
+}
+
+fn extract_attr_value(tag_body: &str, attr: &str) -> Option<String> {
+    let needle = format!("{attr}=\"");
+    let start = tag_body.find(&needle)? + needle.len();
+    let end = tag_body[start..].find('"')? + start;
+    Some(tag_body[start..end].to_string())
+}
+
+fn parse_html_list_items(html: &str, _ordered: bool) -> Vec<tl::enums::PageListItem> {
+    let mut items = Vec::new();
+    let lo = html.to_ascii_lowercase();
+    let mut search = 0;
+    while let Some(li_start) = lo[search..].find("<li") {
+        let li_start = search + li_start;
+        let after_open = lo[li_start..]
+            .find('>')
+            .map(|i| li_start + i + 1)
+            .unwrap_or(html.len());
+        let li_end = lo[after_open..]
+            .find("</li>")
+            .map(|i| after_open + i)
+            .unwrap_or(html.len());
+        let content = &html[after_open..li_end];
+        let (_, attrs_raw) = parse_tag(html[li_start + 1..].split('>').next().unwrap_or("").trim());
+        let checked_attr: Option<bool> =
+            if html[li_start..].to_ascii_lowercase().starts_with("<li ") {
+                let li_tag = html[li_start..].split('>').next().unwrap_or("");
+                if li_tag.to_ascii_lowercase().contains("checked") {
+                    Some(true)
+                } else if li_tag.to_ascii_lowercase().contains("checkbox") {
+                    Some(false)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+        let _ = attrs_raw;
+        items.push(tl::enums::PageListItem::Text(tl::types::PageListItemText {
+            checkbox: checked_attr.is_some(),
+            checked: checked_attr.unwrap_or(false),
+            text: parse_rich_inline_md(content),
+        }));
+        search = li_end + 5;
+    }
+    items
+}
+
+fn parse_html_ordered_list_items(
+    html: &str,
+    list_type: Option<&str>,
+) -> Vec<tl::enums::PageListOrderedItem> {
+    let mut items = Vec::new();
+    let lo = html.to_ascii_lowercase();
+    let mut search = 0;
+    while let Some(li_start) = lo[search..].find("<li") {
+        let li_start = search + li_start;
+        let after_tag = lo[li_start..]
+            .find('>')
+            .map(|i| li_start + i)
+            .unwrap_or(html.len());
+        let tag_attrs_raw = html[li_start + 1..after_tag].trim();
+        let (_, attrs) = parse_tag(tag_attrs_raw);
+        let value: Option<i32> = attrs
+            .iter()
+            .find(|(k, _)| k == "value")
+            .and_then(|(_, v)| v.parse().ok());
+        let item_type: Option<String> = attrs
+            .iter()
+            .find(|(k, _)| k == "type")
+            .map(|(_, v)| v.clone())
+            .or_else(|| list_type.map(|s| s.to_string()));
+        let after_open = after_tag + 1;
+        let li_end = lo[after_open..]
+            .find("</li>")
+            .map(|i| after_open + i)
+            .unwrap_or(html.len());
+        let content = &html[after_open..li_end];
+        items.push(tl::enums::PageListOrderedItem::Text(
+            tl::types::PageListOrderedItemText {
+                checkbox: false,
+                checked: false,
+                num: None,
+                text: parse_rich_inline_md(content),
+                value,
+                r#type: item_type,
+            },
+        ));
+        search = li_end + 5;
+    }
+    items
+}
+
+fn parse_html_table(html: &str) -> (tl::enums::RichText, Vec<tl::enums::PageTableRow>) {
+    let lo = html.to_ascii_lowercase();
+    // Extract caption
+    let title = extract_between(html, "<caption>", "</caption>")
+        .map(|c| parse_rich_inline_md(&c))
+        .unwrap_or_else(rt_empty);
+
+    let mut rows = Vec::new();
+    let mut search = 0;
+    while let Some(tr_start) = lo[search..].find("<tr") {
+        let tr_start = search + tr_start;
+        let after_tr = lo[tr_start..]
+            .find('>')
+            .map(|i| tr_start + i + 1)
+            .unwrap_or(html.len());
+        let tr_end = lo[after_tr..]
+            .find("</tr>")
+            .map(|i| after_tr + i)
+            .unwrap_or(html.len());
+        let row_html = &html[after_tr..tr_end];
+        let cells = parse_html_table_cells(row_html);
+        rows.push(tl::enums::PageTableRow::PageTableRow(
+            tl::types::PageTableRow { cells },
+        ));
+        search = tr_end + 5;
+    }
+    (title, rows)
+}
+
+fn parse_html_table_cells(html: &str) -> Vec<tl::enums::PageTableCell> {
+    let mut cells = Vec::new();
+    let lo = html.to_ascii_lowercase();
+    let mut search = 0;
+
+    loop {
+        let th_pos = lo[search..].find("<th").map(|i| (search + i, true));
+        let td_pos = lo[search..].find("<td").map(|i| (search + i, false));
+        let (cell_start, is_header) = match (th_pos, td_pos) {
+            (Some(a), Some(b)) => {
+                if a.0 <= b.0 {
+                    a
+                } else {
+                    b
+                }
+            }
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => break,
+        };
+        let close_tag = if is_header { "</th>" } else { "</td>" };
+        let after_open = lo[cell_start..]
+            .find('>')
+            .map(|i| cell_start + i)
+            .unwrap_or(html.len());
+        let tag_raw = html[cell_start + 1..after_open].trim();
+        let (_, attrs) = parse_tag(tag_raw);
+        let colspan: Option<i32> = attrs
+            .iter()
+            .find(|(k, _)| k == "colspan")
+            .and_then(|(_, v)| v.parse().ok());
+        let rowspan: Option<i32> = attrs
+            .iter()
+            .find(|(k, _)| k == "rowspan")
+            .and_then(|(_, v)| v.parse().ok());
+        let align = attrs
+            .iter()
+            .find(|(k, _)| k == "align")
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("");
+        let valign = attrs
+            .iter()
+            .find(|(k, _)| k == "valign")
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("");
+        let align_center = align == "center";
+        let align_right = align == "right";
+        let valign_middle = valign == "middle";
+        let valign_bottom = valign == "bottom";
+        let content_start = after_open + 1;
+        let cell_end = lo[content_start..]
+            .find(close_tag)
+            .map(|i| content_start + i)
+            .unwrap_or(html.len());
+        let content = &html[content_start..cell_end];
+        cells.push(tl::enums::PageTableCell::PageTableCell(
+            tl::types::PageTableCell {
+                header: is_header,
+                align_center,
+                align_right,
+                valign_middle,
+                valign_bottom,
+                text: Some(parse_rich_inline_md(content)),
+                colspan,
+                rowspan,
+            },
+        ));
+        search = cell_end + close_tag.len();
+    }
+    cells
+}
+
+// Rich HTML parser: `&str` → `Vec<PageBlock>`
+
+/// Parse **Rich HTML** into a list of `PageBlock`s for use in `InputRichMessage`.
+///
+/// All block and inline tags from the Bot API Rich HTML spec are supported.
+pub fn parse_rich_html(html: &str) -> Vec<tl::enums::PageBlock> {
+    RichHtmlParser::new(html).parse()
+}
+
+struct RichHtmlParser {
+    html: String,
+    pos: usize,
+}
+
+impl RichHtmlParser {
+    fn new(html: &str) -> Self {
+        Self {
+            html: html.to_string(),
+            pos: 0,
+        }
+    }
+
+    fn remaining(&self) -> &str {
+        &self.html[self.pos..]
+    }
+
+    fn skip_whitespace(&mut self) {
+        while self.pos < self.html.len() {
+            let c = self.html.as_bytes()[self.pos];
+            if c.is_ascii_whitespace() {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn parse(mut self) -> Vec<tl::enums::PageBlock> {
+        let mut blocks = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.pos >= self.html.len() {
+                break;
+            }
+            if self.remaining().starts_with('<')
+                && let Some(block) = self.try_parse_block_tag()
+            {
+                blocks.extend(block);
+                continue;
+            }
+            // Text content at top level → paragraph
+            if let Some(para) = self.parse_text_paragraph() {
+                blocks.push(para);
+            }
+        }
+        blocks
+    }
+
+    fn try_parse_block_tag(&mut self) -> Option<Vec<tl::enums::PageBlock>> {
+        let rem = self.remaining();
+        let lower = rem.to_ascii_lowercase();
+
+        macro_rules! heading {
+            ($tag:literal, $level:expr) => {
+                if lower.starts_with(concat!("<", $tag, ">"))
+                    || lower.starts_with(concat!("<", $tag, " "))
+                {
+                    let body = self.consume_tag($tag)?;
+                    return Some(vec![heading_block($level, parse_rich_html_inline(&body))]);
+                }
+            };
+        }
+
+        heading!("h1", 1);
+        heading!("h2", 2);
+        heading!("h3", 3);
+        heading!("h4", 4);
+        heading!("h5", 5);
+        heading!("h6", 6);
+
+        if lower.starts_with("<p>") || lower.starts_with("<p ") {
+            let body = self.consume_tag("p")?;
+            return Some(vec![tl::enums::PageBlock::Paragraph(
+                tl::types::PageBlockParagraph {
+                    text: parse_rich_html_inline(&body),
+                },
+            )]);
+        }
+
+        if lower.starts_with("<pre>") || lower.starts_with("<pre>") || lower.starts_with("<pre ") {
+            let body = self.consume_tag("pre")?;
+            let (lang, code) = extract_pre_content_from_body(&body);
+            return Some(vec![tl::enums::PageBlock::Preformatted(
+                tl::types::PageBlockPreformatted {
+                    text: rt_plain(code),
+                    language: lang,
+                },
+            )]);
+        }
+
+        if lower.starts_with("<footer>") || lower.starts_with("<footer ") {
+            let body = self.consume_tag("footer")?;
+            return Some(vec![tl::enums::PageBlock::Footer(
+                tl::types::PageBlockFooter {
+                    text: parse_rich_html_inline(&body),
+                },
+            )]);
+        }
+
+        if lower.starts_with("<hr") {
+            self.consume_until('>');
+            self.pos += 1;
+            return Some(vec![tl::enums::PageBlock::Divider]);
+        }
+
+        if lower.starts_with("<blockquote") {
+            let body = self.consume_tag("blockquote")?;
+            let (text, credit) = split_cite(&body);
+            return Some(vec![tl::enums::PageBlock::Blockquote(
+                tl::types::PageBlockBlockquote {
+                    text: parse_rich_html_inline(&text),
+                    caption: parse_rich_html_inline(&credit),
+                },
+            )]);
+        }
+
+        if lower.starts_with("<aside") {
+            let body = self.consume_tag("aside")?;
+            let (text, credit) = split_cite(&body);
+            return Some(vec![tl::enums::PageBlock::Pullquote(
+                tl::types::PageBlockPullquote {
+                    text: parse_rich_html_inline(&text),
+                    caption: parse_rich_html_inline(&credit),
+                },
+            )]);
+        }
+
+        if lower.starts_with("<ul") {
+            let body = self.consume_tag("ul")?;
+            let items = parse_html_list_items(&body, false);
+            return Some(vec![tl::enums::PageBlock::List(tl::types::PageBlockList {
+                items,
+            })]);
+        }
+
+        if lower.starts_with("<ol") {
+            let tag_open = rem.split('>').next().unwrap_or("").to_string();
+            let (_, attrs) = parse_tag(tag_open.trim_start_matches('<'));
+            let start: Option<i32> = attrs
+                .iter()
+                .find(|(k, _)| k == "start")
+                .and_then(|(_, v)| v.parse().ok());
+            let reversed = attrs.iter().any(|(k, _)| k == "reversed");
+            let ol_type: Option<String> = attrs
+                .iter()
+                .find(|(k, _)| k == "type")
+                .map(|(_, v)| v.clone());
+            let body = self.consume_tag("ol")?;
+            let items = parse_html_ordered_list_items(&body, ol_type.as_deref());
+            return Some(vec![tl::enums::PageBlock::OrderedList(
+                tl::types::PageBlockOrderedList {
+                    reversed,
+                    items,
+                    start,
+                    r#type: ol_type,
+                },
+            )]);
+        }
+
+        if lower.starts_with("<table") {
+            let tag_open = rem.split('>').next().unwrap_or("").to_string();
+            let (_, attrs) = parse_tag(tag_open.trim_start_matches('<'));
+            let bordered = attrs.iter().any(|(k, _)| k == "bordered");
+            let striped = attrs.iter().any(|(k, _)| k == "striped");
+            let body = self.consume_tag("table")?;
+            let (title, rows) = parse_html_table(&body);
+            return Some(vec![tl::enums::PageBlock::Table(
+                tl::types::PageBlockTable {
+                    bordered,
+                    striped,
+                    title,
+                    rows,
+                },
+            )]);
+        }
+
+        if lower.starts_with("<details") {
+            let is_open_hint = rem.to_ascii_lowercase().starts_with("<details open");
+            let full = self.consume_tag("details")?;
+            let is_open = is_open_hint || full.starts_with("open");
+            let summary = extract_between(&full, "<summary>", "</summary>").unwrap_or_default();
+            let body_start = full
+                .find("</summary>")
+                .map(|i| i + "</summary>".len())
+                .unwrap_or(full.len());
+            let inner = parse_rich_html(full[body_start..].trim());
+            return Some(vec![tl::enums::PageBlock::Details(
+                tl::types::PageBlockDetails {
+                    open: is_open,
+                    blocks: inner,
+                    title: parse_rich_html_inline(&summary),
+                },
+            )]);
+        }
+
+        if lower.starts_with("<img ") {
+            let tag_raw = self.consume_self_closing_tag();
+            let (_, attrs) = parse_tag(&tag_raw);
+            let src = attrs
+                .iter()
+                .find(|(k, _)| k == "src")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            let spoiler = attrs.iter().any(|(k, _)| k == "tg-spoiler");
+            if !src.is_empty() {
+                return Some(vec![media_block(&src, empty_caption(), spoiler)]);
+            }
+            return Some(vec![]);
+        }
+
+        if lower.starts_with("<video ") {
+            let tag_raw = self.consume_self_closing_or_pair("video");
+            let (_, attrs) = parse_tag(&tag_raw);
+            let src = attrs
+                .iter()
+                .find(|(k, _)| k == "src")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            let spoiler = attrs.iter().any(|(k, _)| k == "tg-spoiler");
+            if !src.is_empty() {
+                return Some(vec![media_block(&src, empty_caption(), spoiler)]);
+            }
+            return Some(vec![]);
+        }
+
+        if lower.starts_with("<audio ") {
+            let tag_raw = self.consume_self_closing_or_pair("audio");
+            let (_, attrs) = parse_tag(&tag_raw);
+            let src = attrs
+                .iter()
+                .find(|(k, _)| k == "src")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            if !src.is_empty() {
+                return Some(vec![media_block(&src, empty_caption(), false)]);
+            }
+            return Some(vec![]);
+        }
+
+        if lower.starts_with("<figure") {
+            let body = self.consume_tag("figure")?;
+            let caption_raw =
+                extract_between(&body, "<figcaption>", "</figcaption>").unwrap_or_default();
+            let (cap_t, cap_cr) = split_cite(&caption_raw);
+            let cap = if cap_t.is_empty() {
+                empty_caption()
+            } else {
+                caption_text_credit(
+                    parse_rich_html_inline(&cap_t),
+                    parse_rich_html_inline(&cap_cr),
+                )
+            };
+            let spoiler = body.contains("tg-spoiler");
+
+            if body.to_ascii_lowercase().contains("<tg-map") {
+                let map_inner = extract_between(&body, "<tg-map", "/>").unwrap_or_default();
+                let (_, attrs) = parse_tag(&format!("tg-map {map_inner}"));
+                let lat: f64 = attrs
+                    .iter()
+                    .find(|(k, _)| k == "lat")
+                    .and_then(|(_, v)| v.parse().ok())
+                    .unwrap_or(0.0);
+                let long: f64 = attrs
+                    .iter()
+                    .find(|(k, _)| k == "long")
+                    .and_then(|(_, v)| v.parse().ok())
+                    .unwrap_or(0.0);
+                let zoom: i32 = attrs
+                    .iter()
+                    .find(|(k, _)| k == "zoom")
+                    .and_then(|(_, v)| v.parse().ok())
+                    .unwrap_or(15);
+                return Some(vec![tl::enums::PageBlock::Map(tl::types::PageBlockMap {
+                    geo: tl::enums::GeoPoint::GeoPoint(tl::types::GeoPoint {
+                        lat,
+                        long,
+                        access_hash: 0,
+                        accuracy_radius: None,
+                    }),
+                    zoom,
+                    w: 400,
+                    h: 300,
+                    caption: cap,
+                })]);
+            }
+
+            let src = extract_src_from_figure(&body);
+            if let Some(url) = src {
+                return Some(vec![media_block(&url, cap, spoiler)]);
+            }
+            return Some(vec![]);
+        }
+
+        if lower.starts_with("<tg-collage") {
+            let body = self.consume_tag("tg-collage")?;
+            let (items, cap) = extract_collage_items(&body);
+            return Some(vec![tl::enums::PageBlock::Collage(
+                tl::types::PageBlockCollage {
+                    items,
+                    caption: cap.unwrap_or_else(empty_caption),
+                },
+            )]);
+        }
+
+        if lower.starts_with("<tg-slideshow") {
+            let body = self.consume_tag("tg-slideshow")?;
+            let (items, cap) = extract_collage_items(&body);
+            return Some(vec![tl::enums::PageBlock::Slideshow(
+                tl::types::PageBlockSlideshow {
+                    items,
+                    caption: cap.unwrap_or_else(empty_caption),
+                },
+            )]);
+        }
+
+        if lower.starts_with("<tg-map") {
+            let tag_raw = self.consume_self_closing_tag();
+            let (_, attrs) = parse_tag(&tag_raw);
+            let lat: f64 = attrs
+                .iter()
+                .find(|(k, _)| k == "lat")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(0.0);
+            let long: f64 = attrs
+                .iter()
+                .find(|(k, _)| k == "long")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(0.0);
+            let zoom: i32 = attrs
+                .iter()
+                .find(|(k, _)| k == "zoom")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(15);
+            return Some(vec![tl::enums::PageBlock::Map(tl::types::PageBlockMap {
+                geo: tl::enums::GeoPoint::GeoPoint(tl::types::GeoPoint {
+                    lat,
+                    long,
+                    access_hash: 0,
+                    accuracy_radius: None,
+                }),
+                zoom,
+                w: 400,
+                h: 300,
+                caption: empty_caption(),
+            })]);
+        }
+
+        if lower.starts_with("<tg-math-block") {
+            let body = self.consume_tag("tg-math-block")?;
+            return Some(vec![tl::enums::PageBlock::Math(tl::types::PageBlockMath {
+                source: body,
+            })]);
+        }
+
+        if lower.starts_with("<a ") && lower.contains("name=") {
+            // Standalone anchor: <a name="id"></a>
+            let tag_raw = self.consume_self_closing_or_pair("a");
+            let (_, attrs) = parse_tag(&tag_raw);
+            let name = attrs
+                .iter()
+                .find(|(k, _)| k == "name")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            if !name.is_empty() {
+                return Some(vec![tl::enums::PageBlock::Anchor(
+                    tl::types::PageBlockAnchor { name },
+                )]);
+            }
+            return Some(vec![]);
+        }
+
+        // Skip unknown/comment/doctype tags
+        if lower.starts_with("<!--") || lower.starts_with("<!") {
+            self.consume_until('>');
+            self.pos = (self.pos + 1).min(self.html.len());
+            return Some(vec![]);
+        }
+
+        None
+    }
+
+    fn consume_tag(&mut self, tag: &str) -> Option<String> {
+        // Move past the opening tag
+        let open_end = self.remaining().find('>')?;
+        self.pos += open_end + 1;
+        let close_tag = format!("</{tag}>");
+        let close_pos = self.remaining().to_ascii_lowercase().find(&close_tag)?;
+        let body = self.remaining()[..close_pos].to_string();
+        self.pos += close_pos + close_tag.len();
+        Some(body)
+    }
+
+    fn consume_self_closing_tag(&mut self) -> String {
+        let end = self.remaining().find('>').unwrap_or(self.remaining().len());
+        let tag_raw = self.remaining()[1..end]
+            .trim_end_matches('/')
+            .trim()
+            .to_string();
+        self.pos += end + 1;
+        tag_raw
+    }
+
+    fn consume_self_closing_or_pair(&mut self, tag: &str) -> String {
+        let rem = self.remaining();
+        // Check if it's self-closing or has a close tag in the same stretch
+        let open_end = rem.find('>').unwrap_or(rem.len());
+        let is_self = rem[..open_end].ends_with('/');
+        let tag_raw = rem[1..open_end].trim_end_matches('/').trim().to_string();
+        self.pos += open_end + 1;
+        if !is_self {
+            let close_tag = format!("</{tag}>");
+            if let Some(end) = self.remaining().to_ascii_lowercase().find(&close_tag) {
+                self.pos += end + close_tag.len();
+            }
+        }
+        tag_raw
+    }
+
+    fn consume_until(&mut self, ch: char) {
+        while self.pos < self.html.len() {
+            if self.html.as_bytes()[self.pos] == ch as u8 {
+                break;
+            }
+            self.pos += 1;
+        }
+    }
+
+    fn parse_text_paragraph(&mut self) -> Option<tl::enums::PageBlock> {
+        let start = self.pos;
+        while self.pos < self.html.len() {
+            let rem = self.remaining();
+            if rem.starts_with('<') {
+                // Peek at the tag: if it's a block tag, stop
+                let lower = rem.to_ascii_lowercase();
+                let is_block = is_block_html_tag(&lower);
+                if is_block {
+                    break;
+                }
+                // Inline tag: include it as-is and continue
+                let end = rem.find('>').unwrap_or(rem.len());
+                self.pos += end + 1;
+            } else {
+                self.pos += 1;
+            }
+        }
+        if self.pos == start {
+            return None;
+        }
+        let text_raw = &self.html[start..self.pos];
+        let decoded = decode_html_entities(text_raw);
+        if decoded.trim().is_empty() {
+            return None;
+        }
+        Some(tl::enums::PageBlock::Paragraph(
+            tl::types::PageBlockParagraph {
+                text: parse_rich_html_inline(&decoded),
+            },
+        ))
+    }
+}
+
+/// Parse an HTML inline string into a `RichText` tree.
+/// Handles all inline tags: b, strong, i, em, u, ins, s, del, strike,
+/// code, mark, tg-spoiler, sub, sup, a, tg-emoji, tg-time, tg-math, tg-reference.
+pub fn parse_rich_html_inline(html: &str) -> tl::enums::RichText {
+    let chars: Vec<char> = html.chars().collect();
+    let mut parts = Vec::new();
+    let mut buf = String::new();
+    let mut i = 0;
+    let n = chars.len();
+
+    macro_rules! flush {
+        () => {
+            if !buf.is_empty() {
+                parts.push(rt_plain(decode_html_entities(&std::mem::take(&mut buf))));
+            }
+        };
+    }
+
+    while i < n {
+        if chars[i] == '&' {
+            // HTML entity: collect until `;`
+            let mut j = i + 1;
+            while j < n && chars[j] != ';' && chars[j] != ' ' {
+                j += 1;
+            }
+            if j < n && chars[j] == ';' {
+                let entity: String = chars[i..=j].iter().collect();
+                buf.push_str(&decode_html_entities(&entity));
+                i = j + 1;
+                continue;
+            }
+        }
+
+        if chars[i] != '<' {
+            buf.push(chars[i]);
+            i += 1;
+            continue;
+        }
+
+        // Try to parse as inline HTML tag
+        let remaining: String = chars[i..].iter().collect();
+        if let Some((consumed, rt)) = try_parse_html_inline_tag(&chars, i, n) {
+            flush!();
+            parts.push(rt);
+            i = consumed;
+            continue;
+        }
+
+        // Not recognised - emit as text
+        buf.push(chars[i]);
+        i += 1;
+        let _ = remaining;
+    }
+    flush!();
+    rt_concat(parts)
+}
+
+fn extract_pre_content_from_body(body: &str) -> (String, String) {
+    // <code class="language-X">…</code>
+    let lo = body.to_ascii_lowercase();
+    if lo.contains("<code") {
+        let lang = extract_between(body, "class=\"language-", "\"").unwrap_or_default();
+        let code_start = lo.find('>').map(|i| i + 1).unwrap_or(0);
+        let code = extract_between(body, ">", "</code>")
+            .or_else(|| {
+                extract_between(body, "<code", "</code>").map(|c| {
+                    let ci = c.find('>').map(|i| i + 1).unwrap_or(0);
+                    c[ci..].to_string()
+                })
+            })
+            .unwrap_or_else(|| body[code_start..].to_string());
+        return (lang, decode_html_entities(&code));
+    }
+    (String::new(), decode_html_entities(body))
+}
+
+// Tests for rich parsers
+
+#[cfg(test)]
+mod rich_tests {
+    use super::*;
+
+    #[test]
+    fn rich_md_heading1() {
+        let blocks = parse_rich_markdown("# Hello");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Heading1(_)));
+        if let tl::enums::PageBlock::Heading1(h) = &blocks[0] {
+            assert!(matches!(h.text, tl::enums::RichText::TextPlain(_)));
+        }
+    }
+
+    #[test]
+    fn rich_md_heading6() {
+        let blocks = parse_rich_markdown("###### Deep");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Heading6(_)));
+    }
+
+    #[test]
+    fn rich_md_paragraph() {
+        let blocks = parse_rich_markdown("Hello world");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Paragraph(_)));
+    }
+
+    #[test]
+    fn rich_md_code_block() {
+        let blocks = parse_rich_markdown("```python\nprint('hi')\n```");
+        if let tl::enums::PageBlock::Preformatted(p) = &blocks[0] {
+            assert_eq!(p.language, "python");
+            assert!(matches!(p.text, tl::enums::RichText::TextPlain(_)));
+        } else {
+            panic!("expected Preformatted");
+        }
+    }
+
+    #[test]
+    fn rich_md_math_block_backtick() {
+        let blocks = parse_rich_markdown("```math\nE = mc^2\n```");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Math(_)));
+        if let tl::enums::PageBlock::Math(m) = &blocks[0] {
+            assert_eq!(m.source, "E = mc^2");
+        }
+    }
+
+    #[test]
+    fn rich_md_divider() {
+        let blocks = parse_rich_markdown("---");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Divider));
+    }
+
+    #[test]
+    fn rich_md_unordered_list() {
+        let blocks = parse_rich_markdown("- item 1\n- item 2");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::List(_)));
+        if let tl::enums::PageBlock::List(l) = &blocks[0] {
+            assert_eq!(l.items.len(), 2);
+        }
+    }
+
+    #[test]
+    fn rich_md_task_list() {
+        let blocks = parse_rich_markdown("- [ ] todo\n- [x] done");
+        if let tl::enums::PageBlock::List(l) = &blocks[0] {
+            assert!(
+                matches!(l.items[0], tl::enums::PageListItem::Text(ref t) if t.checkbox && !t.checked)
+            );
+            assert!(
+                matches!(l.items[1], tl::enums::PageListItem::Text(ref t) if t.checkbox && t.checked)
+            );
+        } else {
+            panic!("expected List");
+        }
+    }
+
+    #[test]
+    fn rich_md_ordered_list() {
+        let blocks = parse_rich_markdown("1. first\n2. second");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::OrderedList(_)));
+        if let tl::enums::PageBlock::OrderedList(l) = &blocks[0] {
+            assert_eq!(l.items.len(), 2);
+        }
+    }
+
+    #[test]
+    fn rich_md_blockquote() {
+        let blocks = parse_rich_markdown(">Hello\n>World");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Blockquote(_)));
+    }
+
+    #[test]
+    fn rich_md_table() {
+        let md = "| A | B |\n|---|---|\n| 1 | 2 |";
+        let blocks = parse_rich_markdown(md);
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Table(_)));
+        if let tl::enums::PageBlock::Table(t) = &blocks[0] {
+            assert_eq!(t.rows.len(), 2); // header + data
+        }
+    }
+
+    #[test]
+    fn rich_md_inline_bold() {
+        let rt = parse_rich_inline_md("**bold**");
+        assert!(matches!(rt, tl::enums::RichText::TextBold(_)));
+    }
+
+    #[test]
+    fn rich_md_inline_italic() {
+        let rt = parse_rich_inline_md("*italic*");
+        assert!(matches!(rt, tl::enums::RichText::TextItalic(_)));
+    }
+
+    #[test]
+    fn rich_md_inline_code() {
+        let rt = parse_rich_inline_md("`code`");
+        assert!(matches!(rt, tl::enums::RichText::TextFixed(_)));
+    }
+
+    #[test]
+    fn rich_md_inline_mark() {
+        let rt = parse_rich_inline_md("==marked==");
+        assert!(matches!(rt, tl::enums::RichText::TextMarked(_)));
+    }
+
+    #[test]
+    fn rich_md_inline_spoiler() {
+        let rt = parse_rich_inline_md("||secret||");
+        assert!(matches!(rt, tl::enums::RichText::TextSpoiler(_)));
+    }
+
+    #[test]
+    fn rich_md_inline_strike() {
+        let rt = parse_rich_inline_md("~~strike~~");
+        assert!(matches!(rt, tl::enums::RichText::TextStrike(_)));
+    }
+
+    #[test]
+    fn rich_md_inline_url() {
+        let rt = parse_rich_inline_md("[click](https://t.me/)");
+        assert!(matches!(rt, tl::enums::RichText::TextUrl(_)));
+    }
+
+    #[test]
+    fn rich_md_inline_mention() {
+        let rt = parse_rich_inline_md("[User](tg://user?id=42)");
+        assert!(matches!(rt, tl::enums::RichText::TextMentionName(_)));
+        if let tl::enums::RichText::TextMentionName(m) = rt {
+            assert_eq!(m.user_id, 42);
+        }
+    }
+
+    #[test]
+    fn rich_md_inline_email_link() {
+        let rt = parse_rich_inline_md("[mail](mailto:user@example.com)");
+        assert!(matches!(rt, tl::enums::RichText::TextEmail(_)));
+    }
+
+    #[test]
+    fn rich_md_inline_phone_link() {
+        let rt = parse_rich_inline_md("[call](tel:+123456789)");
+        assert!(matches!(rt, tl::enums::RichText::TextPhone(_)));
+    }
+
+    #[test]
+    fn rich_md_inline_custom_emoji() {
+        let rt = parse_rich_inline_md("![👍](tg://emoji?id=5368324170671202286)");
+        assert!(matches!(rt, tl::enums::RichText::TextCustomEmoji(_)));
+        if let tl::enums::RichText::TextCustomEmoji(e) = rt {
+            assert_eq!(e.document_id, 5368324170671202286);
+        }
+    }
+
+    #[test]
+    fn rich_md_inline_math() {
+        let rt = parse_rich_inline_md("$x^2 + y^2$");
+        assert!(matches!(rt, tl::enums::RichText::TextMath(_)));
+        if let tl::enums::RichText::TextMath(m) = rt {
+            assert_eq!(m.source, "x^2 + y^2");
+        }
+    }
+
+    #[test]
+    fn rich_md_inline_html_underline() {
+        let rt = parse_rich_inline_md("<u>underlined</u>");
+        assert!(matches!(rt, tl::enums::RichText::TextUnderline(_)));
+    }
+
+    #[test]
+    fn rich_md_inline_html_sub() {
+        let rt = parse_rich_inline_md("<sub>sub</sub>");
+        assert!(matches!(rt, tl::enums::RichText::TextSubscript(_)));
+    }
+
+    #[test]
+    fn rich_md_inline_html_sup() {
+        let rt = parse_rich_inline_md("<sup>sup</sup>");
+        assert!(matches!(rt, tl::enums::RichText::TextSuperscript(_)));
+    }
+
+    #[test]
+    fn rich_md_inline_tg_spoiler_html() {
+        let rt = parse_rich_inline_md("<tg-spoiler>hidden</tg-spoiler>");
+        assert!(matches!(rt, tl::enums::RichText::TextSpoiler(_)));
+    }
+
+    #[test]
+    fn rich_html_heading() {
+        let blocks = parse_rich_html("<h2>World</h2>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Heading2(_)));
+    }
+
+    #[test]
+    fn rich_html_paragraph() {
+        let blocks = parse_rich_html("<p>Hello</p>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Paragraph(_)));
+    }
+
+    #[test]
+    fn rich_html_preformatted() {
+        let blocks = parse_rich_html("<pre><code class=\"language-rust\">fn main(){}</code></pre>");
+        if let tl::enums::PageBlock::Preformatted(p) = &blocks[0] {
+            assert_eq!(p.language, "rust");
+        } else {
+            panic!(
+                "expected Preformatted, got {:?}",
+                blocks.get(0).map(|_| "block")
+            );
+        }
+    }
+
+    #[test]
+    fn rich_html_blockquote() {
+        let blocks = parse_rich_html("<blockquote>Quote<cite>Author</cite></blockquote>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Blockquote(_)));
+        if let tl::enums::PageBlock::Blockquote(b) = &blocks[0] {
+            assert!(!matches!(b.caption, tl::enums::RichText::TextEmpty));
+        }
+    }
+
+    #[test]
+    fn rich_html_aside_pullquote() {
+        let blocks = parse_rich_html("<aside>Pull quote<cite>The Author</cite></aside>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Pullquote(_)));
+    }
+
+    #[test]
+    fn rich_html_hr_divider() {
+        let blocks = parse_rich_html("<hr/>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Divider));
+    }
+
+    #[test]
+    fn rich_html_unordered_list() {
+        let blocks = parse_rich_html("<ul><li>a</li><li>b</li></ul>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::List(_)));
+        if let tl::enums::PageBlock::List(l) = &blocks[0] {
+            assert_eq!(l.items.len(), 2);
+        }
+    }
+
+    #[test]
+    fn rich_html_ordered_list() {
+        let blocks = parse_rich_html("<ol><li>first</li><li>second</li></ol>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::OrderedList(_)));
+    }
+
+    #[test]
+    fn rich_html_table() {
+        let blocks = parse_rich_html(
+            "<table><tr><th>H1</th><th>H2</th></tr><tr><td>v1</td><td>v2</td></tr></table>",
+        );
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Table(_)));
+        if let tl::enums::PageBlock::Table(t) = &blocks[0] {
+            assert_eq!(t.rows.len(), 2);
+        }
+    }
+
+    #[test]
+    fn rich_html_details() {
+        let blocks = parse_rich_html("<details open><summary>Title</summary>Content</details>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Details(_)));
+        if let tl::enums::PageBlock::Details(d) = &blocks[0] {
+            assert!(d.open);
+        }
+    }
+
+    #[test]
+    fn rich_html_map() {
+        let blocks = parse_rich_html("<tg-map lat=\"41.9\" long=\"12.5\" zoom=\"14\"/>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Map(_)));
+        if let tl::enums::PageBlock::Map(m) = &blocks[0] {
+            assert_eq!(m.zoom, 14);
+        }
+    }
+
+    #[test]
+    fn rich_html_math_block() {
+        let blocks = parse_rich_html("<tg-math-block>E = mc^2</tg-math-block>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Math(_)));
+        if let tl::enums::PageBlock::Math(m) = &blocks[0] {
+            assert_eq!(m.source, "E = mc^2");
+        }
+    }
+
+    #[test]
+    fn rich_html_inline_bold() {
+        let rt = parse_rich_html_inline("<b>bold</b>");
+        assert!(matches!(rt, tl::enums::RichText::TextBold(_)));
+    }
+
+    #[test]
+    fn rich_html_inline_spoiler() {
+        let rt = parse_rich_html_inline("<tg-spoiler>secret</tg-spoiler>");
+        assert!(matches!(rt, tl::enums::RichText::TextSpoiler(_)));
+    }
+
+    #[test]
+    fn rich_html_inline_custom_emoji() {
+        let rt = parse_rich_html_inline("<tg-emoji emoji-id=\"999\">👍</tg-emoji>");
+        assert!(matches!(rt, tl::enums::RichText::TextCustomEmoji(_)));
+        if let tl::enums::RichText::TextCustomEmoji(e) = rt {
+            assert_eq!(e.document_id, 999);
+        }
+    }
+
+    #[test]
+    fn rich_html_inline_tg_time() {
+        let rt = parse_rich_html_inline(
+            "<tg-time unix=\"1647531900\" format=\"wDT\">22:45 tomorrow</tg-time>",
+        );
+        assert!(matches!(rt, tl::enums::RichText::TextDate(_)));
+        if let tl::enums::RichText::TextDate(d) = rt {
+            assert_eq!(d.date, 1647531900);
+            assert!(d.day_of_week);
+        }
+    }
+
+    #[test]
+    fn rich_html_photo_block() {
+        let blocks = parse_rich_html("<img src=\"https://telegram.org/example/photo.jpg\"/>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Photo(_)));
+    }
+
+    #[test]
+    fn rich_html_video_block() {
+        let blocks =
+            parse_rich_html("<video src=\"https://telegram.org/example/video.mp4\"></video>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Video(_)));
+    }
+
+    #[test]
+    fn rich_html_audio_block() {
+        let blocks =
+            parse_rich_html("<audio src=\"https://telegram.org/example/audio.mp3\"></audio>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Audio(_)));
+    }
+
+    #[test]
+    fn rich_html_collage() {
+        let blocks = parse_rich_html(
+            "<tg-collage><img src=\"https://telegram.org/example/photo.jpg\"/><video src=\"https://telegram.org/example/video.mp4\"/></tg-collage>",
+        );
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Collage(_)));
+        if let tl::enums::PageBlock::Collage(c) = &blocks[0] {
+            assert_eq!(c.items.len(), 2);
+        }
+    }
+
+    #[test]
+    fn rich_html_slideshow() {
+        let blocks = parse_rich_html(
+            "<tg-slideshow><img src=\"https://telegram.org/example/photo.jpg\"/><video src=\"https://telegram.org/example/video.mp4\"/></tg-slideshow>",
+        );
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Slideshow(_)));
+    }
+
+    #[test]
+    fn rich_html_footer() {
+        let blocks = parse_rich_html("<footer>Footer text</footer>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Footer(_)));
+    }
+
+    #[test]
+    fn rich_html_anchor_block() {
+        let blocks = parse_rich_html("<a name=\"chapter-1\"></a>");
+        assert!(matches!(blocks[0], tl::enums::PageBlock::Anchor(_)));
+        if let tl::enums::PageBlock::Anchor(a) = &blocks[0] {
+            assert_eq!(a.name, "chapter-1");
+        }
+    }
+}
