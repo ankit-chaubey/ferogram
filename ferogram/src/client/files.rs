@@ -10,6 +10,8 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
+#[allow(unused_imports)]
+use ferogram_tl_types::{Cursor, Deserializable};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -777,5 +779,340 @@ impl Client {
             .await;
         done.store(true, Ordering::Release);
         result
+    }
+
+    /// Download message media to any [`AsyncWrite`] sink (file, socket, in-memory buffer…).
+    ///
+    /// Returns total bytes written. Uses the sequential streaming path so the
+    /// entire file is never buffered in memory.
+    ///
+    /// [`AsyncWrite`]: tokio::io::AsyncWrite
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client; use ferogram_tl_types as tl;
+    /// # async fn ex(client: Client, msg: ferogram::update::IncomingMessage) {
+    /// // to memory
+    /// let mut buf = Vec::new();
+    /// client.download(msg.media().unwrap(), &mut buf, None).await.unwrap();
+    ///
+    /// // to file
+    /// let mut file = tokio::fs::File::create("photo.jpg").await.unwrap();
+    /// client.download(msg.media().unwrap(), &mut file, None).await.unwrap();
+    /// # }
+    /// ```
+    pub async fn download(
+        &self,
+        media: &tl::enums::MessageMedia,
+        mut dest: impl tokio::io::AsyncWrite + Unpin,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<u64, InvocationError> {
+        let (loc, dc) = crate::media::location_from_media(media).ok_or_else(|| {
+            InvocationError::Deserialize("media has no downloadable location".into())
+        })?;
+        if let Some(h) = handle {
+            let total = crate::media::size_from_media(media).unwrap_or(0);
+            h.set_total(total as u64);
+            h.reset_start();
+        }
+        self.download_streaming_on_dc(loc, dc, &mut dest, handle)
+            .await
+    }
+
+    /// Download message media directly to a file at `path`. Returns bytes written.
+    ///
+    /// Creates (or truncates) the file. Streams directly to disk.
+    /// Use [`download_file_with_handle`] to track progress or support pause/cancel.
+    ///
+    /// [`download_file_with_handle`]: Client::download_file_with_handle
+    pub async fn download_file(
+        &self,
+        media: &tl::enums::MessageMedia,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<u64, InvocationError> {
+        self.download_file_with_handle(media, path, None).await
+    }
+
+    /// Like [`download_file`] but accepts a [`TransferHandle`] for progress
+    /// tracking or pause/cancel support.
+    ///
+    /// [`download_file`]: Client::download_file
+    /// [`TransferHandle`]: crate::transfer::TransferHandle
+    pub async fn download_file_with_handle(
+        &self,
+        media: &tl::enums::MessageMedia,
+        path: impl AsRef<std::path::Path>,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<u64, InvocationError> {
+        let path = path.as_ref();
+        let (loc, dc) = crate::media::location_from_media(media).ok_or_else(|| {
+            InvocationError::Deserialize("media has no downloadable location".into())
+        })?;
+        if let Some(size) = crate::media::size_from_media(media)
+            && size >= crate::media::BIG_FILE_THRESHOLD
+        {
+            return self
+                .download_media_concurrent_on_dc_to_file(loc, size, dc, path, handle)
+                .await;
+        }
+        let mut file = tokio::fs::File::create(path)
+            .await
+            .map_err(InvocationError::Io)?;
+        self.download_streaming_on_dc(loc, dc, &mut file, handle)
+            .await
+    }
+
+    /// Return a lazy chunk iterator for `media`.
+    ///
+    /// Call [`DownloadIter::next`] until it returns `Ok(None)`. Each chunk is
+    /// a [`bytes::Bytes`] slice - zero-copy where possible.
+    ///
+    /// Returns `None` if `media` has no downloadable location.
+    pub fn iter_download(
+        &self,
+        media: &tl::enums::MessageMedia,
+    ) -> Option<crate::media::DownloadIter> {
+        let (loc, dc) = crate::media::location_from_media(media)?;
+        Some(crate::media::DownloadIter::new(self.clone(), loc, dc))
+    }
+
+    /// Upload from any [`AsyncRead`] source.
+    ///
+    /// Buffers the stream to determine size, then uploads using the optimal
+    /// part size and worker count. Use [`upload_file`] when you have a path -
+    /// it avoids the double-buffer.
+    ///
+    /// Use [`upload_with_handle`] to track progress or support pause/cancel.
+    ///
+    /// [`AsyncRead`]: tokio::io::AsyncRead
+    /// [`upload_file`]: Client::upload_file
+    /// [`upload_with_handle`]: Client::upload_with_handle
+    pub async fn upload(
+        &self,
+        source: impl tokio::io::AsyncRead + Unpin + Send,
+        name: &str,
+    ) -> Result<crate::media::UploadedFile, InvocationError> {
+        self.upload_with_handle(source, name, None).await
+    }
+
+    /// Like [`upload`] but accepts a [`TransferHandle`] for progress tracking
+    /// or pause/cancel support.
+    ///
+    /// [`upload`]: Client::upload
+    /// [`TransferHandle`]: crate::transfer::TransferHandle
+    pub async fn upload_with_handle(
+        &self,
+        mut source: impl tokio::io::AsyncRead + Unpin + Send,
+        name: &str,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<crate::media::UploadedFile, InvocationError> {
+        use tokio::io::AsyncReadExt;
+        let mut data = Vec::new();
+        source
+            .read_to_end(&mut data)
+            .await
+            .map_err(InvocationError::Io)?;
+        if data.len() > crate::media::BIG_FILE_THRESHOLD {
+            self.upload_file_concurrent(std::sync::Arc::new(data), name, "", handle)
+                .await
+        } else {
+            self.upload_bytes(&data, name, "", handle).await
+        }
+    }
+
+    /// Upload a file from disk by path.
+    ///
+    /// Stats the file first (for optimal part sizing), then streams in chunks.
+    /// Use [`upload_file_with_handle`] to track progress or support pause/cancel.
+    ///
+    /// [`upload_file_with_handle`]: Client::upload_file_with_handle
+    pub async fn upload_file(
+        &self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<crate::media::UploadedFile, InvocationError> {
+        self.upload_file_with_handle(path, None).await
+    }
+
+    /// Like [`upload_file`] but accepts a [`TransferHandle`] for progress
+    /// tracking or pause/cancel support.
+    ///
+    /// [`upload_file`]: Client::upload_file
+    /// [`TransferHandle`]: crate::transfer::TransferHandle
+    pub async fn upload_file_with_handle(
+        &self,
+        path: impl AsRef<std::path::Path>,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<crate::media::UploadedFile, InvocationError> {
+        use tokio::io::AsyncReadExt;
+        let path = path.as_ref();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+        let meta = tokio::fs::metadata(path)
+            .await
+            .map_err(InvocationError::Io)?;
+        let size = meta.len() as usize;
+        if size >= crate::media::BIG_FILE_THRESHOLD {
+            return self
+                .upload_file_concurrent_streaming(path, name, "", handle)
+                .await;
+        }
+        let mut file = tokio::fs::File::open(path)
+            .await
+            .map_err(InvocationError::Io)?;
+        let mut data = Vec::with_capacity(size);
+        file.read_to_end(&mut data)
+            .await
+            .map_err(InvocationError::Io)?;
+        self.upload_bytes(&data, name, "", handle).await
+    }
+
+    #[allow(dead_code)]
+    pub async fn upload_media(
+        &self,
+        peer: impl Into<PeerRef>,
+        media: tl::enums::InputMedia,
+    ) -> Result<tl::enums::MessageMedia, InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let req = tl::functions::messages::UploadMedia {
+            business_connection_id: None,
+            peer: input_peer,
+            media,
+        };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        Ok(tl::enums::MessageMedia::deserialize(&mut cur)?)
+    }
+
+    pub async fn get_media_group(
+        &self,
+        peer: impl Into<PeerRef>,
+        msg_id: i32,
+    ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
+        use ferogram_tl_types as tl;
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+
+        // Fetch the seed message first to get grouped_id
+        let seed_ids = vec![tl::enums::InputMessage::Id(tl::types::InputMessageId {
+            id: msg_id,
+        })];
+
+        let seed_msgs = match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                let req = tl::functions::channels::GetMessages {
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id: c.channel_id,
+                        access_hash: c.access_hash,
+                    }),
+                    id: seed_ids,
+                };
+                let body = self.rpc_call_raw(&req).await?;
+                let mut cur = Cursor::from_slice(&body);
+                match tl::enums::messages::Messages::deserialize(&mut cur)? {
+                    tl::enums::messages::Messages::Messages(m) => m.messages,
+                    tl::enums::messages::Messages::Slice(m) => m.messages,
+                    tl::enums::messages::Messages::ChannelMessages(m) => m.messages,
+                    tl::enums::messages::Messages::NotModified(_) => vec![],
+                }
+            }
+            _ => {
+                let req = tl::functions::messages::GetMessages { id: seed_ids };
+                let body = self.rpc_call_raw(&req).await?;
+                let mut cur = Cursor::from_slice(&body);
+                match tl::enums::messages::Messages::deserialize(&mut cur)? {
+                    tl::enums::messages::Messages::Messages(m) => m.messages,
+                    tl::enums::messages::Messages::Slice(m) => m.messages,
+                    tl::enums::messages::Messages::ChannelMessages(m) => m.messages,
+                    tl::enums::messages::Messages::NotModified(_) => vec![],
+                }
+            }
+        };
+
+        // Extract grouped_id from the seed message
+        let grouped_id = seed_msgs.iter().find_map(|m| {
+            if let tl::enums::Message::Message(msg) = m {
+                msg.grouped_id
+            } else {
+                None
+            }
+        });
+
+        // If there's no grouped_id, just return the single message
+        let Some(gid) = grouped_id else {
+            return Ok(seed_msgs
+                .into_iter()
+                .map(update::IncomingMessage::from_raw)
+                .collect());
+        };
+
+        // Fetch a window of messages around msg_id to find all members of the group
+        // Albums are always contiguous so a window of ±10 is more than enough
+        let window_start = (msg_id - 9).max(1);
+        let window_ids: Vec<tl::enums::InputMessage> = (window_start..=msg_id + 9)
+            .map(|id| tl::enums::InputMessage::Id(tl::types::InputMessageId { id }))
+            .collect();
+
+        let window_msgs = match &input_peer {
+            tl::enums::InputPeer::Channel(c) => {
+                let req = tl::functions::channels::GetMessages {
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id: c.channel_id,
+                        access_hash: c.access_hash,
+                    }),
+                    id: window_ids,
+                };
+                let body = self.rpc_call_raw(&req).await?;
+                let mut cur = Cursor::from_slice(&body);
+                match tl::enums::messages::Messages::deserialize(&mut cur)? {
+                    tl::enums::messages::Messages::Messages(m) => m.messages,
+                    tl::enums::messages::Messages::Slice(m) => m.messages,
+                    tl::enums::messages::Messages::ChannelMessages(m) => m.messages,
+                    tl::enums::messages::Messages::NotModified(_) => vec![],
+                }
+            }
+            _ => seed_msgs,
+        };
+
+        let group: Vec<update::IncomingMessage> = window_msgs
+            .into_iter()
+            .filter(|m| {
+                if let tl::enums::Message::Message(msg) = m {
+                    msg.grouped_id == Some(gid)
+                } else {
+                    false
+                }
+            })
+            .map(update::IncomingMessage::from_raw)
+            .collect();
+
+        Ok(group)
+    }
+
+    /// Upload a single part for experimental resumable upload.
+    #[cfg(feature = "experimental")]
+    pub(crate) async fn upload_part_pub(
+        &self,
+        big: bool,
+        file_id: i64,
+        part: i32,
+        total_parts: i32,
+        data: &[u8],
+    ) -> Result<bool, InvocationError> {
+        if big {
+            self.rpc_call(tl::functions::upload::SaveBigFilePart {
+                file_id,
+                file_part: part,
+                file_total_parts: total_parts,
+                bytes: data.to_vec(),
+            })
+            .await
+        } else {
+            self.rpc_call(tl::functions::upload::SaveFilePart {
+                file_id,
+                file_part: part,
+                bytes: data.to_vec(),
+            })
+            .await
+        }
     }
 }
