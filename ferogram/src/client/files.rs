@@ -92,7 +92,7 @@ impl Client {
         result
     }
 
-    /// Upload from any [`AsyncRead`] source and call `on_progress` once per second.
+    /// Upload from any [`tokio::io::AsyncRead`] source and call `on_progress` once per second.
     ///
     /// Same callback rules as [`Self::download_with_progress`]: sync only.
     /// For async work use a channel in a separate task.

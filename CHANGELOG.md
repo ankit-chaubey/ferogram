@@ -13,13 +13,13 @@ Transport, reconnect, and update synchronization stabilization release.
 
 ### Added
 
-- `add_offset` on `Client::get_message_history`, `Client::get_history_range`, and `Client::get_replies` for offset-based pagination.
+- `add_offset` on `Client::get_message_history` and `Client::get_replies` for offset-based pagination.
 - Connection generation, reader lifecycle, and session identity tracing (`[conn_gen=X]`, `[reader#N]`, `[sid=...]`).
 - Frame-level transport diagnostics for sequence tracking, CRC validation, and transport debugging.
 
 ### Changed
 
-- `Client::get_message_history`, `Client::get_history_range`, and `Client::get_replies` now accept an additional `add_offset: i32` parameter. Pass `0` to preserve previous behavior.
+- `Client::get_message_history` and `Client::get_replies` now accept an additional `add_offset: i32` parameter. Pass `0` to preserve previous behavior.
 - Refactored ownership boundaries across `ferogram`, `ferogram-connect`, `ferogram-mtsender`, `ferogram-session`, and `ferogram-parsers`.
 - Reduced coupling between transport, session, connection, and RPC dispatch layers.
 - Improved transport initialization, fallback selection, and reconnect flow.

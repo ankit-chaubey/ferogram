@@ -132,7 +132,7 @@ impl ClientBuilder {
 
     /// Inject a fully custom [`SessionBackend`] implementation.
     ///
-    /// Useful for [`crate::LibSqlBackend`] (bundled SQLite, no system dep) or any
+    /// Useful for `LibSqlBackend` (bundled SQLite, no system dep) or any
     /// custom persistence layer:
     /// ```rust,no_run
     /// # use ferogram::{Client};

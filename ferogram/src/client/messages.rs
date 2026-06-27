@@ -968,44 +968,6 @@ impl Client {
         self.send_chat_action_ex(peer, action, None).await
     }
 
-    /// Same as [`Client::get_message_history`], plus `add_offset` for
-    /// limit-based pagination: skip this many messages past `offset_id`
-    /// (which can stay 0) instead of having to resolve an exact offset
-    /// message ID for each page.
-    pub async fn get_history_range(
-        &self,
-        peer: impl Into<PeerRef>,
-
-        limit: i32,
-        offset_id: i32,
-        add_offset: i32,
-    ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let req = tl::functions::messages::GetHistory {
-            peer: input_peer,
-            offset_id,
-            offset_date: 0,
-            add_offset,
-            limit,
-            max_id: 0,
-            min_id: 0,
-            hash: 0,
-        };
-        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        let msgs = match tl::enums::messages::Messages::deserialize(&mut cur)? {
-            tl::enums::messages::Messages::Messages(m) => m.messages,
-            tl::enums::messages::Messages::Slice(m) => m.messages,
-            tl::enums::messages::Messages::ChannelMessages(m) => m.messages,
-            tl::enums::messages::Messages::NotModified(_) => vec![],
-        };
-        Ok(msgs
-            .into_iter()
-            .map(|m| update::IncomingMessage::from_raw(m).with_client(self.clone()))
-            .collect())
-    }
-
     /// Send a dice/dart/basketball/etc animated emoji and return the sent message.
     ///
     /// The rolled value is in the returned message's media:

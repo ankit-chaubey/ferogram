@@ -57,7 +57,7 @@ pub struct InputMessage {
 
 /// Options for forwarding messages.
 ///
-/// Used by [`crate::Client::forward_messages_with`], [`crate::Client::forward_messages`] and
+/// Used by [`crate::Client::forward_messages`] and
 /// `IncomingMessage::forward_to_ex`.  All fields default to `false`/`None`.
 #[derive(Default, Clone)]
 pub struct ForwardOptions {

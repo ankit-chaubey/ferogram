@@ -39,9 +39,9 @@
 //! - [`StringSessionBackend`]: serializes the session to a base64 string.
 //!   Useful for serverless environments where you store state in an env var or
 //!   database column. Load it with `Client::builder().session_string(s)`.
-//! - [`SqliteBackend`](crate::SqliteBackend): SQLite-backed storage via rusqlite. Behind the
+//! - `SqliteBackend`: SQLite-backed storage via rusqlite. Behind the
 //!   `sqlite-session` feature flag. Good for local multi-account tooling.
-//! - [`LibSqlBackend`](crate::LibSqlBackend): libSQL / Turso backend. Behind `libsql-session`.
+//! - `LibSqlBackend`: libSQL / Turso backend. Behind `libsql-session`.
 //!   For distributed or edge-hosted session storage.
 //!
 //! You can also implement `SessionBackend` yourself for Redis, PostgreSQL, or

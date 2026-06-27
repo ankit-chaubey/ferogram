@@ -21,24 +21,6 @@ use crate::{
 use ferogram_tl_types::{Cursor, Deserializable};
 
 impl Client {
-    /// Get notification settings for a peer.
-    #[allow(dead_code)]
-    pub(crate) async fn get_notify_settings_raw(
-        &self,
-        peer: impl Into<PeerRef>,
-    ) -> Result<tl::enums::PeerNotifySettings, InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let req = tl::functions::account::GetNotifySettings {
-            peer: tl::enums::InputNotifyPeer::InputNotifyPeer(tl::types::InputNotifyPeer {
-                peer: input_peer,
-            }),
-        };
-        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        Ok(tl::enums::PeerNotifySettings::deserialize(&mut cur)?)
-    }
-
     /// Get your privacy rules for one setting - who can see your phone
     /// number, add you to groups, call you, and so on.
     pub async fn get_privacy(
