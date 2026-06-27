@@ -22,17 +22,17 @@
 /// | `FakeTls` | TLS 1.3 ClientHello | Most DPI-resistant; required for `0xEE` MTProxy secrets |
 #[derive(Clone, Debug, Default)]
 pub enum TransportKind {
-    /// MTProto [Abridged] transport: length prefix is 1 or 4 bytes.
+    /// MTProto Abridged transport: length prefix is 1 or 4 bytes.
     Abridged,
-    /// MTProto [Intermediate] transport: 4-byte LE length prefix.
+    /// MTProto Intermediate transport: 4-byte LE length prefix.
     Intermediate,
-    /// MTProto [Full] transport: 4-byte length + seqno + CRC32.
+    /// MTProto Full transport: 4-byte length + seqno + CRC32.
     ///
     /// No init byte is sent. Provides CRC32 integrity and sequence number
     /// validation on every frame. **Default** transport.
     #[default]
     Full,
-    /// [Obfuscated2] transport: AES-256-CTR over Abridged framing.
+    /// Obfuscated2 transport: AES-256-CTR over Abridged framing.
     /// Required for MTProxy and networks with deep-packet inspection.
     ///
     /// `secret` is the 16-byte MTProxy secret, or `None` for keyless obfuscation.

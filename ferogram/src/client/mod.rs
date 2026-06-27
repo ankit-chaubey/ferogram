@@ -134,7 +134,7 @@ pub struct Config {
     ///
     /// Internal MTProto state (pts, qts, getDifference) is unaffected: it
     /// always runs inside the reader task regardless of this setting.
-    /// Only the high-level [`Update`] queue your application reads via
+    /// Only the high-level [`crate::Update`] queue your application reads via
     /// [`Client::stream_updates`] is governed here.
     ///
     /// Default: 2048-slot ring buffer with `DropOldest` overflow.
@@ -286,7 +286,7 @@ impl Default for Config {
         }
     }
 }
-/// Asynchronous stream of [`Update`]s.
+/// Asynchronous stream of [`crate::Update`]s.
 pub struct UpdateStream {
     rx: mpsc::Receiver<update::Update>,
 }
@@ -478,7 +478,7 @@ mod stickers;
 mod users;
 
 impl Client {
-    /// Return a fluent [`ClientBuilder`] for constructing and connecting a client.
+    /// Return a fluent [`crate::ClientBuilder`] for constructing and connecting a client.
     ///
     /// # Example
     /// ```rust,no_run
@@ -496,6 +496,9 @@ impl Client {
         crate::builder::ClientBuilder::default()
     }
 
+    /// Connect to Telegram and log in (or resume an existing session) using
+    /// `config`. This is the first thing you call - it returns your `Client`
+    /// plus a [`ShutdownToken`] you can use to disconnect cleanly later.
     pub async fn connect(config: Config) -> Result<(Self, ShutdownToken), InvocationError> {
         // Validate required config fields up-front with clear error messages.
         if config.api_id == 0 {
@@ -1502,7 +1505,7 @@ impl Client {
         }
     }
 
-    /// Persist the current session to the configured [`SessionBackend`].
+    /// Persist the current session to the configured [`crate::SessionBackend`].
     pub async fn save_session(&self) -> Result<(), InvocationError> {
         // build_persisted_session() is the source of truth for structural
         // session data: auth key, salts, DC table, peer cache.
@@ -1546,7 +1549,7 @@ impl Client {
     /// Export the session as a compact string (V2 format).
     ///
     /// Encodes dc_id, ip, port, user_id, and auth key. Store in an env var
-    /// or secret manager and pass back to [`ClientBuilder::session_string`]
+    /// or secret manager and pass back to [`crate::ClientBuilder::session_string`]
     /// to resume without re-authenticating.
     ///
     /// Calls `get_me()` internally to obtain the user_id.
@@ -1581,7 +1584,7 @@ impl Client {
     ///
     /// Use this when you need to resume update processing from exactly where
     /// you left off (PTS, QTS, seq, peer cache intact). Pass the result back
-    /// to [`ClientBuilder::session_string`] which auto-detects the format.
+    /// to [`crate::ClientBuilder::session_string`] which auto-detects the format.
     pub async fn export_native_session_string(&self) -> Result<String, InvocationError> {
         Ok(self.build_persisted_session().await.to_string())
     }
@@ -1629,7 +1632,7 @@ impl Client {
         }
     }
 
-    /// Return an [`UpdateStream`] that yields incoming [`Update`]s.
+    /// Return an [`UpdateStream`] that yields incoming [`crate::Update`]s.
     ///
     /// The reader task sends all updates to `inner.update_tx`.  This method
     /// proxies those updates into a caller-owned channel, applying the
@@ -3230,7 +3233,7 @@ impl Client {
         }
     }
 
-    /// Look up the cached [`ChannelKind`] for a raw channel ID.
+    /// Look up the cached [`crate::ChannelKind`] for a raw channel ID.
     ///
     /// Returns `None` if the channel is not in the peer cache yet. The cache is
     /// populated automatically as updates arrive, or you can warm it explicitly
@@ -3245,6 +3248,10 @@ impl Client {
             .channel_kind_of(channel_id)
     }
 
+    /// Fetch the first page of dialogs purely to populate the peer cache
+    /// with their users/chats. Called automatically on a cache-miss burst
+    /// (see `bulk_peer_hydration`); exposed publicly so callers can
+    /// also warm it up-front instead of waiting for the first miss.
     pub async fn warm_peer_cache_from_dialogs(&self) -> Result<(), InvocationError> {
         let req = tl::functions::messages::GetDialogs {
             exclude_pinned: false,

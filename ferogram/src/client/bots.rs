@@ -23,6 +23,9 @@ use crate::{
 use ferogram_tl_types::{Cursor, Deserializable};
 
 impl Client {
+    /// Open a Telegram Mini App (a web app) in `peer`'s context and get back
+    /// a session you can use to interact with it. `app` picks whether you're
+    /// opening the bot's main app or a specific URL it registered.
     pub async fn open_mini_app(
         &self,
         peer: impl Into<PeerRef>,
@@ -120,6 +123,10 @@ impl Client {
         }
     }
 
+    /// Respond to a button tap from an inline keyboard. With `alert: true`,
+    /// `text` shows as a popup the user has to dismiss; otherwise it's a brief
+    /// toast. You should call this for every callback query you get, even
+    /// with no text, or the button stays stuck in a loading state.
     pub async fn answer_callback_query(
         &self,
         query_id: i64,
@@ -138,6 +145,9 @@ impl Client {
         Ok(body.len() >= 4 && u32::from_le_bytes(body[..4].try_into().unwrap()) == 0x997275b5)
     }
 
+    /// Send results back for an `@your_bot query` inline query. `next_offset`
+    /// lets the client ask for more results when the user scrolls, by passing
+    /// it back to you as the next query's offset.
     pub async fn answer_inline_query(
         &self,
         query_id: i64,
@@ -162,6 +172,8 @@ impl Client {
         Ok(body.len() >= 4 && u32::from_le_bytes(body[..4].try_into().unwrap()) == 0x997275b5)
     }
 
+    /// Send `/start` to a bot with a deep-link parameter, as if the user
+    /// tapped a `t.me/bot?start=...` link.
     pub async fn start_bot(
         &self,
         bot_user_id: i64,
@@ -191,6 +203,10 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Set a user's score for the game in a sent game message. With
+    /// `force: true`, the score is set even if it's lower than the user's
+    /// current one; with `edit_message: true`, the message's scoreboard is
+    /// updated in place.
     pub async fn set_game_score(
         &self,
         peer: impl Into<PeerRef>,
@@ -225,6 +241,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Get the high score table for the game in a sent game message,
+    /// centered around `user_id`.
     pub async fn get_game_high_scores(
         &self,
         peer: impl Into<PeerRef>,
@@ -264,6 +282,8 @@ impl Client {
             .collect())
     }
 
+    /// Edit a message that was sent via inline mode (one identified by an
+    /// `InputBotInlineMessageId`, not a regular message ID).
     pub async fn edit_inline_message(
         &self,
         id: tl::enums::InputBotInlineMessageId,
@@ -284,6 +304,9 @@ impl Client {
         Ok(body.len() >= 4 && u32::from_le_bytes(body[..4].try_into().unwrap()) == 0x997275b5)
     }
 
+    /// Set the bot's command list - the menu users see when they tap the
+    /// `/` icon. `scope` controls where it applies (everywhere, a specific
+    /// chat, just admins, etc); `None` means the default scope.
     pub async fn set_bot_commands(
         &self,
         commands: &[(&str, &str)],
@@ -308,6 +331,8 @@ impl Client {
         Ok(is_bool_true(&body))
     }
 
+    /// Clear the bot's command list for a scope, falling back to whatever the
+    /// next broader scope defines.
     pub async fn delete_bot_commands(
         &self,
         scope: Option<tl::enums::BotCommandScope>,

@@ -99,6 +99,9 @@ impl StringSession {
         }
     }
 
+    /// The minimal V2 fields, regardless of which version was decoded. For a
+    /// V1 session this drops `server_salt`/`seq_no`/`layer`; use
+    /// [`Self::full_session`] if you need those.
     pub fn session(&self) -> Session {
         match self {
             StringSession::V2(s) => s.clone(),
@@ -112,6 +115,8 @@ impl StringSession {
         }
     }
 
+    /// The full V1 fields, or `None` if this is a V2 session (V2 never
+    /// carried `server_salt`/`seq_no`/`layer` to begin with).
     pub fn full_session(&self) -> Option<&FullSession> {
         match self {
             StringSession::V1(s) => Some(s),
@@ -119,6 +124,8 @@ impl StringSession {
         }
     }
 
+    /// Which version this session was decoded as (1 or 2), independent of
+    /// which version [`Self::encode`] would produce.
     pub fn version(&self) -> u8 {
         match self {
             StringSession::V1(_) => VERSION_V1,

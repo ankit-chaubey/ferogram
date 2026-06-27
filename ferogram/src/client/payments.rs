@@ -17,10 +17,11 @@ use crate::{
     dialog::{Dialog, DialogIter, MessageIter},
     inline_iter, media, participants, search, update,
 };
-#[allow(unused_imports)]
-use ferogram_tl_types::{Cursor, Deserializable};
 
 impl Client {
+    /// Approve or decline a checkout right before payment is charged.
+    /// Set `ok: false` with an `error_message` to tell the user why it
+    /// can't go through (e.g. out of stock).
     pub async fn answer_precheckout_query(
         &self,
         query_id: i64,
@@ -35,6 +36,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Respond to a shipping query with available shipping options, or an
+    /// `error` if you can't ship to the address the user gave.
     pub async fn answer_shipping_query(
         &self,
         query_id: i64,
@@ -49,6 +52,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Send a payment invoice message. `payload` is your own opaque string
+    /// for tracking the order - it isn't shown to the user.
     pub async fn send_invoice(
         &self,
         peer: impl Into<crate::PeerRef>,

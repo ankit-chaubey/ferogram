@@ -23,6 +23,8 @@ use crate::{
 use ferogram_tl_types::{Cursor, Deserializable};
 
 impl Client {
+    /// Tell Telegram you've seen the reactions on these messages, so it
+    /// stops marking them as new/unread.
     pub async fn get_reactions(
         &self,
         peer: impl Into<PeerRef>,
@@ -57,6 +59,9 @@ impl Client {
         Ok(body.len() >= 4 && u32::from_le_bytes(body[..4].try_into().unwrap()) == 0x997275b5)
     }
 
+    /// List who reacted to a message, and with what. Pass `reaction` to
+    /// filter to one specific reaction, or `None` for all of them; `offset`
+    /// pages through results.
     pub async fn iter_reaction_users(
         &self,
         peer: impl Into<PeerRef>,
@@ -83,6 +88,8 @@ impl Client {
         Ok(result)
     }
 
+    /// Send `count` Star reactions on a message - the paid reaction type,
+    /// not a regular emoji one.
     pub async fn send_paid_reaction(
         &self,
         peer: impl Into<PeerRef>,

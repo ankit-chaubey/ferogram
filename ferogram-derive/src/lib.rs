@@ -10,6 +10,41 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc(html_root_url = "https://docs.rs/ferogram-derive/0.6.2")]
+//! Procedural macros for ferogram.
+//!
+//! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
+//! MTProto client built by [Ankit Chaubey](https://github.com/ankit-chaubey).
+//!
+//! - Channel: [t.me/Ferogram](https://t.me/Ferogram)
+//! - Chat: [t.me/FerogramChat](https://t.me/FerogramChat)
+//!
+//! You do not depend on this crate directly. It is re-exported through
+//! `ferogram` and `ferogram-fsm`. Add those crates to your `Cargo.toml`
+//! instead.
+//!
+//! # What's in here
+//!
+//! - **`#[derive(FsmState)]`**: Implements the `ferogram_fsm::FsmState`
+//!   trait for a unit-variant enum. Generates `as_key` (variant name →
+//!   `String`) and `from_key` (string → `Option<Self>`). Tuple and struct
+//!   variants are rejected at compile time.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use ferogram::FsmState;
+//!
+//! #[derive(FsmState, Clone, Debug, PartialEq)]
+//! enum CheckoutState {
+//!     Cart,
+//!     Address,
+//!     Payment,
+//!     Confirmation,
+//! }
+//! ```
+
 #![deny(unsafe_code)]
 
 use proc_macro::TokenStream;
@@ -17,7 +52,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, parse_macro_input, spanned::Spanned};
 
-/// Derive the [`ferogram::fsm::FsmState`] trait for an enum.
+/// Derive the `ferogram_fsm::FsmState` trait for an enum.
 ///
 /// Only **unit variants** (no fields) are supported. Tuple or struct variants
 /// are rejected with a compile error.

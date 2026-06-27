@@ -17,6 +17,3 @@ ferogram-session   = { workspace = true }
 tokio    = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros"] }
 tracing  = { version = "0.1", features = ["log"] }
 metrics  = "0.24"
-
-[dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }

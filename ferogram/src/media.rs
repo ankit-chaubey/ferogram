@@ -117,7 +117,7 @@ pub const MAX_WORKERS_PER_FILE: usize = 4;
 /// Hard global MTProto sender ceiling across all concurrent transfers.
 ///
 /// Prefer 8 for normal usage; 12 is the absolute burst ceiling.  Enforced via
-/// [`ClientInner::worker_semaphore`] which is initialised with this many permits.
+/// `ClientInner::worker_semaphore` which is initialised with this many permits.
 pub const MAX_GLOBAL_SENDERS: usize = 12;
 
 /// Files larger than this use `upload.saveBigFilePart`  - Telegram protocol spec.
@@ -2541,7 +2541,7 @@ impl crate::update::IncomingMessage {
         None
     }
 
-    /// Like [`download_location`] but also returns the file's DC id.
+    /// Like [`Self::download_location`] but also returns the file's DC id.
     pub fn download_location_with_dc(&self) -> Option<(tl::enums::InputFileLocation, i32)> {
         let media = match &self.raw {
             tl::enums::Message::Message(m) => m.media.as_ref()?,
@@ -2593,7 +2593,7 @@ impl crate::update::IncomingMessage {
     /// Convenience wrapper over [`download`] for small files. For large files
     /// prefer [`download`] with a [`tokio::fs::File`] to avoid memory pressure.
     ///
-    /// [`download`]: IncomingMessage::download
+    /// [`download`]: crate::update::IncomingMessage::download
     pub async fn bytes(&self) -> Result<Vec<u8>, crate::InvocationError> {
         let mut buf = Vec::new();
         self.download(&mut buf).await?;
@@ -2601,7 +2601,7 @@ impl crate::update::IncomingMessage {
     }
 }
 
-/// Extract a download [`InputFileLocation`] and DC id from a raw `MessageMedia`.
+/// Extract a download `InputFileLocation` and DC id from a raw `MessageMedia`.
 ///
 /// Returns `(location, dc_id)` or `None` when the media has no downloadable file.
 pub fn download_location_from_media(

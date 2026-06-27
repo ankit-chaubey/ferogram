@@ -80,6 +80,9 @@ pub struct DcPool {
 }
 
 impl DcPool {
+    /// Build an empty pool for `home_dc_id`, seeded with addresses for every
+    /// DC in `dc_entries`. No connections are opened yet; slots get created
+    /// lazily on first use of each DC.
     pub fn new(
         home_dc_id: i32,
         dc_entries: &[DcEntry],

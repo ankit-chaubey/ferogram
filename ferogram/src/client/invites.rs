@@ -21,6 +21,9 @@ use crate::{
 use ferogram_tl_types::{Cursor, Deserializable};
 
 impl Client {
+    /// Create a new invite link for a chat. `expire_date`/`usage_limit` cap
+    /// when it stops working; `request_needed: true` makes joins go through
+    /// admin approval instead of being instant.
     pub async fn export_invite_link(
         &self,
         peer: impl Into<PeerRef>,
@@ -45,6 +48,7 @@ impl Client {
         Ok(tl::enums::ExportedChatInvite::deserialize(&mut cur)?)
     }
 
+    /// Revoke an invite link so it stops working.
     pub async fn revoke_invite_link(
         &self,
         peer: impl Into<PeerRef>,
@@ -75,6 +79,8 @@ impl Client {
         Ok(result.invite)
     }
 
+    /// Change an existing invite link's expiry, usage limit, approval
+    /// requirement, or title. Fields left `None` are unchanged.
     pub async fn edit_invite_link(
         &self,
         peer: impl Into<PeerRef>,
@@ -109,6 +115,9 @@ impl Client {
         Ok(result.invite)
     }
 
+    /// List invite links for a chat created by a specific admin. Set
+    /// `revoked: true` to see revoked links instead of active ones;
+    /// `offset_date`/`offset_link` page through results.
     pub async fn get_invite_links(
         &self,
         peer: impl Into<PeerRef>,
@@ -148,6 +157,8 @@ impl Client {
         Ok(result.invites)
     }
 
+    /// Permanently delete a revoked invite link. Active links need
+    /// [`Self::revoke_invite_link`] first.
     pub async fn delete_invite_link(
         &self,
         peer: impl Into<PeerRef>,
@@ -162,6 +173,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Delete every revoked invite link a specific admin created for a chat,
+    /// in one go.
     pub async fn delete_revoked_invite_links(
         &self,
         peer: impl Into<PeerRef>,
@@ -188,6 +201,7 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Approve or decline a single pending join request.
     pub async fn join_request(
         &self,
         peer: impl Into<PeerRef>,
@@ -216,6 +230,9 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Approve or decline every pending join request for a chat at once.
+    /// Pass `link` to only act on requests that came through that specific
+    /// invite link.
     pub async fn all_join_requests(
         &self,
         peer: impl Into<PeerRef>,
@@ -232,6 +249,10 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// List the people who joined (or requested to join) through a chat's
+    /// invite links. Pass `link` to filter to one specific link, or `None`
+    /// for all of them. Set `requested: true` to list pending join requests
+    /// instead of people who already joined.
     pub async fn get_invite_link_members(
         &self,
         peer: impl Into<PeerRef>,
@@ -280,6 +301,8 @@ impl Client {
             .collect())
     }
 
+    /// List the admins who have invite links for a chat, with how many
+    /// people joined through each admin's links.
     pub async fn get_admins_with_invites(
         &self,
         peer: impl Into<PeerRef>,

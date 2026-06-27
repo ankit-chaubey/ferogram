@@ -39,6 +39,8 @@ impl Client {
         Ok(tl::enums::PeerNotifySettings::deserialize(&mut cur)?)
     }
 
+    /// Get your privacy rules for one setting - who can see your phone
+    /// number, add you to groups, call you, and so on.
     pub async fn get_privacy(
         &self,
         key: tl::enums::InputPrivacyKey,
@@ -53,6 +55,8 @@ impl Client {
         Ok(result.rules)
     }
 
+    /// Replace your privacy rules for one setting. This overwrites the
+    /// whole rule set for `key`, not just one rule in it.
     pub async fn set_privacy(
         &self,
         key: tl::enums::InputPrivacyKey,
@@ -68,6 +72,7 @@ impl Client {
         Ok(result.rules)
     }
 
+    /// Get notification settings for a chat - muted, sound, and so on.
     pub async fn get_notify_settings(
         &self,
         peer: impl Into<PeerRef>,
@@ -84,6 +89,7 @@ impl Client {
         Ok(tl::enums::PeerNotifySettings::deserialize(&mut cur)?)
     }
 
+    /// Change notification settings for a chat.
     pub async fn update_notify_settings(
         &self,
         peer: impl Into<PeerRef>,

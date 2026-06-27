@@ -81,6 +81,8 @@ impl ObfuscatedStream {
         })
     }
 
+    /// Encrypt and send one frame using whichever [`ObfuscatedFraming`] this
+    /// stream was set up with.
     pub async fn send(&mut self, data: &[u8]) -> Result<(), ConnectError> {
         match self.framing {
             ObfuscatedFraming::Abridged => {
@@ -128,6 +130,10 @@ impl ObfuscatedStream {
         Ok(())
     }
 
+    /// Read and decrypt one frame. A header word count above `0x7f` (in
+    /// Abridged framing) means the server sent a 4-byte transport error
+    /// code instead of a real frame; that's surfaced as an `Io` error rather
+    /// than parsed as a frame length.
     pub async fn recv(&mut self) -> Result<Vec<u8>, ConnectError> {
         match self.framing {
             ObfuscatedFraming::Abridged => {

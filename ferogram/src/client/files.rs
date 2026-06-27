@@ -94,7 +94,7 @@ impl Client {
 
     /// Upload from any [`AsyncRead`] source and call `on_progress` once per second.
     ///
-    /// Same callback rules as [`download_with_progress`]: sync only.
+    /// Same callback rules as [`Self::download_with_progress`]: sync only.
     /// For async work use a channel in a separate task.
     ///
     /// # Example
@@ -865,7 +865,7 @@ impl Client {
     /// Return a lazy chunk iterator for `media`.
     ///
     /// Call [`DownloadIter::next`] until it returns `Ok(None)`. Each chunk is
-    /// a [`bytes::Bytes`] slice - zero-copy where possible.
+    /// a `bytes::Bytes` slice - zero-copy where possible.
     ///
     /// Returns `None` if `media` has no downloadable location.
     pub fn iter_download(
@@ -966,6 +966,10 @@ impl Client {
     }
 
     #[allow(dead_code)]
+    /// Upload media to Telegram's servers without sending it as a message
+    /// yet, getting back a ready-to-send [`tl::enums::MessageMedia`]. Handy
+    /// when you want to upload once and reuse the result, e.g. across
+    /// several `send_message` calls.
     pub async fn upload_media(
         &self,
         peer: impl Into<PeerRef>,
@@ -983,6 +987,8 @@ impl Client {
         Ok(tl::enums::MessageMedia::deserialize(&mut cur)?)
     }
 
+    /// Get every message in the same media group (album) as `msg_id`, given
+    /// any one message from that group.
     pub async fn get_media_group(
         &self,
         peer: impl Into<PeerRef>,

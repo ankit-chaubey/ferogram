@@ -21,6 +21,7 @@ use crate::{
 use ferogram_tl_types::{Cursor, Deserializable};
 
 impl Client {
+    /// Get a sticker set's contents - title, stickers, and so on.
     pub async fn get_sticker_set(
         &self,
         stickerset: tl::enums::InputStickerSet,
@@ -64,6 +65,9 @@ impl Client {
         }
     }
 
+    /// List every sticker set you have installed. Pass the `hash` from a
+    /// previous call to get back `None` cheaply when nothing's changed,
+    /// instead of the full list again; `0` always gets the full list.
     pub async fn get_all_stickers(
         &self,
         hash: i64,
@@ -84,6 +88,8 @@ impl Client {
         }
     }
 
+    /// Look up custom emoji by their document IDs, to get the actual emoji
+    /// documents (image/animation data) behind them.
     pub async fn get_custom_emoji_documents(
         &self,
         document_ids: Vec<i64>,

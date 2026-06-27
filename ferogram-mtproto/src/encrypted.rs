@@ -339,7 +339,7 @@ impl EncryptedSession {
         (buf.as_ref().to_vec(), msg_id)
     }
 
-    /// Like [`pack`] but also returns the `msg_id` allocated for this message.
+    /// Like [`Self::pack`] but also returns the `msg_id` allocated for this message.
     pub fn pack_with_msg_id<R: RemoteCall>(&mut self, call: &R) -> (Vec<u8>, i64) {
         let body = call.to_bytes();
         let msg_id = self.next_msg_id();
@@ -506,7 +506,7 @@ impl EncryptedSession {
 }
 
 impl EncryptedSession {
-    /// Like [`decrypt_frame`] but also performs seen-msg_id deduplication using the
+    /// Like [`Self::decrypt_frame`] but also performs seen-msg_id deduplication using the
     /// supplied ring. Pass `&self.inner.seen_msg_ids` from the client.
     ///
     /// Hard-codes `time_offset = 0`. On systems where the local clock differs from
@@ -522,7 +522,7 @@ impl EncryptedSession {
         Self::decrypt_frame_dedup_with_offset(auth_key, session_id, frame, seen, 0)
     }
 
-    /// Like [`decrypt_frame_dedup`] but applies the time-window check with the given
+    /// Like [`Self::decrypt_frame_dedup`] but applies the time-window check with the given
     /// `time_offset` (seconds, server_time − local_time).
     ///
     /// Callers that track the session's clock skew (from `correct_time_offset`) should
@@ -563,7 +563,7 @@ impl EncryptedSession {
         Self::decrypt_frame_with_offset(auth_key, session_id, frame, 0)
     }
 
-    /// Like [`decrypt_frame`] but applies the time-window check with the given
+    /// Like [`Self::decrypt_frame`] but applies the time-window check with the given
     /// `time_offset` (seconds, server_time − local_time).
     pub fn decrypt_frame_with_offset(
         auth_key: &[u8; 256],

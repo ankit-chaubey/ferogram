@@ -23,6 +23,7 @@ use crate::{
 use ferogram_tl_types::{Cursor, Deserializable};
 
 impl Client {
+    /// Send a poll, built with [`crate::poll::PollBuilder`].
     pub async fn send_poll(
         &self,
         peer: impl Into<PeerRef>,
@@ -58,6 +59,9 @@ impl Client {
         Ok(())
     }
 
+    /// Vote on a poll. `options` are the option byte identifiers from the
+    /// poll's own answer list, not their text or index - pass more than one
+    /// only if the poll allows multiple choice.
     pub async fn send_vote(
         &self,
         peer: impl Into<PeerRef>,
@@ -94,6 +98,9 @@ impl Client {
         Ok(result)
     }
 
+    /// List who voted for what on a poll. Pass `option` to filter to one
+    /// specific answer, or `None` for everyone; `offset`/`limit` page
+    /// through results.
     pub async fn get_poll_votes(
         &self,
         peer: impl Into<PeerRef>,

@@ -483,6 +483,8 @@ impl Client {
             .with_client(self.clone())
     }
 
+    /// Send a message to your own Saved Messages. A quick way to test that
+    /// a connection works, or to leave yourself a note.
     pub async fn send_to_self(
         &self,
         msg: impl Into<InputMessage>,
@@ -544,6 +546,9 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Forward one or more messages from `source` to `destination`. Forwards
+    /// keep the "Forwarded from" attribution by default; set `opts` to
+    /// strip it or to reply to an existing message in the destination.
     pub async fn forward_messages(
         &self,
         destination: impl Into<PeerRef>,
@@ -654,6 +659,9 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Delete messages by ID from a regular chat or DM. Channel posts need
+    /// channel-aware deletion instead, which isn't wired up on this path.
+    /// With `revoke: true`, deletes for the other side too, not just you.
     pub async fn delete_messages(
         &self,
         message_ids: &[i32],
@@ -707,6 +715,8 @@ impl Client {
             .collect())
     }
 
+    /// Get the currently pinned message in a chat, or `None` if nothing's
+    /// pinned. If a chat has multiple pins, this returns only the latest one.
     pub async fn get_pinned_message(
         &self,
         peer: impl Into<PeerRef>,
@@ -845,6 +855,7 @@ impl Client {
             .map(|m| update::IncomingMessage::from_raw(m).with_client(self.clone())))
     }
 
+    /// Unpin every pinned message in a chat at once.
     pub async fn unpin_all_messages(
         &self,
         peer: impl Into<PeerRef>,
@@ -859,6 +870,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// List a chat's scheduled messages - the ones queued to send later,
+    /// not sent yet.
     pub async fn get_scheduled_messages(
         &self,
         peer: impl Into<PeerRef>,
@@ -883,6 +896,7 @@ impl Client {
             .collect())
     }
 
+    /// Cancel scheduled messages before they send.
     pub async fn delete_scheduled_messages(
         &self,
         peer: impl Into<PeerRef>,
@@ -941,6 +955,9 @@ impl Client {
             .collect())
     }
 
+    /// Show a chat action like "typing..." in a chat. Telegram clears it
+    /// automatically after a few seconds, so call this again if the action
+    /// is still ongoing.
     pub async fn send_chat_action(
         &self,
         peer: impl Into<PeerRef>,
@@ -1081,6 +1098,8 @@ impl Client {
         Ok((out, count))
     }
 
+    /// Save text as the draft for a chat, the way an unsent typed message
+    /// shows up when you reopen it.
     pub async fn save_draft(
         &self,
         peer: impl Into<PeerRef>,
@@ -1103,6 +1122,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Send scheduled messages immediately instead of waiting for their
+    /// scheduled time.
     pub async fn send_scheduled_now(
         &self,
         peer: impl Into<PeerRef>,
@@ -1117,6 +1138,9 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// List who has read a message and when, in a small group. Telegram
+    /// doesn't track this for everything - large chats or old enough
+    /// messages just come back empty.
     pub async fn get_message_read_participants(
         &self,
         peer: impl Into<PeerRef>,
@@ -1178,6 +1202,8 @@ impl Client {
             .collect())
     }
 
+    /// Get the discussion-group message linked to a channel post, for
+    /// channels that have comments enabled.
     pub async fn get_discussion_message(
         &self,
         peer: impl Into<PeerRef>,
@@ -1198,6 +1224,7 @@ impl Client {
         Ok(result)
     }
 
+    /// Mark a discussion thread as read up to `read_max_id`.
     pub async fn read_discussion(
         &self,
         peer: impl Into<PeerRef>,
@@ -1214,6 +1241,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Generate a link preview for `text` without sending it anywhere -
+    /// handy for showing a preview before the user actually sends.
     pub async fn get_web_page_preview(
         &self,
         text: impl Into<String>,
@@ -1229,6 +1258,8 @@ impl Client {
         Ok(result.media)
     }
 
+    /// Translate one or more existing messages to `to_lang` (an ISO language
+    /// code like `"en"`).
     pub async fn translate_messages(
         &self,
         peer: impl Into<PeerRef>,
@@ -1258,6 +1289,7 @@ impl Client {
             .collect())
     }
 
+    /// Transcribe a voice message to text.
     pub async fn transcribe_audio(
         &self,
         peer: impl Into<PeerRef>,
@@ -1276,6 +1308,7 @@ impl Client {
         Ok(result)
     }
 
+    /// Turn the "Translate" button on or off for a chat.
     pub async fn toggle_peer_translations(
         &self,
         peer: impl Into<PeerRef>,
@@ -1290,6 +1323,9 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Get a `t.me` link to a specific message. `kind` picks whether it
+    /// points at the single message, its whole media group, or its comment
+    /// thread.
     pub async fn export_message_link(
         &self,
         peer: impl Into<PeerRef>,

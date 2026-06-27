@@ -16,6 +16,10 @@ use tokio::net::TcpStream;
 use crate::connection::FrameKind;
 use crate::error::ConnectError;
 
+/// Write one frame using the Abridged transport framing: a 1-byte word count
+/// (in 4-byte words) if under `0x7f`, otherwise `0x7f` followed by a 3-byte
+/// little-endian word count, then the payload. `data` must already be
+/// 4-byte aligned.
 pub async fn send_abridged(stream: &mut TcpStream, data: &[u8]) -> Result<(), ConnectError> {
     debug_assert_eq!(
         data.len() % 4,
@@ -108,6 +112,10 @@ pub async fn recv_raw_frame(
     }
 }
 
+/// Read one Abridged-framed message. A 3-byte word count of exactly `1`
+/// after the `0x7f` length marker means the server sent a 4-byte transport
+/// error code instead of a real frame, which this surfaces as
+/// [`ConnectError::TransportCode`] rather than trying to parse it as data.
 pub async fn recv_abridged(stream: &mut TcpStream) -> Result<Vec<u8>, ConnectError> {
     let mut h = [0u8; 1];
     stream.read_exact(&mut h).await?;

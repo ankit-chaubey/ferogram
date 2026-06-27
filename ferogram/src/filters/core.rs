@@ -16,9 +16,9 @@ use crate::update::IncomingMessage;
 
 /// A composable, synchronous predicate over an [`IncomingMessage`].
 ///
-/// Use the built-in constructors ([`command`], [`private`], [`text`], ...) and
+/// Use the built-in constructors ([`crate::filters::command`], [`crate::filters::private`], [`crate::filters::text`], ...) and
 /// combine them with `&`, `|`, `!` operators rather than implementing this
-/// trait directly. For arbitrary logic use [`custom`].
+/// trait directly. For arbitrary logic use [`crate::filters::custom`].
 pub trait Filter: Send + Sync + 'static {
     fn check(&self, msg: &IncomingMessage) -> bool;
 }

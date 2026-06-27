@@ -97,7 +97,7 @@ impl ClientBuilder {
     /// Use a binary file session at `path`.
     ///
     /// Mutually exclusive with [`session_string`](Self::session_string) and
-    /// [`in_memory`](Self::in_memory): last call wins.
+    /// `session_string("")`: last call wins.
     pub fn session(mut self, path: impl AsRef<std::path::Path>) -> Self {
         self.session_backend = Arc::new(BinaryFileBackend::new(path.as_ref()));
         self
@@ -115,7 +115,7 @@ impl ClientBuilder {
     /// Pass `""` to start a fresh in-memory session.
     ///
     /// Mutually exclusive with [`session`](Self::session) and
-    /// [`in_memory`](Self::in_memory): last call wins.
+    /// `session_string("")`: last call wins.
     pub fn session_string(mut self, s: impl Into<String>) -> Self {
         let s: String = s.into();
 
@@ -132,7 +132,7 @@ impl ClientBuilder {
 
     /// Inject a fully custom [`SessionBackend`] implementation.
     ///
-    /// Useful for [`LibSqlBackend`] (bundled SQLite, no system dep) or any
+    /// Useful for [`crate::LibSqlBackend`] (bundled SQLite, no system dep) or any
     /// custom persistence layer:
     /// ```rust,no_run
     /// # use ferogram::{Client};
@@ -254,11 +254,11 @@ impl ClientBuilder {
         self.proxy_link(&url)
     }
 
-    /// Route all connections through an MTProxy from a pre-built [`MtProxyConfig`].
+    /// Route all connections through an MTProxy from a pre-built [`crate::MtProxyConfig`].
     ///
     /// The proxy `transport` is set automatically from the secret prefix;
     /// you do not need to also call `.transport()`.
-    /// Build the [`MtProxyConfig`] with [`crate::parse_proxy_link`].
+    /// Build the [`crate::MtProxyConfig`] with [`crate::parse_proxy_link`].
     pub fn mtproxy(mut self, proxy: crate::proxy::MtProxyConfig) -> Self {
         // Override transport to match what the proxy requires.
         self.transport = proxy.transport.clone();

@@ -356,12 +356,18 @@ impl DcConnection {
         ))
     }
 
+    /// The auth key this connection is currently encrypted with. Unlike
+    /// [`crate::MtpSender::auth_key_bytes`], there's no separate permanent
+    /// key tracked here, so under PFS this is the temporary key, not one
+    /// safe to persist to the session.
     pub fn auth_key_bytes(&self) -> [u8; 256] {
         self.enc.auth_key_bytes()
     }
+    /// The server salt this connection started with.
     pub fn first_salt(&self) -> i64 {
         self.enc.salt
     }
+    /// Clock offset (seconds) between this client and the server.
     pub fn time_offset(&self) -> i32 {
         self.enc.time_offset
     }
@@ -379,6 +385,12 @@ impl DcConnection {
         (self.stream, self.frame_kind, self.enc)
     }
 
+    /// Send `req` and block until its matching `rpc_result` comes back,
+    /// discarding or handling anything else that arrives in between (server
+    /// pushes, the periodic keepalive ping, salt/session-reset retries).
+    /// One request at a time; `DcPool` graduates connections that need
+    /// pipelined concurrent requests into a background sender task instead
+    /// of using this directly.
     #[tracing::instrument(skip(self, req), fields(method = std::any::type_name::<R>()))]
     pub async fn rpc_call<R: RemoteCall>(&mut self, req: &R) -> Result<Vec<u8>, InvocationError> {
         let _t0 = std::time::Instant::now();

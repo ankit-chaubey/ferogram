@@ -11,7 +11,7 @@
 // Please keep this notice when redistributing.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-crypto/0.4.0")]
+#![doc(html_root_url = "https://docs.rs/ferogram-crypto/0.6.2")]
 //! Cryptographic primitives for Telegram MTProto 2.0.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
@@ -66,7 +66,7 @@
 //! ```rust
 //! use ferogram_crypto::factorize;
 //!
-//! let (p, q) = factorize(0x17ED48941A08F981);
+//! let (p, q) = factorize(0x17ED48941A08F981).expect("factors exist");
 //! assert!(p < q);
 //! assert_eq!(p * q, 0x17ED48941A08F981);
 //! ```

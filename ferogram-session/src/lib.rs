@@ -12,6 +12,7 @@
 
 #![deny(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc(html_root_url = "https://docs.rs/ferogram-session/0.6.2")]
 //! Session persistence types and storage backends for ferogram.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
@@ -38,9 +39,9 @@
 //! - [`StringSessionBackend`]: serializes the session to a base64 string.
 //!   Useful for serverless environments where you store state in an env var or
 //!   database column. Load it with `Client::builder().session_string(s)`.
-//! - [`SqliteBackend`]: SQLite-backed storage via rusqlite. Behind the
+//! - [`SqliteBackend`](crate::SqliteBackend): SQLite-backed storage via rusqlite. Behind the
 //!   `sqlite-session` feature flag. Good for local multi-account tooling.
-//! - [`LibSqlBackend`]: libSQL / Turso backend. Behind `libsql-session`.
+//! - [`LibSqlBackend`](crate::LibSqlBackend): libSQL / Turso backend. Behind `libsql-session`.
 //!   For distributed or edge-hosted session storage.
 //!
 //! You can also implement `SessionBackend` yourself for Redis, PostgreSQL, or
@@ -81,6 +82,8 @@ use std::path::Path;
 mod auth_key_serde {
     use serde::{Deserialize, Deserializer, Serializer};
 
+    /// `serde(with = "auth_key_serde")` shim: `[u8; 256]` has no built-in
+    /// `Serialize`, so this writes it as a plain byte sequence.
     pub fn serialize<S>(value: &Option<[u8; 256]>, s: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -91,6 +94,8 @@ mod auth_key_serde {
         }
     }
 
+    /// Read side of [`serialize`]: decodes a byte sequence back into the
+    /// fixed-size array, rejecting anything that isn't exactly 256 bytes.
     pub fn deserialize<'de, D>(d: D) -> Result<Option<[u8; 256]>, D::Error>
     where
         D: Deserializer<'de>,
@@ -123,10 +128,12 @@ impl DcFlags {
     pub const CDN: DcFlags = DcFlags(1 << 3);
     pub const STATIC: DcFlags = DcFlags(1 << 4);
 
+    /// Whether every bit set in `other` is also set in `self`.
     pub fn contains(self, other: DcFlags) -> bool {
         self.0 & other.0 == other.0
     }
 
+    /// OR `flag`'s bit(s) into `self` in place.
     pub fn set(&mut self, flag: DcFlags) {
         self.0 |= flag.0;
     }
@@ -263,7 +270,8 @@ pub enum ChannelKind {
 }
 
 impl ChannelKind {
-    /// Decode from the session byte.  Unknown values fall back to `Broadcast`.
+    /// Decode from the session byte. Returns `None` for any byte that isn't
+    /// a known variant, rather than guessing.
     pub fn from_byte(b: u8) -> Option<Self> {
         match b {
             0 => Some(Self::Broadcast),
@@ -273,6 +281,7 @@ impl ChannelKind {
         }
     }
 
+    /// Encode for storing in the session: the read side is [`Self::from_byte`].
     pub fn to_byte(self) -> u8 {
         self as u8
     }
@@ -587,7 +596,7 @@ impl PersistedSession {
         })
     }
 
-    /// Decode a session from a URL-safe base64 string produced by [`to_string`].
+    /// Decode a session from a URL-safe base64 string produced by `to_string`.
     pub fn from_string(s: &str) -> io::Result<Self> {
         use base64::Engine as _;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -596,6 +605,8 @@ impl PersistedSession {
         Self::from_bytes(&bytes)
     }
 
+    /// Read and decode a session from `path` (the binary v2 format written
+    /// by [`Self::to_bytes`]).
     pub fn load(path: &Path) -> io::Result<Self> {
         let buf = std::fs::read(path)?;
         Self::from_bytes(&buf)
@@ -744,7 +755,7 @@ pub trait SessionBackend: Send + Sync {
 
 /// A single update-sequence change, applied via [`SessionBackend::apply_update_state`].
 ///
-///uses:
+/// Single variant constructed:
 /// ```text
 /// UpdateState::All(updates_state)
 /// UpdateState::Primary { pts, date, seq }
@@ -752,7 +763,8 @@ pub trait SessionBackend: Send + Sync {
 /// UpdateState::Channel { id, pts }
 /// ```
 ///
-/// We map this 1-to-1 to layer's `UpdatesStateSnap`.
+/// `All` carries a full [`UpdatesStateSnap`]; the other variants update one
+/// field of the existing snapshot in place.
 #[derive(Debug, Clone)]
 pub enum UpdateStateChange {
     /// Replace the entire state snapshot.
@@ -803,6 +815,8 @@ pub struct BinaryFileBackend {
 }
 
 impl BinaryFileBackend {
+    /// Point a backend at `path`. The file doesn't need to exist yet; it's
+    /// created on the first save.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
@@ -810,6 +824,7 @@ impl BinaryFileBackend {
         }
     }
 
+    /// The file path this backend reads from and writes to.
     pub fn path(&self) -> &std::path::Path {
         &self.path
     }
@@ -869,6 +884,7 @@ pub struct InMemoryBackend {
 }
 
 impl InMemoryBackend {
+    /// An empty in-memory backend; equivalent to [`Default::default`].
     pub fn new() -> Self {
         Self::default()
     }
@@ -949,12 +965,15 @@ pub struct StringSessionBackend {
 }
 
 impl StringSessionBackend {
+    /// Seed the backend with an existing session string (as produced by
+    /// [`Self::current`]), or an empty string to start fresh.
     pub fn new(s: impl Into<String>) -> Self {
         Self {
             data: std::sync::Mutex::new(s.into()),
         }
     }
 
+    /// The current session, base64-encoded. Updates after every [`save`](SessionBackend::save).
     pub fn current(&self) -> String {
         self.data.lock().unwrap().clone()
     }

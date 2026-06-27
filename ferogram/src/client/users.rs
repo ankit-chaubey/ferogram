@@ -85,12 +85,15 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    /// Terminate a specific session by its `hash` (obtained from [`get_authorizations`]).
+    /// Terminate a specific session by its `hash` (obtained from [`Self::get_authorizations`]).
     pub async fn terminate_session(&self, hash: i64) -> Result<(), InvocationError> {
         let req = tl::functions::account::ResetAuthorization { hash };
         self.rpc_write(&req).await
     }
 
+    /// Add a user to your contacts. With `add_phone_privacy_exception: true`,
+    /// they'll be able to see your phone number even if your privacy
+    /// settings would normally hide it from them.
     pub async fn add_contact(
         &self,
         user_id: i64,
@@ -122,6 +125,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Add several contacts at once, each given as `(phone, first_name,
+    /// last_name)`.
     pub async fn import_contacts(
         &self,
         contacts: &[(&str, &str, &str)],
@@ -151,6 +156,7 @@ impl Client {
         Ok(result)
     }
 
+    /// List the users you've blocked. `offset`/`limit` page through results.
     pub async fn get_blocked_users(
         &self,
         offset: i32,
@@ -177,6 +183,8 @@ impl Client {
             .collect())
     }
 
+    /// Search your contacts and the global user directory by name or
+    /// username for `query`.
     pub async fn search_contacts(
         &self,
         query: impl Into<String>,
@@ -204,6 +212,8 @@ impl Client {
         Ok(peers)
     }
 
+    /// Delete profile photos by `(id, access_hash, file_reference)`. Returns
+    /// the IDs that were actually deleted.
     pub async fn delete_profile_photos(
         &self,
         photo_ids: Vec<(i64, i64, Vec<u8>)>,
@@ -241,6 +251,8 @@ impl Client {
         crate::SetProfileBuilder::new(self.clone(), peer.into())
     }
 
+    /// List your active sessions - every device currently logged into this
+    /// account.
     pub async fn get_authorizations(
         &self,
     ) -> Result<Vec<tl::types::Authorization>, InvocationError> {
@@ -259,6 +271,8 @@ impl Client {
             .collect())
     }
 
+    /// Get full info for a user - bio, common chats count, blocked status,
+    /// and other fields the basic user object doesn't carry.
     pub async fn get_user_full(
         &self,
         user_id: i64,

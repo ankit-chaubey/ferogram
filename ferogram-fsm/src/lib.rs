@@ -10,6 +10,72 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc(html_root_url = "https://docs.rs/ferogram-fsm/0.6.2")]
+//! FSM state management for ferogram bots.
+//!
+//! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
+//! MTProto client built by [Ankit Chaubey](https://github.com/ankit-chaubey).
+//!
+//! - Channel: [t.me/Ferogram](https://t.me/Ferogram)
+//! - Chat: [t.me/FerogramChat](https://t.me/FerogramChat)
+//!
+//! Provides a finite-state machine layer for multi-step bot conversations.
+//! Each user/chat slot holds an optional state string and an arbitrary
+//! key-value data bag. Handlers are gated on the current state and receive
+//! a [`StateContext`] to transition to the next state or read/write data.
+//!
+//! Most users reach this through the `ferogram` crate's handler builder
+//! (`.state::<MyState>(MyState::WaitingName)`). Use `ferogram-fsm` directly
+//! only when building a custom dispatcher or storage backend.
+//!
+//! # What's in here
+//!
+//! - **[`FsmState`]**: Trait that state enums must implement. Serialises a
+//!   variant to a string key and deserialises it back. Derived automatically
+//!   via `#[derive(FsmState)]` from `ferogram-derive`.
+//! - **[`StateContext`]**: Injected into state-matched handlers. Exposes
+//!   [`StateContext::transition`] to move to the next state, [`StateContext::clear_state`]
+//!   to finish the conversation, and typed [`StateContext::set_data`] /
+//!   [`StateContext::get_data`] for per-slot JSON-serialised fields.
+//! - **[`StateStorage`]**: Async trait for the persistence backend. Implement
+//!   it to add Redis, SQLite, or any other store.
+//! - **[`MemoryStorage`]**: Built-in in-process backend backed by `DashMap`.
+//!   Zero setup; state is lost on restart.
+//! - **[`StateKey`]** / **[`StateKeyStrategy`]**: Controls how the storage
+//!   slot is keyed. The default strategy keys by `(chat_id, user_id)` so
+//!   each user in a group has independent state.
+//! - **[`StorageError`]**: Error type returned by all storage operations.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use ferogram_fsm::{FsmState, MemoryStorage, StateContext};
+//!
+//! #[derive(Clone, Debug, PartialEq)]
+//! enum OrderState { WaitingItem, WaitingQty, Done }
+//!
+//! impl FsmState for OrderState {
+//!     fn as_key(&self) -> String {
+//!         match self {
+//!             Self::WaitingItem => "WaitingItem".into(),
+//!             Self::WaitingQty  => "WaitingQty".into(),
+//!             Self::Done        => "Done".into(),
+//!         }
+//!     }
+//!     fn from_key(key: &str) -> Option<Self> {
+//!         match key {
+//!             "WaitingItem" => Some(Self::WaitingItem),
+//!             "WaitingQty"  => Some(Self::WaitingQty),
+//!             "Done"        => Some(Self::Done),
+//!             _             => None,
+//!         }
+//!     }
+//! }
+//!
+//! // In practice, use #[derive(FsmState)] from ferogram-derive instead.
+//! ```
+
 #![deny(unsafe_code)]
 
 mod context;

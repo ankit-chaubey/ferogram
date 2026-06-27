@@ -23,6 +23,9 @@ use crate::{
 use ferogram_tl_types::{Cursor, Deserializable};
 
 impl Client {
+    /// List a forum group's topics, optionally filtered by `query`. Page
+    /// through results with `offset_date`/`offset_id`/`offset_topic` from
+    /// the last topic you saw - all `0` to start from the most recent.
     pub async fn get_forum_topics(
         &self,
         peer: impl Into<PeerRef>,
@@ -51,6 +54,7 @@ impl Client {
         Ok(result.topics)
     }
 
+    /// Look up specific topics in a forum group by their topic IDs.
     pub async fn get_forum_topics_by_id(
         &self,
         peer: impl Into<PeerRef>,
@@ -71,6 +75,8 @@ impl Client {
         Ok(result.topics)
     }
 
+    /// Create a new topic in a forum group. `icon_color`/`icon_emoji_id` are
+    /// both optional - leave them `None` for Telegram's default icon.
     pub async fn create_forum_topic(
         &self,
         peer: impl Into<PeerRef>,
@@ -92,6 +98,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Edit a topic's title, icon, or open/closed and hidden state. Pass
+    /// `None` for any field you don't want to change.
     pub async fn edit_forum_topic(
         &self,
         peer: impl Into<PeerRef>,
@@ -114,6 +122,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Delete every message in a topic. Telegram only deletes a batch at a
+    /// time, so this keeps calling through until nothing's left.
     pub async fn delete_forum_topic_history(
         &self,
         peer: impl Into<PeerRef>,
@@ -137,6 +147,7 @@ impl Client {
         Ok(())
     }
 
+    /// Turn Topics mode on or off for a supergroup.
     pub async fn toggle_forum(
         &self,
         peer: impl Into<PeerRef>,

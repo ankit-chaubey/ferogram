@@ -26,7 +26,7 @@
 //! | 3 | Firebase Realtime DB | `https://<project>.firebaseio.com/…` |
 //!
 //! The response from each source is a **base64-encoded, AES-IGE-encrypted**
-//! blob.  After decryption a TL-serialised [`help.configSimple`] is returned,
+//! blob.  After decryption a TL-serialised `help.configSimple` is returned,
 //! which contains one or more DC addresses with phone-prefix rules.
 //!
 //! # Usage

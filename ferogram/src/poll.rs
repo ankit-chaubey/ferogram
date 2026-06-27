@@ -12,7 +12,7 @@
 
 use ferogram_tl_types as tl;
 
-/// Fluent builder for polls sent via [`Client::send_poll`].
+/// Fluent builder for polls sent via [`crate::Client::send_poll`].
 ///
 /// ```rust,no_run
 /// # use ferogram::{Client, poll::PollBuilder};

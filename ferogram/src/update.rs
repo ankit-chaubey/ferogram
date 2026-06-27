@@ -450,7 +450,7 @@ impl IncomingMessage {
         self.is_group() || self.is_channel()
     }
 
-    /// Look up the [`ChannelKind`] of the chat this message is in.
+    /// Look up the [`crate::ChannelKind`] of the chat this message is in.
     ///
     /// Returns `None` when the message is not in a channel/supergroup, or when
     /// the kind is not yet known (e.g. first message from an unseen channel, or
@@ -466,7 +466,7 @@ impl IncomingMessage {
         self.channel_kind_with(client).await
     }
 
-    /// Look up the [`ChannelKind`] of the chat this message is in, using an
+    /// Look up the [`crate::ChannelKind`] of the chat this message is in, using an
     /// explicit client reference.
     pub async fn channel_kind_with(&self, client: &Client) -> Option<crate::types::ChannelKind> {
         match self.peer_id()? {

@@ -157,7 +157,7 @@ pub enum PeerType {
 pub struct PeerCache {
     /// user_id -> access_hash (full users only, min=false)
     pub users: HashMap<i64, i64>,
-    /// channel_id -> (access_hash, Option<ChannelKind>) (full channels only, min=false)
+    /// channel_id -> (access_hash, `Option<ChannelKind>`) (full channels only, min=false)
     pub channels: HashMap<i64, (i64, Option<ChannelKind>)>,
     /// Regular group chat IDs (Chat::Chat / ChatForbidden).
     /// Groups need no access_hash; track existence for peer validation.

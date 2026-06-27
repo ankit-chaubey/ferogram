@@ -50,7 +50,7 @@ impl Client {
     /// Leave a channel or supergroup.
     ///
     /// For basic groups, kick yourself or use
-    /// [`delete_dialog`] to just hide it.
+    /// [`Client::delete_dialog`] to just hide it.
     pub async fn leave_chat(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
@@ -113,6 +113,8 @@ impl Client {
     }
 
     #[allow(dead_code)]
+    /// Get the full info for a chat - description, pinned message,
+    /// slow-mode delay, and other fields the basic chat object doesn't carry.
     pub async fn get_chat_full(
         &self,
         peer: impl Into<PeerRef>,
@@ -213,6 +215,9 @@ impl Client {
         }
     }
 
+    /// Delete messages up to `max_id` from a chat's history on your side.
+    /// With `revoke: true` on a group/channel you admin, it deletes for
+    /// everyone instead of just you.
     pub async fn delete_chat_history(
         &self,
         peer: impl Into<PeerRef>,
@@ -258,6 +263,10 @@ impl Client {
         }
     }
 
+    /// Create a basic group chat with `title` and the given members. This is
+    /// the small, old-style group with a low member cap - use
+    /// [`Self::create_channel`] for a supergroup if you need more room or
+    /// admin tooling.
     pub async fn create_group(
         &self,
         title: impl Into<String>,
@@ -295,6 +304,9 @@ impl Client {
             .ok_or_else(|| InvocationError::Deserialize("create_group: no chat in response".into()))
     }
 
+    /// Create a channel or supergroup. `broadcast: true` makes a broadcast
+    /// channel (only admins post); `false` makes a supergroup (everyone can,
+    /// by default).
     pub async fn create_channel(
         &self,
         title: impl Into<String>,
@@ -325,6 +337,8 @@ impl Client {
         })
     }
 
+    /// Set the default permissions for non-admin members of a chat, using a
+    /// builder closure over [`crate::participants::BannedRightsBuilder`].
     pub async fn edit_chat_default_banned_rights(
         &self,
         peer: impl Into<PeerRef>,
@@ -342,6 +356,7 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Add one or more users to a chat by user ID.
     pub async fn invite_users(
         &self,
         peer: impl Into<PeerRef>,
@@ -405,6 +420,8 @@ impl Client {
         }
     }
 
+    /// Set the auto-delete timer for new messages in a chat, in seconds.
+    /// Pass `0` to turn it off.
     pub async fn set_history_ttl(
         &self,
         peer: impl Into<PeerRef>,
@@ -419,6 +436,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// List the group chats you have in common with a user. `max_id`/`limit`
+    /// page through results if there are a lot.
     pub async fn get_common_chats(
         &self,
         user_id: i64,
@@ -451,6 +470,7 @@ impl Client {
         })
     }
 
+    /// List the admins of a chat.
     pub async fn get_chat_administrators(
         &self,
         peer: impl Into<PeerRef>,
@@ -510,6 +530,10 @@ impl Client {
         }
     }
 
+    /// Transfer ownership of a channel or supergroup to another user. You'll
+    /// need their confirmation on Telegram's end too - this just starts the
+    /// transfer. `password` is your 2FA password, required by Telegram for
+    /// this regardless of whether you'd normally need it to log in.
     pub async fn transfer_chat_ownership(
         &self,
         peer: impl Into<PeerRef>,
@@ -553,6 +577,8 @@ impl Client {
         Ok(())
     }
 
+    /// Get the ID of the discussion group linked to a broadcast channel, or
+    /// `None` if it doesn't have one.
     pub async fn get_linked_channel(
         &self,
         peer: impl Into<PeerRef>,
@@ -586,6 +612,11 @@ impl Client {
         Ok(linked)
     }
 
+    /// Read the admin action log for a supergroup or channel: who banned
+    /// who, what got deleted, title changes, and so on. You need to be an
+    /// admin of `peer` to call this. `query` filters by text, and
+    /// `max_id`/`min_id` page through results - pass `0` for both to start
+    /// from the most recent event.
     pub async fn get_admin_log(
         &self,
         peer: impl Into<PeerRef>,
@@ -633,6 +664,8 @@ impl Client {
             .collect())
     }
 
+    /// Turn content protection on or off for a chat - when enabled, members
+    /// can't forward or save media from it.
     pub async fn toggle_no_forwards(
         &self,
         peer: impl Into<PeerRef>,
@@ -648,6 +681,9 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Set the emoji theme for a chat. `emoticon` must be one of the emoji
+    /// Telegram's official clients offer in the chat theme picker, not
+    /// arbitrary text.
     pub async fn set_chat_theme(
         &self,
         peer: impl Into<PeerRef>,
@@ -664,6 +700,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Set which reactions are allowed in a chat - all of them, none, or a
+    /// specific list.
     pub async fn set_chat_reactions(
         &self,
         peer: impl Into<PeerRef>,
@@ -680,6 +718,8 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// List the identities you can post as in a chat - your own account, or
+    /// any channel you admin that's linked to it.
     pub async fn get_send_as_peers(
         &self,
         peer: impl Into<PeerRef>,
@@ -706,6 +746,8 @@ impl Client {
             .collect())
     }
 
+    /// Set which identity you post as in a chat by default, from the options
+    /// [`Self::get_send_as_peers`] returns.
     pub async fn set_default_send_as(
         &self,
         peer: impl Into<PeerRef>,

@@ -134,6 +134,8 @@ impl Client {
     // Internal helper: fetch dialogs with a custom GetDialogs request.
     // Like `get_messages` but also returns the total count from `messages.Slice`.
 
+    /// Remove a dialog from your chat list, clearing its history on your
+    /// side. For a group or channel this also makes you leave it.
     pub async fn delete_dialog(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
@@ -326,6 +328,10 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Run a raw `messages.getDialogs` request and decode the result into
+    /// [`Dialog`]s, caching any users/chats it returns along the way. A
+    /// lower-level building block - for normal use, iterate dialogs through
+    /// [`DialogIter`] instead, which handles paging for you.
     pub async fn get_dialogs_slice(
         &self,
         req: tl::functions::messages::GetDialogs,
@@ -424,6 +430,9 @@ impl Client {
         Ok(result)
     }
 
+    /// Like [`Self::get_dialogs_slice`], but also returns the total dialog
+    /// count when Telegram includes one (a sliced response), or `None`
+    /// when it doesn't (a complete, unsliced response).
     pub async fn get_dialogs_paginated(
         &self,
         req: tl::functions::messages::GetDialogs,
@@ -615,6 +624,8 @@ impl Client {
         Ok((dialogs, count))
     }
 
+    /// List the pinned dialogs in a folder. `folder_id` is `0` for the main
+    /// list, `1` for the Archive folder.
     pub async fn get_pinned_dialogs(
         &self,
         folder_id: i32,
@@ -629,6 +640,8 @@ impl Client {
         Ok(result.dialogs)
     }
 
+    /// Mark a dialog as unread, the way "Mark as unread" in the app does -
+    /// independent of whether it actually has unread messages.
     pub async fn mark_dialog_unread(
         &self,
         peer: impl Into<PeerRef>,
