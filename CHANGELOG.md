@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.3] - 2026-06-28
+
+Rich messaging, new client modules, separated upload/download APIs, and a broad documentation pass across the entire codebase.
+
+### Added
+
+**Rich messages**
+
+- `InputMessage::rich_text(blocks)` attaches structured `PageBlock` content to any message. Rich messages render as full documents inside Telegram (headings, tables, code blocks, collapsible sections, math) rather than flat text.
+- `parse_rich_markdown(text)` in `ferogram-parsers` converts a Markdown string into `Vec<PageBlock>`. Supports ATX headings, fenced code blocks with language tag, GFM tables, ordered and unordered lists, `<details>/<summary>` collapsible sections, horizontal rules, LaTeX math (`$...$` inline, `$$...$$` block), and standard inline formatting (bold, italic, strikethrough, spoiler, inline code).
+- `parse_rich_html(html)` does the same from an HTML source. Both parsers live in `ferogram-parsers` alongside the existing flat-text parsers and are re-exported from `ferogram::parsers`.
+- `rich_common` internal module shared by both parsers (block construction helpers, inline-text rendering, `RichText` builder).
+- `rich_message.rs` example: sends a structured article with headings, a table, a code block, a collapsible section, and a LaTeX math block to a target chat.
+- New doc page: `docs/src/messaging/rich-messages.md` with the full syntax reference and a worked example.
+
+**New client modules**
+
+Eight new files under `ferogram/src/client/`, each covering a previously unaddressed API surface:
+
+- `reactions.rs`: `get_reactions`, `delete_reaction`, `iter_reaction_users`, `send_paid_reaction`.
+- `forum.rs`: `get_forum_topics`, `get_forum_topics_by_id`, `create_forum_topic`, `edit_forum_topic`, `delete_forum_topic_history`, `toggle_forum`.
+- `invites.rs`: `export_invite_link`, `revoke_invite_link`, `edit_invite_link`, `get_invite_links`, `delete_invite_link`, `delete_revoked_invite_links`, `join_request`, `all_join_requests`, `get_invite_link_members`, `get_admins_with_invites`.
+- `payments.rs`: `answer_precheckout_query`, `answer_shipping_query`, `send_invoice`.
+- `polls.rs`: `send_poll`, `send_vote`, `poll_results`, `get_poll_votes`.
+- `privacy.rs`: privacy rule getters and setters.
+- `resolve.rs`: `resolve`, `join_link`, `check_invite` extracted from the main module into their own file.
+- `stickers.rs`: `get_sticker_set`, `toggle_stickers`, `get_all_stickers`, `get_custom_emoji_documents`.
+
+**Upload/download API separation**
+
+- `DownloadFile<'a>` builder type returned by `Client::download_file`. Supports an optional `.handle(&TransferHandle)` for progress tracking before `.await`.
+- `Upload<'a, R>` builder type returned by `Client::upload`. Same `.handle()` chaining pattern.
+- `UploadFile<'a>` builder type returned by `Client::upload_file`. Mirrors the above.
+- All three types implement `IntoFuture`, so existing `.await` callsites work without change. The builders are a non-breaking extension: calling `.handle(h).await` is the opt-in path.
+- `html.rs` and `markdown.rs` added as named entry points in `ferogram-parsers` alongside the existing `lib.rs` re-exports.
+
+### Changed
+
+- `client/mod.rs` is substantially leaner. Logic for reactions, forum, invites, payments, polls, privacy, resolve, and stickers has moved into the dedicated files listed above.
+- `ferogram-parsers` reorganized: `rich_common`, `rich_html`, `rich_markdown` sit next to the flat-text parsers rather than in a separate sub-crate.
+- Doc comments across the public API rewritten for clarity and accuracy. Covers `InputMessage`, `Client`, `transfer`, `media`, `parsers`, and several builder types.
+- `docs/src/messaging/media.md`, `docs/src/api/client.md`, `docs/src/introduction.md`, `docs/src/installation.md`, `docs/src/features.md`, and `docs/src/whats-new.md` updated.
+- `FEATURES.md` and `README.md` updated to reflect the 0.6.3 additions.
+- Several examples cleaned up: `chat_history.rs`, `order_bot.rs`, `progress_transfer.rs`, `transfer_showcase.rs` updated for current API.
+
+### Internal
+
+- `ferogram-parsers/src/lib.rs` re-exports all four public parsers (`parse_markdown`, `parse_html`, `parse_rich_markdown`, `parse_rich_html`) from a single location.
+- `IntoFuture` impls for the three upload/download builders avoid breaking existing `.await` callsites while enabling optional progress wiring.
+- General cleanup and dead-code removal across `ferogram-mtsender`, `ferogram-crypto`, `ferogram-session`, `ferogram-tl-gen`, and `ferogram-tl-parser`.
+
+---
+
 ## [0.6.2] - 2026-06-24
 
 Transport, reconnect, and update synchronization stabilization release.
