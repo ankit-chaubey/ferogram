@@ -11,7 +11,7 @@
 // Please keep this notice when redistributing.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-fsm/0.6.2")]
+#![doc(html_root_url = "https://docs.rs/ferogram-fsm/0.6.3")]
 //! FSM state management for ferogram bots.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust

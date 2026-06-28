@@ -11,7 +11,7 @@
 // Please keep this notice when redistributing.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-tl-types/0.6.2")]
+#![doc(html_root_url = "https://docs.rs/ferogram-tl-types/0.6.3")]
 //! Auto-generated Telegram API types, functions, and enums for TL Layer 227.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust

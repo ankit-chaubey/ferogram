@@ -19,7 +19,7 @@ If something's missing for you, drop by [t.me/FerogramChat](https://t.me/Ferogra
 
 ```toml
 [dependencies]
-ferogram = "0.6.0"
+ferogram = "0.6.3"
 tokio    = { version = "1", features = ["full"] }
 ```
 

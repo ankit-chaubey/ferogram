@@ -37,7 +37,7 @@ The longer-term goal is to support [multiple languages](https://github.com/ankit
 
 ```toml
 [dependencies]
-ferogram = "0.6.2"
+ferogram = "0.6.3"
 tokio    = { version = "1", features = ["full"] }
 ```
 
