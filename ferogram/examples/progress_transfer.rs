@@ -198,8 +198,14 @@ async fn handle_media(
 
     let mut buf = Vec::new();
     let fname2 = fname.clone();
-    let dl = client
-        .download_with_progress(&media, &mut buf, &dl_handle, move |p| {
+    let ctl = dl_handle.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            if ctl.is_cancelled() {
+                break;
+            }
+            let p = ctl.progress();
             let bar = progress_bar(p.percent());
             if p.total > 0 && p.speed_bps() > 512 {
                 println!(
@@ -212,8 +218,9 @@ async fn handle_media(
                 println!("Downloading {fname2}: {bar} {:.0}%", p.percent());
             }
             let _ = tx.send(p);
-        })
-        .await;
+        }
+    });
+    let dl = client.download(&media, &mut buf, Some(&dl_handle)).await;
 
     chat_task.abort();
     println!("Downloading {fname}: {} 100% | done", progress_bar(100.0));
@@ -278,8 +285,14 @@ async fn handle_media(
     };
 
     let fname2 = fname.clone();
-    let up = client
-        .upload_with_progress(std::io::Cursor::new(buf), &fname, &up_handle, move |p| {
+    let ctl = up_handle.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            if ctl.is_cancelled() {
+                break;
+            }
+            let p = ctl.progress();
             let bar = progress_bar(p.percent());
             if p.total > 0 && p.speed_bps() > 512 {
                 println!(
@@ -292,7 +305,10 @@ async fn handle_media(
                 println!("Uploading {fname2}: {bar} {:.0}%", p.percent());
             }
             let _ = tx.send(p);
-        })
+        }
+    });
+    let up = client
+        .upload(std::io::Cursor::new(buf), &fname, Some(&up_handle))
         .await;
 
     chat_task.abort();

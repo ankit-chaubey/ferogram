@@ -81,28 +81,28 @@ impl From<(tl::enums::InputMedia, String)> for AlbumItem {
 /// 256 KB: safe at all file sizes.
 pub const DOWNLOAD_CHUNK_SIZE: i32 = 256 * 1024;
 
-/// Adaptive download chunk size for the parallel path.
+/// Adaptive download chunk size based on file size.
 ///
-/// Telegram's `upload.getFile` rule:
-///   `(offset + limit)` must not cross a 1 MB boundary  - so using 512 KB is safe
-///   as long as offsets are multiples of 512 KB, which our sequential part
-///   numbering guarantees (`part * chunk`).  1 MB chunks are intentionally
-///   avoided here; they require extra offset-alignment care and gain little over
-///   512 KB in practice.
+/// Telegram's `upload.getFile` rule: `(offset + limit)` must not cross a 1 MB
+/// boundary. Using chunk sizes that are powers of two and aligning offsets as
+/// `part * chunk` always satisfies this. 1 MB chunks are only used at >= 500 MB
+/// where the round-trip savings justify the stricter alignment requirement.
 ///
-/// | File size  | Chunk  | Rationale                        |
-/// |------------|--------|----------------------------------|
-/// | < 50 MB    | 256 KB | small files: fewer parts is fine |
-/// | ≥ 50 MB    | 512 KB | large files: halve RPC round-trips|
+/// | File size    | Chunk  | Rationale                          |
+/// |--------------|--------|------------------------------------|
+/// | < 50 MB      | 256 KB | small files, fewer parts is fine   |
+/// | 50-500 MB    | 512 KB | halves round-trips vs 256 KB       |
+/// | >= 500 MB    | 1 MB   | halves round-trips vs 512 KB       |
 pub fn download_chunk_size(file_size: usize) -> i32 {
     if file_size < 50 * 1024 * 1024 {
         256 * 1024 // 256 KB
     } else if file_size < 500 * 1024 * 1024 {
         512 * 1024 // 512 KB
     } else {
-        // 1 MB chunks for files ≥ 500 MB.
-        // 1 MB-aligned offsets (0, 1 MB, 2 MB, …) never cross a 1 MB boundary,
-        // satisfying Telegram's offset+limit constraint.  This halves RPC round-
+        // 1 MB chunks for files >= 500 MB.
+        // 1 MB-aligned offsets (0, 1 MB, 2 MB, ...) never cross a 1 MB boundary,
+        // satisfying Telegram's offset+limit constraint. This halves RPC round-trips
+        // vs 512 KB for very large files with negligible memory overhead.
         1024 * 1024 // 1 MB
     }
 }
@@ -127,6 +127,9 @@ pub const BIG_FILE_THRESHOLD: usize = 10 * 1024 * 1024;
 /// Maximum parts per upload.
 #[allow(dead_code)]
 const UPLOAD_MAX_PARTS: i32 = 4000;
+
+/// Maximum upload part size (512 KB). Telegram's protocol hard ceiling.
+pub const MAX_PART_SIZE: usize = 512 * 1024;
 
 /// Maximum bytes in-flight per upload session  -
 /// `kMaxUploadPerSession = 1 MB`.
@@ -2644,6 +2647,267 @@ fn make_input_file(
             name: name.to_string(),
             md5_checksum,
         })
+    }
+
+    /// Like `upload_file_concurrent_streaming` but with caller-supplied worker count
+    /// and chunk size. Used by `upload_exp`.
+    #[cfg(feature = "experimental")]
+    pub(crate) async fn upload_file_concurrent_streaming_exp(
+        &self,
+        path: &std::path::Path,
+        n_workers: usize,
+        chunk_size: usize,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<UploadedFile, InvocationError> {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+        let meta = tokio::fs::metadata(path)
+            .await
+            .map_err(InvocationError::Io)?;
+        let total = meta.len() as usize;
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+        let big = total > BIG_FILE_THRESHOLD;
+        let total_parts = total.div_ceil(chunk_size) as i32;
+        let file_id = crate::random_i64_pub();
+
+        // Sniff MIME from header bytes.
+        let mut header_f = tokio::fs::File::open(path)
+            .await
+            .map_err(InvocationError::Io)?;
+        let mut header = vec![0u8; chunk_size.min(65536)];
+        let n = header_f
+            .read(&mut header)
+            .await
+            .map_err(InvocationError::Io)?;
+        header.truncate(n);
+        let mime_type = detect_mime_from_bytes(&header, name);
+        drop(header_f);
+
+        if let Some(h) = handle {
+            h.set_total(total as u64);
+            h.reset_start();
+        }
+
+        let _global_guard = self
+            .inner
+            .worker_semaphore
+            .acquire_many(n_workers as u32)
+            .await
+            .expect("worker semaphore unexpectedly closed");
+
+        let next_part = Arc::new(Mutex::new(0i32));
+        let shared_handle: Option<crate::transfer::TransferHandle> = handle.cloned();
+        let mut tasks: tokio::task::JoinSet<Result<(), InvocationError>> =
+            tokio::task::JoinSet::new();
+
+        for _ in 0..n_workers {
+            let client = self.clone();
+            let next_part = Arc::clone(&next_part);
+            let worker_handle = shared_handle.clone();
+            let path = path.to_path_buf();
+
+            tasks.spawn(async move {
+                let mut conn = client.open_worker_conn(0).await?;
+                let mut f = tokio::fs::File::open(&path)
+                    .await
+                    .map_err(InvocationError::Io)?;
+
+                loop {
+                    let part_num = {
+                        let mut g = next_part.lock().await;
+                        if *g >= total_parts {
+                            break;
+                        }
+                        let n = *g;
+                        *g += 1;
+                        n
+                    };
+
+                    if let Some(ref h) = worker_handle {
+                        h.poll_pause_cancel().await?;
+                    }
+
+                    let offset = part_num as u64 * chunk_size as u64;
+                    f.seek(std::io::SeekFrom::Start(offset))
+                        .await
+                        .map_err(InvocationError::Io)?;
+                    let mut buf = vec![0u8; chunk_size];
+                    let mut bytes_read = 0;
+                    while bytes_read < chunk_size {
+                        match f
+                            .read(&mut buf[bytes_read..])
+                            .await
+                            .map_err(InvocationError::Io)?
+                        {
+                            0 => break,
+                            n => bytes_read += n,
+                        }
+                    }
+                    if bytes_read == 0 {
+                        break;
+                    }
+                    let bytes = buf[..bytes_read].to_vec();
+                    let chunk_len = bytes.len() as u64;
+
+                    if big {
+                        conn.rpc_call(&tl::functions::upload::SaveBigFilePart {
+                            file_id,
+                            file_part: part_num,
+                            file_total_parts: total_parts,
+                            bytes,
+                        })
+                        .await?;
+                    } else {
+                        conn.rpc_call(&tl::functions::upload::SaveFilePart {
+                            file_id,
+                            file_part: part_num,
+                            bytes,
+                        })
+                        .await?;
+                    }
+
+                    if let Some(ref h) = worker_handle {
+                        h.add_bytes(chunk_len);
+                    }
+                }
+                Ok(())
+            });
+        }
+
+        while let Some(res) = tasks.join_next().await {
+            if let Err(e) =
+                res.map_err(|e| InvocationError::Io(std::io::Error::other(e.to_string())))?
+            {
+                tasks.abort_all();
+                return Err(e);
+            }
+        }
+
+        let inner = make_input_file(big, file_id, total_parts, name, &[]);
+        tracing::info!(
+            "[ferogram::transfer] upload_exp complete: '{}' ({} bytes, {}B chunks x {}, {} workers)",
+            name,
+            total,
+            chunk_size,
+            total_parts,
+            n_workers
+        );
+        Ok(UploadedFile {
+            inner,
+            mime_type,
+            name: name.to_string(),
+        })
+    }
+
+    /// Parallel download with caller-supplied worker count and chunk size.
+    /// Used by `download_exp`. Writes assembled bytes into `dest`.
+    #[cfg(feature = "experimental")]
+    pub(crate) async fn download_concurrent_exp(
+        &self,
+        location: tl::enums::InputFileLocation,
+        dc_id: i32,
+        size: usize,
+        dest: &mut Vec<u8>,
+        n_workers: usize,
+        chunk_size: i32,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<u64, InvocationError> {
+        use tokio::io::AsyncWriteExt;
+
+        let n_parts = size.div_ceil(chunk_size as usize);
+
+        // Pre-allocate destination buffer.
+        dest.resize(size, 0u8);
+        let dest_arc = Arc::new(tokio::sync::Mutex::new(dest));
+
+        let _global_guard = self
+            .inner
+            .worker_semaphore
+            .acquire_many(n_workers as u32)
+            .await
+            .expect("worker semaphore unexpectedly closed");
+
+        let next_part = Arc::new(Mutex::new(0usize));
+        let shared_handle: Option<crate::transfer::TransferHandle> = handle.cloned();
+        let mut tasks: tokio::task::JoinSet<Result<(), InvocationError>> =
+            tokio::task::JoinSet::new();
+
+        for _ in 0..n_workers {
+            let client = self.clone();
+            let location = location.clone();
+            let next_part = Arc::clone(&next_part);
+            let dest_arc = Arc::clone(&dest_arc);
+            let worker_handle = shared_handle.clone();
+
+            tasks.spawn(async move {
+                let mut conn = client.open_worker_conn(dc_id).await?;
+
+                loop {
+                    let part_num = {
+                        let mut g = next_part.lock().await;
+                        if *g >= n_parts {
+                            break;
+                        }
+                        let n = *g;
+                        *g += 1;
+                        n
+                    };
+
+                    if let Some(ref h) = worker_handle {
+                        h.poll_pause_cancel().await?;
+                    }
+
+                    let offset = part_num as i64 * chunk_size as i64;
+                    let req = tl::functions::upload::GetFile {
+                        precise: true,
+                        cdn_supported: false,
+                        location: location.clone(),
+                        offset,
+                        limit: chunk_size,
+                    };
+                    let raw = conn.rpc_call(&req).await?;
+                    let mut cur = Cursor::from_slice(&raw);
+                    let bytes = match tl::enums::upload::File::deserialize(&mut cur)? {
+                        tl::enums::upload::File::File(f) => f.bytes,
+                        tl::enums::upload::File::CdnRedirect(_) => {
+                            return Err(InvocationError::Deserialize(
+                                "CDN redirect not supported in download_exp".into(),
+                            ));
+                        }
+                    };
+
+                    let start = part_num * chunk_size as usize;
+                    let end = (start + bytes.len()).min(size);
+                    {
+                        let mut d = dest_arc.lock().await;
+                        d[start..end].copy_from_slice(&bytes[..end - start]);
+                    }
+
+                    if let Some(ref h) = worker_handle {
+                        h.add_bytes(bytes.len() as u64);
+                    }
+                }
+                Ok(())
+            });
+        }
+
+        while let Some(res) = tasks.join_next().await {
+            if let Err(e) =
+                res.map_err(|e| InvocationError::Io(std::io::Error::other(e.to_string())))?
+            {
+                tasks.abort_all();
+                return Err(e);
+            }
+        }
+
+        let n = size as u64;
+        tracing::info!(
+            "[ferogram::transfer] download_exp complete: {} bytes, {} workers, {}B chunks",
+            n,
+            n_workers,
+            chunk_size
+        );
+        Ok(n)
     }
 }
 

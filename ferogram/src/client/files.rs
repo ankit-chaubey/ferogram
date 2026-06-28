@@ -12,6 +12,7 @@
 
 #[allow(unused_imports)]
 use ferogram_tl_types::{Cursor, Deserializable};
+#[cfg(feature = "experimental")]
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -37,116 +38,6 @@ impl Client {
         }
         std::path::PathBuf::from(".ferogram-transfers")
     }
-
-    /// Download media and call `on_progress` once per second while transferring.
-    ///
-    /// The callback is a plain sync `FnMut(TransferProgress)`. For async work
-    /// (editing a Telegram message) use a channel and a separate async task.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use ferogram::{Client, TransferHandle};
-    ///
-    /// # async fn example(client: Client, media: ferogram_tl_types::enums::MessageMedia) -> anyhow::Result<()> {
-    /// let handle = TransferHandle::new();
-    /// let mut buf = Vec::new();
-    /// client
-    ///     .download_with_progress(&media, &mut buf, &handle, |p| {
-    ///         println!("{:.0}% | {}", p.percent(), p.speed_human());
-    ///     })
-    ///     .await?;
-    /// # Ok(()) }
-    /// ```
-    pub async fn download_with_progress(
-        &self,
-        media: &tl::enums::MessageMedia,
-        dest: impl tokio::io::AsyncWrite + Unpin,
-        handle: &TransferHandle,
-        mut on_progress: impl FnMut(TransferProgress) + Send + 'static,
-    ) -> Result<u64, InvocationError> {
-        let _span = tracing::info_span!(
-            target: "ferogram::transfer",
-            "download",
-            total = tracing::field::Empty,
-        );
-        // Note: span is attached via .instrument() on the async block below,
-        // not via span.enter(), which does not work correctly across await points.
-
-        let done = Arc::new(AtomicBool::new(false));
-        let ctl = handle.clone();
-        let done2 = done.clone();
-
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                if done2.load(Ordering::Acquire) || ctl.is_cancelled() {
-                    break;
-                }
-                on_progress(ctl.progress());
-            }
-        });
-
-        let result = self.download(media, dest, Some(handle)).await;
-        done.store(true, Ordering::Release);
-        result
-    }
-
-    /// Upload from any [`tokio::io::AsyncRead`] source and call `on_progress` once per second.
-    ///
-    /// Same callback rules as [`Self::download_with_progress`]: sync only.
-    /// For async work use a channel in a separate task.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use ferogram::{Client, TransferHandle};
-    ///
-    /// # async fn example(client: Client) -> anyhow::Result<()> {
-    /// let handle = TransferHandle::new();
-    /// let data = std::io::Cursor::new(vec![0u8; 1024]);
-    /// let uploaded = client
-    ///     .upload_with_progress(data, "file.bin", &handle, |p| {
-    ///         println!("{:.0}% | {}", p.percent(), p.speed_human());
-    ///     })
-    ///     .await?;
-    /// # Ok(()) }
-    /// ```
-    pub async fn upload_with_progress(
-        &self,
-        source: impl tokio::io::AsyncRead + Unpin + Send,
-        name: &str,
-        handle: &TransferHandle,
-        mut on_progress: impl FnMut(TransferProgress) + Send + 'static,
-    ) -> Result<media::UploadedFile, InvocationError> {
-        let _span = tracing::info_span!(
-            target: "ferogram::transfer",
-            "upload",
-            name,
-            total = tracing::field::Empty,
-        );
-        // Note: span is attached via .instrument() on the async block below,
-        // not via span.enter(), which does not work correctly across await points.
-
-        let done = Arc::new(AtomicBool::new(false));
-        let ctl = handle.clone();
-        let done2 = done.clone();
-
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                if done2.load(Ordering::Acquire) || ctl.is_cancelled() {
-                    break;
-                }
-                on_progress(ctl.progress());
-            }
-        });
-
-        let result = self.upload_with_handle(source, name, Some(handle)).await;
-        done.store(true, Ordering::Release);
-        result
-    }
-
     /// Resumable download with persistent checkpoint.
     ///
     /// Requires `features = ["experimental"]` **and**
@@ -162,7 +53,7 @@ impl Client {
     /// SHA-256 of the complete assembled file is logged on success.
     /// The checkpoint and partial file are deleted automatically on success.
     ///
-    /// Falls back to `download_with_progress` silently if
+    /// Falls back to `download` silently if
     /// `resumable_transfers` is `false`.
     ///
     /// # Example
@@ -199,7 +90,7 @@ impl Client {
 
         if !self.inner.experimental.resumable_transfers {
             return self
-                .download_with_progress(media, dest as &mut Vec<u8>, handle, on_progress)
+                .download(media, dest as &mut Vec<u8>, Some(handle))
                 .await;
         }
 
@@ -348,7 +239,7 @@ impl Client {
     /// checkpoint directory. Telegram upload sessions are valid for ~1 hour;
     /// if the checkpoint is older, a fresh upload starts automatically.
     ///
-    /// Falls back to `upload_with_progress` silently if
+    /// Falls back to `upload` silently if
     /// `resumable_transfers` is `false`.
     ///
     /// # Example
@@ -387,7 +278,7 @@ impl Client {
 
         if !self.inner.experimental.resumable_transfers {
             return self
-                .upload_with_progress(std::io::Cursor::new(data), name, handle, on_progress)
+                .upload(std::io::Cursor::new(data), name, Some(handle))
                 .await;
         }
 
@@ -556,12 +447,21 @@ impl Client {
             name.to_string(),
         ))
     }
-    /// Upload a file from disk by path, streaming chunks without loading the whole
-    /// file into memory.
+    /// Upload a file from disk one chunk at a time, without ever loading the full file into memory.
     ///
-    /// Unlike `upload_file` (which reads the entire file into a `Vec<u8>` first),
-    /// this method reads one chunk at a time, uploads it, and discards it.
-    /// Safe to use with files larger than available RAM.
+    /// Reads and sends each part sequentially with no concurrency. RAM usage stays flat at
+    /// roughly one chunk size regardless of how large the file is. Good for constrained
+    /// environments or when you want predictable memory, but slower than [`upload_file`]
+    /// on a fast connection.
+    ///
+    /// MIME type is sniffed from the first bytes of the file so you do not need to
+    /// specify it manually.
+    ///
+    /// Pass a [`TransferHandle`] if you want to pause, resume, or cancel mid-transfer.
+    /// Pass `None` to skip progress tracking entirely.
+    ///
+    /// [`upload_file`]: Client::upload_file
+    /// [`TransferHandle`]: crate::transfer::TransferHandle
     ///
     /// # Example
     ///
@@ -570,12 +470,12 @@ impl Client {
     ///
     /// # async fn example(client: Client) -> anyhow::Result<()> {
     /// let handle = TransferHandle::new();
-    /// let uploaded = client
-    ///     .upload_file_streaming("big_video.mp4", Some(&handle))
-    ///     .await?;
+    /// let uploaded = client.upload_sequential("big_video.mp4", Some(&handle)).await?;
+    /// // Then attach to a message:
+    /// // client.send_message(chat, InputMessage::text("").document(uploaded)).await?;
     /// # Ok(()) }
     /// ```
-    pub async fn upload_file_streaming(
+    pub async fn upload_sequential(
         &self,
         path: impl AsRef<std::path::Path>,
         handle: Option<&TransferHandle>,
@@ -690,113 +590,30 @@ impl Client {
 
         Ok(media::UploadedFile::new(inner, mime_type, name.to_string()))
     }
-
-    /// Stream-upload a file from disk with a per-second progress callback.
+    /// Download message media to any writable sink: a `Vec<u8>`, a file handle, a socket, etc.
     ///
-    /// Same as `upload_file_streaming` but calls `on_progress` every second.
-    /// For async work (editing a Telegram message) pair with a channel.
+    /// Streams data directly to `dest` without buffering the entire file in memory first.
+    /// Returns the total number of bytes written.
     ///
-    /// # Example
+    /// If the media is on a different DC than the current connection, ferogram reconnects
+    /// transparently. You do not need to handle DC switching yourself.
     ///
-    /// ```rust,no_run
-    /// use ferogram::{Client, TransferHandle};
-    ///
-    /// # async fn example(client: Client) -> anyhow::Result<()> {
-    /// let handle = TransferHandle::new();
-    /// let uploaded = client
-    ///     .upload_file_streaming_with_progress("big_video.mp4", &handle, |p| {
-    ///         println!("{:.0}% | {}", p.percent(), p.speed_human());
-    ///     })
-    ///     .await?;
-    /// # Ok(()) }
-    /// ```
-    pub async fn upload_file_streaming_with_progress(
-        &self,
-        path: impl AsRef<std::path::Path>,
-        handle: &TransferHandle,
-        mut on_progress: impl FnMut(TransferProgress) + Send + 'static,
-    ) -> Result<media::UploadedFile, InvocationError> {
-        let done = Arc::new(AtomicBool::new(false));
-        let ctl = handle.clone();
-        let done2 = done.clone();
-
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                if done2.load(Ordering::Acquire) || ctl.is_cancelled() {
-                    break;
-                }
-                on_progress(ctl.progress());
-            }
-        });
-
-        let result = self.upload_file_streaming(path, Some(handle)).await;
-        done.store(true, Ordering::Release);
-        result
-    }
-
-    /// Download media to a file path with a per-second progress callback.
-    ///
-    /// Streams directly to disk; no memory buffer. Safe for large files.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use ferogram::{Client, TransferHandle};
-    ///
-    /// # async fn example(client: Client, media: ferogram_tl_types::enums::MessageMedia) -> anyhow::Result<()> {
-    /// let handle = TransferHandle::new();
-    /// client
-    ///     .download_file_with_progress(&media, "video.mp4", &handle, |p| {
-    ///         println!("{:.0}% | {}", p.percent(), p.speed_human());
-    ///     })
-    ///     .await?;
-    /// # Ok(()) }
-    /// ```
-    pub async fn download_file_with_progress(
-        &self,
-        media: &tl::enums::MessageMedia,
-        path: impl AsRef<std::path::Path>,
-        handle: &TransferHandle,
-        mut on_progress: impl FnMut(TransferProgress) + Send + 'static,
-    ) -> Result<u64, InvocationError> {
-        let done = Arc::new(AtomicBool::new(false));
-        let ctl = handle.clone();
-        let done2 = done.clone();
-
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                if done2.load(Ordering::Acquire) || ctl.is_cancelled() {
-                    break;
-                }
-                on_progress(ctl.progress());
-            }
-        });
-
-        let result = self
-            .download_file_with_handle(media, path, Some(handle))
-            .await;
-        done.store(true, Ordering::Release);
-        result
-    }
-
-    /// Download message media to any [`AsyncWrite`] sink (file, socket, in-memory buffer…).
-    ///
-    /// Returns total bytes written. Uses the sequential streaming path so the
-    /// entire file is never buffered in memory.
+    /// Pass a [`TransferHandle`] to track progress, pause, or cancel. Pass `None` to
+    /// skip progress tracking.
     ///
     /// [`AsyncWrite`]: tokio::io::AsyncWrite
+    /// [`TransferHandle`]: crate::transfer::TransferHandle
     ///
     /// # Example
+    ///
     /// ```rust,no_run
-    /// # use ferogram::Client; use ferogram_tl_types as tl;
+    /// # use ferogram::Client;
     /// # async fn ex(client: Client, msg: ferogram::update::IncomingMessage) {
-    /// // to memory
+    /// // Download to an in-memory buffer
     /// let mut buf = Vec::new();
     /// client.download(msg.media().unwrap(), &mut buf, None).await.unwrap();
     ///
-    /// // to file
+    /// // Stream directly to a file on disk
     /// let mut file = tokio::fs::File::create("photo.jpg").await.unwrap();
     /// client.download(msg.media().unwrap(), &mut file, None).await.unwrap();
     /// # }
@@ -819,26 +636,31 @@ impl Client {
             .await
     }
 
-    /// Download message media directly to a file at `path`. Returns bytes written.
+    /// Download message media and save it directly to a file at `path`.
     ///
-    /// Creates (or truncates) the file. Streams directly to disk.
-    /// Use [`download_file_with_handle`] to track progress or support pause/cancel.
+    /// Creates the file if it does not exist, or truncates it if it does. Data is
+    /// streamed to disk without loading everything into memory first.
     ///
-    /// [`download_file_with_handle`]: Client::download_file_with_handle
-    pub async fn download_file(
-        &self,
-        media: &tl::enums::MessageMedia,
-        path: impl AsRef<std::path::Path>,
-    ) -> Result<u64, InvocationError> {
-        self.download_file_with_handle(media, path, None).await
-    }
-
-    /// Like [`download_file`] but accepts a [`TransferHandle`] for progress
-    /// tracking or pause/cancel support.
+    /// For large files (over 10 MB) this uses concurrent workers automatically,
+    /// which is significantly faster than the sequential path. You do not need to
+    /// configure anything; ferogram picks the worker count based on file size.
     ///
-    /// [`download_file`]: Client::download_file
+    /// Pass a [`TransferHandle`] to track progress, pause, or cancel. Pass `None` to
+    /// skip progress tracking.
+    ///
+    /// Returns the number of bytes written.
+    ///
     /// [`TransferHandle`]: crate::transfer::TransferHandle
-    pub async fn download_file_with_handle(
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client, msg: ferogram::update::IncomingMessage) -> anyhow::Result<()> {
+    /// client.download_file(msg.media().unwrap(), "downloaded.mp4", None).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn download_file(
         &self,
         media: &tl::enums::MessageMedia,
         path: impl AsRef<std::path::Path>,
@@ -864,10 +686,25 @@ impl Client {
 
     /// Return a lazy chunk iterator for `media`.
     ///
-    /// Call [`DownloadIter::next`] until it returns `Ok(None)`. Each chunk is
-    /// a `bytes::Bytes` slice - zero-copy where possible.
+    /// Useful when you want to process file bytes as they arrive instead of waiting
+    /// for the full download to complete. Each call to [`DownloadIter::next`] fetches
+    /// the next chunk from Telegram and returns it as a `bytes::Bytes` slice.
     ///
-    /// Returns `None` if `media` has no downloadable location.
+    /// Returns `None` if the media does not have a downloadable location (for example,
+    /// a contact card or a venue).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn ex(client: Client, msg: ferogram::update::IncomingMessage) -> anyhow::Result<()> {
+    /// if let Some(mut iter) = client.iter_download(msg.media().unwrap()) {
+    ///     while let Some(chunk) = iter.next().await? {
+    ///         // process chunk bytes
+    ///     }
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub fn iter_download(
         &self,
         media: &tl::enums::MessageMedia,
@@ -876,31 +713,33 @@ impl Client {
         Some(crate::media::DownloadIter::new(self.clone(), loc, dc))
     }
 
-    /// Upload from any [`AsyncRead`] source.
+    /// Upload from any [`tokio::io::AsyncRead`] source: a file handle, a network stream,
+    /// a cursor over bytes in memory, etc.
     ///
-    /// Buffers the stream to determine size, then uploads using the optimal
-    /// part size and worker count. Use [`upload_file`] when you have a path -
-    /// it avoids the double-buffer.
+    /// Reads the entire source into memory first, then uploads using the optimal part
+    /// size. If the data is larger than 10 MB, concurrent workers are used automatically.
     ///
-    /// Use [`upload_with_handle`] to track progress or support pause/cancel.
+    /// If you already have a path on disk, prefer [`upload_file`] instead. It stats the
+    /// file before opening it and avoids the in-memory buffer for large files.
     ///
-    /// [`AsyncRead`]: tokio::io::AsyncRead
+    /// Pass a [`TransferHandle`] to track progress, pause, or cancel. Pass `None` to
+    /// skip progress tracking.
+    ///
+    /// [`tokio::io::AsyncRead`]: tokio::io::AsyncRead
     /// [`upload_file`]: Client::upload_file
-    /// [`upload_with_handle`]: Client::upload_with_handle
-    pub async fn upload(
-        &self,
-        source: impl tokio::io::AsyncRead + Unpin + Send,
-        name: &str,
-    ) -> Result<crate::media::UploadedFile, InvocationError> {
-        self.upload_with_handle(source, name, None).await
-    }
-
-    /// Like [`upload`] but accepts a [`TransferHandle`] for progress tracking
-    /// or pause/cancel support.
-    ///
-    /// [`upload`]: Client::upload
     /// [`TransferHandle`]: crate::transfer::TransferHandle
-    pub async fn upload_with_handle(
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use ferogram::Client;
+    ///
+    /// # async fn example(client: Client) -> anyhow::Result<()> {
+    /// let bytes = b"hello world".to_vec();
+    /// let uploaded = client.upload(std::io::Cursor::new(bytes), "note.txt", None).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn upload(
         &self,
         mut source: impl tokio::io::AsyncRead + Unpin + Send,
         name: &str,
@@ -920,25 +759,35 @@ impl Client {
         }
     }
 
-    /// Upload a file from disk by path.
+    /// Upload a file from disk by path. This is the standard upload method for most use cases.
     ///
-    /// Stats the file first (for optimal part sizing), then streams in chunks.
-    /// Use [`upload_file_with_handle`] to track progress or support pause/cancel.
+    /// Stats the file first so ferogram can pick the right part size without reading
+    /// the entire file upfront. For large files (over 10 MB) it streams from disk with
+    /// concurrent workers, keeping RAM usage low even for multi-gigabyte files.
     ///
-    /// [`upload_file_with_handle`]: Client::upload_file_with_handle
-    pub async fn upload_file(
-        &self,
-        path: impl AsRef<std::path::Path>,
-    ) -> Result<crate::media::UploadedFile, InvocationError> {
-        self.upload_file_with_handle(path, None).await
-    }
-
-    /// Like [`upload_file`] but accepts a [`TransferHandle`] for progress
-    /// tracking or pause/cancel support.
+    /// For strict sequential uploads with a fixed memory ceiling, use [`upload_sequential`].
     ///
-    /// [`upload_file`]: Client::upload_file
+    /// MIME type is detected automatically from the file name and content.
+    ///
+    /// Pass a [`TransferHandle`] to track progress, pause, or cancel. Pass `None` to
+    /// skip progress tracking.
+    ///
+    /// [`upload_sequential`]: Client::upload_sequential
     /// [`TransferHandle`]: crate::transfer::TransferHandle
-    pub async fn upload_file_with_handle(
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use ferogram::{Client, TransferHandle};
+    ///
+    /// # async fn example(client: Client) -> anyhow::Result<()> {
+    /// let handle = TransferHandle::new();
+    /// let uploaded = client.upload_file("photo.jpg", Some(&handle)).await?;
+    /// // Then send it as a photo:
+    /// // client.send_message(chat, InputMessage::text("").photo(uploaded)).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn upload_file(
         &self,
         path: impl AsRef<std::path::Path>,
         handle: Option<&crate::transfer::TransferHandle>,
@@ -964,29 +813,6 @@ impl Client {
             .map_err(InvocationError::Io)?;
         self.upload_bytes(&data, name, "", handle).await
     }
-
-    #[allow(dead_code)]
-    /// Upload media to Telegram's servers without sending it as a message
-    /// yet, getting back a ready-to-send [`tl::enums::MessageMedia`]. Handy
-    /// when you want to upload once and reuse the result, e.g. across
-    /// several `send_message` calls.
-    pub async fn upload_media(
-        &self,
-        peer: impl Into<PeerRef>,
-        media: tl::enums::InputMedia,
-    ) -> Result<tl::enums::MessageMedia, InvocationError> {
-        let peer = peer.into().resolve(self).await?;
-        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let req = tl::functions::messages::UploadMedia {
-            business_connection_id: None,
-            peer: input_peer,
-            media,
-        };
-        let body = self.rpc_call_raw(&req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        Ok(tl::enums::MessageMedia::deserialize(&mut cur)?)
-    }
-
     /// Get every message in the same media group (album) as `msg_id`, given
     /// any one message from that group.
     pub async fn get_media_group(
@@ -1120,5 +946,201 @@ impl Client {
             })
             .await
         }
+    }
+}
+
+/// Configuration for experimental high-throughput transfers.
+///
+/// Both fields are clamped internally: `workers` to 1-[`MAX_GLOBAL_SENDERS`] (12) in
+/// `upload_exp`/`download_exp`. Chunk size to 128 KB-[`MAX_PART_SIZE`].
+/// Pass `None` to accept the library default.
+///
+/// [`MAX_GLOBAL_SENDERS`]: crate::media::MAX_GLOBAL_SENDERS
+/// [`MAX_PART_SIZE`]: crate::media::MAX_PART_SIZE
+#[cfg(feature = "experimental")]
+#[derive(Debug, Clone, Default)]
+pub struct TransferConfig {
+    /// Number of parallel workers. `None` = auto (scales with file size).
+    ///
+    /// In `upload_exp` / `download_exp` this can go up to
+    /// [`MAX_GLOBAL_SENDERS`] (12). All other transfer methods cap at
+    /// [`MAX_WORKERS_PER_FILE`] (4).
+    ///
+    /// [`MAX_GLOBAL_SENDERS`]: crate::media::MAX_GLOBAL_SENDERS
+    /// [`MAX_WORKERS_PER_FILE`]: crate::media::MAX_WORKERS_PER_FILE
+    pub workers: Option<usize>,
+    /// Chunk size in bytes per request. `None` = auto (256 KB or 512 KB).
+    pub chunk_size: Option<usize>,
+}
+
+#[cfg(feature = "experimental")]
+impl Client {
+    /// # Warning: bypasses connection safety limits
+    ///
+    /// **`upload_exp` bypasses ferogram's built-in connection safety limits.**
+    ///
+    /// - Workers can go up to 12 (the global MTProto connection ceiling).
+    ///   If other transfers are running concurrently, they will **block**
+    ///   until `upload_exp` releases permits back to the pool.
+    /// - Telegram actively rate-limits and **bans** accounts that open too
+    ///   many concurrent connections or upload too aggressively. ferogram
+    ///   does **not** protect you here. You are fully responsible.
+    /// - Do not use this in production user-facing code. It exists for
+    ///   benchmarking, internal tooling, and situations where you know
+    ///   exactly what you are doing and have tested against your specific
+    ///   account and server conditions.
+    ///
+    /// **Use [`upload_file`] for all normal uploads.** It auto-tunes workers
+    /// and chunk size safely and will not get your account rate-limited.
+    ///
+    /// ---
+    ///
+    /// Upload a file from disk with manually specified concurrency and chunk size.
+    ///
+    /// Requires `features = ["experimental"]` in `Cargo.toml`.
+    ///
+    /// Workers are clamped to 1-[`MAX_GLOBAL_SENDERS`] (12).
+    /// Chunk size is clamped to 128 KB-[`MAX_PART_SIZE`], rounded down to the nearest 1 KB.
+    /// The file is never fully loaded into memory; it is streamed from disk in parallel.
+    ///
+    /// [`upload_file`]: Client::upload_file
+    /// [`MAX_GLOBAL_SENDERS`]: crate::media::MAX_GLOBAL_SENDERS
+    /// [`MAX_PART_SIZE`]: crate::media::MAX_PART_SIZE
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use ferogram::{Client, TransferHandle, TransferConfig};
+    ///
+    /// # async fn example(client: Client) -> anyhow::Result<()> {
+    /// // WARNING: high worker counts risk rate limits and account bans.
+    /// // Only use if you know what you are doing.
+    /// let handle = TransferHandle::new();
+    /// let uploaded = client
+    ///     .upload_exp(
+    ///         "big_video.mp4",
+    ///         Some(&handle),
+    ///         TransferConfig { workers: Some(8), chunk_size: Some(512 * 1024) },
+    ///     )
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn upload_exp(
+        &self,
+        path: impl AsRef<std::path::Path>,
+        handle: Option<&crate::transfer::TransferHandle>,
+        config: crate::client::files::TransferConfig,
+    ) -> Result<crate::media::UploadedFile, InvocationError> {
+        let path = path.as_ref();
+        let meta = tokio::fs::metadata(path)
+            .await
+            .map_err(InvocationError::Io)?;
+        let size = meta.len() as usize;
+
+        let workers = config
+            .workers
+            .unwrap_or_else(|| crate::media::upload_worker_count(size))
+            .max(1)
+            .min(crate::media::MAX_GLOBAL_SENDERS); // exp: up to 12, not the normal 4 ceiling
+
+        let chunk_size = config
+            .chunk_size
+            .unwrap_or_else(|| crate::media::upload_part_size(size).0)
+            .max(128 * 1024)
+            .min(crate::media::MAX_PART_SIZE);
+        // Round down to nearest 1 KB boundary.
+        let chunk_size = (chunk_size / 1024) * 1024;
+
+        self.upload_file_concurrent_streaming_exp(path, workers, chunk_size, handle)
+            .await
+    }
+
+    /// # Warning: bypasses connection safety limits
+    ///
+    /// **`download_exp` bypasses ferogram's built-in connection safety limits.**
+    ///
+    /// - Workers can go up to 12 (the global MTProto connection ceiling).
+    ///   If other transfers are running concurrently, they will **block**
+    ///   until `download_exp` releases permits back to the pool.
+    /// - Telegram actively rate-limits and **bans** accounts that open too
+    ///   many concurrent connections or download too aggressively. ferogram
+    ///   does **not** protect you here. You are fully responsible.
+    /// - Do not use this in production user-facing code. It exists for
+    ///   benchmarking, internal tooling, and situations where you know
+    ///   exactly what you are doing and have tested against your specific
+    ///   account and server conditions.
+    ///
+    /// **Use [`download`] or [`download_file`] for all normal downloads.**
+    /// They auto-tune workers and chunk size safely and will not get your
+    /// account rate-limited.
+    ///
+    /// ---
+    ///
+    /// Download media with manually specified concurrency and chunk size.
+    ///
+    /// Requires `features = ["experimental"]` in `Cargo.toml`.
+    ///
+    /// Workers are clamped to 1-[`MAX_GLOBAL_SENDERS`] (12).
+    /// Chunk size is clamped to 128 KB-512 KB (Telegram's hard `GetFile` ceiling),
+    /// rounded down to the nearest 1 KB. Assembled bytes are written into `dest`,
+    /// which is pre-allocated to the exact file size before downloading begins.
+    ///
+    /// [`download`]: Client::download
+    /// [`download_file`]: Client::download_file
+    /// [`MAX_GLOBAL_SENDERS`]: crate::media::MAX_GLOBAL_SENDERS
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use ferogram::{Client, TransferHandle, TransferConfig};
+    ///
+    /// # async fn example(client: Client, media: ferogram_tl_types::enums::MessageMedia) -> anyhow::Result<()> {
+    /// // WARNING: high worker counts risk rate limits and account bans.
+    /// // Only use if you know what you are doing.
+    /// let handle = TransferHandle::new();
+    /// let mut buf = Vec::new();
+    /// client
+    ///     .download_exp(
+    ///         &media,
+    ///         &mut buf,
+    ///         Some(&handle),
+    ///         TransferConfig { workers: Some(8), chunk_size: Some(512 * 1024) },
+    ///     )
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn download_exp(
+        &self,
+        media: &tl::enums::MessageMedia,
+        dest: &mut Vec<u8>,
+        handle: Option<&crate::transfer::TransferHandle>,
+        config: crate::client::files::TransferConfig,
+    ) -> Result<u64, InvocationError> {
+        let (loc, dc) = crate::media::location_from_media(media).ok_or_else(|| {
+            InvocationError::Deserialize("media has no downloadable location".into())
+        })?;
+        let size = crate::media::size_from_media(media).unwrap_or(0);
+
+        let workers = config
+            .workers
+            .unwrap_or_else(|| crate::media::download_worker_count(size))
+            .max(1)
+            .min(crate::media::MAX_GLOBAL_SENDERS); // exp: up to 12, not the normal 4 ceiling
+
+        // Telegram's GetFile hard ceiling is 512 KB per request.
+        let chunk_size = config
+            .chunk_size
+            .unwrap_or_else(|| crate::media::download_chunk_size(size) as usize)
+            .max(128 * 1024)
+            .min(512 * 1024);
+        let chunk_size = (chunk_size / 1024) * 1024;
+
+        if let Some(h) = handle {
+            h.set_total(size as u64);
+            h.reset_start();
+        }
+
+        self.download_concurrent_exp(loc, dc, size, dest, workers, chunk_size as i32, handle)
+            .await
     }
 }

@@ -23,7 +23,7 @@
 //! # async fn example(client: Client, media: ferogram_tl_types::enums::MessageMedia) -> anyhow::Result<()> {
 //! let handle = TransferHandle::new();
 //! let mut buf = Vec::new();
-//! match client.download_with_progress(&media, &mut buf, &handle, |_| {}).await {
+//! match client.download(&media, &mut buf, Some(&handle)).await {
 //!     Ok(_) => {}
 //!     Err(e) if matches!(e.kind(), ferogram::ErrorKind::Transfer) => println!("transfer error: {}", e.friendly()),
 //!     Err(e) => println!("other: {e}"),
@@ -50,7 +50,7 @@
 //! });
 //!
 //! let uploaded = client
-//!     .upload_file_with_handle("/tmp/video.mp4", Some(&handle))
+//!     .upload_file("/tmp/video.mp4", Some(&handle))
 //!     .await?;
 //! # Ok(()) }
 //! ```

@@ -76,7 +76,7 @@ let uploaded = client.upload_file(&bytes, "photo.jpg", "image/jpeg").await?;
 let media = uploaded.as_photo_media();
 
 // Upload to Telegram's servers (no message sent)
-let stored = client.upload_media("@peer", media.clone()).await?;
+// upload_media removed; pass InputMedia directly to send_message instead
 
 // Reuse the stored media handle
 let msg = InputMessage::text("Here it is!").copy_media(stored.into_input_media());

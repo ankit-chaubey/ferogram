@@ -238,6 +238,8 @@ pub use ferogram_derive::FsmState;
 
 pub use builder::{BuilderError, ClientBuilder};
 pub use client::Client;
+#[cfg(feature = "experimental")]
+pub use client::files::TransferConfig;
 pub use client::{Config, ShutdownToken, UpdateStream};
 pub use dialog::{Dialog, DialogIter, MessageIter};
 pub use errors::{
@@ -439,7 +441,7 @@ impl SetProfileBuilder {
         use ferogram_tl_types as tl;
         // Handle photo_path: upload before resolving anything else.
         if let Some(path) = self.photo_path.take() {
-            let uploaded = self.client.upload_file(path).await?;
+            let uploaded = self.client.upload_file(path, None).await?;
             self.photo = Some(uploaded);
         }
 

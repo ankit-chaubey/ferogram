@@ -181,18 +181,10 @@ async fn demo_upload_controls(client: &Client) -> Result<(), Box<dyn std::error:
     });
 
     let result = client
-        .upload_with_progress(
+        .upload(
             std::io::Cursor::new(data),
             "showcase_dummy.bin",
-            &handle,
-            |p: TransferProgress| {
-                println!(
-                    "  upload: {:.0}% | {} | ETA {}s",
-                    p.percent(),
-                    p.speed_human(),
-                    p.eta_secs()
-                );
-            },
+            Some(&up_handle),
         )
         .await;
 
@@ -279,16 +271,7 @@ async fn demo_download_progress(client: &Client) -> Result<(), Box<dyn std::erro
     let handle = TransferHandle::new();
     let mut buf = Vec::new();
 
-    let bytes = client
-        .download_with_progress(&media, &mut buf, &handle, |p: TransferProgress| {
-            println!(
-                "  download: {:.0}% | {} | ETA {}s",
-                p.percent(),
-                p.speed_human(),
-                p.eta_secs()
-            );
-        })
-        .await?;
+    let bytes = client.download(&media, &mut buf, Some(&handle)).await?;
 
     println!("  downloaded {bytes} bytes  ok");
     Ok(())
