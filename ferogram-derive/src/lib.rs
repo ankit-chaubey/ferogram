@@ -129,7 +129,7 @@ fn fsm_state_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 
     Ok(quote! {
         #[automatically_derived]
-        impl #impl_generics ::ferogram::fsm::FsmState
+        impl #impl_generics ::ferogram_fsm::FsmState
             for #name #ty_generics
             #where_clause
         {

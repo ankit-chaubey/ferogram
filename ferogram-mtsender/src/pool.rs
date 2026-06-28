@@ -332,6 +332,19 @@ impl DcPool {
             metrics::counter!("ferogram.rpc_errors_total", "kind" => kind).increment(1);
         }
 
+        if let Err(InvocationError::Rpc(ref e)) = result
+            && e.code == -404
+        {
+            // Telegram dropped the auth key (e.g. AndroidTV killed the socket during sleep).
+            // Evict and redo a full DH exchange; the login session is still valid server-side.
+            tracing::warn!(
+                "[ferogram::pool] DC{dc_id} returned -404 (auth key gone); evicting and redoing DH"
+            );
+            self.evict(dc_id);
+            let retry_slot = self.get_or_create_slot(dc_id, false, None).await?;
+            return Self::send_via_slot(&retry_slot, body).await;
+        }
+
         if result.is_err() && !slot.alive.load(Ordering::Acquire) {
             tracing::warn!(
                 "[ferogram::pool] DC{dc_id} connection died mid-request; evicting and retrying on a fresh connection"
@@ -365,6 +378,17 @@ impl DcPool {
             .map_err(|_| InvocationError::Deserialize(format!("no connection for DC{dc_id}")))?;
         let body = maybe_gz_pack(&req.to_bytes());
         let result = Self::send_via_slot(&slot, body.clone()).await;
+
+        if let Err(InvocationError::Rpc(ref e)) = result
+            && e.code == -404
+        {
+            tracing::warn!(
+                "[ferogram::pool] DC{dc_id} returned -404 (serializable path); evicting and redoing DH"
+            );
+            self.evict(dc_id);
+            let retry_slot = self.get_or_create_slot(dc_id, false, None).await?;
+            return Self::send_via_slot(&retry_slot, body).await;
+        }
 
         if result.is_err() && !slot.alive.load(Ordering::Acquire) {
             tracing::warn!(
