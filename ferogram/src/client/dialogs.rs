@@ -17,7 +17,7 @@ use crate::{
     dialog::{Dialog, DialogIter, MessageIter},
     inline_iter, media, participants, search, update,
 };
-use ferogram_tl_types::Deserializable;
+use ferogram_tl_types::{Cursor, Deserializable};
 use std::collections::{HashMap, VecDeque};
 
 impl Client {
@@ -134,6 +134,8 @@ impl Client {
     // Internal helper: fetch dialogs with a custom GetDialogs request.
     // Like `get_messages` but also returns the total count from `messages.Slice`.
 
+    /// Remove a dialog from your chat list, clearing its history on your
+    /// side. For a group or channel this also makes you leave it.
     pub async fn delete_dialog(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
@@ -322,6 +324,137 @@ impl Client {
                     folder_id: if archive { 1 } else { 0 },
                 },
             )],
+        };
+        self.rpc_write(&req).await
+    }
+
+    pub(crate) async fn get_dialogs_raw_with_count(
+        &self,
+        req: tl::functions::messages::GetDialogs,
+    ) -> Result<(Vec<Dialog>, Option<i32>), InvocationError> {
+        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let raw = tl::enums::messages::Dialogs::deserialize(&mut cur)?;
+        let (dialogs_raw, messages, users, chats, count) = match raw {
+            tl::enums::messages::Dialogs::Dialogs(d) => {
+                (d.dialogs, d.messages, d.users, d.chats, None)
+            }
+            tl::enums::messages::Dialogs::Slice(d) => {
+                (d.dialogs, d.messages, d.users, d.chats, Some(d.count))
+            }
+            tl::enums::messages::Dialogs::NotModified(d) => return Ok((vec![], Some(d.count))),
+        };
+
+        self.cache_users_and_chats(&users, &chats).await;
+
+        let msg_map: std::collections::HashMap<i32, tl::enums::Message> = messages
+            .into_iter()
+            .map(|m| {
+                let id = match &m {
+                    tl::enums::Message::Message(x) => x.id,
+                    tl::enums::Message::Service(x) => x.id,
+                    tl::enums::Message::Empty(x) => x.id,
+                };
+                (id, m)
+            })
+            .collect();
+
+        let user_map: std::collections::HashMap<i64, tl::enums::User> = users
+            .into_iter()
+            .filter_map(|u| {
+                if let tl::enums::User::User(ref uu) = u {
+                    Some((uu.id, u))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let chat_map: std::collections::HashMap<i64, tl::enums::Chat> = chats
+            .into_iter()
+            .map(|c| {
+                let id = match &c {
+                    tl::enums::Chat::Chat(x) => x.id,
+                    tl::enums::Chat::Forbidden(x) => x.id,
+                    tl::enums::Chat::Channel(x) => x.id,
+                    tl::enums::Chat::ChannelForbidden(x) => x.id,
+                    tl::enums::Chat::Empty(x) => x.id,
+                };
+                (id, c)
+            })
+            .collect();
+
+        let dialogs: Vec<Dialog> = dialogs_raw
+            .into_iter()
+            .map(|d| {
+                let top_id = match &d {
+                    tl::enums::Dialog::Dialog(x) => x.top_message,
+                    _ => 0,
+                };
+                let peer = match &d {
+                    tl::enums::Dialog::Dialog(x) => Some(&x.peer),
+                    _ => None,
+                };
+                let message = msg_map.get(&top_id).cloned();
+                let entity = peer.and_then(|p| match p {
+                    tl::enums::Peer::User(u) => user_map.get(&u.user_id).cloned(),
+                    _ => None,
+                });
+                let chat = peer.and_then(|p| match p {
+                    tl::enums::Peer::Chat(c) => chat_map.get(&c.chat_id).cloned(),
+                    tl::enums::Peer::Channel(c) => chat_map.get(&c.channel_id).cloned(),
+                    _ => None,
+                });
+                Dialog {
+                    raw: d,
+                    message,
+                    entity,
+                    chat,
+                }
+            })
+            .collect();
+
+        Ok((dialogs, count))
+    }
+
+    /// List the pinned dialogs in a folder. `folder_id` is `0` for the main
+    /// list, `1` for the Archive folder.
+    pub async fn get_pinned_dialogs(
+        &self,
+        folder_id: i32,
+    ) -> Result<Vec<tl::enums::Dialog>, InvocationError> {
+        let req = tl::functions::messages::GetPinnedDialogs { folder_id };
+        let body = self.rpc_call_raw(&req).await?;
+        let mut cur = Cursor::from_slice(&body);
+        let tl::enums::messages::PeerDialogs::PeerDialogs(result) =
+            tl::enums::messages::PeerDialogs::deserialize(&mut cur)?;
+        self.cache_users_slice(&result.users).await;
+        self.cache_chats_slice(&result.chats).await;
+        Ok(result.dialogs)
+    }
+
+    /// Mark a dialog as unread, the way "Mark as unread" in the app does -
+    /// independent of whether it actually has unread messages.
+    pub async fn mark_dialog_unread(
+        &self,
+        peer: impl Into<PeerRef>,
+    ) -> Result<(), InvocationError> {
+        self.set_dialog_unread_flag(peer, true).await
+    }
+
+    pub(crate) async fn set_dialog_unread_flag(
+        &self,
+        peer: impl Into<PeerRef>,
+        unread: bool,
+    ) -> Result<(), InvocationError> {
+        let peer = peer.into().resolve(self).await?;
+        let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
+        let req = tl::functions::messages::MarkDialogUnread {
+            unread,
+            parent_peer: None,
+            peer: tl::enums::InputDialogPeer::InputDialogPeer(tl::types::InputDialogPeer {
+                peer: input_peer,
+            }),
         };
         self.rpc_write(&req).await
     }

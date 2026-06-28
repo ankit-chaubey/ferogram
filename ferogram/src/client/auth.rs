@@ -387,9 +387,9 @@ impl Client {
     /// Returns `(token_bytes, expires_unix_ts)`. Encode `token_bytes` as a
     /// `tg://login?token=<base64url>` URL and present as a QR code.
     ///
-    /// Call [`import_qr_token`] once the user scans it, then poll until you
+    /// Call `import_qr_token` once the user scans it, then poll until you
     /// receive `Update::Raw` with `updateLoginToken` (constructor `0x564fe691`),
-    /// or call [`export_login_token`] again to check.
+    /// or call `export_login_token` again to check.
     ///
     /// # Example
     /// ```rust,no_run

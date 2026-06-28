@@ -66,6 +66,7 @@
 //! # Dispatcher and filters
 //!
 //! ```rust,ignore
+//! # fn main() {
 //! use ferogram::filters::{Dispatcher, command, private, text_contains};
 //!
 //! let mut dp = Dispatcher::new();
@@ -147,6 +148,7 @@
 //! - GitHub: [ankit-chaubey/ferogram](https://github.com/ankit-chaubey/ferogram)
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc(html_root_url = "https://docs.rs/ferogram/0.6.3")]
 #![deny(unsafe_code)]
 
 pub mod builder;
@@ -218,7 +220,7 @@ pub(crate) mod builder_util;
 /// directly to [`ClientBuilder::session_string`] and it is handled automatically.
 ///
 /// Use this module only when you need to inspect or construct a
-/// [`StringSession`] value programmatically.
+/// [`StringSession`](crate::string_session::StringSession) value programmatically.
 pub mod string_session {
     pub use ferogram_session::string_session::{
         FullSession, Session, StringSession, StringSessionError,
@@ -236,6 +238,8 @@ pub use ferogram_derive::FsmState;
 
 pub use builder::{BuilderError, ClientBuilder};
 pub use client::Client;
+#[cfg(feature = "experimental")]
+pub use client::files::TransferConfig;
 pub use client::{Config, ShutdownToken, UpdateStream};
 pub use dialog::{Dialog, DialogIter, MessageIter};
 pub use errors::{

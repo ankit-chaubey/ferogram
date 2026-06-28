@@ -11,7 +11,7 @@
 // Please keep this notice when redistributing.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-mtproto/0.4.0")]
+#![doc(html_root_url = "https://docs.rs/ferogram-mtproto/0.6.3")]
 //! MTProto 2.0 session management, message framing, DH key exchange, and transport abstractions.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
@@ -33,8 +33,8 @@
 //!   encrypted messages once you have a finished `AuthKey`.
 //! - [`session`]: [`Session`]: tracks plaintext sequence numbers and
 //!   message IDs for the pre-auth handshake phase.
-//! - [`transport`]: [`Transport`] trait + [`AbridgedTransport`] and
-//!   [`ObfuscatedAbridged`] implementations over any `Read + Write` stream.
+//! - [`transport`]: [`transport::Transport`] trait + [`transport::AbridgedTransport`] and
+//!   [`transport::ObfuscatedAbridged`] implementations over any `Read + Write` stream.
 //! - [`message`]: [`Message`] and [`MessageId`] framing types.
 //! - [`bind_temp_key`]: Helpers for binding a temporary auth key to a
 //!   permanent one (used by CDN and multi-DC flows).

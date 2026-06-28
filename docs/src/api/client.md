@@ -1056,7 +1056,6 @@ client.set_chat_reactions(peer.clone(),
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_media(peer: impl Into&lt;PeerRef&gt;, media: tl::enums::InputMedia) → Result&lt;tl::enums::MessageMedia, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Upload a media object to Telegram servers without sending it as a message. The returned <code>MessageMedia</code> can be reused in subsequent <code>send_message</code> calls via <code>InputMessage::copy_media()</code>. Distinct from <code>upload_file</code>  -  this works with an existing <code>InputMedia</code>.</div>
 </div>

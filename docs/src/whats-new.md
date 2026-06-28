@@ -4,7 +4,7 @@ ferogram started as a renamed continuation of [layer](https://github.com/ankit-c
 
 ---
 
-## v0.6.0
+## v0.6.3
 
 Released 2026-05-29. Transfer progress tracking, resumable transfers, and typed errors.
 
@@ -57,7 +57,7 @@ match result {
 ### Upgrading from 0.5.2
 
 ```toml
-ferogram = "0.6.0"
+ferogram = "0.6.3"
 ```
 
 Rename `upload_file_from_path` call sites to `upload_file`. Add `None` as the last argument to all upload and download calls.

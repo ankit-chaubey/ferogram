@@ -10,6 +10,77 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc(html_root_url = "https://docs.rs/ferogram-parsers/0.6.3")]
+//! Telegram HTML and Markdown entity parsers for ferogram.
+//!
+//! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
+//! MTProto client built by [Ankit Chaubey](https://github.com/ankit-chaubey).
+//!
+//! - Channel: [t.me/Ferogram](https://t.me/Ferogram)
+//! - Chat: [t.me/FerogramChat](https://t.me/FerogramChat)
+//!
+//! Converts Telegram-flavoured Markdown and HTML into the `(plain_text,
+//! entities)` pair that the Telegram API expects, and generates those formats
+//! back from entities. Also provides rich-text parsers that produce
+//! `Vec<PageBlock>` for Telegraph-style structured content.
+//!
+//! Most users reach this through the `ferogram` crate's `InputMessage`
+//! builder (`.markdown()` / `.html()`). Use `ferogram-parsers` directly only
+//! when you need the parse/generate functions without the full client.
+//!
+//! # What's in here
+//!
+//! - **[`parse_markdown`]** / **[`generate_markdown`]**: Parse and generate
+//!   Telegram MarkdownV2. Supports bold, italic, underline, strikethrough,
+//!   spoiler, inline code, code blocks with language, blockquotes (regular
+//!   and expandable), text URLs, user mentions, and custom emoji. All offsets
+//!   are in UTF-16 code units as required by the Telegram API.
+//! - **[`parse_markdown_v1`]** (deprecated): Legacy MarkdownV1 retained for
+//!   backward compatibility. Prefer V2 for new code.
+//! - **[`parse_html`]** / **[`generate_html`]**: Parse and generate
+//!   Telegram Bot API HTML. Recognises `<b>`, `<i>`, `<u>`, `<s>`,
+//!   `<code>`, `<pre>`, `<a>`, `<blockquote>`, `<tg-spoiler>`,
+//!   `<tg-emoji>`, `<tg-time>`, and their aliases. The `html5ever` feature
+//!   switches to a spec-compliant parser for malformed input.
+//! - **[`parse_rich_markdown`]** / **[`parse_rich_inline_md`]**: Parse
+//!   extended Markdown into `Vec<PageBlock>` / `RichText` for Telegraph
+//!   articles. Supports headings (H1–H6), paragraphs, ordered and unordered
+//!   lists, task lists, tables, blockquotes, pull quotes, dividers, fenced
+//!   code blocks, and math blocks.
+//! - **[`parse_rich_html`]** / **[`parse_rich_html_inline`]**: Same as the
+//!   Markdown rich parsers but driven by HTML input (`<h1>`–`<h6>`, `<ul>`,
+//!   `<ol>`, `<table>`, `<details>`, `<tg-map>`, `<tg-math-block>`, etc.).
+//!
+//! # Example: Markdown round-trip
+//!
+//! ```rust
+//! use ferogram_parsers::{parse_markdown, generate_markdown};
+//!
+//! let (text, entities) = parse_markdown("Hello **world**!");
+//! assert_eq!(text, "Hello world!");
+//!
+//! let back = generate_markdown(&text, &entities);
+//! assert_eq!(back, "Hello *world*\\!");
+//! ```
+//!
+//! # Example: HTML to entities
+//!
+//! ```rust
+//! use ferogram_parsers::parse_html;
+//!
+//! let (text, entities) = parse_html("<b>bold</b> and <i>italic</i>");
+//! assert_eq!(text, "bold and italic");
+//! assert_eq!(entities.len(), 2);
+//! ```
+//!
+//! # Features
+//!
+//! | Feature | Default | Description |
+//! |---------|---------|-------------|
+//! | `html` | yes | Built-in hand-rolled HTML parser |
+//! | `html5ever` | no | Replaces the built-in parser with `html5ever` for spec-compliant handling of malformed HTML |
+
 #![deny(unsafe_code)]
 
 mod html;

@@ -39,6 +39,8 @@ const ID_GZIP_PACKED: u32 = 0x3072cfa1;
 const ID_MSGS_ACK: u32 = 0x62d6b459;
 const ID_MSG_CONTAINER: u32 = 0x73f1f8dc;
 
+/// Generate a random `i64`. Used for `random_id` fields in RPC requests,
+/// where Telegram only needs uniqueness, not cryptographic strength.
 pub fn random_i64() -> i64 {
     let mut b = [0u8; 8];
     ferogram_crypto::fill_random(&mut b);
@@ -57,6 +59,10 @@ pub fn jitter_delay(base_ms: u64) -> Duration {
     Duration::from_millis((base_ms as f64 * factor) as u64)
 }
 
+/// Decode a TL `bytes` value: the read-side counterpart to [`tl_write_bytes`].
+/// Returns `None` on a truncated or malformed length prefix. Doesn't skip the
+/// 4-byte alignment padding TL normally adds after the payload, since this is
+/// only used to unwrap `gzip_packed`'s single trailing field.
 pub fn tl_read_bytes(data: &[u8]) -> Option<Vec<u8>> {
     if data.is_empty() {
         return Some(vec![]);
@@ -77,10 +83,15 @@ pub fn tl_read_bytes(data: &[u8]) -> Option<Vec<u8>> {
     Some(data[start..start + len].to_vec())
 }
 
+/// Like [`tl_read_bytes`] but decodes the payload as UTF-8 (lossily, so
+/// invalid sequences become replacement characters instead of failing).
 pub fn tl_read_string(data: &[u8]) -> Option<String> {
     tl_read_bytes(data).map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
+/// Decompress a `gzip_packed` payload. Tries gzip first (the standard
+/// format); if that fails or yields nothing, retries as raw zlib (no gzip
+/// header) before giving up.
 pub fn gz_inflate(data: &[u8]) -> Result<Vec<u8>, ConnectError> {
     use std::io::Read;
     let mut out = Vec::new();
@@ -98,6 +109,8 @@ pub fn gz_inflate(data: &[u8]) -> Result<Vec<u8>, ConnectError> {
     Ok(out)
 }
 
+/// Unwrap a response body if it's wrapped in `gzip_packed`, identified by
+/// its constructor ID; otherwise returns `body` unchanged.
 pub fn maybe_gz_decompress(body: Vec<u8>) -> Result<Vec<u8>, ConnectError> {
     const ID_GZIP_PACKED_LOCAL: u32 = 0x3072cfa1;
     if body.len() >= 4 && u32::from_le_bytes(body[0..4].try_into().unwrap()) == ID_GZIP_PACKED_LOCAL

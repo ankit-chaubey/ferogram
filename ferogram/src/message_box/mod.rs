@@ -230,7 +230,7 @@ impl MessageBoxes {
         self.entries.is_empty()
     }
 
-    /// Set state right after login (must only call when [`is_empty`] is true).
+    /// Set state right after login (must only call when [`Self::is_empty`] is true).
     pub fn set_state(&mut self, state: tl::types::updates::State) {
         debug_assert!(self.is_empty());
         let deadline = next_updates_deadline();
@@ -324,7 +324,7 @@ impl MessageBoxes {
     /// Return the `GetDifference` request to execute, if any.
     ///
     /// The caller is responsible for executing the RPC and calling
-    /// [`apply_difference`] with the result.
+    /// [`Self::apply_difference`] with the result.
     pub fn get_difference(&self) -> Option<tl::functions::updates::GetDifference> {
         for key in [Key::Common, Key::Secondary] {
             if self.getting_diff_for.contains(&key) {
@@ -349,7 +349,7 @@ impl MessageBoxes {
     /// Return the skeleton of a `GetChannelDifference` request, if any channel needs it.
     ///
     /// The caller must fill in `access_hash` and `limit` before executing.
-    /// Call [`apply_channel_difference`] or [`end_channel_difference`] with the result.
+    /// Call [`Self::apply_channel_difference`] or [`Self::end_channel_difference`] with the result.
     pub fn get_channel_difference(
         &mut self,
     ) -> Option<(i64, tl::functions::updates::GetChannelDifference)> {

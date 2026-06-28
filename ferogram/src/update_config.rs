@@ -72,8 +72,8 @@ pub(crate) fn update_priority(upd: &crate::update::Update) -> UpdatePriority {
 
 /// Configuration for the user-facing update dispatch queue.
 ///
-/// Pass this via [`ClientBuilder::update_queue_capacity`] /
-/// [`ClientBuilder::update_overflow_strategy`] or set
+/// Pass this via [`crate::ClientBuilder::update_queue_capacity`] /
+/// [`crate::ClientBuilder::update_overflow_strategy`] or set
 /// `Config::update_config` directly.
 ///
 /// # Example
@@ -120,7 +120,7 @@ impl UpdateConfig {
     /// Drops the queue to 256 slots and sets `DropOldest` eviction.
     ///
     /// Good for Termux, small VPS, or any host where RAM is tight.
-    /// Prefer [`ClientBuilder::low_memory_mode`] over calling this directly.
+    /// Prefer [`crate::ClientBuilder::low_memory_mode`] over calling this directly.
     ///
     /// ```rust,no_run
     /// use ferogram::{Client, update_config::UpdateConfig};

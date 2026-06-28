@@ -86,6 +86,8 @@ pub struct MtpSender {
 }
 
 impl MtpSender {
+    /// Wrap an already-connected stream and encrypted session into a sender
+    /// with empty request/ACK/resend queues, ready for [`Self::enqueue`].
     pub fn new(
         stream: TcpStream,
         enc: EncryptedSession,
@@ -110,16 +112,24 @@ impl MtpSender {
         }
     }
 
+    /// The permanent auth key, for persisting to the session. Under PFS this
+    /// is `perm_auth_key`, not the short-lived temp key `enc` actually
+    /// encrypts with.
     pub fn auth_key_bytes(&self) -> [u8; 256] {
         self.perm_auth_key
             .unwrap_or_else(|| self.enc.auth_key_bytes())
     }
+    /// The server salt this sender started with, for persisting to the
+    /// session. Later salts learned via `future_salts` live in [`Self::salts`].
     pub fn first_salt(&self) -> i64 {
         self.enc.salt
     }
+    /// Clock offset (seconds) between this client and the server, as
+    /// established during the DH handshake.
     pub fn time_offset(&self) -> i32 {
         self.enc.time_offset
     }
+    /// The MTProto session ID for this connection.
     pub fn session_id(&self) -> i64 {
         self.enc.session_id()
     }

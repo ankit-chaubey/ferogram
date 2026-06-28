@@ -107,6 +107,9 @@ pub enum Error {
     InvalidPqSize {
         size: usize,
     },
+    FactorizationFailed {
+        pq: u64,
+    },
     UnknownFingerprints {
         fingerprints: Vec<i64>,
     },
@@ -150,6 +153,9 @@ impl fmt::Display for Error {
                 write!(f, "nonce mismatch: got {got:?}, expected {expected:?}")
             }
             Self::InvalidPqSize { size } => write!(f, "pq size {size} invalid (expected 8)"),
+            Self::FactorizationFailed { pq } => {
+                write!(f, "could not factorize server-supplied pq={pq}")
+            }
             Self::UnknownFingerprints { fingerprints } => {
                 write!(f, "no known fingerprint in {fingerprints:?}")
             }
@@ -287,7 +293,7 @@ pub fn step2(
 ) -> Result<(ferogram_tl_types::functions::ReqDhParams, Step2), Error> {
     let mut rnd = [0u8; 256];
     fill_random(&mut rnd);
-    do_step2(data, response, &rnd, dc_id)
+    do_step2_inner(data, response, &rnd, dc_id, None)
 }
 
 /// Like `step2` but requests a temporary auth key (PFS).
@@ -301,78 +307,15 @@ pub fn step2_temp(
 ) -> Result<(ferogram_tl_types::functions::ReqDhParams, Step2), Error> {
     let mut rnd = [0u8; 256];
     fill_random(&mut rnd);
-    do_step2_temp(data, response, &rnd, dc_id, expires_in)
+    do_step2_inner(data, response, &rnd, dc_id, Some(expires_in))
 }
 
-fn do_step2_temp(
+fn do_step2_inner(
     data: Step1,
     response: ferogram_tl_types::enums::ResPq,
     random: &[u8; 256],
     dc_id: i32,
-    expires_in: i32,
-) -> Result<(ferogram_tl_types::functions::ReqDhParams, Step2), Error> {
-    let Step1 { nonce } = data;
-    let ferogram_tl_types::enums::ResPq::ResPq(res_pq) = response;
-    check_nonce(&res_pq.nonce, &nonce)?;
-    if res_pq.pq.len() != 8 {
-        return Err(Error::InvalidPqSize {
-            size: res_pq.pq.len(),
-        });
-    }
-    let pq = u64::from_be_bytes(res_pq.pq.as_slice().try_into().unwrap());
-    let (p, q) = factorize(pq);
-    let mut new_nonce = [0u8; 32];
-    new_nonce.copy_from_slice(&random[..32]);
-    let rnd224: &[u8; 224] = random[32..].try_into().unwrap();
-    fn trim_be(v: u64) -> Vec<u8> {
-        let b = v.to_be_bytes();
-        let skip = b.iter().position(|&x| x != 0).unwrap_or(7);
-        b[skip..].to_vec()
-    }
-    let p_bytes = trim_be(p);
-    let q_bytes = trim_be(q);
-    let pq_inner = serialize_pq_inner_data_temp_dc(
-        &pq.to_be_bytes(),
-        &p_bytes,
-        &q_bytes,
-        &nonce,
-        &res_pq.server_nonce,
-        &new_nonce,
-        dc_id,
-        expires_in,
-    );
-    let fingerprint = res_pq
-        .server_public_key_fingerprints
-        .iter()
-        .copied()
-        .find(|&fp| key_for_fingerprint(fp).is_some())
-        .ok_or_else(|| Error::UnknownFingerprints {
-            fingerprints: res_pq.server_public_key_fingerprints.clone(),
-        })?;
-    let key = key_for_fingerprint(fingerprint).unwrap();
-    let ciphertext = rsa::encrypt_hashed(&pq_inner, &key, rnd224);
-    Ok((
-        ferogram_tl_types::functions::ReqDhParams {
-            nonce,
-            server_nonce: res_pq.server_nonce,
-            p: p_bytes,
-            q: q_bytes,
-            public_key_fingerprint: fingerprint,
-            encrypted_data: ciphertext,
-        },
-        Step2 {
-            nonce,
-            server_nonce: res_pq.server_nonce,
-            new_nonce,
-        },
-    ))
-}
-
-fn do_step2(
-    data: Step1,
-    response: ferogram_tl_types::enums::ResPq,
-    random: &[u8; 256],
-    dc_id: i32,
+    expires_in: Option<i32>,
 ) -> Result<(ferogram_tl_types::functions::ReqDhParams, Step2), Error> {
     let Step1 { nonce } = data;
 
@@ -388,7 +331,7 @@ fn do_step2(
     }
 
     let pq = u64::from_be_bytes(res_pq.pq.as_slice().try_into().unwrap());
-    let (p, q) = factorize(pq);
+    let (p, q) = factorize(pq).ok_or(Error::FactorizationFailed { pq })?;
 
     let mut new_nonce = [0u8; 32];
     new_nonce.copy_from_slice(&random[..32]);
@@ -405,18 +348,32 @@ fn do_step2(
     let p_bytes = trim_be(p);
     let q_bytes = trim_be(q);
 
-    // Serialize PQInnerDataDc (constructor 0xa9f55f95) manually.
-    // The legacy PQInnerData constructor (#83c95aec, no dc field) is rejected
-    // by Telegram servers for connections to non-DC2 endpoints.
-    let pq_inner = serialize_pq_inner_data_dc(
-        &pq.to_be_bytes(),
-        &p_bytes,
-        &q_bytes,
-        &nonce,
-        &res_pq.server_nonce,
-        &new_nonce,
-        dc_id,
-    );
+    // Serialize PQInnerDataDc (constructor 0xa9f55f95) manually, or the
+    // temp-key variant p_q_inner_data_temp_dc (0x56fddf88) when `expires_in`
+    // is set (PFS). The legacy PQInnerData constructor (#83c95aec, no dc
+    // field) is rejected by Telegram servers for connections to non-DC2
+    // endpoints.
+    let pq_inner = match expires_in {
+        Some(expires_in) => serialize_pq_inner_data_temp_dc(
+            &pq.to_be_bytes(),
+            &p_bytes,
+            &q_bytes,
+            &nonce,
+            &res_pq.server_nonce,
+            &new_nonce,
+            dc_id,
+            expires_in,
+        ),
+        None => serialize_pq_inner_data_dc(
+            &pq.to_be_bytes(),
+            &p_bytes,
+            &q_bytes,
+            &nonce,
+            &res_pq.server_nonce,
+            &new_nonce,
+            dc_id,
+        ),
+    };
 
     let fingerprint = res_pq
         .server_public_key_fingerprints

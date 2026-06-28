@@ -10,6 +10,64 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc(html_root_url = "https://docs.rs/ferogram-mtsender/0.6.3")]
+//! MTProto sender pool and retry policy for ferogram.
+//!
+//! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
+//! MTProto client built by [Ankit Chaubey](https://github.com/ankit-chaubey).
+//!
+//! - Channel: [t.me/Ferogram](https://t.me/Ferogram)
+//! - Chat: [t.me/FerogramChat](https://t.me/FerogramChat)
+//!
+//! Most users do not need this crate directly. The `ferogram` crate wraps
+//! everything. Use `ferogram-mtsender` only if you are building a custom
+//! dispatch layer or need direct access to the DC connection pool.
+//!
+//! # What's in here
+//!
+//! - **[`MtpSender`]**: Single-task MTProto sender. All TCP I/O (read, write,
+//!   ping) runs inside one Tokio task that owns the unsplit `TcpStream`.
+//!   Callers enqueue request bodies via [`MtpSender::enqueue`] and receive
+//!   results through a oneshot channel. This design eliminates mutex
+//!   contention between reader and writer halves and ensures ACKs are flushed
+//!   on every outgoing frame.
+//! - **[`DcPool`]**: Per-DC connection pool capped at three slots. Requests
+//!   are round-robined across live [`ConnSlot`]s. The pool opens new
+//!   connections on demand and replaces slots that have faulted.
+//! - **[`DcConnection`]**: One encrypted connection to a single DC. Handles
+//!   pending `msgs_ack` accumulation and issues `ping_delay_disconnect` to
+//!   keep the socket alive inside Telegram's 75-second idle window.
+//! - **[`RetryPolicy`] / [`RetryLoop`]**: Trait and executor for retry
+//!   behaviour on RPC failures. [`AutoSleep`] sleeps through `FLOOD_WAIT`
+//!   errors; [`NoRetries`] returns the error immediately. Implement the
+//!   trait to add exponential back-off or a circuit breaker.
+//! - **[`CircuitBreaker`]**: Stops issuing requests to a DC that has failed
+//!   repeatedly, giving the pool time to reconnect before hammering the
+//!   server.
+//! - **`spawn_sender_task` / [`SenderHandle`]**: Spawns the background I/O
+//!   loop and returns a handle for enqueuing RPCs, subscribing to
+//!   [`FrameEvent`]s (updates), and issuing [`ReconnectRequest`]s.
+//! - **[`InvocationError`] / [`RpcError`]**: Typed errors for failed RPC
+//!   calls, including flood waits, server errors, and transport failures.
+//!
+//! # Example: send an RPC via the pool
+//!
+//! ```rust,no_run
+//! use ferogram_mtsender::{DcPool, InvocationError};
+//! use ferogram_connect::TransportKind;
+//! use ferogram_session::DcEntry;
+//! use ferogram_tl_types::functions::help::GetConfig;
+//!
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let dc_entries: Vec<DcEntry> = vec![]; // populate from your session
+//! let mut pool = DcPool::new(2, &dc_entries, None, TransportKind::Full);
+//! let raw = pool.invoke_on_dc(2, &dc_entries, &GetConfig {}).await?;
+//! println!("raw response bytes: {}", raw.len());
+//! # Ok(())
+//! # }
+//! ```
+
 #![deny(unsafe_code)]
 
 mod errors;

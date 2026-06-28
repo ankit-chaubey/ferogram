@@ -20,7 +20,7 @@ use crate::errors::InvocationError;
 /// Used as a fallback when the DC is not yet in the session's dc_options table
 /// (i.e. first migration to a DC we haven't talked to before).
 ///
-/// Source: https://core.telegram.org/mtproto/DC
+/// Source: <https://core.telegram.org/mtproto/DC>
 pub fn fallback_dc_addr(dc_id: i32) -> &'static str {
     match dc_id {
         1 => "149.154.175.53:443",

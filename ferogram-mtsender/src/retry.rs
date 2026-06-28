@@ -189,6 +189,8 @@ pub struct RetryLoop {
 }
 
 impl RetryLoop {
+    /// Start a fresh retry loop against `policy`, with the failure count
+    /// and accumulated sleep time both reset.
     pub fn new(policy: Arc<dyn RetryPolicy>) -> Self {
         Self {
             policy,

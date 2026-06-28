@@ -37,7 +37,7 @@ impl IntermediateTransport {
         })
     }
 
-    /// Wrap an existing stream (the init byte will be sent on first [`send`]).
+    /// Wrap an existing stream (the init byte will be sent on first [`Self::send`]).
     pub fn from_stream(stream: TcpStream) -> Self {
         Self {
             stream,
@@ -74,6 +74,8 @@ impl IntermediateTransport {
         Ok(buf)
     }
 
+    /// Discard the framing state and hand back the raw stream, e.g. to
+    /// switch transports mid-connection or hand off to a different sender.
     pub fn into_inner(self) -> TcpStream {
         self.stream
     }
@@ -95,7 +97,7 @@ pub struct PaddedIntermediateTransport {
 }
 
 impl PaddedIntermediateTransport {
-    /// Connect to `addr` and lazily send the `0xDDDDDDDD` init tag on first [`send`].
+    /// Connect to `addr` and lazily send the `0xDDDDDDDD` init tag on first [`Self::send`].
     pub async fn connect(addr: &str) -> Result<Self, ConnectError> {
         let stream = TcpStream::connect(addr).await?;
         Ok(Self {
@@ -104,7 +106,7 @@ impl PaddedIntermediateTransport {
         })
     }
 
-    /// Wrap an existing stream (the init tag will be sent on first [`send`]).
+    /// Wrap an existing stream (the init tag will be sent on first [`Self::send`]).
     pub fn from_stream(stream: TcpStream) -> Self {
         Self {
             stream,
@@ -158,6 +160,7 @@ impl PaddedIntermediateTransport {
         Ok(buf)
     }
 
+    /// Discard the framing state and hand back the raw stream.
     pub fn into_inner(self) -> TcpStream {
         self.stream
     }
@@ -183,6 +186,9 @@ pub struct FullTransport {
 }
 
 impl FullTransport {
+    /// Connect to `addr`. No init byte is sent for this transport; framing
+    /// is identified purely by the absence of the Abridged/Intermediate
+    /// init markers.
     pub async fn connect(addr: &str) -> Result<Self, ConnectError> {
         let stream = TcpStream::connect(addr).await?;
         Ok(Self {
@@ -192,6 +198,9 @@ impl FullTransport {
         })
     }
 
+    /// Wrap an existing stream. Both sequence-number counters start at 0,
+    /// so this assumes the stream hasn't already exchanged Full-framed
+    /// messages.
     pub fn from_stream(stream: TcpStream) -> Self {
         Self {
             stream,
@@ -261,6 +270,8 @@ impl FullTransport {
         Ok(body[4..].to_vec())
     }
 
+    /// Discard the framing state (including the sequence-number counters)
+    /// and hand back the raw stream.
     pub fn into_inner(self) -> TcpStream {
         self.stream
     }

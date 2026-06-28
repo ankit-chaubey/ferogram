@@ -264,6 +264,10 @@ impl Connection {
         }
     }
 
+    /// Open a fresh connection and run the full unauthenticated DH key
+    /// exchange to produce a brand new permanent auth key. Use
+    /// [`Self::connect_with_key`] instead once an auth key already exists
+    /// for the DC, since redoing DH on every reconnect is wasted work.
     pub async fn connect_raw(
         addr: &str,
         socks5: Option<&crate::socks5::Socks5Config>,
@@ -385,6 +389,10 @@ impl Connection {
             })?
     }
 
+    /// Open a connection using an `auth_key` already negotiated for this DC,
+    /// skipping the DH handshake entirely. If `pfs` is set, also binds a
+    /// temporary key for this session via `auth.bindTempAuthKey`, falling
+    /// back to the permanent key if the bind fails.
     #[allow(clippy::too_many_arguments)]
     pub async fn connect_with_key(
         addr: &str,
@@ -592,6 +600,9 @@ impl Connection {
         ))
     }
 
+    /// The permanent auth key, for persisting to the session. Under PFS this
+    /// is `perm_auth_key`, not the short-lived temp key the connection is
+    /// actually encrypted with.
     pub fn auth_key_bytes(&self) -> [u8; 256] {
         // When PFS is active, perm_auth_key is the key to persist in the session.
         // enc.auth_key_bytes() would return the short-lived temp key instead.

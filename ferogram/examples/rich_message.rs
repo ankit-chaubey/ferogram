@@ -13,7 +13,7 @@
 //! Rich message demo. Sends a structured article with headings, a table,
 //! a code block, a collapsible section, and a divider to a chat.
 //!
-//! Rich messages render as full documents inside Telegram — not flat text.
+//! Rich messages render as full documents inside Telegram, not flat text.
 //! They use `PageBlock` rather than `MessageEntity`.
 //!
 //! Run:

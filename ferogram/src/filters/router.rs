@@ -256,7 +256,7 @@ pub(crate) struct FlatHandlers {
 /// # Handler dispatch order
 ///
 /// 1. All middleware runs in registration order.
-/// 2. For message updates, if a [`StateStorage`] is configured and the current
+/// 2. For message updates, if a `StateStorage` is configured and the current
 ///    conversation has an active state, FSM handlers are checked **first**.
 /// 3. Regular handlers are checked in registration order.
 /// 4. First match wins; no further handlers are tried.
@@ -316,7 +316,7 @@ impl Dispatcher {
         self.middlewares.push(Arc::new(mw));
     }
 
-    /// Configure the [`StateStorage`] backend for FSM handlers.
+    /// Configure the `StateStorage` backend for FSM handlers.
     #[cfg(feature = "fsm")]
     pub fn with_state_storage(&mut self, storage: Arc<dyn StateStorage>) {
         self.state_storage = Some(storage);

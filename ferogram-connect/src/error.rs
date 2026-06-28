@@ -26,6 +26,7 @@ pub enum ConnectError {
 }
 
 impl ConnectError {
+    /// Build the `Other` variant from any string-like value.
     pub fn other(msg: impl Into<String>) -> Self {
         Self::Other(msg.into())
     }

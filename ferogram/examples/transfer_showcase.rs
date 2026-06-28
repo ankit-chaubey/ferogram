@@ -29,9 +29,7 @@
 
 use std::time::Duration;
 
-use ferogram::{
-    Client, ErrorKind, InvocationErrorExt, TransferError, TransferHandle, TransferProgress,
-};
+use ferogram::{Client, ErrorKind, InvocationErrorExt, TransferError, TransferHandle};
 
 const API_ID: i32 = 0; // from https://my.telegram.org
 const API_HASH: &str = ""; // from https://my.telegram.org
@@ -181,19 +179,8 @@ async fn demo_upload_controls(client: &Client) -> Result<(), Box<dyn std::error:
     });
 
     let result = client
-        .upload_with_progress(
-            std::io::Cursor::new(data),
-            "showcase_dummy.bin",
-            &handle,
-            |p: TransferProgress| {
-                println!(
-                    "  upload: {:.0}% | {} | ETA {}s",
-                    p.percent(),
-                    p.speed_human(),
-                    p.eta_secs()
-                );
-            },
-        )
+        .upload(std::io::Cursor::new(data), "showcase_dummy.bin")
+        .handle(&handle)
         .await;
 
     match result {
@@ -279,16 +266,7 @@ async fn demo_download_progress(client: &Client) -> Result<(), Box<dyn std::erro
     let handle = TransferHandle::new();
     let mut buf = Vec::new();
 
-    let bytes = client
-        .download_with_progress(&media, &mut buf, &handle, |p: TransferProgress| {
-            println!(
-                "  download: {:.0}% | {} | ETA {}s",
-                p.percent(),
-                p.speed_human(),
-                p.eta_secs()
-            );
-        })
-        .await?;
+    let bytes = client.download(&media, &mut buf, Some(&handle)).await?;
 
     println!("  downloaded {bytes} bytes  ok");
     Ok(())
@@ -338,11 +316,7 @@ async fn demo_resumable_download(client: &Client) -> Result<(), Box<dyn std::err
     // Upload a 1.5 MB file to use as download target.
     let payload = vec![7u8; 3 * 512 * 1024];
     let uploaded = client
-        .upload(
-            std::io::Cursor::new(payload.clone()),
-            "resumable_dl.bin",
-            None,
-        )
+        .upload(std::io::Cursor::new(payload.clone()), "resumable_dl.bin")
         .await?;
     let msg = client
         .send_file(TARGET_PEER, uploaded, &Default::default())

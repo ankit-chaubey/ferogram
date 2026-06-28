@@ -161,7 +161,7 @@ impl SearchBuilder {
 
 /// Fluent builder for `messages.searchGlobal` (cross-chat search).
 ///
-/// Created by [`Client::search_global_builder`]. All setters are chainable;
+/// Created by `Client::search_global_builder`. All setters are chainable;
 /// call [`fetch`] to execute.
 ///
 /// [`fetch`]: GlobalSearchBuilder::fetch

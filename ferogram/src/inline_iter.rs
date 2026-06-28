@@ -165,7 +165,7 @@ impl InlineResultIter {
 impl Client {
     /// Return an iterator that yields every *incoming* inline query (bot side).
     ///
-    /// The internal channel is bounded to [`INLINE_QUERY_CHANNEL_CAP`] entries.
+    /// The internal channel is bounded to 256 entries.
     /// If the consumer stops calling [`InlineQueryIter::next`] and the backlog
     /// fills, the feed task exits and the stream ends rather than growing memory
     /// without bound.

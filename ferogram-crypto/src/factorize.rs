@@ -86,16 +86,21 @@ fn factorize_with(pq: u128, c: u128) -> (u64, u64) {
 }
 
 /// Factorize `pq` into two prime factors `(p, q)` where `p ≤ q`.
-pub fn factorize(pq: u64) -> (u64, u64) {
+///
+/// Returns `None` if `pq` isn't a semiprime this routine can factor within
+/// the fixed attempt budget (e.g. a malformed or adversarial value from a
+/// server). Callers on a security-sensitive path (auth key exchange) must
+/// treat that as a protocol error, not panic.
+pub fn factorize(pq: u64) -> Option<(u64, u64)> {
     let n = pq as u128;
     for attempt in [43u128, 47, 53, 59, 61] {
         let c = attempt * (n / 103);
         let (p, q) = factorize_with(n, c);
         if p != 1 {
-            return (p, q);
+            return Some((p, q));
         }
     }
-    panic!("factorize failed after fixed attempts");
+    None
 }
 
 #[cfg(test)]
@@ -103,10 +108,16 @@ mod tests {
     use super::*;
     #[test]
     fn t1() {
-        assert_eq!(factorize(1470626929934143021), (1206429347, 1218991343));
+        assert_eq!(
+            factorize(1470626929934143021),
+            Some((1206429347, 1218991343))
+        );
     }
     #[test]
     fn t2() {
-        assert_eq!(factorize(2363612107535801713), (1518968219, 1556064227));
+        assert_eq!(
+            factorize(2363612107535801713),
+            Some((1518968219, 1556064227))
+        );
     }
 }

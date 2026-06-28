@@ -30,7 +30,7 @@ const API_HASH: &str = ""; // from https://my.telegram.org
 const PHONE: &str = ""; // your Telegram phone number, e.g. "+15551234567"
 
 /// How many messages to fetch. Increase freely - the API supports up to 100
-/// per call; use `get_history_range` for paginated walks over larger histories.
+/// per call; use `add_offset` with `get_message_history` for paginated walks over larger histories.
 const LIMIT: i32 = 20;
 
 /// Peer to read from. "me" resolves to Saved Messages. Any username, phone

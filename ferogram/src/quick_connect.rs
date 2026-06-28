@@ -145,7 +145,7 @@ fn prompt(msg: &str) -> Result<String, QuickConnectError> {
 /// Errors returned by [`Client::quick_connect`].
 #[derive(Debug)]
 pub enum QuickConnectError {
-    /// [`ClientBuilder::connect`] failed (missing api_id/hash or network error).
+    /// [`crate::ClientBuilder::connect`] failed (missing api_id/hash or network error).
     Builder(BuilderError),
     /// An MTProto RPC call during authentication failed.
     Auth(InvocationError),

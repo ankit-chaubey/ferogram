@@ -57,8 +57,8 @@ pub struct InputMessage {
 
 /// Options for forwarding messages.
 ///
-/// Used by [`Client::forward_messages_with`], [`Client::forward_messages`] and
-/// [`IncomingMessage::forward_to_ex`].  All fields default to `false`/`None`.
+/// Used by [`crate::Client::forward_messages`] and
+/// `IncomingMessage::forward_to_ex`.  All fields default to `false`/`None`.
 #[derive(Default, Clone)]
 pub struct ForwardOptions {
     /// Send silently (no notification for recipient).
@@ -75,7 +75,7 @@ pub struct ForwardOptions {
     pub schedule_date: Option<i32>,
 }
 
-/// Selects which flavour of message link [`Client::export_message_link`] should produce.
+/// Selects which flavour of message link [`crate::Client::export_message_link`] should produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LinkKind {
     /// A plain `t.me/channel/msgid` permalink (default).

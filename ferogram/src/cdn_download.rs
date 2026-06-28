@@ -130,7 +130,7 @@ impl CdnDownloader {
     // High-level download helpers
 
     /// Download the full file. Returns error if `cdnFileReuploadNeeded` is received.
-    /// Use [`download_all_with_reupload`] if you need to handle reupload.
+    /// Use [`Self::download_all_with_reupload`] if you need to handle reupload.
     pub async fn download_all(
         &mut self,
         total_size: Option<i64>,
