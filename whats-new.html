@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6c28794d.js";
+            window.path_to_searchindex_js = "searchindex-13e43010.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-fccdd209.js"></script>
+        <script src="toc-5d15c526.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,7 +184,7 @@
                         <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
 <hr>
-<h2 id="v060"><a class="header" href="#v060">v0.6.0</a></h2>
+<h2 id="v063"><a class="header" href="#v063">v0.6.3</a></h2>
 <p>Released 2026-05-29. Transfer progress tracking, resumable transfers, and typed errors.</p>
 <h3 id="transfer-progress-and-control"><a class="header" href="#transfer-progress-and-control">Transfer progress and control</a></h3>
 <p><code>TransferHandle</code> and <code>TransferProgress</code> let you track, pause, resume, or cancel any upload or download. Pass a handle as the last argument to <code>upload_file</code>, <code>upload</code>, <code>download</code>, or <code>download_file</code>. Pass <code>None</code> to keep old behavior.</p>
@@ -225,7 +225,7 @@ match result {
 <li><code>send_file</code> now takes <code>impl Into&lt;InputMedia&gt;</code> instead of <code>InputMedia</code> directly.</li>
 </ul>
 <h3 id="upgrading-from-052"><a class="header" href="#upgrading-from-052">Upgrading from 0.5.2</a></h3>
-<pre><code class="language-toml">ferogram = "0.6.0"
+<pre><code class="language-toml">ferogram = "0.6.3"
 </code></pre>
 <p>Rename <code>upload_file_from_path</code> call sites to <code>upload_file</code>. Add <code>None</code> as the last argument to all upload and download calls.</p>
 <hr>

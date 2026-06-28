@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6c28794d.js";
+            window.path_to_searchindex_js = "../searchindex-13e43010.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-fccdd209.js"></script>
+        <script src="../toc-5d15c526.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -1430,7 +1430,6 @@ tl::enums::ChatReactions::ChatReactionsNone
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_media(peer: impl Into&lt;PeerRef&gt;, media: tl::enums::InputMedia) → Result&lt;tl::enums::MessageMedia, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Upload a media object to Telegram servers without sending it as a message. The returned <code>MessageMedia</code> can be reused in subsequent <code>send_message</code> calls via <code>InputMessage::copy_media()</code>. Distinct from <code>upload_file</code>  -  this works with an existing <code>InputMedia</code>.</div>

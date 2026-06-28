@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6c28794d.js";
+            window.path_to_searchindex_js = "../searchindex-13e43010.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-fccdd209.js"></script>
+        <script src="../toc-5d15c526.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -260,7 +260,7 @@ let uploaded = client.upload_file(&amp;bytes, "photo.jpg", "image/jpeg").await?;
 let media = uploaded.as_photo_media();
 
 // Upload to Telegram's servers (no message sent)
-let stored = client.upload_media("@peer", media.clone()).await?;
+// upload_media removed; pass InputMedia directly to send_message instead
 
 // Reuse the stored media handle
 let msg = InputMessage::text("Here it is!").copy_media(stored.into_input_media());

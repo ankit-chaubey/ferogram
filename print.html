@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6c28794d.js";
+            window.path_to_searchindex_js = "searchindex-13e43010.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-fccdd209.js"></script>
+        <script src="toc-5d15c526.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -191,7 +191,7 @@
 <p>If something’s missing for you, drop by <a href="https://t.me/FerogramChat">t.me/FerogramChat</a>. I genuinely like hearing what people are building with it.</p>
 <h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.6.0"
+ferogram = "0.6.3"
 tokio    = { version = "1", features = ["full"] }
 </code></pre>
 <p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
@@ -263,7 +263,7 @@ tokio    = { version = "1", features = ["full"] }
 <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
 <p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
 <hr>
-<h2 id="v060"><a class="header" href="#v060">v0.6.0</a></h2>
+<h2 id="v063"><a class="header" href="#v063">v0.6.3</a></h2>
 <p>Released 2026-05-29. Transfer progress tracking, resumable transfers, and typed errors.</p>
 <h3 id="transfer-progress-and-control"><a class="header" href="#transfer-progress-and-control">Transfer progress and control</a></h3>
 <p><code>TransferHandle</code> and <code>TransferProgress</code> let you track, pause, resume, or cancel any upload or download. Pass a handle as the last argument to <code>upload_file</code>, <code>upload</code>, <code>download</code>, or <code>download_file</code>. Pass <code>None</code> to keep old behavior.</p>
@@ -304,7 +304,7 @@ match result {
 <li><code>send_file</code> now takes <code>impl Into&lt;InputMedia&gt;</code> instead of <code>InputMedia</code> directly.</li>
 </ul>
 <h3 id="upgrading-from-052"><a class="header" href="#upgrading-from-052">Upgrading from 0.5.2</a></h3>
-<pre><code class="language-toml">ferogram = "0.6.0"
+<pre><code class="language-toml">ferogram = "0.6.3"
 </code></pre>
 <p>Rename <code>upload_file_from_path</code> call sites to <code>upload_file</code>. Add <code>None</code> as the last argument to all upload and download calls.</p>
 <hr>
@@ -807,7 +807,7 @@ See <a href="#peer-cache-helpers">Raw API Access</a> for usage details.</p>
 <h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
 <h2 id="add-to-cargotoml"><a class="header" href="#add-to-cargotoml">Add to Cargo.toml</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.6.0"
+ferogram = "0.6.3"
 tokio        = { version = "1", features = ["full"] }
 </code></pre>
 <p><code>ferogram</code> re-exports everything you need for both user clients and bots.</p>
@@ -848,11 +848,11 @@ let api_hash = "deadbeef..."; // ← never do this in a public repo
 <hr>
 <h2 id="optional-features"><a class="header" href="#optional-features">Optional features</a></h2>
 <h3 id="sqlite-session-storage"><a class="header" href="#sqlite-session-storage">SQLite session storage</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.6.0", features = ["sqlite-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.3", features = ["sqlite-session"] }
 </code></pre>
 <p>Stores session data in a SQLite database instead of a binary file. Better choice for long-running servers where crash-corruption of the binary file is a concern.</p>
 <h3 id="libsql--turso-session-storage-new-in-v020"><a class="header" href="#libsql--turso-session-storage-new-in-v020">LibSQL / Turso session storage: New in v0.2.0</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.6.0", features = ["libsql-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.3", features = ["libsql-session"] }
 </code></pre>
 <p>Backed by <a href="https://github.com/tursodatabase/libsql">libsql</a>: supports local embedded databases and remote Turso cloud databases. Ideal for serverless or distributed deployments.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -886,10 +886,10 @@ let (client, _shutdown) = Client::builder()
 <p>See <a href="#session-backends-1">Session Backends</a> for the full guide.</p>
 <h3 id="html-entity-parsing"><a class="header" href="#html-entity-parsing">HTML entity parsing</a></h3>
 <pre><code class="language-toml"># Built-in hand-rolled HTML parser (no extra deps)
-ferogram = { version = "0.6.0", features = ["html"] }
+ferogram = { version = "0.6.3", features = ["html"] }
 
 # OR: spec-compliant html5ever tokenizer (overrides built-in)
-ferogram = { version = "0.6.0", features = ["html5ever"] }
+ferogram = { version = "0.6.3", features = ["html5ever"] }
 </code></pre>
 <div class="table-wrapper">
 <table>
@@ -904,7 +904,7 @@ ferogram = { version = "0.6.0", features = ["html5ever"] }
 </div>
 <h3 id="raw-type-system-features-ferogram-tl-types"><a class="header" href="#raw-type-system-features-ferogram-tl-types">Raw type system features (<code>ferogram-tl-types</code>)</a></h3>
 <p>If you use <code>ferogram-tl-types</code> directly for raw API access:</p>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.0", features = [
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.3", features = [
     "tl-api",          # Telegram API types (required)
     "tl-mtproto",      # Low-level MTProto types
     "impl-debug",      # Debug trait on all types (default ON)
@@ -2418,7 +2418,7 @@ let uploaded = client.upload_file(&amp;bytes, "photo.jpg", "image/jpeg").await?;
 let media = uploaded.as_photo_media();
 
 // Upload to Telegram's servers (no message sent)
-let stored = client.upload_media("@peer", media.clone()).await?;
+// upload_media removed; pass InputMedia directly to send_message instead
 
 // Reuse the stored media handle
 let msg = InputMessage::text("Here it is!").copy_media(stored.into_input_media());
@@ -2751,6 +2751,272 @@ let htm = generate_html(plain_text, &amp;entities);
 <tr><td><code>Blockquote</code></td><td>Block quote, optionally collapsible</td></tr>
 <tr><td><code>CustomEmoji</code></td><td>Custom emoji by document ID</td></tr>
 <tr><td><code>FormattedDate</code></td><td>Unix timestamp rendered in local time</td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="rich-messages"><a class="header" href="#rich-messages">Rich Messages</a></h1>
+<p>Rich messages render as structured articles inside Telegram with real headings, tables, collapsible sections, embedded media, and more. They use <code>InputRichMessage</code> and <code>PageBlock</code> rather than the flat <code>MessageEntity</code> list used by regular messages.</p>
+<h2 id="when-to-use"><a class="header" href="#when-to-use">When to use</a></h2>
+<p>Regular formatting (<code>InputMessage::markdown</code> / <code>InputMessage::html</code>) produces inline entities on a flat text string. Rich messages produce a full document structure:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Regular message</th><th>Rich message</th></tr>
+</thead>
+<tbody>
+<tr><td><code>MessageEntity</code> offsets on plain text</td><td><code>PageBlock</code> tree</td></tr>
+<tr><td>Bold, italic, code, links</td><td>All of the above plus headings, tables, lists, math, maps, media blocks</td></tr>
+<tr><td><code>send_message</code></td><td><code>send_message</code> with <code>InputRichMessage</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="quickstart"><a class="header" href="#quickstart">Quickstart</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::parsers::parse_rich_markdown;
+
+let blocks = parse_rich_markdown("# Hello\n\nThis is **bold** and _italic_.");
+
+client
+    .send_message(peer)
+    .rich_text(blocks)
+    .await?;
+<span class="boring">}</span></code></pre>
+<p>Or from HTML:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::parsers::parse_rich_html;
+
+let blocks = parse_rich_html("&lt;h1&gt;Hello&lt;/h1&gt;&lt;p&gt;This is &lt;b&gt;bold&lt;/b&gt;.&lt;/p&gt;");
+
+client
+    .send_message(peer)
+    .rich_text(blocks)
+    .await?;
+<span class="boring">}</span></code></pre>
+<h2 id="rich-markdown-syntax"><a class="header" href="#rich-markdown-syntax">Rich Markdown syntax</a></h2>
+<h3 id="headings"><a class="header" href="#headings">Headings</a></h3>
+<pre><code># Heading 1
+## Heading 2
+### Heading 3
+#### Heading 4
+##### Heading 5
+###### Heading 6
+</code></pre>
+<h3 id="inline-formatting"><a class="header" href="#inline-formatting">Inline formatting</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Syntax</th><th>Result</th></tr>
+</thead>
+<tbody>
+<tr><td><code>**text**</code></td><td>Bold</td></tr>
+<tr><td><code>_text_</code> or <code>*text*</code></td><td>Italic</td></tr>
+<tr><td><code>__text__</code></td><td>Bold (two underscores)</td></tr>
+<tr><td><code>~~text~~</code></td><td>Strikethrough</td></tr>
+<tr><td><code>||text||</code></td><td>Spoiler</td></tr>
+<tr><td><code>`text`</code></td><td>Inline code</td></tr>
+<tr><td><code>$source$</code></td><td>Inline math</td></tr>
+<tr><td><code>[label](url)</code></td><td>Link</td></tr>
+<tr><td><code>[label](tg://user?id=123)</code></td><td>Mention by user ID</td></tr>
+<tr><td><code>![alt](tg://emoji?id=N)</code></td><td>Custom emoji</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="code-block"><a class="header" href="#code-block">Code block</a></h3>
+<pre><code>```rust
+fn main() {
+    println!("hello");
+}
+```
+</code></pre>
+<h3 id="math-block"><a class="header" href="#math-block">Math block</a></h3>
+<pre><code>$$
+E = mc^2
+$$
+</code></pre>
+<p>Or inline with single <code>$</code>: <code>$E = mc^2$</code></p>
+<h3 id="blockquote-1"><a class="header" href="#blockquote-1">Blockquote</a></h3>
+<pre><code>&gt; This is a blockquote.
+</code></pre>
+<h3 id="lists"><a class="header" href="#lists">Lists</a></h3>
+<p>Unordered:</p>
+<pre><code>- item one
+- item two
+- [ ] unchecked task
+- [x] checked task
+</code></pre>
+<p>Ordered:</p>
+<pre><code>1. first
+2. second
+3. third
+</code></pre>
+<h3 id="table"><a class="header" href="#table">Table</a></h3>
+<pre><code>| Name  | Age |
+|-------|-----|
+| Alice | 30  |
+| Bob   | 25  |
+</code></pre>
+<p>Column alignment:</p>
+<pre><code>| Left | Center | Right |
+|:-----|:------:|------:|
+| a    |   b    |     c |
+</code></pre>
+<h3 id="divider"><a class="header" href="#divider">Divider</a></h3>
+<pre><code>---
+</code></pre>
+<h3 id="details--collapsible-section"><a class="header" href="#details--collapsible-section">Details / collapsible section</a></h3>
+<pre><code class="language-html">&lt;details&gt;
+&lt;summary&gt;Click to expand&lt;/summary&gt;
+Content here.
+&lt;/details&gt;
+</code></pre>
+<h3 id="media"><a class="header" href="#media">Media</a></h3>
+<pre><code>![caption](https://example.com/photo.jpg)
+</code></pre>
+<hr>
+<h2 id="rich-html-syntax"><a class="header" href="#rich-html-syntax">Rich HTML syntax</a></h2>
+<h3 id="headings-1"><a class="header" href="#headings-1">Headings</a></h3>
+<pre><code class="language-html">&lt;h1&gt;Heading 1&lt;/h1&gt;
+&lt;h2&gt;Heading 2&lt;/h2&gt;
+&lt;!-- h1 through h6 --&gt;
+</code></pre>
+<h3 id="inline-formatting-1"><a class="header" href="#inline-formatting-1">Inline formatting</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tag</th><th>Result</th></tr>
+</thead>
+<tbody>
+<tr><td><code>&lt;b&gt;</code>, <code>&lt;strong&gt;</code></td><td>Bold</td></tr>
+<tr><td><code>&lt;i&gt;</code>, <code>&lt;em&gt;</code></td><td>Italic</td></tr>
+<tr><td><code>&lt;s&gt;</code>, <code>&lt;del&gt;</code></td><td>Strikethrough</td></tr>
+<tr><td><code>&lt;u&gt;</code>, <code>&lt;ins&gt;</code></td><td>Underline</td></tr>
+<tr><td><code>&lt;tg-spoiler&gt;</code></td><td>Spoiler</td></tr>
+<tr><td><code>&lt;code&gt;</code></td><td>Inline code</td></tr>
+<tr><td><code>&lt;mark&gt;</code></td><td>Marked/highlighted</td></tr>
+<tr><td><code>&lt;sub&gt;</code></td><td>Subscript</td></tr>
+<tr><td><code>&lt;sup&gt;</code></td><td>Superscript</td></tr>
+<tr><td><code>&lt;a href="url"&gt;</code></td><td>Link</td></tr>
+<tr><td><code>&lt;a href="tg://user?id=123"&gt;</code></td><td>Mention by user ID</td></tr>
+<tr><td><code>&lt;a href="mailto:x@y.com"&gt;</code></td><td>Email</td></tr>
+<tr><td><code>&lt;a href="tel:+1234"&gt;</code></td><td>Phone</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="code-block-1"><a class="header" href="#code-block-1">Code block</a></h3>
+<pre><code class="language-html">&lt;pre&gt;&lt;code class="language-rust"&gt;fn main() {}&lt;/code&gt;&lt;/pre&gt;
+</code></pre>
+<h3 id="math"><a class="header" href="#math">Math</a></h3>
+<pre><code class="language-html">&lt;tg-math-block&gt;E = mc^2&lt;/tg-math-block&gt;
+</code></pre>
+<p>Or inline: <code>&lt;tg-math&gt;E = mc^2&lt;/tg-math&gt;</code></p>
+<h3 id="lists-1"><a class="header" href="#lists-1">Lists</a></h3>
+<pre><code class="language-html">&lt;ul&gt;
+  &lt;li&gt;item one&lt;/li&gt;
+  &lt;li&gt;item two&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;first&lt;/li&gt;
+  &lt;li&gt;second&lt;/li&gt;
+&lt;/ol&gt;
+</code></pre>
+<h3 id="table-1"><a class="header" href="#table-1">Table</a></h3>
+<pre><code class="language-html">&lt;table&gt;
+  &lt;tr&gt;&lt;th&gt;Name&lt;/th&gt;&lt;th&gt;Age&lt;/th&gt;&lt;/tr&gt;
+  &lt;tr&gt;&lt;td&gt;Alice&lt;/td&gt;&lt;td&gt;30&lt;/td&gt;&lt;/tr&gt;
+&lt;/table&gt;
+</code></pre>
+<h3 id="divider-1"><a class="header" href="#divider-1">Divider</a></h3>
+<pre><code class="language-html">&lt;hr/&gt;
+</code></pre>
+<h3 id="collapsible-section"><a class="header" href="#collapsible-section">Collapsible section</a></h3>
+<pre><code class="language-html">&lt;details open&gt;
+  &lt;summary&gt;Title&lt;/summary&gt;
+  Content here.
+&lt;/details&gt;
+</code></pre>
+<h3 id="blockquote-1-1"><a class="header" href="#blockquote-1-1">Blockquote</a></h3>
+<pre><code class="language-html">&lt;blockquote&gt;
+  Quote text.
+  &lt;cite&gt;Credit&lt;/cite&gt;
+&lt;/blockquote&gt;
+</code></pre>
+<h3 id="pullquote"><a class="header" href="#pullquote">Pullquote</a></h3>
+<pre><code class="language-html">&lt;aside&gt;
+  Pull quote text.
+  &lt;cite&gt;Credit&lt;/cite&gt;
+&lt;/aside&gt;
+</code></pre>
+<h3 id="embedded-map"><a class="header" href="#embedded-map">Embedded map</a></h3>
+<pre><code class="language-html">&lt;tg-map lat="51.5074" long="-0.1278" zoom="12"/&gt;
+</code></pre>
+<h3 id="media-collage--slideshow"><a class="header" href="#media-collage--slideshow">Media collage / slideshow</a></h3>
+<pre><code class="language-html">&lt;tg-collage&gt;
+  &lt;img src="https://example.com/a.jpg"/&gt;
+  &lt;img src="https://example.com/b.jpg"/&gt;
+&lt;/tg-collage&gt;
+
+&lt;tg-slideshow&gt;
+  &lt;img src="https://example.com/a.jpg"/&gt;
+  &lt;video src="https://example.com/b.mp4"/&gt;
+&lt;/tg-slideshow&gt;
+</code></pre>
+<h3 id="footer"><a class="header" href="#footer">Footer</a></h3>
+<pre><code class="language-html">&lt;footer&gt;Footer text here.&lt;/footer&gt;
+</code></pre>
+<h3 id="anchor"><a class="header" href="#anchor">Anchor</a></h3>
+<pre><code class="language-html">&lt;a name="chapter-1"&gt;&lt;/a&gt;
+</code></pre>
+<hr>
+<h2 id="building-pageblocks-manually"><a class="header" href="#building-pageblocks-manually">Building PageBlocks manually</a></h2>
+<p>Both parsers return <code>Vec&lt;tl::enums::PageBlock&gt;</code>. You can also construct blocks directly:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram_tl_types as tl;
+
+let blocks = vec![
+    tl::enums::PageBlock::Heading1(tl::types::PageBlockHeading1 {
+        text: tl::enums::RichText::TextPlain(tl::types::TextPlain {
+            text: "My Title".into(),
+        }),
+    }),
+    tl::enums::PageBlock::Paragraph(tl::types::PageBlockParagraph {
+        text: tl::enums::RichText::TextPlain(tl::types::TextPlain {
+            text: "Some content.".into(),
+        }),
+    }),
+    tl::enums::PageBlock::Divider,
+];
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="pageblock-reference"><a class="header" href="#pageblock-reference">PageBlock reference</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Heading1</code>–<code>Heading6</code></td><td>Section headings</td></tr>
+<tr><td><code>Paragraph</code></td><td>Body text</td></tr>
+<tr><td><code>Preformatted</code></td><td>Code block with optional language</td></tr>
+<tr><td><code>Math</code></td><td>Math expression (TeX/KaTeX source)</td></tr>
+<tr><td><code>List</code></td><td>Unordered list</td></tr>
+<tr><td><code>OrderedList</code></td><td>Ordered list</td></tr>
+<tr><td><code>Blockquote</code></td><td>Block quote with optional caption</td></tr>
+<tr><td><code>Pullquote</code></td><td>Pull quote (aside)</td></tr>
+<tr><td><code>Table</code></td><td>Table with optional header row</td></tr>
+<tr><td><code>Details</code></td><td>Collapsible section</td></tr>
+<tr><td><code>Divider</code></td><td>Horizontal rule</td></tr>
+<tr><td><code>Map</code></td><td>Embedded map with lat/long/zoom</td></tr>
+<tr><td><code>Photo</code> / <code>Video</code> / <code>Audio</code></td><td>Media blocks</td></tr>
+<tr><td><code>Collage</code></td><td>Side-by-side media grid</td></tr>
+<tr><td><code>Slideshow</code></td><td>Swipeable media slideshow</td></tr>
+<tr><td><code>Anchor</code></td><td>In-document anchor point</td></tr>
+<tr><td><code>Footer</code></td><td>Footer text</td></tr>
+<tr><td><code>Embed</code></td><td>Embedded external content</td></tr>
 </tbody>
 </table>
 </div>
@@ -5080,7 +5346,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 </div>
 
 <hr>
-<h2 id="media"><a class="header" href="#media">Media</a></h2>
+<h2 id="media-1"><a class="header" href="#media-1">Media</a></h2>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
@@ -5604,7 +5870,6 @@ tl::enums::ChatReactions::ChatReactionsNone
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.upload_media(peer: impl Into&lt;PeerRef&gt;, media: tl::enums::InputMedia) → Result&lt;tl::enums::MessageMedia, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Upload a media object to Telegram servers without sending it as a message. The returned <code>MessageMedia</code> can be reused in subsequent <code>send_message</code> calls via <code>InputMessage::copy_media()</code>. Distinct from <code>upload_file</code>  -  this works with an existing <code>InputMedia</code>.</div>
@@ -11358,7 +11623,7 @@ immediately so no extra bandwidth is used after a winner is picked.</p>
 performed, so there is no extra round trip cost.</p>
 <p>If all three transports fail, the connection attempt returns the last
 <code>InvocationError</code> from the race.</p>
-<h3 id="when-to-use"><a class="header" href="#when-to-use">When to use</a></h3>
+<h3 id="when-to-use-1"><a class="header" href="#when-to-use-1">When to use</a></h3>
 <p>Use <code>probe_transport</code> when:</p>
 <ul>
 <li>You are deploying to a network you do not control (shared hosting, cloud
@@ -11420,7 +11685,7 @@ list that Telegram publishes to Firebase. This is the same endpoint the
 official Telegram apps fall back to when all normal connections fail. Only
 addresses matching the target DC ID are tried.</p>
 <p>If every path fails, the original direct-connect error is returned.</p>
-<h3 id="when-to-use-1"><a class="header" href="#when-to-use-1">When to use</a></h3>
+<h3 id="when-to-use-1-1"><a class="header" href="#when-to-use-1-1">When to use</a></h3>
 <p>Use <code>resilient_connect</code> when:</p>
 <ul>
 <li>You are deploying in a region where Telegram DCs are ISP-blocked (Iran,
@@ -12563,19 +12828,19 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <li><code>ClientBuilder</code>: fluent connection builder</li>
 </ul>
 <pre><code class="language-toml"># SQLite session only
-ferogram = { version = "0.6.0", features = ["sqlite-session"] }
+ferogram = { version = "0.6.3", features = ["sqlite-session"] }
 
 # LibSQL / Turso session (new in 0.2.0)
-ferogram = { version = "0.6.0", features = ["libsql-session"] }
+ferogram = { version = "0.6.3", features = ["libsql-session"] }
 
 # HTML parsing (minimal, no extra deps)
-ferogram = { version = "0.6.0", features = ["html"] }
+ferogram = { version = "0.6.3", features = ["html"] }
 
 # HTML parsing (spec-compliant, adds html5ever dep)
-ferogram = { version = "0.6.0", features = ["html5ever"] }
+ferogram = { version = "0.6.3", features = ["html5ever"] }
 
 # Multiple features at once
-ferogram = { version = "0.6.0", features = ["sqlite-session", "html"] }
+ferogram = { version = "0.6.3", features = ["sqlite-session", "html"] }
 </code></pre>
 <hr>
 <h2 id="ferogram-tl-types-1"><a class="header" href="#ferogram-tl-types-1">ferogram-tl-types</a></h2>
@@ -12597,14 +12862,14 @@ ferogram = { version = "0.6.0", features = ["sqlite-session", "html"] }
 </table>
 </div>
 <h3 id="example-enable-serde"><a class="header" href="#example-enable-serde">Example: enable serde</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.0", features = ["tl-api", "impl-serde"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.3", features = ["tl-api", "impl-serde"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let json = serde_json::to_string(&amp;some_tl_type)?;
 <span class="boring">}</span></code></pre>
 <h3 id="example-name_for_id-debugging"><a class="header" href="#example-name_for_id-debugging">Example: name_for_id (debugging)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.0", features = ["tl-api", "name-for-id"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.3", features = ["tl-api", "name-for-id"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -12615,13 +12880,13 @@ if let Some(name) = name_for_id(0x74ae4240) {
 }
 <span class="boring">}</span></code></pre>
 <h3 id="example-minimal-no-debug-no-conversions"><a class="header" href="#example-minimal-no-debug-no-conversions">Example: minimal (no Debug, no conversions)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.0", default-features = false, features = ["tl-api"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.3", default-features = false, features = ["tl-api"] }
 </code></pre>
 <p>Reduces compile time when you don’t need convenience traits.</p>
 <hr>
 <h2 id="string-session-no-feature-flag-needed"><a class="header" href="#string-session-no-feature-flag-needed">String session: no feature flag needed</a></h2>
 <p><code>StringSessionBackend</code> and <code>export_session_string()</code> are available in the default build: no feature flag required:</p>
-<pre><code class="language-toml">ferogram = "0.6.0"   # already includes StringSessionBackend
+<pre><code class="language-toml">ferogram = "0.6.3"   # already includes StringSessionBackend
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
