@@ -50,7 +50,7 @@ impl Client {
             .session(session)
             .api_id(api_id)
             .api_hash(api_hash)
-            .connect()
+            .connect_and_login()
             .await
     }
 }

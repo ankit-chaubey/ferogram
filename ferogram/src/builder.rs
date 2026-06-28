@@ -544,13 +544,45 @@ impl ClientBuilder {
     /// Returns `Err(BuilderError::MissingApiId)` / `Err(BuilderError::MissingApiHash)`
     /// before attempting any network I/O if the required fields are absent.
     ///
-    /// If the restored (or freshly created) session isn't authorized yet,
-    /// this also prompts interactively (stdin) for a phone number or bot
-    /// token, drives the full auth flow (login code, 2FA password if
-    /// required), and saves the session afterward. If the session is
-    /// already authorized, the prompt is skipped entirely and this only
-    /// connects.
+    /// This method only establishes the connection. It never prompts for
+    /// credentials. Auth is the caller's responsibility:
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let (client, _) = Client::builder()
+    ///     .api_id(12345)
+    ///     .api_hash("abc")
+    ///     .session("bot.session")
+    ///     .connect().await?;
+    ///
+    /// if !client.is_authorized().await? {
+    ///     client.bot_sign_in("123456:TOKEN").await?;
+    ///     client.save_session().await?;
+    /// }
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// If you want an interactive stdin prompt for first-time auth use
+    /// [`connect_and_login`](Self::connect_and_login) instead.
     pub async fn connect(self) -> Result<(Client, ShutdownToken), crate::QuickConnectError> {
+        let cfg = self.build()?;
+        let (client, shutdown) = Client::connect(cfg).await.map_err(BuilderError::Connect)?;
+        Ok((client, shutdown))
+    }
+
+    /// Build, connect, and interactively authenticate if not already signed in.
+    ///
+    /// Prompts via stdin for a phone number or bot token, drives the full
+    /// auth flow (login code, 2FA password if required), and saves the
+    /// session. If the session is already authorized the prompt is skipped.
+    ///
+    /// Use this only for interactive tools or first-time setup scripts.
+    /// For bots and production code use [`connect`](Self::connect) and
+    /// call `bot_sign_in` / `sign_in` yourself.
+    pub async fn connect_and_login(
+        self,
+    ) -> Result<(Client, ShutdownToken), crate::QuickConnectError> {
         let cfg = self.build()?;
         let (client, shutdown) = Client::connect(cfg).await.map_err(BuilderError::Connect)?;
         crate::quick_connect::login_interactive(&client).await?;

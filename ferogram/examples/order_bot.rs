@@ -172,7 +172,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect()
         .await?;
 
-    client.bot_sign_in(&bot_token).await?;
+    if !client.is_authorized().await? {
+        client.bot_sign_in(&bot_token).await?;
+    }
 
     let storage: std::sync::Arc<dyn StateStorage> = std::sync::Arc::new(MemoryStorage::new());
 
