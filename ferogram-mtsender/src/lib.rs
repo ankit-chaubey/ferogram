@@ -54,13 +54,16 @@
 //! # Example: send an RPC via the pool
 //!
 //! ```rust,no_run
-//! use ferogram_mtsender::{DcPool, AutoSleep};
+//! use ferogram_mtsender::{DcPool, InvocationError};
+//! use ferogram_connect::TransportKind;
+//! use ferogram_session::DcEntry;
 //! use ferogram_tl_types::functions::help::GetConfig;
 //!
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-//! let pool = DcPool::connect(2, Default::default()).await?;
-//! let config = pool.invoke(GetConfig {}, AutoSleep::default()).await?;
-//! println!("DC count: {}", config.dc_options.len());
+//! let dc_entries: Vec<DcEntry> = vec![]; // populate from your session
+//! let mut pool = DcPool::new(2, &dc_entries, None, TransportKind::Full);
+//! let raw = pool.invoke_on_dc(2, &dc_entries, &GetConfig {}).await?;
+//! println!("raw response bytes: {}", raw.len());
 //! # Ok(())
 //! # }
 //! ```

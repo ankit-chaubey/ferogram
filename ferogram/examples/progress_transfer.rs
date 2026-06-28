@@ -308,7 +308,8 @@ async fn handle_media(
         }
     });
     let up = client
-        .upload(std::io::Cursor::new(buf), &fname, Some(&up_handle))
+        .upload(std::io::Cursor::new(buf), &fname)
+        .handle(&up_handle)
         .await;
 
     chat_task.abort();

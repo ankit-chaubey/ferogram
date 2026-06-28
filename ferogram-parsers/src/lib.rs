@@ -61,7 +61,7 @@
 //! assert_eq!(text, "Hello world!");
 //!
 //! let back = generate_markdown(&text, &entities);
-//! assert_eq!(back, "Hello *world*!");
+//! assert_eq!(back, "Hello *world*\\!");
 //! ```
 //!
 //! # Example: HTML to entities

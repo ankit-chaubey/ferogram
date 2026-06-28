@@ -26,6 +26,106 @@ use crate::{
     inline_iter, media, participants, search, update,
 };
 
+/// Builder returned by [`Client::download_file`].
+///
+/// Awaiting it directly downloads with no progress tracking. Chain
+/// [`.handle()`](DownloadFile::handle) before `.await` to track progress,
+/// pause, or cancel the transfer.
+pub struct DownloadFile<'a> {
+    client: &'a Client,
+    media: &'a tl::enums::MessageMedia,
+    path: std::path::PathBuf,
+    handle: Option<&'a crate::transfer::TransferHandle>,
+}
+
+impl<'a> DownloadFile<'a> {
+    /// Track progress, pause, or cancel this transfer with `handle`.
+    pub fn handle(mut self, handle: &'a crate::transfer::TransferHandle) -> Self {
+        self.handle = Some(handle);
+        self
+    }
+}
+
+impl<'a> std::future::IntoFuture for DownloadFile<'a> {
+    type Output = Result<u64, InvocationError>;
+    type IntoFuture =
+        std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            self.client
+                .download_file_inner(self.media, &self.path, self.handle)
+                .await
+        })
+    }
+}
+
+/// Builder returned by [`Client::upload`].
+///
+/// Awaiting it directly uploads with no progress tracking. Chain
+/// [`.handle()`](Upload::handle) before `.await` to track progress, pause,
+/// or cancel the transfer.
+pub struct Upload<'a, R> {
+    client: &'a Client,
+    source: R,
+    name: String,
+    handle: Option<&'a crate::transfer::TransferHandle>,
+}
+
+impl<'a, R> Upload<'a, R> {
+    /// Track progress, pause, or cancel this transfer with `handle`.
+    pub fn handle(mut self, handle: &'a crate::transfer::TransferHandle) -> Self {
+        self.handle = Some(handle);
+        self
+    }
+}
+
+impl<'a, R> std::future::IntoFuture for Upload<'a, R>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'a,
+{
+    type Output = Result<crate::media::UploadedFile, InvocationError>;
+    type IntoFuture =
+        std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            self.client
+                .upload_inner(self.source, &self.name, self.handle)
+                .await
+        })
+    }
+}
+
+/// Builder returned by [`Client::upload_file`].
+///
+/// Awaiting it directly uploads with no progress tracking. Chain
+/// [`.handle()`](UploadFile::handle) before `.await` to track progress,
+/// pause, or cancel the transfer.
+pub struct UploadFile<'a> {
+    client: &'a Client,
+    path: std::path::PathBuf,
+    handle: Option<&'a crate::transfer::TransferHandle>,
+}
+
+impl<'a> UploadFile<'a> {
+    /// Track progress, pause, or cancel this transfer with `handle`.
+    pub fn handle(mut self, handle: &'a crate::transfer::TransferHandle) -> Self {
+        self.handle = Some(handle);
+        self
+    }
+}
+
+impl<'a> std::future::IntoFuture for UploadFile<'a> {
+    type Output = Result<crate::media::UploadedFile, InvocationError>;
+    type IntoFuture =
+        std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move { self.client.upload_file_inner(&self.path, self.handle).await })
+    }
+}
+
 impl Client {
     /// Resolve the checkpoint directory for resumable transfers.
     ///
@@ -278,7 +378,8 @@ impl Client {
 
         if !self.inner.experimental.resumable_transfers {
             return self
-                .upload(std::io::Cursor::new(data), name, Some(handle))
+                .upload(std::io::Cursor::new(data), name)
+                .handle(handle)
                 .await;
         }
 
@@ -645,28 +746,53 @@ impl Client {
     /// which is significantly faster than the sequential path. You do not need to
     /// configure anything; ferogram picks the worker count based on file size.
     ///
-    /// Pass a [`TransferHandle`] to track progress, pause, or cancel. Pass `None` to
-    /// skip progress tracking.
-    ///
     /// Returns the number of bytes written.
     ///
-    /// [`TransferHandle`]: crate::transfer::TransferHandle
+    /// By default no progress tracking happens. Chain [`.handle(&handle)`] before
+    /// `.await` if you want to track progress, pause, or cancel the transfer:
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::{Client, transfer::TransferHandle};
+    /// # async fn ex(client: Client, msg: ferogram::update::IncomingMessage) -> anyhow::Result<()> {
+    /// let handle = TransferHandle::new();
+    /// client.download_file(msg.media().unwrap(), "downloaded.mp4")
+    ///     .handle(&handle)
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// [`.handle(&handle)`]: DownloadFile::handle
     ///
     /// # Example
     ///
     /// ```rust,no_run
     /// # use ferogram::Client;
     /// # async fn ex(client: Client, msg: ferogram::update::IncomingMessage) -> anyhow::Result<()> {
-    /// client.download_file(msg.media().unwrap(), "downloaded.mp4", None).await?;
+    /// client.download_file(msg.media().unwrap(), "downloaded.mp4").await?;
     /// # Ok(()) }
     /// ```
-    pub async fn download_file(
+    pub fn download_file<'a>(
+        &'a self,
+        media: &'a tl::enums::MessageMedia,
+        path: impl AsRef<std::path::Path>,
+    ) -> DownloadFile<'a> {
+        DownloadFile {
+            client: self,
+            media,
+            path: path.as_ref().to_path_buf(),
+            handle: None,
+        }
+    }
+
+    /// Inner implementation behind the [`download_file`] builder.
+    ///
+    /// [`download_file`]: Client::download_file
+    async fn download_file_inner(
         &self,
         media: &tl::enums::MessageMedia,
-        path: impl AsRef<std::path::Path>,
+        path: &std::path::Path,
         handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<u64, InvocationError> {
-        let path = path.as_ref();
         let (loc, dc) = crate::media::location_from_media(media).ok_or_else(|| {
             InvocationError::Deserialize("media has no downloadable location".into())
         })?;
@@ -722,12 +848,23 @@ impl Client {
     /// If you already have a path on disk, prefer [`upload_file`] instead. It stats the
     /// file before opening it and avoids the in-memory buffer for large files.
     ///
-    /// Pass a [`TransferHandle`] to track progress, pause, or cancel. Pass `None` to
-    /// skip progress tracking.
+    /// By default no progress tracking happens. Chain [`.handle(&handle)`] before
+    /// `.await` if you want to track progress, pause, or cancel the transfer:
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::{Client, transfer::TransferHandle};
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// let handle = TransferHandle::new();
+    /// let bytes = b"hello world".to_vec();
+    /// let uploaded = client.upload(std::io::Cursor::new(bytes), "note.txt")
+    ///     .handle(&handle)
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
     ///
     /// [`tokio::io::AsyncRead`]: tokio::io::AsyncRead
     /// [`upload_file`]: Client::upload_file
-    /// [`TransferHandle`]: crate::transfer::TransferHandle
+    /// [`.handle(&handle)`]: Upload::handle
     ///
     /// # Example
     ///
@@ -736,10 +873,25 @@ impl Client {
     ///
     /// # async fn example(client: Client) -> anyhow::Result<()> {
     /// let bytes = b"hello world".to_vec();
-    /// let uploaded = client.upload(std::io::Cursor::new(bytes), "note.txt", None).await?;
+    /// let uploaded = client.upload(std::io::Cursor::new(bytes), "note.txt").await?;
     /// # Ok(()) }
     /// ```
-    pub async fn upload(
+    pub fn upload<'a, R>(&'a self, source: R, name: &str) -> Upload<'a, R>
+    where
+        R: tokio::io::AsyncRead + Unpin + Send + 'a,
+    {
+        Upload {
+            client: self,
+            source,
+            name: name.to_string(),
+            handle: None,
+        }
+    }
+
+    /// Inner implementation behind the [`upload`] builder.
+    ///
+    /// [`upload`]: Client::upload
+    async fn upload_inner(
         &self,
         mut source: impl tokio::io::AsyncRead + Unpin + Send,
         name: &str,
@@ -769,31 +921,50 @@ impl Client {
     ///
     /// MIME type is detected automatically from the file name and content.
     ///
-    /// Pass a [`TransferHandle`] to track progress, pause, or cancel. Pass `None` to
-    /// skip progress tracking.
+    /// By default no progress tracking happens. Chain [`.handle(&handle)`] before
+    /// `.await` if you want to track progress, pause, or cancel the transfer:
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::{Client, TransferHandle};
+    /// # async fn ex(client: Client) -> anyhow::Result<()> {
+    /// let handle = TransferHandle::new();
+    /// let uploaded = client.upload_file("photo.jpg")
+    ///     .handle(&handle)
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
     ///
     /// [`upload_sequential`]: Client::upload_sequential
-    /// [`TransferHandle`]: crate::transfer::TransferHandle
+    /// [`.handle(&handle)`]: UploadFile::handle
     ///
     /// # Example
     ///
     /// ```rust,no_run
-    /// use ferogram::{Client, TransferHandle};
+    /// use ferogram::Client;
     ///
     /// # async fn example(client: Client) -> anyhow::Result<()> {
-    /// let handle = TransferHandle::new();
-    /// let uploaded = client.upload_file("photo.jpg", Some(&handle)).await?;
+    /// let uploaded = client.upload_file("photo.jpg").await?;
     /// // Then send it as a photo:
     /// // client.send_message(chat, InputMessage::text("").photo(uploaded)).await?;
     /// # Ok(()) }
     /// ```
-    pub async fn upload_file(
+    pub fn upload_file<'a>(&'a self, path: impl AsRef<std::path::Path>) -> UploadFile<'a> {
+        UploadFile {
+            client: self,
+            path: path.as_ref().to_path_buf(),
+            handle: None,
+        }
+    }
+
+    /// Inner implementation behind the [`upload_file`] builder.
+    ///
+    /// [`upload_file`]: Client::upload_file
+    async fn upload_file_inner(
         &self,
-        path: impl AsRef<std::path::Path>,
+        path: &std::path::Path,
         handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<crate::media::UploadedFile, InvocationError> {
         use tokio::io::AsyncReadExt;
-        let path = path.as_ref();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
         let meta = tokio::fs::metadata(path)
             .await

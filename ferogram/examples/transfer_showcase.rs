@@ -29,9 +29,7 @@
 
 use std::time::Duration;
 
-use ferogram::{
-    Client, ErrorKind, InvocationErrorExt, TransferError, TransferHandle, TransferProgress,
-};
+use ferogram::{Client, ErrorKind, InvocationErrorExt, TransferError, TransferHandle};
 
 const API_ID: i32 = 0; // from https://my.telegram.org
 const API_HASH: &str = ""; // from https://my.telegram.org
@@ -181,11 +179,8 @@ async fn demo_upload_controls(client: &Client) -> Result<(), Box<dyn std::error:
     });
 
     let result = client
-        .upload(
-            std::io::Cursor::new(data),
-            "showcase_dummy.bin",
-            Some(&up_handle),
-        )
+        .upload(std::io::Cursor::new(data), "showcase_dummy.bin")
+        .handle(&handle)
         .await;
 
     match result {
@@ -321,11 +316,7 @@ async fn demo_resumable_download(client: &Client) -> Result<(), Box<dyn std::err
     // Upload a 1.5 MB file to use as download target.
     let payload = vec![7u8; 3 * 512 * 1024];
     let uploaded = client
-        .upload(
-            std::io::Cursor::new(payload.clone()),
-            "resumable_dl.bin",
-            None,
-        )
+        .upload(std::io::Cursor::new(payload.clone()), "resumable_dl.bin")
         .await?;
     let msg = client
         .send_file(TARGET_PEER, uploaded, &Default::default())

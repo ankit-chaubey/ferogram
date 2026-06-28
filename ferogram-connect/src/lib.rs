@@ -52,12 +52,13 @@
 //!
 //! ```rust,no_run
 //! use ferogram_connect::{TransportKind, connect_to_dc};
-//! use ferogram_session::DcEntry;
 //!
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-//! let dc = DcEntry::default_dc(); // DC 2, production
-//! let conn = connect_to_dc(&dc, TransportKind::Full, None, None).await?;
-//! println!("connected, salt={:?}", conn.future_salt);
+//! // DC 2 production address; in practice load this from your session/config.
+//! let (stream, frame_kind, session) =
+//!     connect_to_dc("149.154.167.51:443", 2, &TransportKind::Full, None, None).await?;
+//! println!("connected, salt={}", session.salt);
+//! # let _ = (stream, frame_kind);
 //! # Ok(())
 //! # }
 //! ```
