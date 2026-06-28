@@ -1977,6 +1977,23 @@ impl Client {
                         tracing::warn!(
                             "[ferogram::client] reconnect: init_connection failed after TCP established: {e}"
                         );
+                        // If Telegram rejected the auth key at the RPC level (AUTH_KEY_UNREGISTERED
+                        // after TV sleep or extended inactivity), clear the cached key and loop
+                        // back so the next iteration runs fresh DH instead of reusing the dead key.
+                        if matches!(&e, InvocationError::Rpc(r) if r.code == 401) {
+                            tracing::warn!(
+                                "[ferogram::client] reconnect: auth key rejected by server (401); clearing cached key and retrying with fresh DH"
+                            );
+                            let home = *self.inner.home_dc_id.lock().await;
+                            let mut opts = self.inner.dc_options.lock().await;
+                            if let Some(entry) = opts.get_mut(&home) {
+                                entry.auth_key = None;
+                                entry.first_salt = 0;
+                                entry.time_offset = 0;
+                            }
+                            delay_ms = RECONNECT_BASE_MS;
+                            continue;
+                        }
                     }
                     return;
                 }
