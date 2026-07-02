@@ -76,9 +76,31 @@ impl fmt::Debug for PasswordToken {
 /// Opaque token returned by [`crate::Client::request_login_code`].
 ///
 /// Pass to [`crate::Client::sign_in`] with the received code.
+///
+/// `phone_code_hash` is the only piece Telegram generates; the phone number
+/// is whatever the caller already passed in to get the token. A stateless
+/// server can read the hash out with [`LoginToken::phone_code_hash`], store
+/// it externally between requests, and rebuild the token later with
+/// [`LoginToken::new`] using the phone number it already has on hand.
+#[derive(Clone)]
 pub struct LoginToken {
     pub(crate) phone: String,
     pub(crate) phone_code_hash: String,
+}
+
+impl LoginToken {
+    /// Rebuild a token from a phone number and a previously stored phone_code_hash.
+    pub fn new(phone: impl Into<String>, phone_code_hash: impl Into<String>) -> Self {
+        Self {
+            phone: phone.into(),
+            phone_code_hash: phone_code_hash.into(),
+        }
+    }
+
+    /// The phone_code_hash Telegram issued for this login attempt.
+    pub fn phone_code_hash(&self) -> &str {
+        &self.phone_code_hash
+    }
 }
 
 // Typed error helpers
