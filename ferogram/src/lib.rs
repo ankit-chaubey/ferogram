@@ -255,7 +255,7 @@ pub use keyboard::{Button, InlineKeyboard, ReplyKeyboard};
 pub use media::{Document, Downloadable, Photo, Sticker, UploadedFile};
 pub use mini_app::{MiniApp, MiniAppSession};
 pub use participants::{Participant, ParticipantStatus, ProfilePhotoIter};
-pub use peer_cache::{ExperimentalFeatures, PeerCache, PeerType};
+pub use peer_cache::{ExperimentalFeatures, PeerCache, PeerCacheStats, PeerType};
 pub use peer_ext::{OptionPeerExt, PeerExt};
 pub use peer_ref::PeerRef;
 pub use poll::PollBuilder;

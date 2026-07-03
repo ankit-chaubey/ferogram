@@ -643,6 +643,68 @@ impl PersistedSession {
     pub fn all_dcs_for(&self, dc_id: i32) -> impl Iterator<Item = &DcEntry> {
         self.dcs.iter().filter(move |d| d.dc_id == dc_id)
     }
+
+    /// A breakdown of what this session currently holds.
+    ///
+    /// Useful for logging, debugging bloated session files, and deciding
+    /// whether to prune stale data (e.g. clear `min_peers` when
+    /// `cache_min_peers` is later disabled).
+    ///
+    /// `approx_bytes` calls `to_bytes()` internally, so avoid calling this
+    /// on every hot-path tick, it is intended for diagnostics only.
+    pub fn stats(&self) -> SessionStats {
+        let users = self
+            .peers
+            .iter()
+            .filter(|p| !p.is_channel && !p.is_chat)
+            .count();
+        let channels = self.peers.iter().filter(|p| p.is_channel).count();
+        let chats = self.peers.iter().filter(|p| p.is_chat).count();
+
+        SessionStats {
+            home_dc_id: self.home_dc_id,
+            dcs_total: self.dcs.len(),
+            dcs_with_auth_key: self.dcs.iter().filter(|d| d.auth_key.is_some()).count(),
+            peers_total: self.peers.len(),
+            peers_users: users,
+            peers_channels: channels,
+            peers_chats: chats,
+            min_peers: self.min_peers.len(),
+            channel_pts_entries: self.updates_state.channels.len(),
+            updates_initialised: self.updates_state.is_initialised(),
+            approx_bytes: self.to_bytes().len(),
+        }
+    }
+}
+
+/// A breakdown of what a [`PersistedSession`] currently holds.
+///
+/// Returned by [`PersistedSession::stats`].
+#[derive(Clone, Debug)]
+pub struct SessionStats {
+    /// The DC this session considers home.
+    pub home_dc_id: i32,
+    /// Total DC entries (may include IPv4 and IPv6 variants per DC).
+    pub dcs_total: usize,
+    /// DC entries that have an auth key negotiated.
+    pub dcs_with_auth_key: usize,
+    /// Total cached peer entries (users + channels + chats).
+    pub peers_total: usize,
+    /// Cached users (have a full access_hash).
+    pub peers_users: usize,
+    /// Cached channels / supergroups (have a full access_hash).
+    pub peers_channels: usize,
+    /// Cached regular group chats (no access_hash needed).
+    pub peers_chats: usize,
+    /// Min-peer entries (`InputPeerUserFromMessage` contexts).
+    /// These are the main source of session bloat over time.
+    pub min_peers: usize,
+    /// Number of per-channel pts counters tracked for gap detection.
+    pub channel_pts_entries: usize,
+    /// Whether the update state has been initialised from Telegram.
+    pub updates_initialised: bool,
+    /// Approximate serialized size in bytes (calls `to_bytes()` internally).
+    pub approx_bytes: usize,
 }
 
 impl std::fmt::Display for PersistedSession {
