@@ -13,7 +13,7 @@
 use std::time::Duration;
 
 use ferogram::filters::{Dispatcher, Router, command, group, private, text};
-use ferogram::fsm::{MemoryStorage, StateContext, StateStorage};
+use ferogram::fsm::{MemoryStorage, StateContext, StateKey, StateKeyStrategy, StateStorage};
 use ferogram::middleware::{PanicRecoveryMiddleware, RateLimitMiddleware, TracingMiddleware};
 use ferogram::{ClientBuilder, FsmState, UpdateStream};
 
@@ -29,10 +29,13 @@ enum OrderState {
 
 // Routers
 
-pub fn order_router() -> Router {
+pub fn order_router(storage: std::sync::Arc<dyn StateStorage>) -> Router {
     let mut r = Router::new().scope(private());
 
-    r.on_message(command("order"), handle_order_start);
+    r.on_message(command("order"), move |msg| {
+        let storage = std::sync::Arc::clone(&storage);
+        async move { handle_order_start(msg, storage).await }
+    });
 
     r.on_message_fsm(text(), OrderState::WaitingProduct, handle_product);
     r.on_message_fsm(text(), OrderState::WaitingQuantity, handle_quantity);
@@ -87,14 +90,34 @@ async fn handle_rules(msg: ferogram::update::IncomingMessage) {
     msg.reply("📋 Group rules: be respectful.").await.ok();
 }
 
-async fn handle_order_start(msg: ferogram::update::IncomingMessage) {
+/// Entry point for `/order`. This is a plain `on_message` handler (not
+/// `on_message_fsm`), so it runs with no pre-existing state -- its job is
+/// to *create* the first state for this conversation slot. Every
+/// `on_message_fsm(..., OrderState::X, ...)` handler after this one only
+/// fires once its expected state matches what we set here.
+async fn handle_order_start(
+    msg: ferogram::update::IncomingMessage,
+    storage: std::sync::Arc<dyn StateStorage>,
+) {
+    // Must use the same StateKeyStrategy the Dispatcher uses (the default,
+    // per-user-per-chat, unless you called `dp.with_key_strategy(...)`) --
+    // otherwise this key won't match the one on_message_fsm looks up.
+    let key = StateKey::from_message(&msg, StateKeyStrategy::default());
+
+    if let Err(e) = storage
+        .set_state(key, OrderState::WaitingProduct.as_key())
+        .await
+    {
+        tracing::error!("failed to start order flow: {e}");
+        msg.reply("⚠️ Couldn't start your order, try again.")
+            .await
+            .ok();
+        return;
+    }
+
     msg.reply("🛍 What product would you like to order?")
         .await
         .ok();
-    // The first on_message_fsm handler fires once we set state.
-    // State is set via a StateContext obtained from a prior message.
-    // Typically you'd set the initial state here via a storage handle.
-    // For demo purposes the user can set state externally.
 }
 
 async fn handle_product(msg: ferogram::update::IncomingMessage, state: StateContext) {
@@ -185,13 +208,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dp.middleware(TracingMiddleware::new());
     dp.middleware(RateLimitMiddleware::new(10, Duration::from_secs(1)));
 
+    // Include routers. order_router needs its own handle to the same
+    // storage so /order can create the first state; with_state_storage
+    // below gives the Dispatcher the handle it uses to read states back.
+    dp.include(info_router());
+    dp.include(order_router(std::sync::Arc::clone(&storage)));
+    dp.include(group_router());
+
     // FSM backend.
     dp.with_state_storage(storage);
-
-    // Include routers.
-    dp.include(info_router());
-    dp.include(order_router());
-    dp.include(group_router());
 
     tracing::info!("bot started");
 
