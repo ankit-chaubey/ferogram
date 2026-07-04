@@ -139,10 +139,47 @@ pub struct ExperimentalFeatures {
     /// Directory for transfer checkpoints when `resumable_transfers` is enabled.
     /// If `None`, defaults to `.ferogram-transfers/` next to the session file.
     pub checkpoint_dir: Option<std::path::PathBuf>,
+
+    /// Cache min-user message contexts (`InputPeerUserFromMessage` entries).
+    ///
+    /// When `false` (the default), users seen with `min=true` are silently
+    /// ignored instead of being stored. This keeps session files lean and is
+    /// the right choice for gateway / proxy servers that never need to address
+    /// min users directly.
+    ///
+    /// Enable only if your application needs to send messages or make API
+    /// calls targeting users that arrive exclusively as min-users (i.e. users
+    /// you have never seen with a full access_hash).
+    ///
+    /// Default: `false`.
+    pub cache_min_peers: bool,
 }
 
 /// Caches access hashes for users and channels so every API call carries the
 /// correct hash without re-resolving peers.
+/// A snapshot of what [`PeerCache`] currently holds.
+///
+/// Returned by [`PeerCache::stats`]. Useful for logging, monitoring, and
+/// deciding whether to call [`PeerCache::clear_min_contexts`].
+#[derive(Clone, Debug)]
+pub struct PeerCacheStats {
+    /// Full users with a valid access_hash.
+    pub users: usize,
+    /// Full channels with a valid access_hash.
+    pub channels: usize,
+    /// Regular group chats tracked by existence (no hash needed).
+    pub chats: usize,
+    /// Channels seen with `min=true` (no usable access_hash yet).
+    pub min_channels: usize,
+    /// Min-user message contexts (`InputPeerUserFromMessage` entries).
+    /// Always 0 when `cache_min_peers` is disabled.
+    pub min_contexts: usize,
+    /// Username reverse-index entries.
+    pub usernames: usize,
+    /// Phone number reverse-index entries.
+    pub phones: usize,
+}
+
 /// Discriminates the kind of peer stored in `PeerCache::username_to_peer`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PeerType {
@@ -238,7 +275,7 @@ impl PeerCache {
         if let tl::enums::User::User(u) = user {
             if u.min {
                 // Never downgrade a cached full user to a min context.
-                if !self.users.contains_key(&u.id) {
+                if self.experimental.cache_min_peers && !self.users.contains_key(&u.id) {
                     // Latest-wins: overwrite with the most recent message context.
                     self.min_contexts.insert(u.id, (peer_id, msg_id));
                 }
@@ -380,7 +417,7 @@ impl PeerCache {
                 };
                 if let Some(peer_id) = container_peer_id {
                     // Only set min_context if there is no full hash cached yet.
-                    if !self.users.contains_key(&u.user_id) {
+                    if self.experimental.cache_min_peers && !self.users.contains_key(&u.user_id) {
                         self.min_contexts.insert(u.user_id, (peer_id, u.msg_id));
                     }
                 }
@@ -528,6 +565,34 @@ impl PeerCache {
                  Ensure the channel flows through the update loop before using \
                  it as a peer, or call client.resolve_peer() first."
             )))
+        }
+    }
+
+    /// Drop all cached min-user contexts.
+    ///
+    /// Safe to call at any time. After this, any min user that has no full
+    /// access_hash returns [`InvocationError::PeerNotCached`] until they
+    /// appear again in an update (and `cache_min_peers` is enabled) or until
+    /// `resolve_peer()` fetches their full hash.
+    ///
+    /// Call this periodically on gateway servers to bound memory growth from
+    /// min-user entries that accumulate over long uptimes.
+    pub fn clear_min_contexts(&mut self) {
+        self.min_contexts.clear();
+    }
+
+    /// A point-in-time snapshot of entry counts in this cache.
+    ///
+    /// Cheap to call, no allocation beyond the returned struct itself.
+    pub fn stats(&self) -> PeerCacheStats {
+        PeerCacheStats {
+            users: self.users.len(),
+            channels: self.channels.len(),
+            chats: self.chats.len(),
+            min_channels: self.channels_min.len(),
+            min_contexts: self.min_contexts.len(),
+            usernames: self.username_to_peer.len(),
+            phones: self.phone_to_user.len(),
         }
     }
 

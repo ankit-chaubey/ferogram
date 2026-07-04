@@ -21,6 +21,9 @@ rusqlite = { version = "0.31", optional = true, features = ["bundled"] }
 libsql   = { version = "0.6", features = ["core"], optional = true }
 tokio    = { version = "1", features = ["sync"], optional = true }
 
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
+
 [features]
 default         = []
 serde           = ["dep:serde"]

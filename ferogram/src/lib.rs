@@ -244,7 +244,7 @@ pub use client::{Config, ShutdownToken, UpdateStream};
 pub use dialog::{Dialog, DialogIter, MessageIter};
 pub use errors::{
     ErrorKind, InvocationError, InvocationErrorExt, LoginToken, PasswordToken, RpcError,
-    SignInError,
+    SendCodeOptions, SendCodeOutcome, SignInError,
 };
 pub use ferogram_connect::TransportKind;
 pub use ferogram_connect::random_i64 as random_i64_pub;
@@ -255,7 +255,7 @@ pub use keyboard::{Button, InlineKeyboard, ReplyKeyboard};
 pub use media::{Document, Downloadable, Photo, Sticker, UploadedFile};
 pub use mini_app::{MiniApp, MiniAppSession};
 pub use participants::{Participant, ParticipantStatus, ProfilePhotoIter};
-pub use peer_cache::{ExperimentalFeatures, PeerCache, PeerType};
+pub use peer_cache::{ExperimentalFeatures, PeerCache, PeerCacheStats, PeerType};
 pub use peer_ext::{OptionPeerExt, PeerExt};
 pub use peer_ref::PeerRef;
 pub use poll::PollBuilder;

@@ -13,7 +13,7 @@
 use crate::*;
 #[allow(unused_imports)]
 use crate::{
-    InputMessage, InvocationError, PeerRef,
+    InputMessage, InvocationError, PeerRef, SendCodeOptions, SendCodeOutcome,
     dialog::{Dialog, DialogIter, MessageIter},
     inline_iter, media, participants, search, update,
 };
@@ -55,15 +55,127 @@ impl Client {
     }
 
     /// Request a login code for a user account.
-    pub async fn request_login_code(&self, phone: &str) -> Result<LoginToken, InvocationError> {
-        use tl::enums::auth::{SentCode, SentCodeType};
+    ///
+    /// Returns [`SendCodeOutcome::CodeRequired`] in the normal case, the user
+    /// must enter the received code and pass the bundled [`LoginToken`] to
+    /// [`Client::sign_in`].
+    ///
+    /// Returns [`SendCodeOutcome::AlreadyAuthorized`] when Telegram recognizes
+    /// a logout token supplied via [`SendCodeOptions::logout_tokens`] and
+    /// authorizes the session immediately. In that case the client is already
+    /// signed in and no code entry is needed.
+    ///
+    /// For standard usage with default delivery settings:
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::{Client, SendCodeOutcome};
+    /// # async fn ex(client: Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// match client.request_login_code("+1234567890").await? {
+    ///     SendCodeOutcome::CodeRequired(token) => {
+    ///         // prompt user for code, then call client.sign_in(&token, code).await
+    ///     }
+    ///     SendCodeOutcome::AlreadyAuthorized(name) => {
+    ///         println!("Welcome back, {name}!");
+    ///     }
+    /// }
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// To pass logout tokens or configure alternative delivery methods use
+    /// [`Client::request_login_code_with_options`].
+    pub async fn request_login_code(
+        &self,
+        phone: &str,
+    ) -> Result<SendCodeOutcome, InvocationError> {
+        self.request_login_code_with_options(phone, SendCodeOptions::default())
+            .await
+    }
+
+    /// Like [`Client::request_login_code`] but with full control over
+    /// `auth.sendCode` delivery settings.
+    ///
+    /// The most important field is [`SendCodeOptions::logout_tokens`]: supply
+    /// future auth tokens from a previous `auth.loggedOut` response and
+    /// Telegram may return [`SendCodeOutcome::AlreadyAuthorized`] without
+    /// requiring any code entry.
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::{Client, SendCodeOptions, SendCodeOutcome};
+    /// # async fn ex(client: Client, stored_token: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
+    /// let opts = SendCodeOptions {
+    ///     logout_tokens: Some(vec![stored_token]),
+    ///     ..Default::default()
+    /// };
+    /// match client.request_login_code_with_options("+1234567890", opts).await? {
+    ///     SendCodeOutcome::AlreadyAuthorized(name) => {
+    ///         println!("Welcome back, {name}!");
+    ///     }
+    ///     SendCodeOutcome::CodeRequired(token) => {
+    ///         // prompt for code, then call client.sign_in(&token, code).await
+    ///     }
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub async fn request_login_code_with_options(
+        &self,
+        phone: &str,
+        mut opts: SendCodeOptions,
+    ) -> Result<SendCodeOutcome, InvocationError> {
+        // Auto-replay a future_auth_token captured by a previous sign_out()
+        // on this session, unless the caller already supplied their own.
+        if opts.logout_tokens.is_none()
+            && let Some(token) = self.inner.future_auth_token.lock().clone()
+        {
+            tracing::debug!(
+                "[ferogram::auth] replaying stored future_auth_token from a previous sign_out"
+            );
+            opts.logout_tokens = Some(vec![token]);
+        }
 
         tracing::info!("[ferogram::auth] not signed in; requesting login code from Telegram");
-        let req = self.make_send_code_req(phone);
+        let req = self.make_send_code_req(phone, opts);
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
+        self.handle_sent_code(phone, &body).await
+    }
 
-        let mut cur = Cursor::from_slice(&body);
-        let hash = match tl::enums::auth::SentCode::deserialize(&mut cur)? {
+    /// Ask Telegram to resend the login code via a different delivery method.
+    ///
+    /// `token` is the [`LoginToken`] from the original [`Client::request_login_code`]
+    /// call. `reason` is an optional client-side diagnostic string Telegram
+    /// may log (e.g. `"user did not receive code"`); pass `None` for the
+    /// default.
+    ///
+    /// Like [`Client::request_login_code`], this can return
+    /// [`SendCodeOutcome::AlreadyAuthorized`] instead of a new code if
+    /// Telegram authorizes the session outright.
+    pub async fn resend_code(
+        &self,
+        token: &LoginToken,
+        reason: Option<&str>,
+    ) -> Result<SendCodeOutcome, InvocationError> {
+        tracing::info!("[ferogram::auth] requesting a resend of the login code");
+        let req = tl::functions::auth::ResendCode {
+            phone_number: token.phone.clone(),
+            phone_code_hash: token.phone_code_hash.clone(),
+            reason: reason.map(str::to_string),
+        };
+        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
+        self.handle_sent_code(&token.phone, &body).await
+    }
+
+    /// Decode an `auth.SentCode` response body and turn it into a
+    /// [`SendCodeOutcome`]. Shared by [`Client::request_login_code_with_options`]
+    /// and [`Client::resend_code`], both of which get this same response type
+    /// back from Telegram.
+    async fn handle_sent_code(
+        &self,
+        phone: &str,
+        body: &[u8],
+    ) -> Result<SendCodeOutcome, InvocationError> {
+        use tl::enums::auth::{SentCode, SentCodeType};
+
+        let mut cur = Cursor::from_slice(body);
+        match tl::enums::auth::SentCode::deserialize(&mut cur)? {
             SentCode::SentCode(s) => {
                 let sent_via = match &s.r#type {
                     SentCodeType::App(_) => {
@@ -86,21 +198,47 @@ impl Client {
                     "[ferogram::auth] phone_code_hash acquired (len={})",
                     s.phone_code_hash.len()
                 );
-                s.phone_code_hash
+                Ok(SendCodeOutcome::CodeRequired(LoginToken {
+                    phone: phone.to_string(),
+                    phone_code_hash: s.phone_code_hash,
+                }))
             }
-            SentCode::Success(_) => {
-                return Err(InvocationError::Deserialize("unexpected Success".into()));
+            SentCode::Success(s) => {
+                // Telegram recognized a logout token and authorized the session
+                // immediately, no code entry is needed.
+                tracing::info!(
+                    "[ferogram::auth] sentCodeSuccess: session authorized via logout token"
+                );
+                // Consume the token: Telegram issues a fresh one on the next
+                // real sign_out, and holding onto a used one risks it being
+                // stale or rejected on a later attempt.
+                *self.inner.future_auth_token.lock() = None;
+                self.mark_session_snapshot_dirty();
+                match s.authorization {
+                    tl::enums::auth::Authorization::Authorization(a) => {
+                        self.cache_user(&a.user).await;
+                        let name = Self::extract_user_name(&a.user);
+                        tracing::info!(
+                            "[ferogram::auth] fast re-auth complete; signed in: welcome, {name}"
+                        );
+                        self.inner
+                            .signed_in
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                        let _ = self.sync_pts_state().await;
+                        Ok(SendCodeOutcome::AlreadyAuthorized(name))
+                    }
+                    tl::enums::auth::Authorization::SignUpRequired(_) => {
+                        Err(InvocationError::Deserialize(
+                            "sentCodeSuccess returned SignUpRequired; account not registered"
+                                .into(),
+                        ))
+                    }
+                }
             }
-            SentCode::PaymentRequired(_) => {
-                return Err(InvocationError::Deserialize(
-                    "payment required to send code".into(),
-                ));
-            }
-        };
-        Ok(LoginToken {
-            phone: phone.to_string(),
-            phone_code_hash: hash,
-        })
+            SentCode::PaymentRequired(_) => Err(InvocationError::Deserialize(
+                "payment required to send code".into(),
+            )),
+        }
     }
 
     /// Complete sign-in with the code sent to the phone.
@@ -204,10 +342,35 @@ impl Client {
     }
 
     /// Sign out and invalidate the current session.
+    ///
+    /// If Telegram returns a `future_auth_token`, it is stored in-memory and
+    /// included in the persisted session on the next [`Client::save_session`]
+    /// call. It is then included automatically on the next
+    /// [`Client::request_login_code`] call to skip code entry for this
+    /// device. Telegram omits the token when the account has 2FA enabled.
     pub async fn sign_out(&self) -> Result<bool, InvocationError> {
         let req = tl::functions::auth::LogOut {};
         match self.rpc_call_raw(&req).await {
-            Ok(_) => {
+            Ok(body) => {
+                let mut cur = Cursor::from_slice(&body);
+                match tl::enums::auth::LoggedOut::deserialize(&mut cur) {
+                    Ok(tl::enums::auth::LoggedOut::LoggedOut(lo)) => {
+                        if lo.future_auth_token.is_some() {
+                            tracing::debug!(
+                                "[ferogram::auth] received future_auth_token on logout"
+                            );
+                        }
+                        *self.inner.future_auth_token.lock() = lo.future_auth_token;
+                        self.mark_session_snapshot_dirty();
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            "[ferogram::auth] could not parse auth.LoggedOut ({e}); \
+                             future_auth_token unavailable this session"
+                        );
+                    }
+                }
+
                 tracing::info!("[ferogram::auth] signed out");
                 // Clear all pooled connections and cached auth keys so that
                 // stale sockets cannot survive logout/reset.
@@ -350,21 +513,25 @@ impl Client {
         Ok(PasswordToken { password: pw })
     }
 
-    fn make_send_code_req(&self, phone: &str) -> tl::functions::auth::SendCode {
+    fn make_send_code_req(
+        &self,
+        phone: &str,
+        opts: SendCodeOptions,
+    ) -> tl::functions::auth::SendCode {
         tl::functions::auth::SendCode {
             phone_number: phone.to_string(),
             api_id: self.inner.api_id,
             api_hash: self.inner.api_hash.clone(),
             settings: tl::enums::CodeSettings::CodeSettings(tl::types::CodeSettings {
-                allow_flashcall: false,
-                current_number: false,
-                allow_app_hash: false,
-                allow_missed_call: false,
-                allow_firebase: false,
-                unknown_number: false,
-                logout_tokens: None,
-                token: None,
-                app_sandbox: None,
+                allow_flashcall: opts.allow_flashcall,
+                current_number: opts.current_number,
+                allow_app_hash: opts.allow_app_hash,
+                allow_missed_call: opts.allow_missed_call,
+                allow_firebase: opts.allow_firebase,
+                unknown_number: opts.unknown_number,
+                logout_tokens: opts.logout_tokens,
+                token: opts.token,
+                app_sandbox: opts.app_sandbox,
             }),
         }
     }

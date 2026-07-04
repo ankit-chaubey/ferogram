@@ -17,7 +17,9 @@
 
 use std::io::{self, Write};
 
-use crate::{Client, InvocationError, ShutdownToken, SignInError, builder::BuilderError};
+use crate::{
+    Client, InvocationError, SendCodeOutcome, ShutdownToken, SignInError, builder::BuilderError,
+};
 
 impl Client {
     /// Connect and authenticate in a single call.
@@ -81,7 +83,8 @@ pub(crate) async fn login_interactive(client: &Client) -> Result<(), QuickConnec
             .map_err(QuickConnectError::Auth)?;
         println!("✅ Signed in as bot: {name}");
     } else {
-        sign_in_user(client, &credential).await?;
+        let name = client.interactive_sign_in(&credential).await?;
+        println!("✅ Signed in as {name}");
     }
 
     client
@@ -93,35 +96,34 @@ pub(crate) async fn login_interactive(client: &Client) -> Result<(), QuickConnec
     Ok(())
 }
 
-async fn sign_in_user(client: &Client, phone: &str) -> Result<(), QuickConnectError> {
-    println!("📱 Requesting login code for {phone} …");
-    let token = client
-        .request_login_code(phone)
-        .await
-        .map_err(QuickConnectError::Auth)?;
-    println!("📨 Code sent, check Telegram (or SMS)");
+impl Client {
+    /// Prompt (stdin) for a login code, and a 2FA password if required, then
+    /// sign in as a user. Returns the signed-in user's display name.
+    ///
+    /// Skips the code prompt entirely if a replayed logout token already
+    /// authorized the session (see [`SendCodeOutcome::AlreadyAuthorized`]).
+    pub async fn interactive_sign_in(&self, phone: &str) -> Result<String, InvocationError> {
+        println!("📱 Requesting login code for {phone} …");
+        let outcome = self.request_login_code(phone).await?;
 
-    let code = prompt("Enter the login code: ")?;
+        let token = match outcome {
+            SendCodeOutcome::AlreadyAuthorized(name) => return Ok(name),
+            SendCodeOutcome::CodeRequired(token) => token,
+        };
 
-    match client.sign_in(&token, &code).await {
-        Ok(name) => {
-            println!("✅ Signed in as {name}");
+        println!("📨 Code sent, check Telegram (or SMS)");
+        let code = prompt_io("Enter the login code: ")?;
+
+        match self.sign_in(&token, &code).await {
+            Ok(name) => Ok(name),
+            Err(SignInError::PasswordRequired(pw_token)) => {
+                println!("🔒 Two-step verification enabled");
+                let password = prompt_io("Enter your 2FA password: ")?;
+                Ok(self.check_password(*pw_token, password.as_bytes()).await?)
+            }
+            Err(e) => Err(e.into()),
         }
-        Err(SignInError::PasswordRequired(pw_token)) => {
-            println!("🔒 Two-step verification enabled");
-            let password = prompt("Enter your 2FA password: ")?;
-            let name = client
-                .check_password(*pw_token, password.as_bytes())
-                .await
-                .map_err(QuickConnectError::Auth)?;
-            println!("✅ Signed in as {name}");
-        }
-        Err(SignInError::InvalidCode) => return Err(QuickConnectError::InvalidCode),
-        Err(SignInError::SignUpRequired) => return Err(QuickConnectError::SignUpRequired),
-        Err(SignInError::Other(e)) => return Err(QuickConnectError::Auth(e)),
     }
-
-    Ok(())
 }
 
 // Bot tokens are always `<digits>:<alphanumeric>`, e.g. `123456789:AABBcc...`
@@ -133,12 +135,14 @@ fn is_bot_token(s: &str) -> bool {
 }
 
 fn prompt(msg: &str) -> Result<String, QuickConnectError> {
+    prompt_io(msg).map_err(QuickConnectError::Io)
+}
+
+fn prompt_io(msg: &str) -> io::Result<String> {
     print!("{msg}");
-    io::stdout().flush().map_err(QuickConnectError::Io)?;
+    io::stdout().flush()?;
     let mut buf = String::new();
-    io::stdin()
-        .read_line(&mut buf)
-        .map_err(QuickConnectError::Io)?;
+    io::stdin().read_line(&mut buf)?;
     Ok(buf.trim().to_string())
 }
 
@@ -160,6 +164,18 @@ pub enum QuickConnectError {
 impl From<BuilderError> for QuickConnectError {
     fn from(e: BuilderError) -> Self {
         Self::Builder(e)
+    }
+}
+
+impl From<InvocationError> for QuickConnectError {
+    fn from(e: InvocationError) -> Self {
+        match &e {
+            InvocationError::Rpc(rpc) if rpc.name == "PHONE_CODE_INVALID" => Self::InvalidCode,
+            InvocationError::Rpc(rpc) if rpc.name == "PHONE_NUMBER_UNOCCUPIED" => {
+                Self::SignUpRequired
+            }
+            _ => Self::Auth(e),
+        }
     }
 }
 

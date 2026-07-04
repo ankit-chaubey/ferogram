@@ -33,6 +33,7 @@ use crate::errors::InvocationError;
 use crate::pool::build_msgs_ack_ping_body;
 
 const PING_DELAY: Duration = Duration::from_secs(60);
+const READ_TIMEOUT: Duration = Duration::from_secs(90);
 const READ_BUF_CAP: usize = (1024 * 1024) + (8 * 1024);
 
 #[derive(Debug)]
@@ -206,16 +207,26 @@ impl MtpSender {
         let result = tokio::select! {
             biased;
 
-            result = rh.read(&mut self.read_buf[self.read_tail..]) => {
-                let n = result.map_err(InvocationError::Io)?;
-                if n == 0 {
-                    return Err(InvocationError::Io(std::io::Error::new(
-                        std::io::ErrorKind::ConnectionReset,
-                        "server closed connection",
-                    )));
+            result = tokio::time::timeout(READ_TIMEOUT, rh.read(&mut self.read_buf[self.read_tail..])) => {
+                match result {
+                    Err(_) => {
+                        return Err(InvocationError::Io(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "read timeout: server silent for 90s, connection likely dead",
+                        )));
+                    }
+                    Ok(Err(e)) => return Err(InvocationError::Io(e)),
+                    Ok(Ok(0)) => {
+                        return Err(InvocationError::Io(std::io::Error::new(
+                            std::io::ErrorKind::ConnectionReset,
+                            "server closed connection",
+                        )));
+                    }
+                    Ok(Ok(n)) => {
+                        self.read_tail += n;
+                        Ok::<_, InvocationError>(StepOutcome::Frames)
+                    }
                 }
-                self.read_tail += n;
-                Ok::<_, InvocationError>(StepOutcome::Frames)
             }
 
             result = wh.write(&self.write_buf[self.write_head..]),

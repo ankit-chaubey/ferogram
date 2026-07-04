@@ -114,33 +114,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn login(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
-    use ferogram::SignInError;
-    use std::io::{self, BufRead, Write};
-
-    fn prompt(msg: &str) -> io::Result<String> {
-        print!("{msg}");
-        io::stdout().flush()?;
-        let mut line = String::new();
-        io::stdin().lock().read_line(&mut line)?;
-        Ok(line.trim().to_string())
-    }
-
-    let token = client.request_login_code(PHONE).await?;
-    let code = prompt("Enter the code Telegram sent you: ")?;
-    match client.sign_in(&token, &code).await {
-        Ok(name) => println!("Signed in as {name}"),
-        Err(SignInError::PasswordRequired(pw)) => {
-            let pass = prompt(&format!(
-                "2FA password (hint: {}): ",
-                pw.hint().unwrap_or("none")
-            ))?;
-            client.check_password(*pw, pass.trim()).await?;
-        }
-        Err(SignInError::SignUpRequired) => {
-            eprintln!("Phone not registered on Telegram.");
-            std::process::exit(1);
-        }
-        Err(e) => return Err(e.into()),
-    }
+    let name = client.interactive_sign_in(PHONE).await?;
+    println!("Signed in as {name}");
     Ok(())
 }

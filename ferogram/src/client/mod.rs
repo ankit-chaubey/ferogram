@@ -139,6 +139,15 @@ pub struct Config {
     ///
     /// Default: 2048-slot ring buffer with `DropOldest` overflow.
     pub update_config: crate::update_config::UpdateConfig,
+    /// Seed a `future_auth_token` for fast re-login, bypassing code entry on
+    /// the next `request_login_code` call if Telegram still recognizes it.
+    ///
+    /// Normally this is captured automatically by `sign_out()` and persisted
+    /// in the session file; set this directly for stateless setups (e.g. a
+    /// server that stores the token itself rather than a session file), or
+    /// to import a token obtained elsewhere. Overrides any value already in
+    /// the loaded session.
+    pub future_auth_token: Option<Vec<u8>>,
 }
 
 impl Config {
@@ -283,6 +292,7 @@ impl Default for Config {
             use_pfs: false,
             experimental_features: ExperimentalFeatures::default(),
             update_config: crate::update_config::UpdateConfig::default(),
+            future_auth_token: None,
         }
     }
 }
@@ -451,6 +461,13 @@ pub(crate) struct ClientInner {
     /// A single long-lived task owns the sequential diff loop, and callers
     /// just notify it instead of spawning new tasks.
     diff_notify: std::sync::Arc<tokio::sync::Notify>,
+
+    /// `future_auth_token` captured from a previous `sign_out()` call (or
+    /// restored from the loaded session). Replayed automatically by
+    /// `request_login_code` so a fresh login after logout can skip code
+    /// entry. `None` once consumed by a successful re-auth, or if the
+    /// account has 2FA enabled (Telegram never issues one in that case).
+    pub(crate) future_auth_token: parking_lot::Mutex<Option<Vec<u8>>>,
 }
 
 /// The main Telegram client. Cheap to clone: internally Arc-wrapped.
@@ -739,6 +756,13 @@ impl Client {
             session_snapshot_dirty: std::sync::atomic::AtomicBool::new(false),
             experimental: config.experimental_features.clone(),
             diff_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+            future_auth_token: parking_lot::Mutex::new(config.future_auth_token.clone().or_else(
+                || {
+                    loaded_session
+                        .as_ref()
+                        .and_then(|s| s.future_auth_token.clone())
+                },
+            )),
         });
 
         let client = Self {
@@ -1502,6 +1526,7 @@ impl Client {
             updates_state: pts_snap,
             peers,
             min_peers,
+            future_auth_token: self.inner.future_auth_token.lock().clone(),
         }
     }
 
@@ -1977,6 +2002,23 @@ impl Client {
                         tracing::warn!(
                             "[ferogram::client] reconnect: init_connection failed after TCP established: {e}"
                         );
+                        // If Telegram rejected the auth key at the RPC level (AUTH_KEY_UNREGISTERED
+                        // after TV sleep or extended inactivity), clear the cached key and loop
+                        // back so the next iteration runs fresh DH instead of reusing the dead key.
+                        if matches!(&e, InvocationError::Rpc(r) if r.code == 401) {
+                            tracing::warn!(
+                                "[ferogram::client] reconnect: auth key rejected by server (401); clearing cached key and retrying with fresh DH"
+                            );
+                            let home = *self.inner.home_dc_id.lock().await;
+                            let mut opts = self.inner.dc_options.lock().await;
+                            if let Some(entry) = opts.get_mut(&home) {
+                                entry.auth_key = None;
+                                entry.first_salt = 0;
+                                entry.time_offset = 0;
+                            }
+                            delay_ms = RECONNECT_BASE_MS;
+                            continue;
+                        }
                     }
                     return;
                 }
@@ -3101,12 +3143,12 @@ impl Client {
             .store(true, std::sync::atomic::Ordering::Release);
     }
 
-    /// Sync the internal pts/qts/seq/date state with the Telegram server.
+    /// Cache a `User` object's ID, access hash, and display info.
     ///
-    /// Called automatically on `connect()`. Call it manually if you
-    /// need to reset the update gap-detection counters, e.g. after resuming
-    /// from a long hibernation.
-    async fn cache_user(&self, user: &tl::enums::User) {
+    /// Call this after obtaining a `User` from a raw RPC response the client
+    /// doesn't already track, so later calls (e.g. sending a message) can
+    /// resolve the peer without a redundant `users.getUsers`.
+    pub async fn cache_user(&self, user: &tl::enums::User) {
         self.remember_self_id(user);
         self.inner.peer_cache.write().await.cache_user(user);
         self.mark_session_snapshot_dirty();
