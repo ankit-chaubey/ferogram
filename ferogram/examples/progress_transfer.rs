@@ -91,19 +91,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
                     if let Some(h) = handle {
                         h.cancel();
-                        let _ = client
-                            .answer_callback_query(cb.query_id, Some("Cancelled."), false)
-                            .await;
+                        let _ = cb.answer().text("Cancelled.").send(&client).await;
                         let _ = client
                             .edit_message(peer, msg_id, InputMessage::text("Transfer cancelled."))
                             .await;
                     } else {
-                        let _ = client
-                            .answer_callback_query(
-                                cb.query_id,
-                                Some("Already finished or cancelled."),
-                                false,
-                            )
+                        let _ = cb
+                            .answer()
+                            .text("Already finished or cancelled.")
+                            .send(&client)
                             .await;
                     }
                 }

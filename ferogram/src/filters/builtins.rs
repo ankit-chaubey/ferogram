@@ -13,69 +13,73 @@
 use super::core::{BoxFilter, make};
 use crate::update::IncomingMessage;
 
-/// Passes every message (wildcard / fallback handler).
-pub fn all() -> BoxFilter {
+/// Passes every update of type `T` (wildcard / fallback handler).
+///
+/// Generic so it works with `on_message`/`on_edit` (`T` = [`IncomingMessage`],
+/// the default), `on_callback_query` (`T` = [`crate::update::CallbackQuery`]),
+/// and `on_inline_query`/`on_inline_send`.
+pub fn all<T: 'static>() -> BoxFilter<T> {
     make(|_| true)
 }
 
-/// Never passes (disabled handler placeholder).
-pub fn none() -> BoxFilter {
+/// Never passes (disabled handler placeholder). Generic, same as [`all`].
+pub fn none<T: 'static>() -> BoxFilter<T> {
     make(|_| false)
 }
 
 /// Private (1-on-1) chats only.
 pub fn private() -> BoxFilter {
-    make(|m| m.is_private())
+    make(|m: &IncomingMessage| m.is_private())
 }
 
 /// Basic group chats only.
 pub fn group() -> BoxFilter {
-    make(|m| m.is_group())
+    make(|m: &IncomingMessage| m.is_group())
 }
 
 /// Channels and supergroups only.
 pub fn channel() -> BoxFilter {
-    make(|m| m.is_channel())
+    make(|m: &IncomingMessage| m.is_channel())
 }
 
 /// Any non-empty text message.
 pub fn text() -> BoxFilter {
-    make(|m| m.text().is_some())
+    make(|m: &IncomingMessage| m.text().is_some())
 }
 
 /// Messages with any media attachment.
 pub fn media() -> BoxFilter {
-    make(|m| m.has_media())
+    make(|m: &IncomingMessage| m.has_media())
 }
 
 /// Messages with a photo.
 pub fn photo() -> BoxFilter {
-    make(|m| m.has_photo())
+    make(|m: &IncomingMessage| m.has_photo())
 }
 
 /// Messages with a document (file, video, audio, sticker ...).
 pub fn document() -> BoxFilter {
-    make(|m| m.has_document())
+    make(|m: &IncomingMessage| m.has_document())
 }
 
 /// Forwarded messages.
 pub fn forwarded() -> BoxFilter {
-    make(|m| m.is_forwarded())
+    make(|m: &IncomingMessage| m.is_forwarded())
 }
 
 /// Reply messages.
 pub fn reply() -> BoxFilter {
-    make(|m| m.is_reply())
+    make(|m: &IncomingMessage| m.is_reply())
 }
 
 /// Album / grouped-media messages.
 pub fn album() -> BoxFilter {
-    make(|m| m.album_id().is_some())
+    make(|m: &IncomingMessage| m.album_id().is_some())
 }
 
 /// Any bot command (`/something`).
 pub fn any_command() -> BoxFilter {
-    make(|m| m.is_bot_command())
+    make(|m: &IncomingMessage| m.is_bot_command())
 }
 
 /// A specific bot command (case-insensitive, strips `@BotName` suffix).
@@ -88,29 +92,29 @@ pub fn any_command() -> BoxFilter {
 /// ```
 pub fn command(name: impl Into<String>) -> BoxFilter {
     let name = name.into();
-    make(move |m| m.is_command_named(&name))
+    make(move |m: &IncomingMessage| m.is_command_named(&name))
 }
 
 /// Text contains a substring (case-sensitive).
 pub fn text_contains(needle: impl Into<String>) -> BoxFilter {
     let needle = needle.into();
-    make(move |m| m.text().is_some_and(|t| t.contains(needle.as_str())))
+    make(move |m: &IncomingMessage| m.text().is_some_and(|t| t.contains(needle.as_str())))
 }
 
 /// Text starts with a prefix (case-sensitive).
 pub fn text_starts_with(prefix: impl Into<String>) -> BoxFilter {
     let prefix = prefix.into();
-    make(move |m| m.text().is_some_and(|t| t.starts_with(prefix.as_str())))
+    make(move |m: &IncomingMessage| m.text().is_some_and(|t| t.starts_with(prefix.as_str())))
 }
 
 /// Message is from a specific user ID.
 pub fn from_user(id: i64) -> BoxFilter {
-    make(move |m| m.sender_user_id() == Some(id))
+    make(move |m: &IncomingMessage| m.sender_user_id() == Some(id))
 }
 
 /// Message is in a specific chat.
 pub fn in_chat(id: i64) -> BoxFilter {
-    make(move |m| m.chat_id() == id)
+    make(move |m: &IncomingMessage| m.chat_id() == id)
 }
 
 /// Filter from an arbitrary closure.

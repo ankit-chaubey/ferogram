@@ -14,92 +14,132 @@ use std::sync::Arc;
 
 use crate::update::IncomingMessage;
 
-/// A composable, synchronous predicate over an [`IncomingMessage`].
+/// A composable, synchronous predicate over an update of type `T`.
 ///
-/// Use the built-in constructors ([`crate::filters::command`], [`crate::filters::private`], [`crate::filters::text`], ...) and
-/// combine them with `&`, `|`, `!` operators rather than implementing this
-/// trait directly. For arbitrary logic use [`crate::filters::custom`].
-pub trait Filter: Send + Sync + 'static {
-    fn check(&self, msg: &IncomingMessage) -> bool;
+/// Generic over the update kind so the same combinator machinery
+/// (`&`, `|`, `!`) works for [`IncomingMessage`] (the default, used by
+/// [`crate::filters::command`], [`crate::filters::private`],
+/// [`crate::filters::text`], ...), [`crate::update::CallbackQuery`]
+/// (via [`crate::filters::data`], [`crate::filters::data_prefix`],
+/// [`crate::filters::data_regex`]), and [`crate::update::InlineQuery`]
+/// (via [`crate::filters::inline_query_matches`]).
+///
+/// Use the built-in constructors and combine them with `&`, `|`, `!`
+/// operators rather than implementing this trait directly. For arbitrary
+/// logic use [`crate::filters::custom`].
+pub trait Filter<T = IncomingMessage>: Send + Sync + 'static {
+    fn check(&self, item: &T) -> bool;
 }
 
-impl Filter for Arc<dyn Filter> {
-    fn check(&self, msg: &IncomingMessage) -> bool {
-        (**self).check(msg)
+impl<T: 'static> Filter<T> for Arc<dyn Filter<T>> {
+    fn check(&self, item: &T) -> bool {
+        (**self).check(item)
     }
 }
 
-/// A heap-allocated, cloneable, composable filter.
+/// A heap-allocated, cloneable, composable filter over updates of type `T`.
 ///
-/// Returned by every built-in filter constructor. Supports `&`, `|`, and `!`
-/// operators for building compound expressions.
-#[derive(Clone)]
-pub struct BoxFilter(Arc<dyn Filter>);
+/// Defaults to `T = `[`IncomingMessage`] so every existing `BoxFilter`
+/// usage (message filters, `Router`/`Dispatcher` message handlers) keeps
+/// compiling unchanged. Returned by every built-in filter constructor.
+/// Supports `&`, `|`, and `!` operators for building compound expressions.
+pub struct BoxFilter<T = IncomingMessage>(Arc<dyn Filter<T>>);
 
-impl BoxFilter {
-    pub(super) fn new<F: Filter>(f: F) -> Self {
+impl<T> Clone for BoxFilter<T> {
+    fn clone(&self) -> Self {
+        BoxFilter(Arc::clone(&self.0))
+    }
+}
+
+impl<T> BoxFilter<T> {
+    pub(super) fn new<F: Filter<T>>(f: F) -> Self {
         BoxFilter(Arc::new(f))
     }
 }
 
-impl Filter for BoxFilter {
-    fn check(&self, msg: &IncomingMessage) -> bool {
-        self.0.check(msg)
+impl<T> Filter<T> for BoxFilter<T>
+where
+    T: 'static,
+{
+    fn check(&self, item: &T) -> bool {
+        self.0.check(item)
     }
 }
 
-impl std::ops::BitAnd for BoxFilter {
-    type Output = BoxFilter;
-    fn bitand(self, rhs: BoxFilter) -> BoxFilter {
+impl<T> std::ops::BitAnd for BoxFilter<T>
+where
+    T: 'static,
+{
+    type Output = BoxFilter<T>;
+    fn bitand(self, rhs: BoxFilter<T>) -> BoxFilter<T> {
         BoxFilter::new(AndFilter(self, rhs))
     }
 }
 
-impl std::ops::BitOr for BoxFilter {
-    type Output = BoxFilter;
-    fn bitor(self, rhs: BoxFilter) -> BoxFilter {
+impl<T> std::ops::BitOr for BoxFilter<T>
+where
+    T: 'static,
+{
+    type Output = BoxFilter<T>;
+    fn bitor(self, rhs: BoxFilter<T>) -> BoxFilter<T> {
         BoxFilter::new(OrFilter(self, rhs))
     }
 }
 
-impl std::ops::Not for BoxFilter {
-    type Output = BoxFilter;
-    fn not(self) -> BoxFilter {
+impl<T> std::ops::Not for BoxFilter<T>
+where
+    T: 'static,
+{
+    type Output = BoxFilter<T>;
+    fn not(self) -> BoxFilter<T> {
         BoxFilter::new(NotFilter(self))
     }
 }
 
-struct AndFilter(BoxFilter, BoxFilter);
-impl Filter for AndFilter {
-    fn check(&self, m: &IncomingMessage) -> bool {
+struct AndFilter<T>(BoxFilter<T>, BoxFilter<T>);
+impl<T> Filter<T> for AndFilter<T>
+where
+    T: 'static,
+{
+    fn check(&self, m: &T) -> bool {
         self.0.check(m) && self.1.check(m)
     }
 }
 
-struct OrFilter(BoxFilter, BoxFilter);
-impl Filter for OrFilter {
-    fn check(&self, m: &IncomingMessage) -> bool {
+struct OrFilter<T>(BoxFilter<T>, BoxFilter<T>);
+impl<T> Filter<T> for OrFilter<T>
+where
+    T: 'static,
+{
+    fn check(&self, m: &T) -> bool {
         self.0.check(m) || self.1.check(m)
     }
 }
 
-struct NotFilter(BoxFilter);
-impl Filter for NotFilter {
-    fn check(&self, m: &IncomingMessage) -> bool {
+struct NotFilter<T>(BoxFilter<T>);
+impl<T> Filter<T> for NotFilter<T>
+where
+    T: 'static,
+{
+    fn check(&self, m: &T) -> bool {
         !self.0.check(m)
     }
 }
 
-struct FnFilter(Arc<dyn Fn(&IncomingMessage) -> bool + Send + Sync + 'static>);
-impl Filter for FnFilter {
-    fn check(&self, m: &IncomingMessage) -> bool {
+struct FnFilter<T>(Arc<dyn Fn(&T) -> bool + Send + Sync + 'static>);
+impl<T> Filter<T> for FnFilter<T>
+where
+    T: 'static,
+{
+    fn check(&self, m: &T) -> bool {
         (self.0)(m)
     }
 }
 
-pub(super) fn make<F>(f: F) -> BoxFilter
+pub(super) fn make<T, F>(f: F) -> BoxFilter<T>
 where
-    F: Fn(&IncomingMessage) -> bool + Send + Sync + 'static,
+    T: 'static,
+    F: Fn(&T) -> bool + Send + Sync + 'static,
 {
     BoxFilter::new(FnFilter(Arc::new(f)))
 }

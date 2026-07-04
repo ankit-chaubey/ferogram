@@ -23,8 +23,9 @@
 //!
 //! Once running, open any chat, type "@your_bot hello" and tap a result.
 
+use ferogram::Client;
+use ferogram::filters::{Dispatcher, all};
 use ferogram::tl;
-use ferogram::{Client, update::Update};
 
 const API_ID: i32 = 0; // from https://my.telegram.org
 const API_HASH: &str = ""; // from https://my.telegram.org
@@ -54,20 +55,30 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         me.username.as_deref().unwrap_or("your_bot"),
     );
 
+    let mut dp = Dispatcher::new();
+
+    {
+        let client = client.clone();
+        dp.on_inline_query(all(), move |iq| {
+            let client = client.clone();
+            async move {
+                let q = iq.query().trim().to_string();
+                let qid = iq.query_id;
+                println!("Inline query [qid={qid}]: {q:?}");
+
+                let results = build_results(&q);
+
+                // answer_inline_query(query_id, results, cache_time_secs, is_personal, next_offset)
+                let _ = client
+                    .answer_inline_query(qid, results, 0, false, None)
+                    .await;
+            }
+        });
+    }
+
     let mut stream = client.stream_updates();
     while let Some(upd) = stream.next().await {
-        if let Update::InlineQuery(iq) = upd {
-            let q = iq.query().trim().to_string();
-            let qid = iq.query_id;
-            println!("Inline query [qid={qid}]: {q:?}");
-
-            let results = build_results(&q);
-
-            // answer_inline_query(query_id, results, cache_time_secs, is_personal, next_offset)
-            let _ = client
-                .answer_inline_query(qid, results, 0, false, None)
-                .await;
-        }
+        dp.dispatch(upd).await;
     }
 
     Ok(())
