@@ -121,8 +121,6 @@ impl Client {
         phone: &str,
         mut opts: SendCodeOptions,
     ) -> Result<SendCodeOutcome, InvocationError> {
-        use tl::enums::auth::{SentCode, SentCodeType};
-
         // Auto-replay a future_auth_token captured by a previous sign_out()
         // on this session, unless the caller already supplied their own.
         if opts.logout_tokens.is_none()
@@ -137,8 +135,46 @@ impl Client {
         tracing::info!("[ferogram::auth] not signed in; requesting login code from Telegram");
         let req = self.make_send_code_req(phone, opts);
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
+        self.handle_sent_code(phone, &body).await
+    }
 
-        let mut cur = Cursor::from_slice(&body);
+    /// Ask Telegram to resend the login code via a different delivery method.
+    ///
+    /// `token` is the [`LoginToken`] from the original [`Client::request_login_code`]
+    /// call. `reason` is an optional client-side diagnostic string Telegram
+    /// may log (e.g. `"user did not receive code"`); pass `None` for the
+    /// default.
+    ///
+    /// Like [`Client::request_login_code`], this can return
+    /// [`SendCodeOutcome::AlreadyAuthorized`] instead of a new code if
+    /// Telegram authorizes the session outright.
+    pub async fn resend_code(
+        &self,
+        token: &LoginToken,
+        reason: Option<&str>,
+    ) -> Result<SendCodeOutcome, InvocationError> {
+        tracing::info!("[ferogram::auth] requesting a resend of the login code");
+        let req = tl::functions::auth::ResendCode {
+            phone_number: token.phone.clone(),
+            phone_code_hash: token.phone_code_hash.clone(),
+            reason: reason.map(str::to_string),
+        };
+        let body: Vec<u8> = self.rpc_call_raw(&req).await?;
+        self.handle_sent_code(&token.phone, &body).await
+    }
+
+    /// Decode an `auth.SentCode` response body and turn it into a
+    /// [`SendCodeOutcome`]. Shared by [`Client::request_login_code_with_options`]
+    /// and [`Client::resend_code`], both of which get this same response type
+    /// back from Telegram.
+    async fn handle_sent_code(
+        &self,
+        phone: &str,
+        body: &[u8],
+    ) -> Result<SendCodeOutcome, InvocationError> {
+        use tl::enums::auth::{SentCode, SentCodeType};
+
+        let mut cur = Cursor::from_slice(body);
         match tl::enums::auth::SentCode::deserialize(&mut cur)? {
             SentCode::SentCode(s) => {
                 let sent_via = match &s.r#type {
@@ -489,13 +525,13 @@ impl Client {
             settings: tl::enums::CodeSettings::CodeSettings(tl::types::CodeSettings {
                 allow_flashcall: opts.allow_flashcall,
                 current_number: opts.current_number,
-                allow_app_hash: false,
+                allow_app_hash: opts.allow_app_hash,
                 allow_missed_call: opts.allow_missed_call,
                 allow_firebase: opts.allow_firebase,
-                unknown_number: false,
+                unknown_number: opts.unknown_number,
                 logout_tokens: opts.logout_tokens,
-                token: None,
-                app_sandbox: None,
+                token: opts.token,
+                app_sandbox: opts.app_sandbox,
             }),
         }
     }

@@ -133,16 +133,27 @@ pub struct SendCodeOptions {
     pub allow_flashcall: bool,
     /// Hint that this is the current number registered on the device.
     pub current_number: bool,
+    /// Allow the app-signature hash to be sent (lets the OS auto-fill the
+    /// code on some platforms without reading SMS content).
+    pub allow_app_hash: bool,
     /// Allow delivery via missed call (last N digits of the caller ID).
     pub allow_missed_call: bool,
     /// Allow Firebase-backed SMS delivery.
     pub allow_firebase: bool,
+    /// Hint that the phone number is not yet known to belong to this device.
+    pub unknown_number: bool,
     /// Future auth tokens obtained from a previous `auth.loggedOut` response.
     ///
     /// Supply these to allow Telegram to short-circuit the login flow and
     /// return [`SendCodeOutcome::AlreadyAuthorized`] when the account is
     /// recognized.
     pub logout_tokens: Option<Vec<Vec<u8>>>,
+    /// Firebase attestation/integrity token, required on some platforms when
+    /// [`SendCodeOptions::allow_firebase`] is set.
+    pub token: Option<String>,
+    /// Whether `token` was issued by a Firebase sandbox (testing) environment
+    /// rather than production.
+    pub app_sandbox: Option<bool>,
 }
 
 // SendCodeOutcome

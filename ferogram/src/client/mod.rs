@@ -3143,12 +3143,12 @@ impl Client {
             .store(true, std::sync::atomic::Ordering::Release);
     }
 
-    /// Sync the internal pts/qts/seq/date state with the Telegram server.
+    /// Cache a `User` object's ID, access hash, and display info.
     ///
-    /// Called automatically on `connect()`. Call it manually if you
-    /// need to reset the update gap-detection counters, e.g. after resuming
-    /// from a long hibernation.
-    async fn cache_user(&self, user: &tl::enums::User) {
+    /// Call this after obtaining a `User` from a raw RPC response the client
+    /// doesn't already track, so later calls (e.g. sending a message) can
+    /// resolve the peer without a redundant `users.getUsers`.
+    pub async fn cache_user(&self, user: &tl::enums::User) {
         self.remember_self_id(user);
         self.inner.peer_cache.write().await.cache_user(user);
         self.mark_session_snapshot_dirty();
