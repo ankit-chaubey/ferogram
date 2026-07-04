@@ -46,6 +46,7 @@ pub struct ClientBuilder {
     experimental_features: ExperimentalFeatures,
     use_pfs: bool,
     update_config: crate::update_config::UpdateConfig,
+    future_auth_token: Option<Vec<u8>>,
 }
 
 impl Default for ClientBuilder {
@@ -73,6 +74,7 @@ impl Default for ClientBuilder {
             experimental_features: ExperimentalFeatures::default(),
             use_pfs: false,
             update_config: crate::update_config::UpdateConfig::default(),
+            future_auth_token: None,
         }
     }
 }
@@ -147,6 +149,19 @@ impl ClientBuilder {
     /// ```
     pub fn session_backend(mut self, backend: Arc<dyn SessionBackend>) -> Self {
         self.session_backend = backend;
+        self
+    }
+
+    /// Seed a `future_auth_token` for fast re-login, bypassing code entry on
+    /// the next `request_login_code` call if Telegram still recognizes it.
+    ///
+    /// Normally captured automatically by `sign_out()` and persisted in the
+    /// session file, only set this directly for stateless setups (e.g. a
+    /// server storing the token itself instead of a session file), or to
+    /// import a token obtained elsewhere. Overrides any token already in the
+    /// loaded session.
+    pub fn future_auth_token(mut self, token: Vec<u8>) -> Self {
+        self.future_auth_token = Some(token);
         self
     }
 
@@ -536,6 +551,7 @@ impl ClientBuilder {
             experimental_features: self.experimental_features,
             use_pfs: self.use_pfs,
             update_config: self.update_config,
+            future_auth_token: self.future_auth_token,
         })
     }
 

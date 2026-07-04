@@ -139,6 +139,15 @@ pub struct Config {
     ///
     /// Default: 2048-slot ring buffer with `DropOldest` overflow.
     pub update_config: crate::update_config::UpdateConfig,
+    /// Seed a `future_auth_token` for fast re-login, bypassing code entry on
+    /// the next `request_login_code` call if Telegram still recognizes it.
+    ///
+    /// Normally this is captured automatically by `sign_out()` and persisted
+    /// in the session file; set this directly for stateless setups (e.g. a
+    /// server that stores the token itself rather than a session file), or
+    /// to import a token obtained elsewhere. Overrides any value already in
+    /// the loaded session.
+    pub future_auth_token: Option<Vec<u8>>,
 }
 
 impl Config {
@@ -283,6 +292,7 @@ impl Default for Config {
             use_pfs: false,
             experimental_features: ExperimentalFeatures::default(),
             update_config: crate::update_config::UpdateConfig::default(),
+            future_auth_token: None,
         }
     }
 }
@@ -451,6 +461,13 @@ pub(crate) struct ClientInner {
     /// A single long-lived task owns the sequential diff loop, and callers
     /// just notify it instead of spawning new tasks.
     diff_notify: std::sync::Arc<tokio::sync::Notify>,
+
+    /// `future_auth_token` captured from a previous `sign_out()` call (or
+    /// restored from the loaded session). Replayed automatically by
+    /// `request_login_code` so a fresh login after logout can skip code
+    /// entry. `None` once consumed by a successful re-auth, or if the
+    /// account has 2FA enabled (Telegram never issues one in that case).
+    pub(crate) future_auth_token: parking_lot::Mutex<Option<Vec<u8>>>,
 }
 
 /// The main Telegram client. Cheap to clone: internally Arc-wrapped.
@@ -739,6 +756,13 @@ impl Client {
             session_snapshot_dirty: std::sync::atomic::AtomicBool::new(false),
             experimental: config.experimental_features.clone(),
             diff_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+            future_auth_token: parking_lot::Mutex::new(config.future_auth_token.clone().or_else(
+                || {
+                    loaded_session
+                        .as_ref()
+                        .and_then(|s| s.future_auth_token.clone())
+                },
+            )),
         });
 
         let client = Self {
@@ -1502,6 +1526,7 @@ impl Client {
             updates_state: pts_snap,
             peers,
             min_peers,
+            future_auth_token: self.inner.future_auth_token.lock().clone(),
         }
     }
 

@@ -583,7 +583,7 @@ impl PeerCache {
 
     /// A point-in-time snapshot of entry counts in this cache.
     ///
-    /// Cheap to call — no allocation beyond the returned struct itself.
+    /// Cheap to call, no allocation beyond the returned struct itself.
     pub fn stats(&self) -> PeerCacheStats {
         PeerCacheStats {
             users: self.users.len(),

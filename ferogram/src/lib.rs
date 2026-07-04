@@ -244,7 +244,7 @@ pub use client::{Config, ShutdownToken, UpdateStream};
 pub use dialog::{Dialog, DialogIter, MessageIter};
 pub use errors::{
     ErrorKind, InvocationError, InvocationErrorExt, LoginToken, PasswordToken, RpcError,
-    SignInError,
+    SendCodeOptions, SendCodeOutcome, SignInError,
 };
 pub use ferogram_connect::TransportKind;
 pub use ferogram_connect::random_i64 as random_i64_pub;

@@ -53,8 +53,9 @@
 //! - `0x01`: legacy (DC table only, no update state or peer cache).
 //! - `0x02`: current (DC table + update state + peer cache).
 //! - `0x06`: adds per-channel `ChannelKind` byte to each peer entry.
+//! - `0x07`: adds `future_auth_token` for fast re-login after `sign_out()`.
 //!
-//! `load()` handles all versions. `save()` always writes v6.
+//! `load()` handles all versions. `save()` always writes v7.
 //!
 //! # Example: export and re-import a session
 //!
@@ -335,14 +336,21 @@ pub struct PersistedSession {
     /// Min-user message contexts: users seen with `min=true` that can only be
     /// addressed via `InputPeerUserFromMessage`.
     pub min_peers: Vec<CachedMinPeer>,
+    /// Future auth token returned by `auth.logOut`, if any.
+    ///
+    /// Passed back into `auth.sendCode`'s `logout_tokens` on the next login
+    /// to skip code entry for this device. `None` until a `sign_out()` call
+    /// receives one, or if the account has 2FA enabled (Telegram omits the
+    /// token in that case).
+    pub future_auth_token: Option<Vec<u8>>,
 }
 
 impl PersistedSession {
-    /// Encode the session to raw bytes (v2 binary format).
+    /// Encode the session to raw bytes (v7 binary format).
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(512);
 
-        b.push(0x06u8); // version
+        b.push(0x07u8); // version
 
         b.extend_from_slice(&self.home_dc_id.to_le_bytes());
 
@@ -399,6 +407,16 @@ impl PersistedSession {
             b.extend_from_slice(&m.user_id.to_le_bytes());
             b.extend_from_slice(&m.peer_id.to_le_bytes());
             b.extend_from_slice(&m.msg_id.to_le_bytes());
+        }
+
+        // v7: future_auth_token from auth.logOut, for fast re-login.
+        match &self.future_auth_token {
+            Some(t) => {
+                b.push(1);
+                b.extend_from_slice(&(t.len() as u16).to_le_bytes());
+                b.extend_from_slice(t);
+            }
+            None => b.push(0),
         }
 
         b
@@ -462,7 +480,9 @@ impl PersistedSession {
 
         let first_byte = r_u8!();
 
-        let (home_dc_id, version) = if first_byte == 0x06 {
+        let (home_dc_id, version) = if first_byte == 0x07 {
+            (r_i32!(), 7u8)
+        } else if first_byte == 0x06 {
             (r_i32!(), 6u8)
         } else if first_byte == 0x05 {
             (r_i32!(), 5u8)
@@ -518,6 +538,7 @@ impl PersistedSession {
                 updates_state: UpdatesStateSnap::default(),
                 peers: Vec::new(),
                 min_peers: Vec::new(),
+                future_auth_token: None,
             });
         }
 
@@ -581,6 +602,23 @@ impl PersistedSession {
             Vec::new()
         };
 
+        // v7+: future_auth_token from auth.logOut.
+        let future_auth_token = if version >= 7 {
+            let has_token = r_u8!();
+            if has_token == 1 {
+                let tl = r_u16!() as usize;
+                Some(r!(tl).to_vec())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        // Silences a false-positive `unused_assignments` lint: the `r!`
+        // macro's final `p += $n` write is never read again after this
+        // point, since future_auth_token is now the last field parsed.
+        let _ = p;
+
         Ok(Self {
             home_dc_id,
             dcs,
@@ -593,6 +631,7 @@ impl PersistedSession {
             },
             peers,
             min_peers,
+            future_auth_token,
         })
     }
 
@@ -1396,7 +1435,7 @@ mod tests {
         });
 
         let bytes = s.to_bytes();
-        assert_eq!(bytes[0], 0x06, "version byte must be 6");
+        assert_eq!(bytes[0], 0x07, "version byte must be 7");
 
         let loaded = PersistedSession::from_bytes(&bytes).unwrap();
         assert_eq!(loaded.peers.len(), 4);
@@ -1416,6 +1455,46 @@ mod tests {
         let p = &loaded.peers[3];
         assert_eq!(p.id, 1004);
         assert_eq!(p.channel_kind, None);
+    }
+
+    #[test]
+    fn v7_future_auth_token_roundtrip() {
+        let mut s = PersistedSession::default();
+        s.home_dc_id = 2;
+        s.future_auth_token = Some(vec![1, 2, 3, 4, 5]);
+
+        let bytes = s.to_bytes();
+        assert_eq!(bytes[0], 0x07, "version byte must be 7");
+
+        let loaded = PersistedSession::from_bytes(&bytes).unwrap();
+        assert_eq!(loaded.future_auth_token, Some(vec![1, 2, 3, 4, 5]));
+    }
+
+    #[test]
+    fn v7_future_auth_token_absent() {
+        let s = PersistedSession {
+            home_dc_id: 2,
+            ..Default::default()
+        };
+
+        let bytes = s.to_bytes();
+        let loaded = PersistedSession::from_bytes(&bytes).unwrap();
+        assert_eq!(loaded.future_auth_token, None);
+    }
+
+    #[test]
+    fn v6_file_without_token_loads_as_none() {
+        // Simulate an old v6 file (no future_auth_token bytes at all) by
+        // building one by hand and confirming it still loads cleanly.
+        let mut s = PersistedSession::default();
+        s.home_dc_id = 3;
+        let mut bytes = s.to_bytes();
+        bytes[0] = 0x06; // downgrade the version byte
+        bytes.truncate(bytes.len() - 1); // drop the v7 presence byte we appended
+
+        let loaded = PersistedSession::from_bytes(&bytes).unwrap();
+        assert_eq!(loaded.home_dc_id, 3);
+        assert_eq!(loaded.future_auth_token, None);
     }
 
     #[test]
@@ -1602,6 +1681,15 @@ impl SqliteBackend {
             })
             .unwrap_or(0);
 
+        // future_auth_token
+        let future_auth_token: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'future_auth_token'",
+                [],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .ok();
+
         // dcs
         let mut stmt = conn
             .prepare("SELECT dc_id, flags, addr, auth_key, first_salt, time_offset FROM dcs")
@@ -1712,6 +1800,7 @@ impl SqliteBackend {
             },
             peers,
             min_peers,
+            future_auth_token,
         })
     }
 
@@ -1725,6 +1814,16 @@ impl SqliteBackend {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             rusqlite::params![s.home_dc_id],
         )
+        .map_err(Self::map_err)?;
+
+        match &s.future_auth_token {
+            Some(token) => conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('future_auth_token', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![token],
+            ),
+            None => conn.execute("DELETE FROM meta WHERE key = 'future_auth_token'", []),
+        }
         .map_err(Self::map_err)?;
 
         // Replace all DCs
@@ -1949,6 +2048,40 @@ impl SessionBackend for SqliteBackend {
     }
 }
 
+#[cfg(all(test, feature = "sqlite-session"))]
+mod sqlite_backend_tests {
+    use super::*;
+
+    #[test]
+    fn future_auth_token_roundtrip() {
+        let b = SqliteBackend::in_memory().unwrap();
+        let mut s = PersistedSession::default();
+        s.home_dc_id = 2;
+        s.future_auth_token = Some(vec![1, 2, 3, 4, 5]);
+        b.save(&s).unwrap();
+
+        let loaded = b.load().unwrap().unwrap();
+        assert_eq!(loaded.future_auth_token, Some(vec![1, 2, 3, 4, 5]));
+    }
+
+    #[test]
+    fn future_auth_token_cleared_on_none() {
+        let b = SqliteBackend::in_memory().unwrap();
+        let mut s = PersistedSession::default();
+        s.home_dc_id = 2;
+        s.future_auth_token = Some(vec![9, 9, 9]);
+        b.save(&s).unwrap();
+        assert_eq!(
+            b.load().unwrap().unwrap().future_auth_token,
+            Some(vec![9, 9, 9])
+        );
+
+        s.future_auth_token = None;
+        b.save(&s).unwrap();
+        assert_eq!(b.load().unwrap().unwrap().future_auth_token, None);
+    }
+}
+
 // LibSqlBackend
 
 /// libSQL-backed session (Turso / embedded replica / in-process).
@@ -2103,6 +2236,15 @@ impl LibSqlBackend {
             .transpose()?
             .unwrap_or(0);
 
+        // future_auth_token
+        let future_auth_token: Option<Vec<u8>> = conn
+            .query("SELECT value FROM meta WHERE key = 'future_auth_token'", ())
+            .await?
+            .next()
+            .await?
+            .map(|r| r.get::<Vec<u8>>(0))
+            .transpose()?;
+
         // dcs
         let mut rows = conn
             .query(
@@ -2211,6 +2353,7 @@ impl LibSqlBackend {
             },
             peers,
             min_peers,
+            future_auth_token,
         })
     }
 
@@ -2226,6 +2369,21 @@ impl LibSqlBackend {
             libsql::params![s.home_dc_id],
         )
         .await?;
+
+        match &s.future_auth_token {
+            Some(token) => {
+                conn.execute(
+                    "INSERT INTO meta (key, value) VALUES ('future_auth_token', ?1)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    libsql::params![token.clone()],
+                )
+                .await?
+            }
+            None => {
+                conn.execute("DELETE FROM meta WHERE key = 'future_auth_token'", ())
+                    .await?
+            }
+        };
 
         conn.execute("DELETE FROM dcs", ()).await?;
         for d in &s.dcs {
@@ -2448,5 +2606,48 @@ impl SessionBackend for LibSqlBackend {
             .await
             .map(|_| ())
         })
+    }
+}
+
+#[cfg(all(test, feature = "libsql-session"))]
+mod libsql_backend_tests {
+    use super::*;
+
+    async fn open_in_memory() -> libsql::Connection {
+        let db = libsql::Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap();
+        let conn = db.connect().unwrap();
+        LibSqlBackend::apply_schema(&conn).await.unwrap();
+        conn
+    }
+
+    #[tokio::test]
+    async fn future_auth_token_roundtrip() {
+        let conn = open_in_memory().await;
+        let mut s = PersistedSession::default();
+        s.home_dc_id = 2;
+        s.future_auth_token = Some(vec![1, 2, 3, 4, 5]);
+        LibSqlBackend::write_session_async(&conn, &s).await.unwrap();
+
+        let loaded = LibSqlBackend::read_session_async(&conn).await.unwrap();
+        assert_eq!(loaded.future_auth_token, Some(vec![1, 2, 3, 4, 5]));
+    }
+
+    #[tokio::test]
+    async fn future_auth_token_cleared_on_none() {
+        let conn = open_in_memory().await;
+        let mut s = PersistedSession::default();
+        s.home_dc_id = 2;
+        s.future_auth_token = Some(vec![9, 9, 9]);
+        LibSqlBackend::write_session_async(&conn, &s).await.unwrap();
+        let loaded = LibSqlBackend::read_session_async(&conn).await.unwrap();
+        assert_eq!(loaded.future_auth_token, Some(vec![9, 9, 9]));
+
+        s.future_auth_token = None;
+        LibSqlBackend::write_session_async(&conn, &s).await.unwrap();
+        let loaded = LibSqlBackend::read_session_async(&conn).await.unwrap();
+        assert_eq!(loaded.future_auth_token, None);
     }
 }
