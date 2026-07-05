@@ -46,9 +46,53 @@ fn tl_serialize_bytes(v: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Serialize plain `p_q_inner_data` (constructor 0x83c95aec), no dc field.
+/// This is what a normal direct connection should send.
+fn serialize_pq_inner_data(
+    pq: &[u8],
+    p: &[u8],
+    q: &[u8],
+    nonce: &[u8; 16],
+    server_nonce: &[u8; 16],
+    new_nonce: &[u8; 32],
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&0x83c95aec_u32.to_le_bytes());
+    out.extend(tl_serialize_bytes(pq));
+    out.extend(tl_serialize_bytes(p));
+    out.extend(tl_serialize_bytes(q));
+    out.extend_from_slice(nonce);
+    out.extend_from_slice(server_nonce);
+    out.extend_from_slice(new_nonce);
+    out
+}
+
+/// Plain p_q_inner_data_temp#3c6a84d4, no dc field.
+fn serialize_pq_inner_data_temp(
+    pq: &[u8],
+    p: &[u8],
+    q: &[u8],
+    nonce: &[u8; 16],
+    server_nonce: &[u8; 16],
+    new_nonce: &[u8; 32],
+    expires_in: i32,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&0x3c6a84d4_u32.to_le_bytes());
+    out.extend(tl_serialize_bytes(pq));
+    out.extend(tl_serialize_bytes(p));
+    out.extend(tl_serialize_bytes(q));
+    out.extend_from_slice(nonce);
+    out.extend_from_slice(server_nonce);
+    out.extend_from_slice(new_nonce);
+    out.extend_from_slice(&expires_in.to_le_bytes());
+    out
+}
+
 /// Serialize a `p_q_inner_data_dc` (constructor 0xa9f55f95) from raw fields.
-/// Needed because the generated TL bindings only expose `PQInnerData`
-/// (legacy, no DC id) which Telegram rejects for non-DC2 connections.
+/// Only for flows that need the server to check the dc id (CDN sub-DC).
+/// Sending this on a normal connect gets rejected with RPC 444 on anything
+/// but DC2, so it's not the default anymore, see `serialize_pq_inner_data`.
 fn serialize_pq_inner_data_dc(
     pq: &[u8],
     p: &[u8],
@@ -283,9 +327,8 @@ fn do_step1(random: &[u8; 16]) -> Result<(ferogram_tl_types::functions::ReqPqMul
 
 /// Process `ResPQ` and generate `req_DH_params`.
 ///
-/// `dc_id` must be the numerical DC id of the server we are connecting to
-/// (e.g. 1 ... 5).  It is embedded in the `PQInnerDataDc` payload so that
-/// Telegram can reject misrouted handshakes on non-DC2 endpoints.
+/// `dc_id` is only used if the dc-tagged constructor is requested via
+/// `step2_dc_tagged`. This function uses the plain `p_q_inner_data`.
 pub fn step2(
     data: Step1,
     response: ferogram_tl_types::enums::ResPq,
@@ -293,11 +336,11 @@ pub fn step2(
 ) -> Result<(ferogram_tl_types::functions::ReqDhParams, Step2), Error> {
     let mut rnd = [0u8; 256];
     fill_random(&mut rnd);
-    do_step2_inner(data, response, &rnd, dc_id, None)
+    do_step2_inner(data, response, &rnd, dc_id, None, false)
 }
 
-/// Like `step2` but requests a temporary auth key (PFS).
-/// Uses p_q_inner_data_temp_dc instead of p_q_inner_data_dc.
+/// Like `step2` but requests a temporary auth key (PFS), plain
+/// p_q_inner_data_temp, no dc field.
 /// Caller must bind the resulting key via auth.bindTempAuthKey before any RPCs.
 pub fn step2_temp(
     data: Step1,
@@ -307,7 +350,20 @@ pub fn step2_temp(
 ) -> Result<(ferogram_tl_types::functions::ReqDhParams, Step2), Error> {
     let mut rnd = [0u8; 256];
     fill_random(&mut rnd);
-    do_step2_inner(data, response, &rnd, dc_id, Some(expires_in))
+    do_step2_inner(data, response, &rnd, dc_id, Some(expires_in), false)
+}
+
+/// Same as `step2`/`step2_temp` but forces the dc-tagged constructor.
+/// Only for flows that need the server to validate the dc id (CDN).
+pub fn step2_dc_tagged(
+    data: Step1,
+    response: ferogram_tl_types::enums::ResPq,
+    dc_id: i32,
+    expires_in: Option<i32>,
+) -> Result<(ferogram_tl_types::functions::ReqDhParams, Step2), Error> {
+    let mut rnd = [0u8; 256];
+    fill_random(&mut rnd);
+    do_step2_inner(data, response, &rnd, dc_id, expires_in, true)
 }
 
 fn do_step2_inner(
@@ -316,6 +372,7 @@ fn do_step2_inner(
     random: &[u8; 256],
     dc_id: i32,
     expires_in: Option<i32>,
+    tag_dc: bool,
 ) -> Result<(ferogram_tl_types::functions::ReqDhParams, Step2), Error> {
     let Step1 { nonce } = data;
 
@@ -348,13 +405,9 @@ fn do_step2_inner(
     let p_bytes = trim_be(p);
     let q_bytes = trim_be(q);
 
-    // Serialize PQInnerDataDc (constructor 0xa9f55f95) manually, or the
-    // temp-key variant p_q_inner_data_temp_dc (0x56fddf88) when `expires_in`
-    // is set (PFS). The legacy PQInnerData constructor (#83c95aec, no dc
-    // field) is rejected by Telegram servers for connections to non-DC2
-    // endpoints.
-    let pq_inner = match expires_in {
-        Some(expires_in) => serialize_pq_inner_data_temp_dc(
+    // Plain by default, tagged only when the caller asks for it (CDN).
+    let pq_inner = match (tag_dc, expires_in) {
+        (true, Some(expires_in)) => serialize_pq_inner_data_temp_dc(
             &pq.to_be_bytes(),
             &p_bytes,
             &q_bytes,
@@ -364,7 +417,7 @@ fn do_step2_inner(
             dc_id,
             expires_in,
         ),
-        None => serialize_pq_inner_data_dc(
+        (true, None) => serialize_pq_inner_data_dc(
             &pq.to_be_bytes(),
             &p_bytes,
             &q_bytes,
@@ -372,6 +425,23 @@ fn do_step2_inner(
             &res_pq.server_nonce,
             &new_nonce,
             dc_id,
+        ),
+        (false, Some(expires_in)) => serialize_pq_inner_data_temp(
+            &pq.to_be_bytes(),
+            &p_bytes,
+            &q_bytes,
+            &nonce,
+            &res_pq.server_nonce,
+            &new_nonce,
+            expires_in,
+        ),
+        (false, None) => serialize_pq_inner_data(
+            &pq.to_be_bytes(),
+            &p_bytes,
+            &q_bytes,
+            &nonce,
+            &res_pq.server_nonce,
+            &new_nonce,
         ),
     };
 
