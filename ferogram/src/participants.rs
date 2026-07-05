@@ -538,9 +538,12 @@ impl Client {
         Ok(())
     }
 
-    /// Iterate profile photos of a user or channel.
+    /// Fetch a page of profile photos for a user (or yourself).
     ///
-    /// Returns a list of photo objects (up to `limit`).
+    /// Returns a list of photo objects (up to `limit`), starting from the
+    /// most recent. Only works for users/self - Telegram has no equivalent
+    /// paged photo-history API for chats/channels. For channel or group
+    /// avatar history, use [`Client::get_chat_photos`] instead.
     pub async fn get_profile_photos(
         &self,
         peer: impl Into<PeerRef>,
@@ -626,6 +629,69 @@ impl Client {
             buffer: VecDeque::new(),
             done: false,
         })
+    }
+
+    /// Fetch a chat's or channel's photo (avatar) history.
+    ///
+    /// Unlike [`get_profile_photos`](Self::get_profile_photos), which only
+    /// works for users, this works for groups and channels too. The
+    /// *current* photo comes from the chat/channel's full info (independent
+    /// of message history, so it's always available even if every message
+    /// has been deleted); older photos are recovered from
+    /// `messageActionChatEditPhoto` service messages via search, which is
+    /// the only place Telegram keeps that history, so those are lost if the
+    /// underlying messages are deleted.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # async fn example(client: Client, peer: ferogram::tl::enums::Peer) -> Result<(), Box<dyn std::error::Error>> {
+    /// let photos = client.get_chat_photos(peer, 100).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn get_chat_photos(
+        &self,
+        peer: impl Into<PeerRef>,
+        limit: i32,
+    ) -> Result<Vec<tl::enums::Photo>, InvocationError> {
+        let peer: PeerRef = peer.into();
+        let mut photos = Vec::new();
+        let mut seen_id: Option<i64> = None;
+
+        // Current photo, straight from the full chat/channel object. This
+        // doesn't depend on message history at all, so it survives even if
+        // every message in the chat has been deleted.
+        if let Ok(tl::enums::messages::ChatFull::ChatFull(f)) =
+            self.get_chat_full(peer.clone()).await
+        {
+            let current = match f.full_chat {
+                tl::enums::ChatFull::ChatFull(c) => c.chat_photo,
+                tl::enums::ChatFull::ChannelFull(c) => Some(c.chat_photo),
+            };
+            if let Some(tl::enums::Photo::Photo(p)) = current {
+                seen_id = Some(p.id);
+                photos.push(tl::enums::Photo::Photo(p));
+            }
+        }
+
+        // Older photos: only recoverable from surviving edit-photo service
+        // messages, so skip anything already covered by the current photo.
+        let messages = self
+            .search(peer, "")
+            .filter(tl::enums::MessagesFilter::InputMessagesFilterChatPhotos)
+            .limit(limit)
+            .fetch(self)
+            .await?;
+
+        photos.extend(messages.into_iter().filter_map(|m| match m.action()? {
+            tl::enums::MessageAction::ChatEditPhoto(a) => match &a.photo {
+                tl::enums::Photo::Photo(p) if Some(p.id) == seen_id => None,
+                _ => Some(a.photo.clone()),
+            },
+            _ => None,
+        }));
+
+        Ok(photos)
     }
 
     /// Search for a peer (user, group, or channel) by name prefix.
