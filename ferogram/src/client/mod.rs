@@ -87,6 +87,11 @@ pub struct Config {
     pub api_id: i32,
     pub api_hash: String,
     pub dc_addr: Option<String>,
+    /// Override which `dc_id` a fresh connection (no saved session yet) is
+    /// registered under. Combined with `dc_addr`, lets a custom address be
+    /// dialed and tracked as an arbitrary `dc_id` instead of the default DC2.
+    /// Ignored once a saved session already exists.
+    pub dc_id_override: Option<i32>,
     pub retry_policy: Arc<dyn RetryPolicy>,
     /// Optional SOCKS5 proxy: every Telegram connection is tunnelled through it.
     pub socks5: Option<crate::socks5::Socks5Config>,
@@ -271,6 +276,7 @@ impl Default for Config {
             api_id: 0,
             api_hash: String::new(),
             dc_addr: None,
+            dc_id_override: None,
             retry_policy: Arc::new(AutoSleep::default()),
             socks5: None,
             mtproxy: None,
@@ -634,6 +640,8 @@ impl Client {
                             &transport,
                             probe_transport,
                             resilient_connect,
+                            config.dc_addr.as_deref(),
+                            config.dc_id_override,
                         )
                         .await?;
                         (c, dc, opts, HashMap::new(), None)
@@ -649,6 +657,8 @@ impl Client {
                         &transport,
                         probe_transport,
                         resilient_connect,
+                        config.dc_addr.as_deref(),
+                        config.dc_id_override,
                     )
                     .await?;
                     (c, dc, opts, HashMap::new(), None)
@@ -662,6 +672,8 @@ impl Client {
                     &transport,
                     probe_transport,
                     resilient_connect,
+                    config.dc_addr.as_deref(),
+                    config.dc_id_override,
                 )
                 .await?;
                 (c, dc, opts, HashMap::new(), None)
@@ -1311,9 +1323,13 @@ impl Client {
         probe_transport: bool,
 
         resilient_connect: bool,
+        dc_addr_override: Option<&str>,
+        dc_id_override: Option<i32>,
     ) -> Result<(Connection, i32, HashMap<i32, DcEntry>), InvocationError> {
-        let dc_id: i16 = 2;
-        let default_addr = fallback_dc_addr(dc_id as i32).to_owned();
+        let dc_id: i16 = dc_id_override.unwrap_or(2) as i16;
+        let default_addr = dc_addr_override
+            .map(|addr| addr.to_owned())
+            .unwrap_or_else(|| fallback_dc_addr(dc_id as i32).to_owned());
 
         let build_opts = || -> HashMap<i32, DcEntry> {
             session::default_dc_addresses()
@@ -1350,9 +1366,15 @@ impl Client {
         }
 
         // Normal direct connect.
-        tracing::debug!(
-            "[ferogram::connect] no address override for DC{dc_id}; connecting to default address {default_addr}"
-        );
+        if dc_addr_override.is_some() || dc_id_override.is_some() {
+            tracing::debug!(
+                "[ferogram::connect] using override for DC{dc_id}; connecting to address {default_addr}"
+            );
+        } else {
+            tracing::debug!(
+                "[ferogram::connect] no address override for DC{dc_id}; connecting to default address {default_addr}"
+            );
+        }
         let direct_result =
             Connection::connect_raw(&default_addr, socks5, mtproxy, transport, dc_id).await;
 
