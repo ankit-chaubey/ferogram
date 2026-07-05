@@ -10,6 +10,9 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable};
 
@@ -1247,6 +1250,12 @@ pub struct CallbackQuery {
     pub chat_peer: Option<tl::enums::Peer>,
     /// For inline-message callbacks: the message ID token.
     pub inline_msg_id: Option<tl::enums::InputBotInlineMessageId>,
+    /// Shared across every clone of this `CallbackQuery` (e.g. when the same
+    /// query is delivered to multiple matching [`crate::filters::Router`]
+    /// handlers). Guards against calling `messages.setBotCallbackAnswer`
+    /// more than once for the same `query_id`, which Telegram rejects.
+    #[doc(hidden)]
+    pub(crate) answered: Arc<AtomicBool>,
 }
 
 impl CallbackQuery {
@@ -1257,9 +1266,34 @@ impl CallbackQuery {
             .and_then(|d| std::str::from_utf8(d).ok())
     }
 
+    /// Whether an answer has already been sent for this callback query
+    /// (by this handler or another one matching the same update).
+    pub fn is_answered(&self) -> bool {
+        self.answered.load(Ordering::Acquire)
+    }
+
+    /// The bare numeric chat ID the button press happened in.
+    ///
+    /// `0` for inline-message callback queries (`chat_peer` is `None` in
+    /// that case; the button is attached to a message sent via inline mode,
+    /// which has no ordinary chat peer). Used to build the FSM
+    /// [`crate::fsm::StateKey`] for [`crate::filters::Router::on_callback_query_fsm`].
+    pub fn chat_id(&self) -> i64 {
+        match &self.chat_peer {
+            Some(tl::enums::Peer::User(u)) => u.user_id,
+            Some(tl::enums::Peer::Chat(c)) => c.chat_id,
+            Some(tl::enums::Peer::Channel(c)) => c.channel_id,
+            None => 0,
+        }
+    }
+
     /// Begin building an answer for this callback query.
     ///
-    /// Finish with `.send(&client).await`:
+    /// Finish with `.send(&client).await`. Telegram only accepts one
+    /// `messages.setBotCallbackAnswer` per `query_id`; if this query has
+    /// already been answered (by this handler or another matching handler),
+    /// `send()` skips the network call, logs a warning, and returns `Ok(())`
+    /// instead of surfacing a Telegram API error.
     ///
     /// ```rust,no_run
     /// # use ferogram::{Client, update::CallbackQuery};
@@ -1276,6 +1310,7 @@ impl CallbackQuery {
     pub fn answer(&self) -> Answer<'_> {
         Answer {
             query_id: self.query_id,
+            answered: Arc::clone(&self.answered),
             message: None,
             alert: false,
             url: None,
@@ -1288,6 +1323,7 @@ impl CallbackQuery {
 /// Fluent builder returned by [`CallbackQuery::answer`]. Finalize with `.send(&client).await`.
 pub struct Answer<'a> {
     query_id: i64,
+    answered: Arc<AtomicBool>,
     message: Option<String>,
     alert: bool,
     url: Option<String>,
@@ -1323,7 +1359,19 @@ impl<'a> Answer<'a> {
     }
 
     /// Send the answer to Telegram.
+    ///
+    /// A no-op (returns `Ok(())` without a network call) if this callback
+    /// query was already answered, since Telegram rejects a second
+    /// `messages.setBotCallbackAnswer` for the same `query_id`.
     pub async fn send(self, client: &Client) -> Result<(), Error> {
+        if self.answered.swap(true, Ordering::AcqRel) {
+            tracing::warn!(
+                query_id = self.query_id,
+                "[ferogram::update] answer() already sent for this callback query; skipping duplicate call"
+            );
+            return Ok(());
+        }
+
         let req = tl::functions::messages::SetBotCallbackAnswer {
             alert: self.alert,
             query_id: self.query_id,
@@ -1894,6 +1942,7 @@ pub(crate) fn from_single_update_with_peers(
             game_short_name: u.game_short_name,
             chat_peer: Some(u.peer),
             inline_msg_id: None,
+            answered: Arc::new(AtomicBool::new(false)),
         })],
         InlineBotCallbackQuery(u) => vec![Update::CallbackQuery(CallbackQuery {
             query_id: u.query_id,
@@ -1904,6 +1953,7 @@ pub(crate) fn from_single_update_with_peers(
             game_short_name: u.game_short_name,
             chat_peer: None,
             inline_msg_id: Some(u.msg_id),
+            answered: Arc::new(AtomicBool::new(false)),
         })],
         BotInlineQuery(u) => vec![Update::InlineQuery(InlineQuery {
             query_id: u.query_id,

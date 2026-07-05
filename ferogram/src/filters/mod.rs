@@ -11,9 +11,11 @@
 // Please keep this notice when redistributing.
 
 mod builtins;
+mod callback_inline;
 mod core;
 mod router;
 
 pub use builtins::*;
+pub use callback_inline::*;
 pub use core::{BoxFilter, Filter};
 pub use router::{Dispatcher, Router};

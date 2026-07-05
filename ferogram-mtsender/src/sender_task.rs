@@ -175,6 +175,14 @@ async fn sender_loop(
                                     req.frame_kind,
                                     req.perm_auth_key,
                                 );
+                                // Drain RPCs that queued up in rpc_rx while we were
+                                // waiting for reconnect. They were submitted against
+                                // the dead session and must not go out before
+                                // initConnection on the new one. Fail them so callers
+                                // resubmit after seeing FrameEvent::Connected.
+                                while let Ok(stale) = rpc_rx.try_recv() {
+                                    let _ = stale.tx.send(Err(InvocationError::Dropped));
+                                }
                                 let _ = frame_tx
                                     .send(FrameEvent::Connected {
                                         auth_key: Box::new(sender.auth_key_bytes()),

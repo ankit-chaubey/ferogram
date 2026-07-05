@@ -87,6 +87,11 @@ pub struct Config {
     pub api_id: i32,
     pub api_hash: String,
     pub dc_addr: Option<String>,
+    /// Override which `dc_id` a fresh connection (no saved session yet) is
+    /// registered under. Combined with `dc_addr`, lets a custom address be
+    /// dialed and tracked as an arbitrary `dc_id` instead of the default DC2.
+    /// Ignored once a saved session already exists.
+    pub dc_id_override: Option<i32>,
     pub retry_policy: Arc<dyn RetryPolicy>,
     /// Optional SOCKS5 proxy: every Telegram connection is tunnelled through it.
     pub socks5: Option<crate::socks5::Socks5Config>,
@@ -271,6 +276,7 @@ impl Default for Config {
             api_id: 0,
             api_hash: String::new(),
             dc_addr: None,
+            dc_id_override: None,
             retry_policy: Arc::new(AutoSleep::default()),
             socks5: None,
             mtproxy: None,
@@ -634,6 +640,8 @@ impl Client {
                             &transport,
                             probe_transport,
                             resilient_connect,
+                            config.dc_addr.as_deref(),
+                            config.dc_id_override,
                         )
                         .await?;
                         (c, dc, opts, HashMap::new(), None)
@@ -649,6 +657,8 @@ impl Client {
                         &transport,
                         probe_transport,
                         resilient_connect,
+                        config.dc_addr.as_deref(),
+                        config.dc_id_override,
                     )
                     .await?;
                     (c, dc, opts, HashMap::new(), None)
@@ -662,6 +672,8 @@ impl Client {
                     &transport,
                     probe_transport,
                     resilient_connect,
+                    config.dc_addr.as_deref(),
+                    config.dc_id_override,
                 )
                 .await?;
                 (c, dc, opts, HashMap::new(), None)
@@ -812,6 +824,13 @@ impl Client {
         // every 5 seconds if anything has changed. Uses the targeted Primary and
         // Secondary variants so only the update counters are touched, not the
         // full session blob. Runs a final save on shutdown.
+        //
+        // The actual backend call is synchronous, blocking I/O (SQLite write,
+        // file write, ...); it's dispatched via spawn_blocking so it can't
+        // stall this task's tokio worker thread. On a server multiplexing
+        // many `Client`s over one runtime, every client runs this task, so a
+        // blocking call here would otherwise periodically stall unrelated
+        // clients sharing the same worker.
         {
             let client_ps = client.clone();
             let shutdown_ps = shutdown_token.clone();
@@ -828,13 +847,15 @@ impl Client {
                             let snap = client_ps.inner.message_box.lock().await.session_state();
                             let (pts, qts, date, seq) = (snap.pts, snap.qts, snap.date, snap.seq);
                             if pts > 0 {
-                                let b = &client_ps.inner.session_backend;
-                                let _ = b.apply_update_state(
-                                    ferogram_session::UpdateStateChange::Primary { pts, date, seq },
-                                );
-                                let _ = b.apply_update_state(
-                                    ferogram_session::UpdateStateChange::Secondary { qts },
-                                );
+                                let backend = Arc::clone(&client_ps.inner.session_backend);
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    let _ = backend.apply_update_state(
+                                        ferogram_session::UpdateStateChange::Primary { pts, date, seq },
+                                    );
+                                    let _ = backend.apply_update_state(
+                                        ferogram_session::UpdateStateChange::Secondary { qts },
+                                    );
+                                }).await;
                             }
                             break;
                         }
@@ -842,13 +863,15 @@ impl Client {
                             let snap = client_ps.inner.message_box.lock().await.session_state();
                             let (pts, qts, date, seq) = (snap.pts, snap.qts, snap.date, snap.seq);
                             if pts > last_pts {
-                                let backend = &client_ps.inner.session_backend;
-                                let _ = backend.apply_update_state(
-                                    ferogram_session::UpdateStateChange::Primary { pts, date, seq },
-                                );
-                                let _ = backend.apply_update_state(
-                                    ferogram_session::UpdateStateChange::Secondary { qts },
-                                );
+                                let backend = Arc::clone(&client_ps.inner.session_backend);
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    let _ = backend.apply_update_state(
+                                        ferogram_session::UpdateStateChange::Primary { pts, date, seq },
+                                    );
+                                    let _ = backend.apply_update_state(
+                                        ferogram_session::UpdateStateChange::Secondary { qts },
+                                    );
+                                }).await;
                                 last_pts = pts;
                                 tracing::debug!(
                                     "[ferogram::persist] periodic state snapshot saved (pts={pts}, qts={qts})"
@@ -1300,9 +1323,13 @@ impl Client {
         probe_transport: bool,
 
         resilient_connect: bool,
+        dc_addr_override: Option<&str>,
+        dc_id_override: Option<i32>,
     ) -> Result<(Connection, i32, HashMap<i32, DcEntry>), InvocationError> {
-        let dc_id: i16 = 2;
-        let default_addr = fallback_dc_addr(dc_id as i32).to_owned();
+        let dc_id: i16 = dc_id_override.unwrap_or(2) as i16;
+        let default_addr = dc_addr_override
+            .map(|addr| addr.to_owned())
+            .unwrap_or_else(|| fallback_dc_addr(dc_id as i32).to_owned());
 
         let build_opts = || -> HashMap<i32, DcEntry> {
             session::default_dc_addresses()
@@ -1339,9 +1366,15 @@ impl Client {
         }
 
         // Normal direct connect.
-        tracing::debug!(
-            "[ferogram::connect] no address override for DC{dc_id}; connecting to default address {default_addr}"
-        );
+        if dc_addr_override.is_some() || dc_id_override.is_some() {
+            tracing::debug!(
+                "[ferogram::connect] using override for DC{dc_id}; connecting to address {default_addr}"
+            );
+        } else {
+            tracing::debug!(
+                "[ferogram::connect] no address override for DC{dc_id}; connecting to default address {default_addr}"
+            );
+        }
         let direct_result =
             Connection::connect_raw(&default_addr, socks5, mtproxy, transport, dc_id).await;
 
@@ -1531,6 +1564,15 @@ impl Client {
     }
 
     /// Persist the current session to the configured [`crate::SessionBackend`].
+    ///
+    /// `SessionBackend` implementations (SQLite, binary file, ...) are
+    /// synchronous, blocking calls under the hood. Running them on the
+    /// caller's task would tie up a tokio worker thread for the duration of
+    /// the disk I/O; on a server multiplexing many clients over a shared
+    /// runtime, that stalls every other client's tasks on that worker for
+    /// as long as the write takes. Every actual backend call here goes
+    /// through [`tokio::task::spawn_blocking`] so it runs on the blocking
+    /// thread pool instead.
     pub async fn save_session(&self) -> Result<(), InvocationError> {
         // build_persisted_session() is the source of truth for structural
         // session data: auth key, salts, DC table, peer cache.
@@ -1539,9 +1581,11 @@ impl Client {
         // so no secondary overwrite is needed.
         let session = self.build_persisted_session().await;
 
-        self.inner
-            .session_backend
-            .save(&session)
+        let backend = Arc::clone(&self.inner.session_backend);
+        let session_for_save = session.clone();
+        tokio::task::spawn_blocking(move || backend.save(&session_for_save))
+            .await
+            .map_err(|e| InvocationError::Io(std::io::Error::other(e)))?
             .map_err(InvocationError::Io)?;
 
         // Secondary monotonic guard (defence-in-depth):
@@ -1556,14 +1600,17 @@ impl Client {
                 session.updates_state.seq,
             );
             if pts > 0 {
-                let b = &self.inner.session_backend;
-                let _ = b.apply_update_state(ferogram_session::UpdateStateChange::Primary {
-                    pts,
-                    date,
-                    seq,
-                });
+                let backend = Arc::clone(&self.inner.session_backend);
                 let _ =
-                    b.apply_update_state(ferogram_session::UpdateStateChange::Secondary { qts });
+                    tokio::task::spawn_blocking(move || {
+                        let _ = backend.apply_update_state(
+                            ferogram_session::UpdateStateChange::Primary { pts, date, seq },
+                        );
+                        let _ = backend.apply_update_state(
+                            ferogram_session::UpdateStateChange::Secondary { qts },
+                        );
+                    })
+                    .await;
             }
         }
 
@@ -2423,10 +2470,18 @@ impl Client {
     }
 
     /// Persist a single update-state change to the session backend.
+    ///
+    /// Dispatched via `spawn_blocking`; see [`Client::save_session`] for why.
+    /// Called only from `sync_pts_state`/`force_sync_pts_state` (login,
+    /// reconnect, gap recovery), not per-update, so this is a low-frequency
+    /// path, but kept consistent with the rest of the persistence layer.
     fn persist_state(&self, change: ferogram_session::UpdateStateChange) {
-        if let Err(e) = self.inner.session_backend.apply_update_state(change) {
-            tracing::warn!("[ferogram::persist] state write failed: {e}");
-        }
+        let backend = Arc::clone(&self.inner.session_backend);
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = backend.apply_update_state(change) {
+                tracing::warn!("[ferogram::persist] state write failed: {e}");
+            }
+        });
     }
 
     /// Fetch the current server update state and initialise `MessageBoxes` if empty.

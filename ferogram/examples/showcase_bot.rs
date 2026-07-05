@@ -286,73 +286,59 @@ async fn dispatch(upd: Update, client: Arc<Client>, me: Arc<tl::types::User>, bo
             println!("🔘 callback [qid={qid}] data={data}");
             match data.as_str() {
                 "cb:ping" => {
-                    let _ = client
-                        .answer_callback_query(qid, Some("🏓 Pong!"), false)
-                        .await;
+                    let _ = cb.answer().text("🏓 Pong!").send(&client).await;
                 }
                 "cb:time" => {
-                    let _ = client
-                        .answer_callback_query(
-                            qid,
-                            Some(&Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string()),
-                            false,
-                        )
+                    let _ = cb
+                        .answer()
+                        .text(Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                        .send(&client)
                         .await;
                 }
                 "cb:stats" => {
-                    let _ = client
-                        .answer_callback_query(
-                            qid,
-                            Some(&format!(
-                                "⏱ {} | 📨 {} msgs",
-                                uptime(),
-                                MSG_COUNT.load(Ordering::Relaxed)
-                            )),
-                            false,
-                        )
+                    let _ = cb
+                        .answer()
+                        .text(format!(
+                            "⏱ {} | 📨 {} msgs",
+                            uptime(),
+                            MSG_COUNT.load(Ordering::Relaxed)
+                        ))
+                        .send(&client)
                         .await;
                 }
                 "cb:ferogram" => {
-                    let _ = client
-                        .answer_callback_query(
-                            qid,
-                            Some(&format!(
-                                "Layer {} · ferogram {} 🦀",
-                                tl::LAYER,
-                                env!("CARGO_PKG_VERSION")
-                            )),
-                            false,
-                        )
+                    let _ = cb
+                        .answer()
+                        .text(format!(
+                            "Layer {} · ferogram {} 🦀",
+                            tl::LAYER,
+                            env!("CARGO_PKG_VERSION")
+                        ))
+                        .send(&client)
                         .await;
                 }
                 "cb:about" => {
-                    let _ = client
-                        .answer_callback_query(
-                            qid,
-                            Some("Built with ferogram: pure Rust MTProto 🦀"),
-                            true,
-                        )
+                    let _ = cb
+                        .answer()
+                        .alert("Built with ferogram: pure Rust MTProto 🦀")
+                        .send(&client)
                         .await;
                 }
                 "cb:help" => {
-                    let _ = client
-                        .answer_callback_query(qid, Some("Send /help for all commands"), false)
+                    let _ = cb
+                        .answer()
+                        .text("Send /help for all commands")
+                        .send(&client)
                         .await;
                 }
                 "cb:joke" => {
-                    let _ = client
-                        .answer_callback_query(qid, Some(random_joke()), true)
-                        .await;
+                    let _ = cb.answer().alert(random_joke()).send(&client).await;
                 }
                 "cb:fact" => {
-                    let _ = client
-                        .answer_callback_query(qid, Some(random_fact()), true)
-                        .await;
+                    let _ = cb.answer().alert(random_fact()).send(&client).await;
                 }
                 _ => {
-                    let _ = client
-                        .answer_callback_query(qid, Some("🤷 Unknown"), false)
-                        .await;
+                    let _ = cb.answer().text("🤷 Unknown").send(&client).await;
                 }
             }
         }

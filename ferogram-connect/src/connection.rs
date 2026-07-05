@@ -451,7 +451,10 @@ impl Connection {
         tokio::time::timeout(Duration::from_secs(30), fut)
             .await
             .map_err(|_| {
-                ConnectError::other(format!("connect_with_key to {addr} timed out after 30 s"))
+                ConnectError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("connect_with_key to {addr} timed out after 30 s"),
+                ))
             })?
     }
 

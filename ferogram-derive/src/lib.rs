@@ -129,7 +129,7 @@ fn fsm_state_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 
     Ok(quote! {
         #[automatically_derived]
-        impl #impl_generics ::ferogram_fsm::FsmState
+        impl #impl_generics ::ferogram::FsmState
             for #name #ty_generics
             #where_clause
         {
@@ -142,7 +142,7 @@ fn fsm_state_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             fn from_key(key: &str) -> ::std::option::Option<Self> {
                 match key {
-                    #(#from_key_arms),*
+                    #(#from_key_arms,)*
                     _ => ::std::option::Option::None,
                 }
             }

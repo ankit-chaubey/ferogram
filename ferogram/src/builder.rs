@@ -27,6 +27,7 @@ pub struct ClientBuilder {
     api_id: i32,
     api_hash: String,
     dc_addr: Option<String>,
+    dc_id_override: Option<i32>,
     retry_policy: Arc<dyn RetryPolicy>,
     restart_policy: Arc<dyn ConnectionRestartPolicy>,
     socks5: Option<Socks5Config>,
@@ -55,6 +56,7 @@ impl Default for ClientBuilder {
             api_id: 0,
             api_hash: String::new(),
             dc_addr: None,
+            dc_id_override: None,
             retry_policy: Arc::new(AutoSleep::default()),
             restart_policy: Arc::new(NeverRestart),
             socks5: None,
@@ -191,6 +193,35 @@ impl ClientBuilder {
     /// Override the first DC address (e.g. `"149.154.167.51:443"`).
     pub fn dc_addr(mut self, addr: impl Into<String>) -> Self {
         self.dc_addr = Some(addr.into());
+        self
+    }
+
+    /// Override which `dc_id` the fresh-connect address is registered under.
+    ///
+    /// By default, a fresh connection (no saved session yet) always dials
+    /// DC2 and labels the resulting auth key as belonging to DC2. Combined
+    /// with [`dc_addr`](Self::dc_addr), this lets you dial any address and
+    /// have it tracked as a specific `dc_id` instead, e.g. for pointing at a
+    /// test DC or a non-default DC entirely:
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::Client;
+    /// # const ID: i32 = 0;
+    /// # const HASH: &str = "";
+    /// # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let (client, _) = Client::builder()
+    ///     .api_id(ID).api_hash(HASH)
+    ///     .dc_addr("149.154.175.53:443")
+    ///     .dc_id_override(1)
+    ///     .connect().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Has no effect once a saved session already exists: the session's own
+    /// `home_dc_id` takes over from that point on.
+    pub fn dc_id_override(mut self, dc_id: i32) -> Self {
+        self.dc_id_override = Some(dc_id);
         self
     }
 
@@ -532,6 +563,7 @@ impl ClientBuilder {
             api_id: self.api_id,
             api_hash: self.api_hash,
             dc_addr: self.dc_addr,
+            dc_id_override: self.dc_id_override,
             retry_policy: self.retry_policy,
             restart_policy: self.restart_policy,
             socks5: self.socks5,

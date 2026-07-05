@@ -13,7 +13,7 @@
 // Re-export everything from the dedicated crate.
 pub use ferogram_fsm::*;
 
-use crate::update::IncomingMessage;
+use crate::update::{CallbackQuery, IncomingMessage};
 
 impl ferogram_fsm::MessageLike for IncomingMessage {
     fn sender_user_id(&self) -> Option<i64> {
@@ -22,5 +22,15 @@ impl ferogram_fsm::MessageLike for IncomingMessage {
 
     fn chat_id(&self) -> i64 {
         IncomingMessage::chat_id(self)
+    }
+}
+
+impl ferogram_fsm::MessageLike for CallbackQuery {
+    fn sender_user_id(&self) -> Option<i64> {
+        Some(self.user_id)
+    }
+
+    fn chat_id(&self) -> i64 {
+        CallbackQuery::chat_id(self)
     }
 }
