@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] - 0.6.4
+
+### Added
+
+- `dispatcher` module: routes callback queries and inline queries alongside the existing message dispatcher.
+- `Client::get_chat_photos(peer, limit)`: photo/avatar history for groups and channels. Current photo comes from the chat's full info (survives message deletion); older photos come from `messageActionChatEditPhoto` search history.
+- `ClientBuilder::dc_id_override(dc_id)`: register a fresh connection under a custom `dc_id`, paired with `.dc_addr(...)`, instead of the hardcoded DC2 default.
+
+### Fixed
+
+- MTProto handshake: stopped sending the dc-tagged `p_q_inner_data` constructor on normal connects. Telegram rejects it with RPC 444 outside of DC2; it's now only used for flows that actually need dc verification.
+- Reconnect: keep the cached auth key on a timeout and drop stale in-flight RPCs before re-initializing, instead of discarding a still-valid key.
+- `#[derive(FsmState)]`: corrected match-arm codegen and crate path resolution.
+
+### Changed
+
+- Session backend I/O now runs on `spawn_blocking`, so SQLite/file writes no longer stall async tasks when multiple clients share a runtime.
+- `order_bot` example: bootstraps its initial FSM state correctly.
+
+---
+
 ## [0.6.3] - 2026-06-28
 
 Rich messaging, new client modules, separated upload/download APIs, and a broad documentation pass across the entire codebase.
