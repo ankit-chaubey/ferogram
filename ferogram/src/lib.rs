@@ -253,7 +253,9 @@ pub use file_info::{FileInfo, detect_mime, file_info, file_info_from_path};
 pub use guest_chat::GuestChatQuery;
 pub use input_message::{ForwardOptions, InputMessage, InvoiceOptions, LinkKind};
 pub use keyboard::{Button, InlineKeyboard, ReplyKeyboard};
-pub use media::{Document, Downloadable, Photo, Sticker, UploadedFile};
+pub use media::{
+    Document, Downloadable, MediaQuality, Photo, Sticker, UploadedFile, VideoQualityInfo,
+};
 pub use mini_app::{MiniApp, MiniAppSession};
 pub use participants::{Participant, ParticipantStatus, ProfilePhotoIter};
 pub use peer_cache::{ExperimentalFeatures, PeerCache, PeerCacheStats, PeerType};

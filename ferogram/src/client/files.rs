@@ -810,6 +810,65 @@ impl Client {
             .await
     }
 
+    /// Download `media` to `path`, choosing a specific quality variant when
+    /// the media carries alternates (`alt_documents`) - typically a video
+    /// with a quality picker in official clients.
+    ///
+    /// Uses exactly the same engine as [`download_file`](Self::download_file):
+    /// the concurrent/pipelined path for files at or above
+    /// [`DOWNLOAD_CONCURRENT_THRESHOLD`](crate::media::DOWNLOAD_CONCURRENT_THRESHOLD),
+    /// governed by the same [`TransferLimits`](crate::TransferLimits) - Y, X,
+    /// and the global connection cap all apply here exactly as they do for
+    /// any other download. Quality selection only changes *which* document
+    /// gets downloaded, not how.
+    ///
+    /// Media with no alternates only ever has [`MediaQuality::Original`] to
+    /// pick from; every other variant falls back to it automatically. Use
+    /// [`crate::media::available_qualities`] to see what's actually on offer
+    /// before choosing, if you want to build your own picker.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::{Client, MediaQuality};
+    /// # async fn ex(client: Client, media: ferogram_tl_types::enums::MessageMedia) -> anyhow::Result<()> {
+    /// // Grab the lightest available quality, e.g. for a quick preview.
+    /// client.download_media(&media, MediaQuality::Lowest, "preview.mp4", None).await?;
+    ///
+    /// // Or the best quality Telegram has for this video.
+    /// client.download_media(&media, MediaQuality::Highest, "video.mp4", None).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn download_media(
+        &self,
+        media: &tl::enums::MessageMedia,
+        quality: crate::media::MediaQuality,
+        path: impl AsRef<std::path::Path>,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<u64, InvocationError> {
+        let path = path.as_ref();
+        let doc = crate::media::resolve_quality_document(media, quality).ok_or_else(|| {
+            InvocationError::Deserialize(
+                "media has no downloadable document for the requested quality".into(),
+            )
+        })?;
+        let loc = doc.to_input_location().ok_or_else(|| {
+            InvocationError::Deserialize("chosen document has no download location".into())
+        })?;
+        let dc = doc.dc_id();
+        let size: usize = doc.size().try_into().unwrap_or(0);
+
+        if size >= crate::media::DOWNLOAD_CONCURRENT_THRESHOLD {
+            return self
+                .download_media_concurrent_on_dc_to_file_pipelined(loc, size, dc, path, handle)
+                .await;
+        }
+        let mut file = tokio::fs::File::create(path)
+            .await
+            .map_err(InvocationError::Io)?;
+        self.download_streaming_on_dc(loc, dc, &mut file, handle)
+            .await
+    }
+
     /// Return a lazy chunk iterator for `media`.
     ///
     /// Useful when you want to process file bytes as they arrive instead of waiting

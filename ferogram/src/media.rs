@@ -180,46 +180,39 @@ pub const MAX_PART_SIZE: usize = 512 * 1024;
 const UPLOAD_MAX_PER_SESSION: usize = 1024 * 1024;
 
 /// Upload part sizes tried in order  -
-/// `kDocumentUploadPartSize{0..4}`.
+/// `kDocumentUploadPartSize{0..2}`.
 #[allow(dead_code)]
-const UPLOAD_PART_SIZES: &[usize] = &[32 * 1024, 64 * 1024, 128 * 1024, 256 * 1024, 512 * 1024];
+const UPLOAD_PART_SIZES: &[usize] = &[128 * 1024, 256 * 1024, 512 * 1024];
 
 /// Choose upload part size for `file_size` bytes.
 ///
 /// Upload part size table:
-/// - < 1 MB  → 32 KB  (fits in ≤ 32 parts)
-/// - 1-32 MB → 64 KB
-/// - 32-512 MB → 128 KB
-/// - 512 MB-1 GB → 256 KB
-/// - > 1 GB  → 512 KB
+/// - < 1 MB  → 128 KB
+/// - 1-50 MB → 256 KB
+/// - > 50 MB → 512 KB
 ///
 /// Returns `(part_size_bytes, total_parts)`.
 pub fn upload_part_size(file_size: usize) -> (usize, i32) {
-    // Five-tier part-size table matching Telegram's kDocumentUploadPartSize constants.
-    // Each boundary keeps total_parts well below the 4000-part hard limit while
-    // minimising per-chunk overhead for small files.
+    // Three-tier part-size table. Fewer, larger parts than the old five-tier
+    // table  - less per-chunk RPC overhead, still nowhere near the 4000-part
+    // hard limit for any file size that matters in practice.
     //
-    // | File size        | Part size | Max parts |
-    // |------------------|-----------|-----------|
-    // | < 1 MB           | 32 KB     | 32        |
-    // | 1 MB  - 32 MB    | 64 KB     | 512       |
-    // | 32 MB - 512 MB   | 128 KB    | 4000      |
-    // | 512 MB - 1 GB    | 256 KB    | 4000      |
-    // | > 1 GB           | 512 KB    | ≤ 4000    |
+    // | File size   | Part size | Max parts |
+    // |-------------|-----------|-----------|
+    // | < 1 MB      | 128 KB    | 8         |
+    // | 1 MB - 50 MB | 256 KB   | 200       |
+    // | > 50 MB     | 512 KB    | grows only for files needing >4000 parts |
     const MAX_PARTS: usize = 4000;
     let mut ps: usize = if file_size < 1024 * 1024 {
-        32 * 1024 // < 1 MB   → 32 KB
-    } else if file_size < 32 * 1024 * 1024 {
-        64 * 1024 // < 32 MB  → 64 KB
-    } else if file_size < 512 * 1024 * 1024 {
-        128 * 1024 // < 512 MB → 128 KB
-    } else if file_size < 1024 * 1024 * 1024 {
-        256 * 1024 // < 1 GB   → 256 KB
+        128 * 1024 // < 1 MB  → 128 KB
+    } else if file_size < 50 * 1024 * 1024 {
+        256 * 1024 // < 50 MB → 256 KB
     } else {
-        512 * 1024 // ≥ 1 GB   → 512 KB
+        512 * 1024 // ≥ 50 MB → 512 KB
     };
-    // Safety: if the chosen tier still exceeds 4000 parts (files > ~1.95 GB with 512 KB
-    // parts are impossible, but guard anyway), grow to the minimum that fits.
+    // Safety: if the chosen tier still exceeds 4000 parts (large files at
+    // the flat 512 KB tier - e.g. premium's up to ~4 GB uploads), grow to
+    // the minimum part size that fits.
     if file_size.div_ceil(ps) > MAX_PARTS {
         ps = file_size.div_ceil(MAX_PARTS);
         ps = ps.div_ceil(512) * 512; // round up to 512-byte boundary (protocol requirement)
@@ -763,6 +756,136 @@ impl Downloadable for Sticker {
     }
 }
 
+// Quality selection (alt_documents)
+
+/// Which quality variant of a video to download, when the media carries
+/// alternate qualities (`alt_documents`) alongside its primary document.
+///
+/// Telegram sends alternate qualities as extra [`Document`]s attached to
+/// the same [`MessageMedia`](tl::enums::MessageMedia), each carrying its
+/// own `documentAttributeVideo` (width/height). Ferogram picks among them
+/// by resolution only - it doesn't try to distinguish encoding or bitrate
+/// beyond what the resolution implies.
+///
+/// Media with no alternates (photos, audio, most documents, or videos
+/// Telegram didn't transcode) only ever have `Original` to pick from -
+/// every variant here falls back to it automatically.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MediaQuality {
+    /// The primary document Telegram sends by default - what most clients
+    /// show first, before you open a quality picker.
+    #[default]
+    Original,
+    /// The highest-resolution alternate available. Falls back to
+    /// `Original` when there are no alternates.
+    Highest,
+    /// The lowest-resolution alternate available. Falls back to
+    /// `Original` when there are no alternates.
+    Lowest,
+}
+
+/// One available quality variant for a video, as reported by
+/// [`available_qualities`].
+#[derive(Clone, Copy, Debug)]
+pub struct VideoQualityInfo {
+    pub width: i32,
+    pub height: i32,
+    pub size: i64,
+}
+
+/// Collect every `Document` on this media that could be a quality
+/// variant: the primary document (if any) followed by every entry in
+/// `alt_documents` (if any). Order is: primary first, then alternates in
+/// the order Telegram sent them - not sorted by resolution.
+fn quality_candidates(media: &tl::enums::MessageMedia) -> Vec<tl::types::Document> {
+    let tl::enums::MessageMedia::Document(md) = media else {
+        return Vec::new();
+    };
+    let mut docs = Vec::new();
+    if let Some(tl::enums::Document::Document(d)) = &md.document {
+        docs.push(d.clone());
+    }
+    if let Some(alts) = &md.alt_documents {
+        for alt in alts {
+            if let tl::enums::Document::Document(d) = alt {
+                docs.push(d.clone());
+            }
+        }
+    }
+    docs
+}
+
+/// Resolution (width * height) of a document, from its
+/// `documentAttributeVideo` if it has one. `0` for documents with no
+/// video attribute (audio, plain files) so they sort below anything with
+/// a real resolution.
+fn video_resolution(doc: &tl::types::Document) -> i64 {
+    doc.attributes
+        .iter()
+        .find_map(|a| match a {
+            tl::enums::DocumentAttribute::Video(v) => Some(v.w as i64 * v.h as i64),
+            _ => None,
+        })
+        .unwrap_or(0)
+}
+
+/// List every quality variant available for this media, sorted ascending
+/// by resolution (primary document included if it has a video
+/// attribute). Empty for media with no video attributes at all - photos,
+/// audio, and documents Telegram didn't transcode into multiple
+/// qualities.
+///
+/// Use this to build your own quality picker UI, or just reach for
+/// [`MediaQuality::Highest`] / [`MediaQuality::Lowest`] directly if you
+/// don't need the full list.
+pub fn available_qualities(media: &tl::enums::MessageMedia) -> Vec<VideoQualityInfo> {
+    let mut out: Vec<VideoQualityInfo> = quality_candidates(media)
+        .iter()
+        .filter_map(|d| {
+            d.attributes.iter().find_map(|a| match a {
+                tl::enums::DocumentAttribute::Video(v) => Some(VideoQualityInfo {
+                    width: v.w,
+                    height: v.h,
+                    size: d.size,
+                }),
+                _ => None,
+            })
+        })
+        .collect();
+    out.sort_by_key(|q| q.width as i64 * q.height as i64);
+    out
+}
+
+/// Resolve `quality` against `media`, returning the chosen [`Document`].
+///
+/// Falls back to the primary document whenever the requested quality
+/// doesn't actually exist for this media (no alternates present, the
+/// media isn't a document at all, or `Original` was requested outright).
+pub(crate) fn resolve_quality_document(
+    media: &tl::enums::MessageMedia,
+    quality: MediaQuality,
+) -> Option<Document> {
+    let primary = match media {
+        tl::enums::MessageMedia::Document(md) => match &md.document {
+            Some(tl::enums::Document::Document(d)) => Some(Document::from_raw(d.clone())),
+            _ => None,
+        },
+        _ => None,
+    };
+
+    let chosen = match quality {
+        MediaQuality::Original => None,
+        MediaQuality::Highest => quality_candidates(media)
+            .into_iter()
+            .max_by_key(video_resolution),
+        MediaQuality::Lowest => quality_candidates(media)
+            .into_iter()
+            .min_by_key(video_resolution),
+    };
+
+    chosen.map(Document::from_raw).or(primary)
+}
+
 // DownloadIter
 
 /// Sequential chunk-by-chunk download iterator.
@@ -884,7 +1007,7 @@ impl Client {
     ///
     /// Part size and big-file threshold:
     /// - Part size chosen by [`upload_part_size`]:
-    ///   < 1 MB → 32 KB, 1-32 MB → 64 KB, 32-512 MB → 128 KB, etc.
+    ///   < 1 MB → 128 KB, 1-50 MB → 256 KB, > 50 MB → 512 KB.
     /// - `upload.saveBigFilePart` used for files > 30 MB (`kUseBigFilesFrom`).
     ///
     /// For files that benefit from parallelism use [`upload_file_concurrent`].
@@ -970,7 +1093,7 @@ impl Client {
     /// Upload bytes with parallel worker sessions.
     ///
     /// Parallel upload using per-worker connections. Worker count scales with file size.
-    /// Part size: 32 KB for tiny files, 512 KB otherwise.
+    /// Part size: 128 KB for tiny files, up to 512 KB otherwise.
     ///
     /// - Files < 10 MB  -> `upload.saveFilePart`    (small-file API)
     /// - Files >= 10 MB -> `upload.saveBigFilePart`  (big-file API)
@@ -2622,14 +2745,14 @@ impl Client {
 
     /// Download all bytes of a media attachment at once (sequential).
     #[allow(dead_code)]
-    pub(crate) async fn download_media(
+    pub(crate) async fn download_media_bytes(
         &self,
         location: tl::enums::InputFileLocation,
     ) -> Result<Vec<u8>, InvocationError> {
         self.download_media_on_dc(location, 0).await
     }
 
-    /// Like [`download_media`] but routes `GetFile` to `dc_id`.
+    /// Like [`download_media_bytes`] but routes `GetFile` to `dc_id`.
     ///
     /// Opens a **dedicated** `DcConnection` for this download so it never
     /// shares the idle transfer-pool connection (which the server silently
