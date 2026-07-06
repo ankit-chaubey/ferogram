@@ -797,10 +797,10 @@ impl Client {
             InvocationError::Deserialize("media has no downloadable location".into())
         })?;
         if let Some(size) = crate::media::size_from_media(media)
-            && size >= crate::media::BIG_FILE_THRESHOLD
+            && size >= crate::media::DOWNLOAD_CONCURRENT_THRESHOLD
         {
             return self
-                .download_media_concurrent_on_dc_to_file(loc, size, dc, path, handle)
+                .download_media_concurrent_on_dc_to_file_pipelined(loc, size, dc, path, handle)
                 .await;
         }
         let mut file = tokio::fs::File::create(path)
@@ -904,7 +904,7 @@ impl Client {
             .await
             .map_err(InvocationError::Io)?;
         if data.len() > crate::media::BIG_FILE_THRESHOLD {
-            self.upload_file_concurrent(std::sync::Arc::new(data), name, "", handle)
+            self.upload_file_concurrent_pipelined(std::sync::Arc::new(data), name, "", handle)
                 .await
         } else {
             self.upload_bytes(&data, name, "", handle).await
@@ -972,7 +972,7 @@ impl Client {
         let size = meta.len() as usize;
         if size >= crate::media::BIG_FILE_THRESHOLD {
             return self
-                .upload_file_concurrent_streaming(path, name, "", handle)
+                .upload_file_concurrent_streaming_pipelined(path, name, "", handle)
                 .await;
         }
         let mut file = tokio::fs::File::open(path)
@@ -1208,9 +1208,14 @@ impl Client {
             .map_err(InvocationError::Io)?;
         let size = meta.len() as usize;
 
+        // exp: auto-tune uses the fixed MAX_WORKERS_PER_FILE ceiling, not the
+        // caller's configured TransferLimits - this path exists specifically
+        // to bypass configured safety limits, so it must not inherit them.
         let workers = config
             .workers
-            .unwrap_or_else(|| crate::media::upload_worker_count(size))
+            .unwrap_or_else(|| {
+                crate::media::upload_worker_count(size, crate::media::MAX_WORKERS_PER_FILE)
+            })
             .max(1)
             .min(crate::media::MAX_GLOBAL_SENDERS); // exp: up to 12, not the normal 4 ceiling
 
@@ -1292,9 +1297,13 @@ impl Client {
         })?;
         let size = crate::media::size_from_media(media).unwrap_or(0);
 
+        // exp: same rationale as upload_exp above - fixed ceiling, not the
+        // caller's TransferLimits.
         let workers = config
             .workers
-            .unwrap_or_else(|| crate::media::download_worker_count(size))
+            .unwrap_or_else(|| {
+                crate::media::download_worker_count(size, crate::media::MAX_WORKERS_PER_FILE)
+            })
             .max(1)
             .min(crate::media::MAX_GLOBAL_SENDERS); // exp: up to 12, not the normal 4 ceiling
 

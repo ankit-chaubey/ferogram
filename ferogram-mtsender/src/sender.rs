@@ -372,16 +372,16 @@ impl DcConnection {
         self.enc.time_offset
     }
 
-    /// Break the connection into its raw parts so the caller can hand them to
-    /// the pipelined [`crate::sender_task::spawn_sender_task`] instead of using
-    /// this struct's blocking [`rpc_call`](Self::rpc_call).
+    /// Decompose this connection into its raw parts so it can be handed off
+    /// to [`crate::sender_task::spawn_sender_task`], graduating it from a
+    /// single-request-at-a-time `DcConnection` into a pipelined background
+    /// sender task that supports multiple concurrent in-flight requests.
     ///
     /// `DcPool` uses this once a connection has finished its setup (DH, PFS
-    /// bind, initConnection) as a plain `DcConnection`: the pool graduates it
-    /// into a background sender task so every later request on the pool's
-    /// `invoke_on_dc` path pipelines instead of blocking the connection for
-    /// each round trip.
-    pub(crate) fn into_parts(self) -> (TcpStream, FrameKind, EncryptedSession) {
+    /// bind, initConnection) as a plain `DcConnection`. ferogram's transfer
+    /// workers (`Client::open_worker_sender`) use the same pattern to enable
+    /// request pipelining on upload/download connections.
+    pub fn into_parts(self) -> (TcpStream, FrameKind, EncryptedSession) {
         (self.stream, self.frame_kind, self.enc)
     }
 

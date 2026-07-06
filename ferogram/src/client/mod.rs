@@ -22,7 +22,8 @@ use crate::session::{self, PersistedSession};
 use crate::update;
 use crate::{
     AutoSleep, ConnectionRestartPolicy, DcEntry, DcFlags, ExperimentalFeatures, InvocationError,
-    NeverRestart, PeerCache, RetryContext, RetryPolicy, dc_pool, message_box, persist,
+    NeverRestart, PeerCache, RetryContext, RetryPolicy, TransferLimits, dc_pool, message_box,
+    persist,
 };
 use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable, RemoteCall};
@@ -153,6 +154,13 @@ pub struct Config {
     /// to import a token obtained elsewhere. Overrides any value already in
     /// the loaded session.
     pub future_auth_token: Option<Vec<u8>>,
+    /// Concurrency ceilings for file transfers. See [`TransferLimits`] for
+    /// the highway/trucks model this controls.
+    ///
+    /// Default: `download_tcp_connections: 4, upload_tcp_connections: 4,
+    /// max_tcp_connections: 12, download_pipeline_depth: 4, upload_pipeline_depth: 4,
+    /// bypass_tcp_allotments: false`.
+    pub transfer_limits: TransferLimits,
 }
 
 impl Config {
@@ -299,6 +307,7 @@ impl Default for Config {
             experimental_features: ExperimentalFeatures::default(),
             update_config: crate::update_config::UpdateConfig::default(),
             future_auth_token: None,
+            transfer_limits: TransferLimits::default(),
         }
     }
 }
@@ -384,9 +393,13 @@ pub(crate) struct ClientInner {
     /// bots get 100_000 (BOT_CHANNEL_DIFF_LIMIT), users get 100 (USER_CHANNEL_DIFF_LIMIT).
     pub is_bot: std::sync::atomic::AtomicBool,
     /// Global MTProto sender semaphore  - limits total concurrent transfer workers
-    /// across all uploads and downloads to [`crate::media::MAX_GLOBAL_SENDERS`] (12).
+    /// across all uploads and downloads to `transfer_limits.max_tcp_connections`.
     /// Each concurrent worker acquires one permit; it is released on drop.
     pub(crate) worker_semaphore: Arc<tokio::sync::Semaphore>,
+    /// User-tunable transfer concurrency ceilings. See [`TransferLimits`]
+    /// for the highway/trucks model. Normalized (clamped to the safe range)
+    /// on construction regardless of how `Config` was built.
+    pub(crate) transfer_limits: TransferLimits,
     /// Guards against calling `stream_updates()` more than once.
     stream_active: std::sync::atomic::AtomicBool,
 
@@ -474,6 +487,70 @@ pub(crate) struct ClientInner {
     /// entry. `None` once consumed by a successful re-auth, or if the
     /// account has 2FA enabled (Telegram never issues one in that case).
     pub(crate) future_auth_token: parking_lot::Mutex<Option<Vec<u8>>>,
+}
+
+/// A pipelined transfer connection: multiple chunk requests can be enqueued
+/// and in flight simultaneously, instead of `DcConnection::rpc_call`'s
+/// one-at-a-time blocking model.
+///
+/// Returned by [`Client::open_worker_sender`]. Backed by a background
+/// [`ferogram_mtsender::sender_task`] that owns the socket; this struct is
+/// just a cheap handle (an mpsc sender + a liveness flag) and can be cloned
+/// freely if multiple call sites need to share one pipelined connection.
+#[derive(Clone)]
+pub(crate) struct PipelinedSender {
+    rpc_tx: tokio::sync::mpsc::Sender<ferogram_mtsender::RpcEnqueue>,
+    /// Flipped to `false` by the background drain task once the sender
+    /// task reports a connection error. Callers check this after a failed
+    /// `enqueue` to decide whether to open a fresh `PipelinedSender` rather
+    /// than keep retrying on a dead connection.
+    alive: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl PipelinedSender {
+    /// `true` if the underlying sender task is still running. Does not
+    /// guarantee the *next* request will succeed (the connection could die
+    /// between this check and the next `enqueue`), but is enough to decide
+    /// whether to keep using this sender or fall back to opening a new one.
+    #[allow(dead_code)]
+    pub(crate) fn is_alive(&self) -> bool {
+        self.alive.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Enqueue a pre-serialised TL request body and return a future that
+    /// resolves when the server responds. Does **not** wait for the
+    /// response itself  - callers can enqueue several of these before
+    /// awaiting any of them, which is exactly what gives this connection
+    /// X > 1 (multiple chunk requests in flight at once on one socket).
+    ///
+    /// Returns an error immediately if the sender task has already shut
+    /// down (e.g. the connection died); otherwise returns a future that
+    /// resolves to the eventual RPC result or a connection-failure error.
+    pub(crate) async fn enqueue(
+        &self,
+        body: Vec<u8>,
+    ) -> Result<
+        impl std::future::Future<Output = Result<Vec<u8>, InvocationError>> + Send + use<>,
+        InvocationError,
+    > {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.rpc_tx
+            .send(ferogram_mtsender::RpcEnqueue { body, tx })
+            .await
+            .map_err(|_| InvocationError::Deserialize("pipelined sender task shut down".into()))?;
+        Ok(async move {
+            rx.await
+                .map_err(|_| InvocationError::Deserialize("pipelined rpc channel closed".into()))?
+        })
+    }
+
+    /// Enqueue and immediately await a single request  - convenience for
+    /// call sites that don't need explicit pipelining (e.g. the final part
+    /// of a transfer, or error-recovery paths).
+    #[allow(dead_code)]
+    pub(crate) async fn call(&self, body: Vec<u8>) -> Result<Vec<u8>, InvocationError> {
+        self.enqueue(body).await?.await
+    }
 }
 
 /// The main Telegram client. Cheap to clone: internally Arc-wrapped.
@@ -750,8 +827,9 @@ impl Client {
             update_tx,
             is_bot: std::sync::atomic::AtomicBool::new(false),
             worker_semaphore: Arc::new(tokio::sync::Semaphore::new(
-                crate::media::MAX_GLOBAL_SENDERS,
+                config.transfer_limits.normalized().max_tcp_connections,
             )),
+            transfer_limits: config.transfer_limits.normalized(),
             stream_active: std::sync::atomic::AtomicBool::new(false),
 
             dh_in_progress: std::sync::atomic::AtomicBool::new(false),
@@ -4008,6 +4086,56 @@ impl Client {
                 Ok(conn)
             }
         }
+    }
+
+    /// Open a pipelined transfer connection for `dc_id`: same DH / auth-import
+    /// setup as [`open_worker_conn`](Self::open_worker_conn), but graduates
+    /// the connection into a background [`ferogram_mtsender::sender_task`]
+    /// instead of returning a blocking [`dc_pool::DcConnection`].
+    ///
+    /// The returned [`PipelinedSender`] supports **X > 1**: multiple chunk
+    /// requests can be enqueued and in flight on the same connection at
+    /// once, with responses matched back to callers out of order. This is
+    /// the "X pieces in flight" half of Telegram's documented upload/download
+    /// performance recommendation (the worker-count axis is "Y queues").
+    /// `DcConnection::rpc_call` (used by [`open_worker_conn`](Self::open_worker_conn))
+    /// only ever has X = 1: it blocks until its own response arrives before
+    /// the caller can send anything else on that connection.
+    pub(crate) async fn open_worker_sender(
+        &self,
+        dc_id: i32,
+    ) -> Result<PipelinedSender, InvocationError> {
+        let conn = self.open_worker_conn(dc_id).await?;
+        let (stream, frame_kind, enc) = conn.into_parts();
+        let (handle, mut frame_rx) =
+            ferogram_mtsender::spawn_sender_task(stream, enc, frame_kind, None);
+
+        // Transfer workers don't support reconnect mid-transfer today (same
+        // as the main session pool's slots): on failure the caller's retry
+        // loop opens a fresh `PipelinedSender` from scratch, same as it
+        // already does for `DcConnection` failures. Dropping reconnect_tx
+        // lets the sender task shut down cleanly on error instead of
+        // waiting for a reconnect that will never come.
+        drop(handle.reconnect_tx);
+
+        let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let alive_for_drain = alive.clone();
+        tokio::spawn(async move {
+            while let Some(event) = frame_rx.recv().await {
+                if let ferogram_mtsender::FrameEvent::Error(e) = event {
+                    tracing::debug!("[ferogram::transfer] pipelined worker conn dropped: {e}");
+                    alive_for_drain.store(false, std::sync::atomic::Ordering::Release);
+                    break;
+                }
+                // Update / Connected events: transfer connections don't
+                // dispatch updates, nothing to do with them.
+            }
+        });
+
+        Ok(PipelinedSender {
+            rpc_tx: handle.rpc_tx,
+            alive,
+        })
     }
 
     /// Like rpc_call_raw but takes a Serializable (for InvokeWithLayer wrappers).

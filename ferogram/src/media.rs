@@ -20,6 +20,23 @@ use tokio::sync::Mutex;
 
 use crate::{Client, InvocationError};
 
+/// One in-flight pipelined upload request: (part index, part length in
+/// bytes, response future). Used as the sliding-window element in
+/// [`Client::upload_file_concurrent_streaming_pipelined`].
+type PipelinedUploadSlot = (
+    i32,
+    u64,
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, InvocationError>> + Send>>,
+);
+
+/// One in-flight pipelined download request: (part index, response future).
+/// Used as the sliding-window element in
+/// [`Client::download_media_concurrent_on_dc_to_file_pipelined`].
+type PipelinedDownloadSlot = (
+    usize,
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, InvocationError>> + Send>>,
+);
+
 /// A single item in a multi-media album send.
 ///
 /// Build via [`AlbumItem::new`], then optionally chain `.caption()`, `.reply_to()`.
@@ -120,9 +137,35 @@ pub const MAX_WORKERS_PER_FILE: usize = 4;
 /// `ClientInner::worker_semaphore` which is initialised with this many permits.
 pub const MAX_GLOBAL_SENDERS: usize = 12;
 
+/// Default trucks-per-highway depth (X): how many chunk requests a single
+/// pipelined transfer connection keeps in flight at once. Matches
+/// Android's upload connection pool depth.
+pub const DEFAULT_PIPELINE_DEPTH: usize = 4;
+
+/// Hard ceiling for [`crate::TransferLimits::download_pipeline_depth`] /
+/// `upload_pipeline_depth`, regardless of what the user requests.
+///
+/// Each in-flight request holds a full chunk buffer in memory
+/// (`{download,upload}_tcp_connections * pipeline_depth` buffers per
+/// transfer), so unlike those fields this ceiling exists to bound memory, not to protect
+/// the server from connection shedding.
+pub const MAX_PIPELINE_DEPTH: usize = 8;
+
 /// Files larger than this use `upload.saveBigFilePart`  - Telegram protocol spec.
-/// MUST be 10 MB, not 30 MB.
+/// MUST be 10 MB, not 30 MB. **Upload-only**: `GetFile` has no small/big
+/// distinction, so this never applies to downloads. See
+/// [`DOWNLOAD_CONCURRENT_THRESHOLD`] for the download-side equivalent.
 pub const BIG_FILE_THRESHOLD: usize = 10 * 1024 * 1024;
+
+/// Routing threshold for downloads: below this, `Client::download` uses a
+/// plain single-connection stream; at or above it, downloads go through
+/// the concurrent/pipelined engine (Y worker connections, each X requests
+/// deep). Independent of [`BIG_FILE_THRESHOLD`] on purpose - that constant
+/// is upload's protocol-mandated `saveBigFilePart` boundary, and reusing it
+/// here was coincidental, not protocol-driven. Same value today, but free
+/// to diverge since nothing in the download path actually depends on it
+/// matching the upload number.
+pub const DOWNLOAD_CONCURRENT_THRESHOLD: usize = 10 * 1024 * 1024;
 
 /// Maximum parts per upload.
 #[allow(dead_code)]
@@ -197,51 +240,58 @@ pub(crate) fn count_workers(n_parts: usize) -> usize {
     }
 }
 
-/// Concurrent download workers for `file_size` bytes.
+/// Concurrent download workers (Y) for `file_size` bytes.
 ///
-/// Hard ceiling: [`MAX_WORKERS_PER_FILE`] = 4.
+/// `max_workers` is the caller's configured ceiling - in practice
+/// `ClientInner::transfer_limits.{download,upload}_tcp_connections`, itself already clamped
+/// to [`MAX_WORKERS_PER_FILE`] (see [`crate::TransferLimits`]). The size
+/// tiers below are Ferogram's own tuning and stay fixed; `max_workers` only
+/// ever pulls the result *down*, never past the absolute ceiling.
 ///
-/// | File size    | Workers |
-/// |--------------|---------|
-/// | < 10 MB      | 1       |
-/// | 10 - 50 MB   | 2       |
-/// | 50 - 300 MB  | 3       |
-/// | > 300 MB     | 4       |
+/// | File size    | Workers (uncapped) |
+/// |--------------|---------------------|
+/// | < 10 MB      | 1                   |
+/// | 10 - 50 MB   | 2                   |
+/// | 50 - 300 MB  | 3                   |
+/// | > 300 MB     | [`MAX_WORKERS_PER_FILE`] |
 ///
 /// The 300 MB boundary avoids the 199 MB → 3 / 202 MB → 4 cliff that a
 /// 200 MB cutoff would create  - files cluster around round sizes.
-pub fn download_worker_count(file_size: usize) -> usize {
-    if file_size < 10 * 1024 * 1024 {
+pub fn download_worker_count(file_size: usize, max_workers: usize) -> usize {
+    let tiered = if file_size < 10 * 1024 * 1024 {
         1
     } else if file_size < 50 * 1024 * 1024 {
         2
     } else if file_size < 300 * 1024 * 1024 {
         3
     } else {
-        MAX_WORKERS_PER_FILE // 4
-    }
+        MAX_WORKERS_PER_FILE
+    };
+    tiered.min(max_workers.max(1))
 }
 
-/// Concurrent upload workers for `file_size` bytes.
+/// Concurrent upload workers (Y) for `file_size` bytes.
 ///
-/// Hard ceiling: [`MAX_WORKERS_PER_FILE`] = 4.
+/// See [`download_worker_count`] for what `max_workers` means; the same
+/// contract applies here.
 ///
-/// | File size    | Workers |
-/// |--------------|---------|
-/// | < 10 MB      | 1       |
-/// | 10 - 100 MB  | 2       |
-/// | 100 - 500 MB | 3       |
-/// | > 500 MB     | 4       |
-pub fn upload_worker_count(file_size: usize) -> usize {
-    if file_size < 10 * 1024 * 1024 {
+/// | File size    | Workers (uncapped) |
+/// |--------------|---------------------|
+/// | < 10 MB      | 1                   |
+/// | 10 - 100 MB  | 2                   |
+/// | 100 - 500 MB | 3                   |
+/// | > 500 MB     | [`MAX_WORKERS_PER_FILE`] |
+pub fn upload_worker_count(file_size: usize, max_workers: usize) -> usize {
+    let tiered = if file_size < 10 * 1024 * 1024 {
         1
     } else if file_size < 100 * 1024 * 1024 {
         2
     } else if file_size < 500 * 1024 * 1024 {
         3
     } else {
-        MAX_WORKERS_PER_FILE // 4
-    }
+        MAX_WORKERS_PER_FILE
+    };
+    tiered.min(max_workers.max(1))
 }
 
 // Kept for backwards compat; upload chunk size is now dynamic  - use `upload_part_size(file_size)`.
@@ -940,8 +990,27 @@ impl Client {
         let total = data.len();
         let (part_size, total_parts) = upload_part_size(total);
         let big = total > BIG_FILE_THRESHOLD;
-        // Per-file hard ceiling: max 4 workers. Global ceiling: MAX_GLOBAL_SENDERS permits.
-        let n_workers = upload_worker_count(total).min(MAX_WORKERS_PER_FILE);
+        // Per-file ceiling: transfer_limits.upload_tcp_connections (clamped to MAX_WORKERS_PER_FILE).
+        // Global ceiling: transfer_limits.max_tcp_connections permits.
+        let n_workers = if self.inner.transfer_limits.bypass_tcp_allotments {
+            self.inner.transfer_limits.upload_tcp_connections
+        } else {
+            upload_worker_count(total, self.inner.transfer_limits.upload_tcp_connections)
+        };
+
+        let home_dc = *self.inner.home_dc_id.lock().await;
+        let started = std::time::Instant::now();
+        let total_mib = total as f64 / (1024.0 * 1024.0);
+        tracing::info!(
+            "[ferogram::transfer] upload starting: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections)",
+            name,
+            total_mib,
+            total,
+            total_parts,
+            part_size,
+            home_dc,
+            n_workers
+        );
 
         if let Some(h) = handle {
             h.set_total(total as u64);
@@ -1181,12 +1250,406 @@ impl Client {
         let file_id = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
         let inner = make_input_file(big, file_id, total_parts, name, &data);
         tracing::info!(
-            "[ferogram::transfer] upload complete: '{}' ({} bytes, {}B parts x {}, {} workers)",
+            "[ferogram::transfer] upload complete: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, took {:.2}s)",
             name,
+            total_mib,
             total,
-            part_size,
             total_parts,
-            actual_workers
+            part_size,
+            home_dc,
+            actual_workers,
+            started.elapsed().as_secs_f64()
+        );
+        Ok(UploadedFile {
+            inner,
+            mime_type: resolve_mime(name, mime_type),
+            name: name.to_string(),
+        })
+    }
+
+    /// Like [`upload_file_concurrent`](Self::upload_file_concurrent) but uses
+    /// [`PipelinedSender`](crate::client::PipelinedSender) connections instead
+    /// of blocking [`DcConnection`](crate::dc_pool::DcConnection)s.
+    ///
+    /// Each worker keeps up to `transfer_limits.upload_pipeline_depth` (X)
+    /// `SaveFilePart`/`SaveBigFilePart` requests in flight on its single
+    /// connection at once, instead of awaiting each part's ack before sending
+    /// the next (X=1, what `upload_file_concurrent` does). Combined with
+    /// `n_workers` separate connections (Y), total in-flight chunks for an
+    /// upload is `n_workers * upload_pipeline_depth` instead of just
+    /// `n_workers`. See [`TransferLimits`](crate::TransferLimits) for the
+    /// highway/trucks model this implements.
+    ///
+    /// `data` is already fully in memory, so unlike the path-based streaming
+    /// variant there is no file handle to juggle on reconnect or DC
+    /// migration - every worker just slices the same `Arc<Vec<u8>>`.
+    ///
+    /// Falls back to the existing non-pipelined path if pipelined connections
+    /// fail to open, same reliability guarantees either way.
+    pub async fn upload_file_concurrent_pipelined(
+        &self,
+        data: Arc<Vec<u8>>,
+        name: &str,
+        mime_type: &str,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<UploadedFile, InvocationError> {
+        if data.is_empty() {
+            return Err(InvocationError::Deserialize(
+                "cannot upload empty file".into(),
+            ));
+        }
+        let total = data.len();
+        let (part_size, total_parts) = upload_part_size(total);
+        let big = total > BIG_FILE_THRESHOLD;
+        let n_workers = if self.inner.transfer_limits.bypass_tcp_allotments {
+            self.inner.transfer_limits.upload_tcp_connections
+        } else {
+            upload_worker_count(total, self.inner.transfer_limits.upload_tcp_connections)
+        };
+
+        let home_dc = *self.inner.home_dc_id.lock().await;
+        let started = std::time::Instant::now();
+        let total_mib = total as f64 / (1024.0 * 1024.0);
+        tracing::info!(
+            "[ferogram::transfer] pipelined upload starting: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, X={} in-flight)",
+            name,
+            total_mib,
+            total,
+            total_parts,
+            part_size,
+            home_dc,
+            n_workers,
+            self.inner.transfer_limits.upload_pipeline_depth
+        );
+
+        if let Some(h) = handle {
+            h.set_total(total as u64);
+            h.reset_start();
+        }
+        let shared_handle: Option<crate::transfer::TransferHandle> = handle.cloned();
+
+        let _global_guard = self
+            .inner
+            .worker_semaphore
+            .acquire_many(n_workers as u32)
+            .await
+            .expect("worker semaphore unexpectedly closed");
+
+        // Single-worker small files: skip pipelined setup overhead entirely.
+        if n_workers == 1 {
+            drop(_global_guard);
+            return self
+                .upload_bytes(&data, name, mime_type, shared_handle.as_ref())
+                .await;
+        }
+
+        let file_id_atomic =
+            std::sync::Arc::new(std::sync::atomic::AtomicI64::new(crate::random_i64_pub()));
+        let upload_dc = Arc::new(AtomicI32::new(0i32));
+
+        let mut open_set: tokio::task::JoinSet<
+            Result<crate::client::PipelinedSender, InvocationError>,
+        > = tokio::task::JoinSet::new();
+        for _ in 0..n_workers {
+            let client = self.clone();
+            open_set.spawn(async move { client.open_worker_sender(0).await });
+        }
+        let mut senders: Vec<crate::client::PipelinedSender> = Vec::with_capacity(n_workers);
+        while let Some(res) = open_set.join_next().await {
+            match res {
+                Ok(Ok(s)) => senders.push(s),
+                Ok(Err(e)) => tracing::debug!(
+                    "[ferogram::transfer] pipelined upload worker connection failed: {e}"
+                ),
+                Err(e) => tracing::debug!(
+                    "[ferogram::transfer] pipelined upload worker task panicked: {e}"
+                ),
+            }
+        }
+        if senders.is_empty() {
+            tracing::debug!(
+                "[ferogram::transfer] no pipelined worker connections available; falling back to non-pipelined concurrent upload"
+            );
+            drop(_global_guard);
+            return self
+                .upload_file_concurrent(data, name, mime_type, handle)
+                .await;
+        }
+        let actual_workers = senders.len();
+
+        let next_part = Arc::new(Mutex::new(0i32));
+        let mut tasks: tokio::task::JoinSet<Result<(), InvocationError>> =
+            tokio::task::JoinSet::new();
+
+        for sender in senders {
+            let data = Arc::clone(&data);
+            let next_part = Arc::clone(&next_part);
+            let client = self.clone();
+            let upload_dc = Arc::clone(&upload_dc);
+            let file_id_atomic = std::sync::Arc::clone(&file_id_atomic);
+            let worker_handle = shared_handle.clone();
+            let mut sender = sender;
+
+            tasks.spawn(async move {
+                const MAX_WORKER_RECONNECTS: u8 = 5;
+                let mut total_reconnects = 0u8;
+                let mut worker_dc = 0i32;
+
+                // Sliding window of (part_num, chunk_len, response_future).
+                // Each future resolves to the raw `Bool` RPC response  - upload
+                // doesn't need to inspect the payload, just that it succeeded.
+                let mut window: std::collections::VecDeque<PipelinedUploadSlot> =
+                    std::collections::VecDeque::with_capacity(
+                        client.inner.transfer_limits.upload_pipeline_depth,
+                    );
+
+                let slice_part = |part_num: i32| -> Vec<u8> {
+                    let start = part_num as usize * part_size;
+                    let end = (start + part_size).min(data.len());
+                    data[start..end].to_vec()
+                };
+
+                loop {
+                    // Top up the window to upload_pipeline_depth before draining the front.
+                    while window.len() < client.inner.transfer_limits.upload_pipeline_depth {
+                        let (part_num, file_id, current_dc) = {
+                            let mut g = next_part.lock().await;
+                            let fid = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
+                            let dc = upload_dc.load(Ordering::Relaxed);
+                            if *g >= total_parts {
+                                break;
+                            }
+                            let n = *g;
+                            *g += 1;
+                            (n, fid, dc)
+                        };
+                        if current_dc != worker_dc {
+                            worker_dc = current_dc;
+                            sender = match client.open_worker_sender(worker_dc).await {
+                                Ok(s) => s,
+                                Err(e) => return Err(e),
+                            };
+                            // A redirect invalidates any parts still in flight from the
+                            // old file_id/DC; the window was for the old upload session.
+                            window.clear();
+                        }
+
+                        let bytes = slice_part(part_num);
+                        let chunk_len = bytes.len() as u64;
+
+                        if let Some(ref h) = worker_handle {
+                            h.poll_pause_cancel().await?;
+                        }
+
+                        let raw_req = if big {
+                            tl::Serializable::to_bytes(&tl::functions::upload::SaveBigFilePart {
+                                file_id,
+                                file_part: part_num,
+                                file_total_parts: total_parts,
+                                bytes,
+                            })
+                        } else {
+                            tl::Serializable::to_bytes(&tl::functions::upload::SaveFilePart {
+                                file_id,
+                                file_part: part_num,
+                                bytes,
+                            })
+                        };
+                        let body = ferogram_connect::util::maybe_gz_pack(&raw_req);
+
+                        match sender.enqueue(body).await {
+                            Ok(fut) => {
+                                window.push_back((part_num, chunk_len, Box::pin(fut)))
+                            }
+                            Err(e) => {
+                                tracing::debug!(
+                                    "[ferogram::transfer] pipelined upload enqueue failed, reconnecting: {e}"
+                                );
+                                total_reconnects += 1;
+                                if total_reconnects >= MAX_WORKER_RECONNECTS {
+                                    return Err(e);
+                                }
+                                let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
+                                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms))
+                                    .await;
+                                sender = match client.open_worker_sender(worker_dc).await {
+                                    Ok(s) => s,
+                                    Err(e) => return Err(e),
+                                };
+                                // Re-queue this part: rewind past it and anything else
+                                // still in the window before clearing.
+                                let min_part = window
+                                    .iter()
+                                    .map(|(p, _, _)| *p)
+                                    .min()
+                                    .unwrap_or(part_num)
+                                    .min(part_num);
+                                window.clear();
+                                let mut g = next_part.lock().await;
+                                *g = (*g).min(min_part);
+                                break;
+                            }
+                        }
+                    }
+
+                    if window.is_empty() {
+                        // No more parts to claim and nothing in flight: this worker is done.
+                        break;
+                    }
+
+                    let (part_num, chunk_len, fut) =
+                        window.pop_front().expect("window checked non-empty above");
+                    let result = fut.await;
+                    let err = match result {
+                        Ok(_) => {
+                            if let Some(ref h) = worker_handle {
+                                h.add_bytes(chunk_len);
+                            }
+                            continue;
+                        }
+                        Err(e) => e,
+                    };
+
+                    if let InvocationError::Rpc(ref rpc) = err {
+                        if rpc.code == 420 {
+                            let secs = rpc.value.unwrap_or(1) as u64;
+                            tracing::debug!(
+                                "[ferogram::transfer] pipelined upload throttled by FLOOD_WAIT_{secs}; sleeping before retry"
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                            // Retry the same part directly  - re-enqueue at front of window.
+                            let file_id =
+                                file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
+                            let bytes = slice_part(part_num);
+                            let raw_req = if big {
+                                tl::Serializable::to_bytes(
+                                    &tl::functions::upload::SaveBigFilePart {
+                                        file_id,
+                                        file_part: part_num,
+                                        file_total_parts: total_parts,
+                                        bytes,
+                                    },
+                                )
+                            } else {
+                                tl::Serializable::to_bytes(&tl::functions::upload::SaveFilePart {
+                                    file_id,
+                                    file_part: part_num,
+                                    bytes,
+                                })
+                            };
+                            let body = ferogram_connect::util::maybe_gz_pack(&raw_req);
+                            match sender.enqueue(body).await {
+                                Ok(retry_fut) => {
+                                    window.push_front((part_num, chunk_len, Box::pin(retry_fut)));
+                                    continue;
+                                }
+                                Err(e) => return Err(e),
+                            }
+                        }
+                        if rpc.code == 303 {
+                            let new_dc = rpc.value.unwrap_or(1) as i32;
+                            tracing::debug!(
+                                "[ferogram::transfer] pipelined upload redirected by FILE_MIGRATE to DC{new_dc} (was DC{worker_dc})"
+                            );
+                            {
+                                let mut g = next_part.lock().await;
+                                file_id_atomic.store(
+                                    crate::random_i64_pub(),
+                                    std::sync::atomic::Ordering::SeqCst,
+                                );
+                                upload_dc.store(new_dc, Ordering::SeqCst);
+                                *g = 0;
+                            }
+                            worker_dc = new_dc;
+                            window.clear();
+                            sender = match client.open_worker_sender(new_dc).await {
+                                Ok(s) => s,
+                                Err(e) => return Err(e),
+                            };
+                            continue;
+                        }
+                        if rpc.name == "AUTH_KEY_UNREGISTERED" {
+                            tracing::warn!(
+                                "[ferogram::transfer] pipelined upload: AUTH_KEY_UNREGISTERED on DC{worker_dc}; re-establishing worker connection (attempt {}/{MAX_WORKER_RECONNECTS})",
+                                total_reconnects + 1
+                            );
+                            total_reconnects += 1;
+                            if total_reconnects >= MAX_WORKER_RECONNECTS {
+                                return Err(err);
+                            }
+                            let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                            let min_part = window
+                                .iter()
+                                .map(|(p, _, _)| *p)
+                                .min()
+                                .unwrap_or(part_num)
+                                .min(part_num);
+                            window.clear();
+                            let mut g = next_part.lock().await;
+                            *g = (*g).min(min_part);
+                            drop(g);
+                            sender = match client.open_worker_sender(worker_dc).await {
+                                Ok(s) => s,
+                                Err(e) => return Err(e),
+                            };
+                            continue;
+                        }
+                        if rpc.code != -503 {
+                            return Err(err);
+                        }
+                    }
+
+                    total_reconnects += 1;
+                    if total_reconnects >= MAX_WORKER_RECONNECTS {
+                        return Err(err);
+                    }
+                    let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
+                    tracing::warn!(
+                        "[ferogram::transfer] pipelined upload worker error ({err}); reconnecting (attempt {total_reconnects}/{MAX_WORKER_RECONNECTS}, backoff {backoff_ms}ms)"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                    let min_part = window
+                        .iter()
+                        .map(|(p, _, _)| *p)
+                        .min()
+                        .unwrap_or(part_num)
+                        .min(part_num);
+                    window.clear();
+                    let mut g = next_part.lock().await;
+                    *g = (*g).min(min_part);
+                    drop(g);
+                    sender = match client.open_worker_sender(worker_dc).await {
+                        Ok(s) => s,
+                        Err(e) => return Err(e),
+                    };
+                }
+                Ok(())
+            });
+        }
+
+        while let Some(res) = tasks.join_next().await {
+            if let Err(e) =
+                res.map_err(|e| InvocationError::Io(std::io::Error::other(e.to_string())))?
+            {
+                tasks.abort_all();
+                return Err(e);
+            }
+        }
+
+        let file_id = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
+        let inner = make_input_file(big, file_id, total_parts, name, &data);
+        tracing::info!(
+            "[ferogram::transfer] pipelined upload complete: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, X={} in-flight, took {:.2}s)",
+            name,
+            total_mib,
+            total,
+            total_parts,
+            part_size,
+            home_dc,
+            actual_workers,
+            self.inner.transfer_limits.upload_pipeline_depth,
+            started.elapsed().as_secs_f64()
         );
         Ok(UploadedFile {
             inner,
@@ -1221,7 +1684,25 @@ impl Client {
 
         let (part_size, total_parts) = upload_part_size(total);
         let big = total > BIG_FILE_THRESHOLD;
-        let n_workers = upload_worker_count(total).min(MAX_WORKERS_PER_FILE);
+        let n_workers = if self.inner.transfer_limits.bypass_tcp_allotments {
+            self.inner.transfer_limits.upload_tcp_connections
+        } else {
+            upload_worker_count(total, self.inner.transfer_limits.upload_tcp_connections)
+        };
+
+        let home_dc = *self.inner.home_dc_id.lock().await;
+        let started = std::time::Instant::now();
+        let total_mib = total as f64 / (1024.0 * 1024.0);
+        tracing::info!(
+            "[ferogram::transfer] upload starting: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, streaming)",
+            name,
+            total_mib,
+            total,
+            total_parts,
+            part_size,
+            home_dc,
+            n_workers
+        );
 
         if let Some(h) = handle {
             h.set_total(total as u64);
@@ -1473,12 +1954,459 @@ impl Client {
             })
         };
         tracing::info!(
-            "[ferogram::transfer] upload complete: '{}' ({} bytes, {}B parts x {}, {} workers, streaming)",
+            "[ferogram::transfer] upload complete: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, streaming, took {:.2}s)",
             name,
+            total_mib,
             total,
-            part_size,
             total_parts,
-            actual_workers
+            part_size,
+            home_dc,
+            actual_workers,
+            started.elapsed().as_secs_f64()
+        );
+        Ok(UploadedFile {
+            inner,
+            mime_type: resolve_mime(name, mime_type),
+            name: name.to_string(),
+        })
+    }
+
+    /// Like [`upload_file_concurrent_streaming`](Self::upload_file_concurrent_streaming)
+    /// but uses [`PipelinedSender`](crate::client::PipelinedSender) connections
+    /// instead of blocking [`DcConnection`](crate::dc_pool::DcConnection)s.
+    ///
+    /// Each worker keeps up to `transfer_limits.upload_pipeline_depth` (X)
+    /// `SaveFilePart`/`SaveBigFilePart` requests in flight on its single
+    /// connection at once, instead of awaiting each part's ack before reading
+    /// and sending the next (X=1, what `upload_file_concurrent_streaming`
+    /// does). Combined with `n_workers` separate connections (Y), total
+    /// in-flight chunks for an upload is `n_workers * upload_pipeline_depth`
+    /// instead of just `n_workers`. See [`TransferLimits`](crate::TransferLimits)
+    /// for the highway/trucks model this implements.
+    ///
+    /// Falls back to the existing non-pipelined path if pipelined connections
+    /// fail to open, same reliability guarantees either way.
+    pub(crate) async fn upload_file_concurrent_streaming_pipelined(
+        &self,
+        path: &std::path::Path,
+        name: &str,
+        mime_type: &str,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<UploadedFile, InvocationError> {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+        let meta = tokio::fs::metadata(path)
+            .await
+            .map_err(InvocationError::Io)?;
+        let total = meta.len() as usize;
+        if total == 0 {
+            return Err(InvocationError::Deserialize(
+                "cannot upload empty file".into(),
+            ));
+        }
+
+        let (part_size, total_parts) = upload_part_size(total);
+        let big = total > BIG_FILE_THRESHOLD;
+        let n_workers = if self.inner.transfer_limits.bypass_tcp_allotments {
+            self.inner.transfer_limits.upload_tcp_connections
+        } else {
+            upload_worker_count(total, self.inner.transfer_limits.upload_tcp_connections)
+        };
+
+        let home_dc = *self.inner.home_dc_id.lock().await;
+        let started = std::time::Instant::now();
+        let total_mib = total as f64 / (1024.0 * 1024.0);
+        tracing::info!(
+            "[ferogram::transfer] pipelined upload starting: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, X={} in-flight)",
+            name,
+            total_mib,
+            total,
+            total_parts,
+            part_size,
+            home_dc,
+            n_workers,
+            self.inner.transfer_limits.upload_pipeline_depth
+        );
+
+        if let Some(h) = handle {
+            h.set_total(total as u64);
+            h.reset_start();
+        }
+        let shared_handle: Option<crate::transfer::TransferHandle> = handle.cloned();
+
+        let _global_guard = self
+            .inner
+            .worker_semaphore
+            .acquire_many(n_workers as u32)
+            .await
+            .expect("worker semaphore unexpectedly closed");
+
+        // Single-worker small files: skip pipelined setup overhead entirely.
+        if n_workers == 1 {
+            drop(_global_guard);
+            let mut data = Vec::with_capacity(total);
+            tokio::fs::File::open(path)
+                .await
+                .map_err(InvocationError::Io)?
+                .read_to_end(&mut data)
+                .await
+                .map_err(InvocationError::Io)?;
+            return self
+                .upload_bytes(&data, name, mime_type, shared_handle.as_ref())
+                .await;
+        }
+
+        let file_id_atomic =
+            std::sync::Arc::new(std::sync::atomic::AtomicI64::new(crate::random_i64_pub()));
+        let upload_dc = Arc::new(AtomicI32::new(0i32));
+
+        let mut open_set: tokio::task::JoinSet<
+            Result<crate::client::PipelinedSender, InvocationError>,
+        > = tokio::task::JoinSet::new();
+        for _ in 0..n_workers {
+            let client = self.clone();
+            open_set.spawn(async move { client.open_worker_sender(0).await });
+        }
+        let mut senders: Vec<crate::client::PipelinedSender> = Vec::with_capacity(n_workers);
+        while let Some(res) = open_set.join_next().await {
+            match res {
+                Ok(Ok(s)) => senders.push(s),
+                Ok(Err(e)) => tracing::debug!(
+                    "[ferogram::transfer] pipelined upload worker connection failed: {e}"
+                ),
+                Err(e) => tracing::debug!(
+                    "[ferogram::transfer] pipelined upload worker task panicked: {e}"
+                ),
+            }
+        }
+        if senders.is_empty() {
+            tracing::debug!(
+                "[ferogram::transfer] no pipelined worker connections available; falling back to non-pipelined concurrent upload"
+            );
+            drop(_global_guard);
+            return self
+                .upload_file_concurrent_streaming(path, name, mime_type, handle)
+                .await;
+        }
+        let actual_workers = senders.len();
+
+        let next_part = Arc::new(Mutex::new(0i32));
+        let mut tasks: tokio::task::JoinSet<Result<(), InvocationError>> =
+            tokio::task::JoinSet::new();
+        let path_arc = std::sync::Arc::new(path.to_path_buf());
+
+        for sender in senders {
+            let next_part = Arc::clone(&next_part);
+            let client = self.clone();
+            let upload_dc = Arc::clone(&upload_dc);
+            let file_id_atomic = std::sync::Arc::clone(&file_id_atomic);
+            let worker_handle = shared_handle.clone();
+            let path_arc = std::sync::Arc::clone(&path_arc);
+            let mut sender = sender;
+
+            tasks.spawn(async move {
+                const MAX_WORKER_RECONNECTS: u8 = 5;
+                let mut total_reconnects = 0u8;
+                let mut worker_dc = 0i32;
+
+                let mut file = tokio::fs::File::open(&*path_arc)
+                    .await
+                    .map_err(InvocationError::Io)?;
+
+                // Sliding window of (part_num, chunk_len, response_future).
+                // Each future resolves to the raw `Bool` RPC response  - upload
+                // doesn't need to inspect the payload, just that it succeeded.
+                let mut window: std::collections::VecDeque<PipelinedUploadSlot> =
+                    std::collections::VecDeque::with_capacity(
+                        client.inner.transfer_limits.upload_pipeline_depth,
+                    );
+
+                loop {
+                    // Top up the window to upload_pipeline_depth before draining the front.
+                    while window.len() < client.inner.transfer_limits.upload_pipeline_depth {
+                        let (part_num, file_id, current_dc) = {
+                            let mut g = next_part.lock().await;
+                            let fid = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
+                            let dc = upload_dc.load(Ordering::Relaxed);
+                            if *g >= total_parts {
+                                break;
+                            }
+                            let n = *g;
+                            *g += 1;
+                            (n, fid, dc)
+                        };
+                        if current_dc != worker_dc {
+                            worker_dc = current_dc;
+                            sender = match client.open_worker_sender(worker_dc).await {
+                                Ok(s) => s,
+                                Err(e) => return Err(e),
+                            };
+                            file = tokio::fs::File::open(&*path_arc)
+                                .await
+                                .map_err(InvocationError::Io)?;
+                            // A redirect invalidates any parts still in flight from the
+                            // old file_id/DC; the window was for the old upload session.
+                            window.clear();
+                        }
+
+                        let start = part_num as u64 * part_size as u64;
+                        let end = (start + part_size as u64).min(total as u64);
+                        let chunk_len = (end - start) as usize;
+
+                        file.seek(std::io::SeekFrom::Start(start))
+                            .await
+                            .map_err(InvocationError::Io)?;
+                        let mut bytes = vec![0u8; chunk_len];
+                        file.read_exact(&mut bytes)
+                            .await
+                            .map_err(InvocationError::Io)?;
+
+                        if let Some(ref h) = worker_handle {
+                            h.poll_pause_cancel().await?;
+                        }
+
+                        let raw_req = if big {
+                            tl::Serializable::to_bytes(&tl::functions::upload::SaveBigFilePart {
+                                file_id,
+                                file_part: part_num,
+                                file_total_parts: total_parts,
+                                bytes,
+                            })
+                        } else {
+                            tl::Serializable::to_bytes(&tl::functions::upload::SaveFilePart {
+                                file_id,
+                                file_part: part_num,
+                                bytes,
+                            })
+                        };
+                        let body = ferogram_connect::util::maybe_gz_pack(&raw_req);
+
+                        match sender.enqueue(body).await {
+                            Ok(fut) => {
+                                window.push_back((part_num, chunk_len as u64, Box::pin(fut)))
+                            }
+                            Err(e) => {
+                                tracing::debug!(
+                                    "[ferogram::transfer] pipelined upload enqueue failed, reconnecting: {e}"
+                                );
+                                total_reconnects += 1;
+                                if total_reconnects >= MAX_WORKER_RECONNECTS {
+                                    return Err(e);
+                                }
+                                let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
+                                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms))
+                                    .await;
+                                sender = match client.open_worker_sender(worker_dc).await {
+                                    Ok(s) => s,
+                                    Err(e) => return Err(e),
+                                };
+                                // Re-queue this part: rewind past it and anything else
+                                // still in the window before clearing.
+                                let min_part = window
+                                    .iter()
+                                    .map(|(p, _, _)| *p)
+                                    .min()
+                                    .unwrap_or(part_num)
+                                    .min(part_num);
+                                window.clear();
+                                let mut g = next_part.lock().await;
+                                *g = (*g).min(min_part);
+                                break;
+                            }
+                        }
+                    }
+
+                    if window.is_empty() {
+                        // No more parts to claim and nothing in flight: this worker is done.
+                        break;
+                    }
+
+                    let (part_num, chunk_len, fut) =
+                        window.pop_front().expect("window checked non-empty above");
+                    let result = fut.await;
+                    let err = match result {
+                        Ok(_) => {
+                            if let Some(ref h) = worker_handle {
+                                h.add_bytes(chunk_len);
+                            }
+                            continue;
+                        }
+                        Err(e) => e,
+                    };
+
+                    if let InvocationError::Rpc(ref rpc) = err {
+                        if rpc.code == 420 {
+                            let secs = rpc.value.unwrap_or(1) as u64;
+                            tracing::debug!(
+                                "[ferogram::transfer] pipelined upload throttled by FLOOD_WAIT_{secs}; sleeping before retry"
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                            // Retry the same part directly  - re-enqueue at front of window.
+                            let file_id =
+                                file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
+                            let start = part_num as u64 * part_size as u64;
+                            let end = (start + part_size as u64).min(total as u64);
+                            let len = (end - start) as usize;
+                            let mut bytes = vec![0u8; len];
+                            file.seek(std::io::SeekFrom::Start(start))
+                                .await
+                                .map_err(InvocationError::Io)?;
+                            file.read_exact(&mut bytes)
+                                .await
+                                .map_err(InvocationError::Io)?;
+                            let raw_req = if big {
+                                tl::Serializable::to_bytes(
+                                    &tl::functions::upload::SaveBigFilePart {
+                                        file_id,
+                                        file_part: part_num,
+                                        file_total_parts: total_parts,
+                                        bytes,
+                                    },
+                                )
+                            } else {
+                                tl::Serializable::to_bytes(&tl::functions::upload::SaveFilePart {
+                                    file_id,
+                                    file_part: part_num,
+                                    bytes,
+                                })
+                            };
+                            let body = ferogram_connect::util::maybe_gz_pack(&raw_req);
+                            match sender.enqueue(body).await {
+                                Ok(retry_fut) => {
+                                    window.push_front((part_num, chunk_len, Box::pin(retry_fut)));
+                                    continue;
+                                }
+                                Err(e) => return Err(e),
+                            }
+                        }
+                        if rpc.code == 303 {
+                            let new_dc = rpc.value.unwrap_or(1) as i32;
+                            tracing::debug!(
+                                "[ferogram::transfer] pipelined upload redirected by FILE_MIGRATE to DC{new_dc} (was DC{worker_dc})"
+                            );
+                            {
+                                let mut g = next_part.lock().await;
+                                file_id_atomic.store(
+                                    crate::random_i64_pub(),
+                                    std::sync::atomic::Ordering::SeqCst,
+                                );
+                                upload_dc.store(new_dc, Ordering::SeqCst);
+                                *g = 0;
+                            }
+                            worker_dc = new_dc;
+                            window.clear();
+                            sender = match client.open_worker_sender(new_dc).await {
+                                Ok(s) => s,
+                                Err(e) => return Err(e),
+                            };
+                            file = tokio::fs::File::open(&*path_arc)
+                                .await
+                                .map_err(InvocationError::Io)?;
+                            continue;
+                        }
+                        if rpc.name == "AUTH_KEY_UNREGISTERED" {
+                            tracing::warn!(
+                                "[ferogram::transfer] pipelined upload: AUTH_KEY_UNREGISTERED on DC{worker_dc}; re-establishing worker connection (attempt {}/{MAX_WORKER_RECONNECTS})",
+                                total_reconnects + 1
+                            );
+                            total_reconnects += 1;
+                            if total_reconnects >= MAX_WORKER_RECONNECTS {
+                                return Err(err);
+                            }
+                            let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                            let min_part = window
+                                .iter()
+                                .map(|(p, _, _)| *p)
+                                .min()
+                                .unwrap_or(part_num)
+                                .min(part_num);
+                            window.clear();
+                            let mut g = next_part.lock().await;
+                            *g = (*g).min(min_part);
+                            drop(g);
+                            sender = match client.open_worker_sender(worker_dc).await {
+                                Ok(s) => s,
+                                Err(e) => return Err(e),
+                            };
+                            continue;
+                        }
+                        if rpc.code != -503 {
+                            return Err(err);
+                        }
+                    }
+
+                    total_reconnects += 1;
+                    if total_reconnects >= MAX_WORKER_RECONNECTS {
+                        return Err(err);
+                    }
+                    let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
+                    tracing::warn!(
+                        "[ferogram::transfer] pipelined upload worker error ({err}); reconnecting (attempt {total_reconnects}/{MAX_WORKER_RECONNECTS}, backoff {backoff_ms}ms)"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                    let min_part = window
+                        .iter()
+                        .map(|(p, _, _)| *p)
+                        .min()
+                        .unwrap_or(part_num)
+                        .min(part_num);
+                    window.clear();
+                    let mut g = next_part.lock().await;
+                    *g = (*g).min(min_part);
+                    drop(g);
+                    sender = match client.open_worker_sender(worker_dc).await {
+                        Ok(s) => s,
+                        Err(e) => return Err(e),
+                    };
+                }
+                Ok(())
+            });
+        }
+
+        while let Some(res) = tasks.join_next().await {
+            if let Err(e) =
+                res.map_err(|e| InvocationError::Io(std::io::Error::other(e.to_string())))?
+            {
+                tasks.abort_all();
+                return Err(e);
+            }
+        }
+
+        let file_id = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
+        let inner = if big {
+            tl::enums::InputFile::Big(tl::types::InputFileBig {
+                id: file_id,
+                parts: total_parts,
+                name: name.to_string(),
+            })
+        } else {
+            let mut data = Vec::with_capacity(total);
+            tokio::fs::File::open(path)
+                .await
+                .map_err(InvocationError::Io)?
+                .read_to_end(&mut data)
+                .await
+                .map_err(InvocationError::Io)?;
+            let md5_checksum = format!("{:x}", md5::compute(&data));
+            tl::enums::InputFile::InputFile(tl::types::InputFile {
+                id: file_id,
+                parts: total_parts,
+                name: name.to_string(),
+                md5_checksum,
+            })
+        };
+        tracing::info!(
+            "[ferogram::transfer] pipelined upload complete: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, X={} in-flight, took {:.2}s)",
+            name,
+            total_mib,
+            total,
+            total_parts,
+            part_size,
+            home_dc,
+            actual_workers,
+            self.inner.transfer_limits.upload_pipeline_depth,
+            started.elapsed().as_secs_f64()
         );
         Ok(UploadedFile {
             inner,
@@ -1939,9 +2867,13 @@ impl Client {
     ) -> Result<Vec<u8>, InvocationError> {
         let chunk = download_chunk_size(size) as usize; // 256 KB (<50 MB) or 512 KB (≥50 MB)
         let n_parts = size.div_ceil(chunk);
-        // Per-file hard ceiling: MAX_WORKERS_PER_FILE = 4.
+        // Per-file ceiling: transfer_limits.download_tcp_connections (clamped to MAX_WORKERS_PER_FILE).
         // Global ceiling: MAX_GLOBAL_SENDERS = 12 (enforced via semaphore).
-        let n_workers = download_worker_count(size).min(MAX_WORKERS_PER_FILE);
+        let n_workers = if self.inner.transfer_limits.bypass_tcp_allotments {
+            self.inner.transfer_limits.download_tcp_connections
+        } else {
+            download_worker_count(size, self.inner.transfer_limits.download_tcp_connections)
+        };
         let _global_guard = self
             .inner
             .worker_semaphore
@@ -2250,7 +3182,31 @@ impl Client {
 
         let chunk = download_chunk_size(size) as usize;
         let n_parts = size.div_ceil(chunk);
-        let n_workers = download_worker_count(size).min(MAX_WORKERS_PER_FILE);
+        let n_workers = if self.inner.transfer_limits.bypass_tcp_allotments {
+            self.inner.transfer_limits.download_tcp_connections
+        } else {
+            download_worker_count(size, self.inner.transfer_limits.download_tcp_connections)
+        };
+
+        let home = {
+            let _g = self.inner.home_dc_id.lock().await;
+            *_g
+        };
+        let effective_dc = if dc_id == 0 { home } else { dc_id };
+
+        let started = std::time::Instant::now();
+        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+        let size_mib = size as f64 / (1024.0 * 1024.0);
+        tracing::info!(
+            "[ferogram::transfer] download starting: '{}' ({:.1} MiB / {} bytes, {} chunks x {}B, DC{}, Y={} connections)",
+            file_name,
+            size_mib,
+            size,
+            n_parts,
+            chunk,
+            effective_dc,
+            n_workers
+        );
 
         if let Some(h) = handle {
             h.set_total(size as u64);
@@ -2263,12 +3219,6 @@ impl Client {
             .acquire_many(n_workers as u32)
             .await
             .expect("worker semaphore unexpectedly closed");
-
-        let home = {
-            let _g = self.inner.home_dc_id.lock().await;
-            *_g
-        };
-        let effective_dc = if dc_id == 0 { home } else { dc_id };
 
         // Single-worker small files: skip parallel setup overhead.
         if n_workers == 1 && effective_dc == home {
@@ -2325,6 +3275,7 @@ impl Client {
         }
 
         let next_part = Arc::new(Mutex::new(0usize));
+        let actual_workers = conns.len();
         let (tx, mut rx) = tokio::sync::mpsc::channel::<(usize, Vec<u8>)>(conns.len() * 2);
         let mut tasks: tokio::task::JoinSet<Result<(), InvocationError>> =
             tokio::task::JoinSet::new();
@@ -2499,9 +3450,422 @@ impl Client {
             }
         }
 
-        writer_task
+        let total_written = writer_task
             .await
-            .map_err(|e| InvocationError::Io(std::io::Error::other(e.to_string())))?
+            .map_err(|e| InvocationError::Io(std::io::Error::other(e.to_string())))??;
+
+        tracing::info!(
+            "[ferogram::transfer] download complete: '{}' ({:.1} MiB / {} bytes, {} chunks x {}B, DC{}, Y={} connections, took {:.2}s)",
+            file_name,
+            total_written as f64 / (1024.0 * 1024.0),
+            total_written,
+            n_parts,
+            chunk,
+            effective_dc,
+            actual_workers,
+            started.elapsed().as_secs_f64()
+        );
+        Ok(total_written)
+    }
+
+    /// Like [`download_media_concurrent_on_dc_to_file`](Self::download_media_concurrent_on_dc_to_file)
+    /// but uses [`PipelinedSender`](crate::client::PipelinedSender) connections
+    /// instead of blocking [`DcConnection`](crate::dc_pool::DcConnection)s.
+    ///
+    /// Each worker keeps up to `transfer_limits.download_pipeline_depth` (X)
+    /// `GetFile` requests in flight on its single connection at once,
+    /// instead of sending one and waiting for the response before sending
+    /// the next (X=1, what `download_media_concurrent_on_dc_to_file` does).
+    /// Combined with `n_workers` separate connections (Y), total in-flight
+    /// chunks for a transfer is `n_workers * download_pipeline_depth` instead
+    /// of just `n_workers`  - this is the "X pieces in flight, Y queues"
+    /// model Telegram's docs recommend for upload/download performance. See
+    /// [`TransferLimits`](crate::TransferLimits) for the highway/trucks model.
+    ///
+    /// Falls back to the existing non-pipelined path internally if pipelined
+    /// connections fail to open (e.g. `into_parts`/`spawn_sender_task`
+    /// unavailable for some reason), so callers get the same reliability
+    /// guarantees either way.
+    pub(crate) async fn download_media_concurrent_on_dc_to_file_pipelined(
+        &self,
+        location: tl::enums::InputFileLocation,
+        size: usize,
+        dc_id: i32,
+        path: &std::path::Path,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<u64, InvocationError> {
+        use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+
+        let chunk = download_chunk_size(size) as usize;
+        let n_parts = size.div_ceil(chunk);
+        let n_workers = if self.inner.transfer_limits.bypass_tcp_allotments {
+            self.inner.transfer_limits.download_tcp_connections
+        } else {
+            download_worker_count(size, self.inner.transfer_limits.download_tcp_connections)
+        };
+
+        let home = {
+            let _g = self.inner.home_dc_id.lock().await;
+            *_g
+        };
+        let effective_dc = if dc_id == 0 { home } else { dc_id };
+
+        let started = std::time::Instant::now();
+        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+        let size_mib = size as f64 / (1024.0 * 1024.0);
+        tracing::info!(
+            "[ferogram::transfer] pipelined download starting: '{}' ({:.1} MiB / {} bytes, {} chunks x {}B, DC{}, Y={} connections, X={} in-flight)",
+            file_name,
+            size_mib,
+            size,
+            n_parts,
+            chunk,
+            effective_dc,
+            n_workers,
+            self.inner.transfer_limits.download_pipeline_depth
+        );
+
+        if let Some(h) = handle {
+            h.set_total(size as u64);
+            h.reset_start();
+        }
+
+        let _global_guard = self
+            .inner
+            .worker_semaphore
+            .acquire_many(n_workers as u32)
+            .await
+            .expect("worker semaphore unexpectedly closed");
+
+        // Single-worker small files: skip parallel/pipelined setup overhead
+        // entirely  - pipelining only pays off once there's more than one
+        // chunk worth queuing.
+        if n_workers == 1 && effective_dc == home {
+            drop(_global_guard);
+            let mut file = tokio::fs::File::create(path)
+                .await
+                .map_err(InvocationError::Io)?;
+            return self
+                .download_streaming_on_dc(location, dc_id, &mut file, handle)
+                .await;
+        }
+
+        // Pre-allocate the file to avoid fragmentation on disk.
+        let file_for_alloc = tokio::fs::File::create(path)
+            .await
+            .map_err(InvocationError::Io)?;
+        file_for_alloc
+            .set_len(size as u64)
+            .await
+            .map_err(InvocationError::Io)?;
+        drop(file_for_alloc);
+
+        let mut open_set: tokio::task::JoinSet<
+            Result<crate::client::PipelinedSender, InvocationError>,
+        > = tokio::task::JoinSet::new();
+        for _ in 0..n_workers {
+            let client = self.clone();
+            open_set.spawn(async move { client.open_worker_sender(effective_dc).await });
+        }
+        let mut senders: Vec<crate::client::PipelinedSender> = Vec::with_capacity(n_workers);
+        while let Some(res) = open_set.join_next().await {
+            match res {
+                Ok(Ok(s)) => senders.push(s),
+                Ok(Err(e)) => tracing::debug!(
+                    "[ferogram::transfer] pipelined download worker connection failed: {e}"
+                ),
+                Err(e) => tracing::debug!(
+                    "[ferogram::transfer] pipelined download worker task panicked: {e}"
+                ),
+            }
+        }
+        if senders.is_empty() {
+            tracing::debug!(
+                "[ferogram::transfer] no pipelined worker connections available; falling back to non-pipelined concurrent download"
+            );
+            drop(_global_guard);
+            return self
+                .download_media_concurrent_on_dc_to_file(location, size, dc_id, path, handle)
+                .await;
+        }
+
+        let actual_workers = senders.len();
+        let next_part = Arc::new(Mutex::new(0usize));
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(usize, Vec<u8>)>(senders.len() * 2);
+        let mut tasks: tokio::task::JoinSet<Result<(), InvocationError>> =
+            tokio::task::JoinSet::new();
+        let abort = Arc::new(AtomicBool::new(false));
+
+        for sender in senders {
+            let location = location.clone();
+            let next_part = Arc::clone(&next_part);
+            let tx = tx.clone();
+            let client = self.clone();
+            let abort = Arc::clone(&abort);
+            let mut worker_dc = effective_dc;
+            let mut sender = sender;
+
+            tasks.spawn(async move {
+                const MAX_WORKER_RECONNECTS: u8 = 5;
+                let mut total_reconnects = 0u8;
+
+                // Sliding window of (part, response_future) pairs, in the
+                // order parts were claimed. We resolve them front-to-back so
+                // ordering for the writer channel stays deterministic per
+                // worker even though responses can arrive out of order on
+                // the wire  - `PipelinedSender::enqueue` already matches each
+                // future to its own msg_id internally.
+                let mut window: std::collections::VecDeque<PipelinedDownloadSlot> =
+                    std::collections::VecDeque::with_capacity(
+                        client.inner.transfer_limits.download_pipeline_depth,
+                    );
+
+                loop {
+                    if abort.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    // Top up the window to download_pipeline_depth before draining the front.
+                    while window.len() < client.inner.transfer_limits.download_pipeline_depth && !abort.load(Ordering::Relaxed) {
+                        let part = {
+                            let mut g = next_part.lock().await;
+                            if *g >= n_parts {
+                                None
+                            } else {
+                                let p = *g;
+                                *g += 1;
+                                Some(p)
+                            }
+                        };
+                        let Some(part) = part else {
+                            break;
+                        };
+                        let req = tl::functions::upload::GetFile {
+                            precise: true,
+                            cdn_supported: false,
+                            location: location.clone(),
+                            offset: (part * chunk) as i64,
+                            limit: chunk as i32,
+                        };
+                        let body =
+                            ferogram_connect::util::maybe_gz_pack(&tl::Serializable::to_bytes(&req));
+                        match sender.enqueue(body).await {
+                            Ok(fut) => window.push_back((part, Box::pin(fut))),
+                            Err(e) => {
+                                // Sender task is dead; reconnect and retry filling the window.
+                                tracing::debug!(
+                                    "[ferogram::transfer] pipelined enqueue failed, reconnecting: {e}"
+                                );
+                                total_reconnects += 1;
+                                if total_reconnects >= MAX_WORKER_RECONNECTS {
+                                    abort.store(true, Ordering::Relaxed);
+                                    return Err(e);
+                                }
+                                let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
+                                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms))
+                                    .await;
+                                match client.open_worker_sender(worker_dc).await {
+                                    Ok(s) => {
+                                        sender = s;
+                                        // Re-queue this part for the next loop iteration.
+                                        let mut g = next_part.lock().await;
+                                        *g = (*g).min(part);
+                                        drop(g);
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        abort.store(true, Ordering::Relaxed);
+                                        return Err(e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if window.is_empty() {
+                        // No more parts to claim and nothing in flight: this worker is done.
+                        break;
+                    }
+
+                    let (part, fut) = window.pop_front().expect("window checked non-empty above");
+                    let raw = match fut.await {
+                        Ok(r) => r,
+                        Err(err) => {
+                            if let InvocationError::Rpc(ref rpc) = err {
+                                if rpc.code == 420 {
+                                    let secs = rpc.value.unwrap_or(1) as u64;
+                                    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                                    // Re-claim this part by decrementing the shared cursor isn't
+                                    // safe under concurrent workers; instead, retry the same
+                                    // part directly on a fresh enqueue.
+                                    let req = tl::functions::upload::GetFile {
+                                        precise: true,
+                                        cdn_supported: false,
+                                        location: location.clone(),
+                                        offset: (part * chunk) as i64,
+                                        limit: chunk as i32,
+                                    };
+                                    let body = ferogram_connect::util::maybe_gz_pack(
+                                        &tl::Serializable::to_bytes(&req),
+                                    );
+                                    match sender.enqueue(body).await {
+                                        Ok(retry_fut) => {
+                                            window.push_front((part, Box::pin(retry_fut)));
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            abort.store(true, Ordering::Relaxed);
+                                            return Err(e);
+                                        }
+                                    }
+                                }
+                                if rpc.code == 303 {
+                                    let new_dc = rpc.value.unwrap_or(1) as i32;
+                                    worker_dc = new_dc;
+                                    match client.open_worker_sender(new_dc).await {
+                                        Ok(s) => {
+                                            sender = s;
+                                            // Parts still queued in `window` haven't been
+                                            // written yet; rewind past the lowest of them
+                                            // (not just `part`) before clearing, or they're
+                                            // silently dropped and the file ends up with gaps.
+                                            let min_part = window
+                                                .iter()
+                                                .map(|(p, _)| *p)
+                                                .min()
+                                                .unwrap_or(part)
+                                                .min(part);
+                                            window.clear();
+                                            let mut g = next_part.lock().await;
+                                            *g = (*g).min(min_part);
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            abort.store(true, Ordering::Relaxed);
+                                            return Err(e);
+                                        }
+                                    }
+                                }
+                            }
+                            // Connection-level failure (sender task died, etc): reconnect
+                            // and let the outer loop re-fill the window from scratch.
+                            total_reconnects += 1;
+                            if total_reconnects >= MAX_WORKER_RECONNECTS {
+                                abort.store(true, Ordering::Relaxed);
+                                return Err(err);
+                            }
+                            let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                            match client.open_worker_sender(worker_dc).await {
+                                Ok(s) => {
+                                    sender = s;
+                                    // Same gap-prevention rewind as the 303 branch above:
+                                    // account for everything still queued in `window`.
+                                    let min_part = window
+                                        .iter()
+                                        .map(|(p, _)| *p)
+                                        .min()
+                                        .unwrap_or(part)
+                                        .min(part);
+                                    window.clear();
+                                    let mut g = next_part.lock().await;
+                                    *g = (*g).min(min_part);
+                                    continue;
+                                }
+                                Err(e) => {
+                                    abort.store(true, Ordering::Relaxed);
+                                    return Err(e);
+                                }
+                            }
+                        }
+                    };
+
+                    let mut cur = Cursor::from_slice(&raw);
+                    match tl::enums::upload::File::deserialize(&mut cur)? {
+                        tl::enums::upload::File::File(f) => {
+                            let expected = if part == n_parts - 1 {
+                                size - part * chunk
+                            } else {
+                                chunk
+                            };
+                            if f.bytes.len() != expected {
+                                abort.store(true, Ordering::Relaxed);
+                                return Err(InvocationError::Deserialize(format!(
+                                    "download part {part}: expected {expected} B, got {} B",
+                                    f.bytes.len()
+                                )));
+                            }
+                            if tx.send((part, f.bytes)).await.is_err() {
+                                break;
+                            }
+                        }
+                        tl::enums::upload::File::CdnRedirect(_) => {
+                            abort.store(true, Ordering::Relaxed);
+                            return Err(InvocationError::Deserialize(
+                                "CDN redirect in pipelined download; retry via sequential".into(),
+                            ));
+                        }
+                    }
+                }
+                Ok(())
+            });
+        }
+        drop(tx);
+
+        // Writer task: single tokio::fs::File, seeks to each chunk offset and writes.
+        let path_owned = path.to_path_buf();
+        let shared_handle = handle.cloned();
+        let writer_task: tokio::task::JoinHandle<Result<u64, InvocationError>> =
+            tokio::spawn(async move {
+                let mut file = tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&path_owned)
+                    .await
+                    .map_err(InvocationError::Io)?;
+                let mut total_written = 0u64;
+                while let Some((part, data)) = rx.recv().await {
+                    let offset = (part * chunk) as u64;
+                    file.seek(std::io::SeekFrom::Start(offset))
+                        .await
+                        .map_err(InvocationError::Io)?;
+                    file.write_all(&data).await.map_err(InvocationError::Io)?;
+                    let n = data.len() as u64;
+                    total_written += n;
+                    if let Some(ref h) = shared_handle {
+                        h.add_bytes(n);
+                    }
+                }
+                file.flush().await.map_err(InvocationError::Io)?;
+                Ok(total_written)
+            });
+
+        while let Some(res) = tasks.join_next().await {
+            if let Err(e) =
+                res.map_err(|e| InvocationError::Io(std::io::Error::other(e.to_string())))?
+            {
+                tasks.abort_all();
+                writer_task.abort();
+                return Err(e);
+            }
+        }
+
+        let total_written = writer_task
+            .await
+            .map_err(|e| InvocationError::Io(std::io::Error::other(e.to_string())))??;
+
+        tracing::info!(
+            "[ferogram::transfer] pipelined download complete: '{}' ({:.1} MiB / {} bytes, {} chunks x {}B, DC{}, Y={} connections, X={} in-flight, took {:.2}s)",
+            file_name,
+            total_written as f64 / (1024.0 * 1024.0),
+            total_written,
+            n_parts,
+            chunk,
+            effective_dc,
+            actual_workers,
+            self.inner.transfer_limits.download_pipeline_depth,
+            started.elapsed().as_secs_f64()
+        );
+        Ok(total_written)
     }
 
     /// Download any [`Downloadable`] item (internal).

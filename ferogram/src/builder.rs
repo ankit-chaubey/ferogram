@@ -13,7 +13,8 @@
 use std::sync::Arc;
 
 use crate::{
-    Client, Config, ExperimentalFeatures, InvocationError, ShutdownToken, TransportKind,
+    Client, Config, ExperimentalFeatures, InvocationError, ShutdownToken, TransferLimits,
+    TransportKind,
     restart::{ConnectionRestartPolicy, NeverRestart},
     retry::{AutoSleep, RetryPolicy},
     session_backend::{BinaryFileBackend, InMemoryBackend, SessionBackend, StringSessionBackend},
@@ -48,6 +49,7 @@ pub struct ClientBuilder {
     use_pfs: bool,
     update_config: crate::update_config::UpdateConfig,
     future_auth_token: Option<Vec<u8>>,
+    transfer_limits: TransferLimits,
 }
 
 impl Default for ClientBuilder {
@@ -77,6 +79,7 @@ impl Default for ClientBuilder {
             use_pfs: false,
             update_config: crate::update_config::UpdateConfig::default(),
             future_auth_token: None,
+            transfer_limits: TransferLimits::default(),
         }
     }
 }
@@ -449,6 +452,136 @@ impl ClientBuilder {
         self
     }
 
+    // Transfer concurrency
+
+    /// Set all transfer concurrency ceilings at once.
+    ///
+    /// See [`TransferLimits`] for the highway/trucks model this controls -
+    /// in short, [`TransferLimits::download_tcp_connections`] /
+    /// [`upload_tcp_connections`](TransferLimits::upload_tcp_connections)
+    /// are how many parallel connections one download or upload may open
+    /// for itself, and [`TransferLimits::max_tcp_connections`] is how many
+    /// the whole client may have open across every transfer at once.
+    ///
+    /// Defaults match Ferogram's built-in tuning, so most users never need
+    /// this. Prefer the [`download_tcp_connections`](Self::download_tcp_connections) /
+    /// [`upload_tcp_connections`](Self::upload_tcp_connections) /
+    /// [`max_tcp_connections`](Self::max_tcp_connections)
+    /// shorthands if you only want to change one field.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use ferogram::{Client, TransferLimits};
+    /// # const ID: i32 = 0;
+    /// # const HASH: &str = "";
+    /// # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let (client, _) = Client::builder()
+    ///     .api_id(ID).api_hash(HASH)
+    ///     .transfer_limits(TransferLimits {
+    ///         download_tcp_connections: 2,
+    ///         upload_tcp_connections: 4,
+    ///         max_tcp_connections: 6,
+    ///         download_pipeline_depth: 2,
+    ///         upload_pipeline_depth: 2,
+    ///         bypass_tcp_allotments: false,
+    ///     })
+    ///     .connect().await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn transfer_limits(mut self, limits: TransferLimits) -> Self {
+        self.transfer_limits = limits;
+        self
+    }
+
+    /// Y: max parallel connections a single download may open for itself.
+    /// Small files always use 1 regardless of this value. Tuned separately
+    /// from uploads since a link's download and upload bandwidth often
+    /// differ - see [`upload_tcp_connections`](Self::upload_tcp_connections).
+    ///
+    /// Clamped to [`media::MAX_WORKERS_PER_FILE`](crate::media::MAX_WORKERS_PER_FILE)
+    /// on connect - exceeding it causes Telegram to shed connections with
+    /// early-EOF, so raising this past the ceiling has no effect rather than
+    /// making transfers faster.
+    ///
+    /// Raising this above the default is your call to make, and Telegram's
+    /// `FLOOD_WAIT` is how it tells you when you've pushed too far for the
+    /// current account or DC. If that starts happening, lower this (and
+    /// the pipeline depth) before anything else - see the
+    /// [`transfer_limits` module docs](crate::transfer_limits) for the full
+    /// explanation.
+    ///
+    /// Default: 4.
+    pub fn download_tcp_connections(mut self, n: usize) -> Self {
+        self.transfer_limits.download_tcp_connections = n;
+        self
+    }
+
+    /// Y for uploads. See [`download_tcp_connections`](Self::download_tcp_connections).
+    ///
+    /// Default: 4.
+    pub fn upload_tcp_connections(mut self, n: usize) -> Self {
+        self.transfer_limits.upload_tcp_connections = n;
+        self
+    }
+
+    /// Total transfer connections ("highways") available to the whole
+    /// client at once, shared across every concurrent upload and download.
+    ///
+    /// Lower this on memory- or socket-constrained devices. Never clamped
+    /// below 1.
+    ///
+    /// Default: 12.
+    pub fn max_tcp_connections(mut self, n: usize) -> Self {
+        self.transfer_limits.max_tcp_connections = n;
+        self
+    }
+
+    /// X: how many `GetFile` requests a single download connection keeps in
+    /// flight at once ("trucks on the highway"), instead of waiting for
+    /// each response before sending the next.
+    ///
+    /// Clamped to [`media::MAX_PIPELINE_DEPTH`](crate::media::MAX_PIPELINE_DEPTH)
+    /// on connect - each in-flight request holds a full chunk buffer in
+    /// memory, so this bounds memory rather than protecting the server.
+    ///
+    /// Default: 4.
+    pub fn download_pipeline_depth(mut self, n: usize) -> Self {
+        self.transfer_limits.download_pipeline_depth = n;
+        self
+    }
+
+    /// X for uploads. See [`download_pipeline_depth`](Self::download_pipeline_depth).
+    ///
+    /// Default: 4.
+    pub fn upload_pipeline_depth(mut self, n: usize) -> Self {
+        self.transfer_limits.upload_pipeline_depth = n;
+        self
+    }
+
+    /// Skip the size-based Y lookup tables entirely and always use
+    /// [`download_tcp_connections`](Self::download_tcp_connections) /
+    /// [`upload_tcp_connections`](Self::upload_tcp_connections) directly,
+    /// regardless of file size.
+    ///
+    /// Off by default: Y is normally chosen from a fixed size-tiered table,
+    /// clamped to your configured ceiling. Turning this on removes the
+    /// table and always opens exactly your configured ceiling worth of
+    /// connections, even for a file that would otherwise only need one.
+    /// Does not change chunk size or X (pipeline depth).
+    ///
+    /// This is an override, not just a tuning knob - it means small files
+    /// now push as much concurrency as large ones. If you start seeing
+    /// `FLOOD_WAIT` after turning this on, turn it back off (or lower your
+    /// connection ceilings) before anything else. See the
+    /// [`transfer_limits` module docs](crate::transfer_limits) for the full
+    /// responsibility note.
+    ///
+    /// Default: `false`.
+    pub fn bypass_tcp_allotments(mut self, enabled: bool) -> Self {
+        self.transfer_limits.bypass_tcp_allotments = enabled;
+        self
+    }
+
     // Update dispatch configuration
 
     /// Set the maximum number of updates held in the user-facing dispatch
@@ -584,6 +717,7 @@ impl ClientBuilder {
             use_pfs: self.use_pfs,
             update_config: self.update_config,
             future_auth_token: self.future_auth_token,
+            transfer_limits: self.transfer_limits.normalized(),
         })
     }
 

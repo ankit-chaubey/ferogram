@@ -209,6 +209,7 @@ pub mod middleware;
 #[cfg(feature = "experimental")]
 pub mod resume;
 pub mod transfer;
+pub mod transfer_limits;
 pub mod update_config;
 pub mod util;
 
@@ -276,6 +277,7 @@ pub use session_backend::{
 };
 pub use socks5::Socks5Config;
 pub use transfer::{TransferError, TransferHandle, TransferProgress};
+pub use transfer_limits::TransferLimits;
 pub use types::{Channel, ChannelKind, Chat, Group, User};
 pub use typing_guard::TypingGuard;
 pub use update::{BotStoppedUpdate, MessageReactionUpdate, PollVoteUpdate};
