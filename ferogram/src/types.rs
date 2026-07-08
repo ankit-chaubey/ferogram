@@ -234,6 +234,91 @@ impl std::fmt::Display for User {
     }
 }
 
+// UserFull
+
+/// Typed wrapper over `tl::enums::users::UserFull`, the response of
+/// [`Client::get_user_full`](crate::Client::get_user_full).
+///
+/// The bare `userFull` constructor doesn't carry the account's name,
+/// username, or online status - those live on the `User` object that
+/// Telegram returns alongside it in the same response. This wrapper keeps
+/// both together so callers can read status without a follow-up
+/// `users.getUsers` round-trip.
+#[derive(Debug, Clone)]
+pub struct UserFull {
+    full: tl::types::UserFull,
+    chats: Vec<tl::enums::Chat>,
+    users: Vec<tl::enums::User>,
+}
+
+impl UserFull {
+    /// Wrap the raw response of `get_user_full`.
+    pub fn from_raw(raw: tl::enums::users::UserFull) -> Self {
+        let tl::enums::users::UserFull::UserFull(inner) = raw;
+        let tl::enums::UserFull::UserFull(full) = inner.full_user;
+        Self {
+            full,
+            chats: inner.chats,
+            users: inner.users,
+        }
+    }
+
+    /// Bio / "about" text.
+    pub fn about(&self) -> Option<&str> {
+        self.full.about.as_deref()
+    }
+
+    /// `true` if the current user has blocked this contact.
+    pub fn blocked(&self) -> bool {
+        self.full.blocked
+    }
+
+    /// Number of chats this user has in common with the current account.
+    pub fn common_chats_count(&self) -> i32 {
+        self.full.common_chats_count
+    }
+
+    /// `true` if voice/video calls are available with this user.
+    pub fn phone_calls_available(&self) -> bool {
+        self.full.phone_calls_available
+    }
+
+    /// `true` if this user's phone calls are set to private.
+    pub fn phone_calls_private(&self) -> bool {
+        self.full.phone_calls_private
+    }
+
+    /// The requested user's `id`.
+    pub fn id(&self) -> i64 {
+        self.full.id
+    }
+
+    /// The `User` object for the requested user - name, username, status,
+    /// etc. - taken from this same response, no extra RPC required.
+    pub fn user(&self) -> Option<User> {
+        let uid = self.full.id;
+        self.users.iter().find_map(|u| match u {
+            tl::enums::User::User(inner) if inner.id == uid => User::from_raw(u.clone()),
+            _ => None,
+        })
+    }
+
+    /// Shortcut for the requested user's current online/offline status.
+    pub fn status(&self) -> Option<tl::enums::UserStatus> {
+        self.user().and_then(|u| u.status().cloned())
+    }
+
+    /// Chats referenced by this response (e.g. via `personal_channel_id`).
+    pub fn chats(&self) -> &[tl::enums::Chat] {
+        &self.chats
+    }
+
+    /// All users referenced by this response (usually just the requested one).
+    pub fn users(&self) -> &[tl::enums::User] {
+        &self.users
+    }
+}
+
 // Group
 
 /// Typed wrapper over `tl::types::Chat`.

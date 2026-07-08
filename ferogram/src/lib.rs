@@ -254,7 +254,8 @@ pub use guest_chat::GuestChatQuery;
 pub use input_message::{ForwardOptions, InputMessage, InvoiceOptions, LinkKind};
 pub use keyboard::{Button, InlineKeyboard, ReplyKeyboard};
 pub use media::{
-    Document, Downloadable, MediaQuality, Photo, Sticker, UploadedFile, VideoQualityInfo,
+    Document, DocumentThumb, Downloadable, MediaQuality, Photo, PhotoThumb, ProfilePhoto,
+    RawLocation, Sticker, UploadedFile, VideoQualityInfo, video_cover,
 };
 pub use mini_app::{MiniApp, MiniAppSession};
 pub use participants::{Participant, ParticipantStatus, ProfilePhotoIter};
@@ -280,7 +281,7 @@ pub use session_backend::{
 pub use socks5::Socks5Config;
 pub use transfer::{TransferError, TransferHandle, TransferProgress};
 pub use transfer_limits::TransferLimits;
-pub use types::{Channel, ChannelKind, Chat, Group, User};
+pub use types::{Channel, ChannelKind, Chat, Group, User, UserFull};
 pub use typing_guard::TypingGuard;
 pub use update::{BotStoppedUpdate, MessageReactionUpdate, PollVoteUpdate};
 pub use update::{ButtonFilter, Update};

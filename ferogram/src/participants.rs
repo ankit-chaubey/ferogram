@@ -235,7 +235,11 @@ impl Client {
     /// Kick a user from a group chat or channel.
     ///
     /// For basic groups, this removes the user immediately.
-    /// For channels and supergroups, it bans then unbans them (a Telegram kick).
+    /// For channels and supergroups, it's a shortcut for [`restrict`] with
+    /// [`BannedRightsBuilder::full_ban`] followed immediately by [`restrict`]
+    /// with the default (all-`false`) builder, i.e. ban then unban.
+    ///
+    /// [`restrict`]: Client::restrict
     pub async fn kick(
         &self,
         peer: impl Into<PeerRef>,
@@ -243,17 +247,17 @@ impl Client {
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
-        let access_hash = self
-            .inner
-            .peer_cache
-            .read()
-            .await
-            .users
-            .get(&user_id)
-            .copied()
-            .unwrap_or(0);
         match &input_peer {
             tl::enums::InputPeer::Chat(c) => {
+                let access_hash = self
+                    .inner
+                    .peer_cache
+                    .read()
+                    .await
+                    .users
+                    .get(&user_id)
+                    .copied()
+                    .unwrap_or(0);
                 let req = tl::functions::messages::DeleteChatUser {
                     revoke_history: false,
                     chat_id: c.chat_id,
@@ -264,85 +268,11 @@ impl Client {
                 };
                 self.rpc_call_raw(&req).await?;
             }
-            tl::enums::InputPeer::Channel(c) => {
-                // For channels: ban then immediately unban (standard kick)
-                let ban_req = tl::functions::channels::EditBanned {
-                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
-                        channel_id: c.channel_id,
-                        access_hash: c.access_hash,
-                    }),
-                    participant: tl::enums::InputPeer::User(tl::types::InputPeerUser {
-                        user_id,
-                        access_hash,
-                    }),
-                    banned_rights: tl::enums::ChatBannedRights::ChatBannedRights(
-                        tl::types::ChatBannedRights {
-                            view_messages: true,
-                            send_messages: true,
-                            send_media: true,
-                            send_stickers: true,
-                            send_gifs: true,
-                            send_games: true,
-                            send_inline: true,
-                            embed_links: true,
-                            send_polls: true,
-                            change_info: true,
-                            invite_users: true,
-                            pin_messages: true,
-                            manage_topics: false,
-                            send_photos: false,
-                            send_videos: false,
-                            send_roundvideos: false,
-                            send_audios: false,
-                            send_voices: false,
-                            send_docs: false,
-                            send_plain: false,
-                            edit_rank: false,
-                            send_reactions: false,
-                            until_date: 0,
-                        },
-                    ),
-                };
-                self.rpc_call_raw(&ban_req).await?;
-                // Unban immediately to allow them to re-join if they have a link
-                let unban_req = tl::functions::channels::EditBanned {
-                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
-                        channel_id: c.channel_id,
-                        access_hash: c.access_hash,
-                    }),
-                    participant: tl::enums::InputPeer::User(tl::types::InputPeerUser {
-                        user_id,
-                        access_hash,
-                    }),
-                    banned_rights: tl::enums::ChatBannedRights::ChatBannedRights(
-                        tl::types::ChatBannedRights {
-                            view_messages: false,
-                            send_messages: false,
-                            send_media: false,
-                            send_stickers: false,
-                            send_gifs: false,
-                            send_games: false,
-                            send_inline: false,
-                            embed_links: false,
-                            send_polls: false,
-                            change_info: false,
-                            invite_users: false,
-                            pin_messages: false,
-                            manage_topics: false,
-                            send_photos: false,
-                            send_videos: false,
-                            send_roundvideos: false,
-                            send_audios: false,
-                            send_voices: false,
-                            send_docs: false,
-                            send_plain: false,
-                            edit_rank: false,
-                            send_reactions: false,
-                            until_date: 0,
-                        },
-                    ),
-                };
-                self.rpc_call_raw(&unban_req).await?;
+            tl::enums::InputPeer::Channel(_) => {
+                // Standard Telegram kick: ban, then immediately unban.
+                self.restrict(peer.clone(), user_id, |_| BannedRightsBuilder::full_ban())
+                    .await?;
+                self.restrict(peer, user_id, |b| b).await?;
             }
             _ => {
                 return Err(InvocationError::Deserialize(
@@ -356,91 +286,20 @@ impl Client {
     /// Ban a user from a channel or supergroup.
     ///
     /// `until: None` is a permanent ban; `until: Some(ts)` bans until the Unix timestamp.
+    ///
+    /// Shortcut for [`restrict`](Client::restrict) with
+    /// [`BannedRightsBuilder::full_ban`]. For a partial ban (e.g. block file
+    /// uploads but allow photos), use [`restrict`](Client::restrict) directly.
     pub async fn ban(
         &self,
         channel: impl Into<PeerRef>,
         user_id: i64,
         until: Option<i32>,
     ) -> Result<(), InvocationError> {
-        self.ban_participant_raw(channel, user_id, until.unwrap_or(0))
-            .await
-    }
-
-    async fn ban_participant_raw(
-        &self,
-        channel: impl Into<PeerRef>,
-        user_id: i64,
-        until_date: i32,
-    ) -> Result<(), InvocationError> {
-        let channel = channel.into().resolve(self).await?;
-        let (channel_id, ch_hash) = match &channel {
-            tl::enums::Peer::Channel(c) => {
-                let h = self
-                    .inner
-                    .peer_cache
-                    .read()
-                    .await
-                    .channels
-                    .get(&c.channel_id)
-                    .map(|&(hash, _)| hash)
-                    .unwrap_or(0);
-                (c.channel_id, h)
-            }
-            _ => {
-                return Err(InvocationError::Deserialize(
-                    "ban_participant: peer must be a channel".into(),
-                ));
-            }
-        };
-        let user_hash = self
-            .inner
-            .peer_cache
-            .read()
-            .await
-            .users
-            .get(&user_id)
-            .copied()
-            .unwrap_or(0);
-
-        let req = tl::functions::channels::EditBanned {
-            channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
-                channel_id,
-                access_hash: ch_hash,
-            }),
-            participant: tl::enums::InputPeer::User(tl::types::InputPeerUser {
-                user_id,
-                access_hash: user_hash,
-            }),
-            banned_rights: tl::enums::ChatBannedRights::ChatBannedRights(
-                tl::types::ChatBannedRights {
-                    view_messages: true,
-                    send_messages: true,
-                    send_media: true,
-                    send_stickers: true,
-                    send_gifs: true,
-                    send_games: true,
-                    send_inline: true,
-                    embed_links: true,
-                    send_polls: true,
-                    change_info: true,
-                    invite_users: true,
-                    pin_messages: true,
-                    manage_topics: false,
-                    send_photos: false,
-                    send_videos: false,
-                    send_roundvideos: false,
-                    send_audios: false,
-                    send_voices: false,
-                    send_docs: false,
-                    send_plain: false,
-                    edit_rank: false,
-                    send_reactions: false,
-                    until_date,
-                },
-            ),
-        };
-        self.rpc_call_raw(&req).await?;
-        Ok(())
+        self.restrict(channel, user_id, |_| {
+            BannedRightsBuilder::full_ban().until_date(until.unwrap_or(0))
+        })
+        .await
     }
 
     #[allow(dead_code)]
@@ -807,6 +666,15 @@ pub struct BannedRightsBuilder {
     pub change_info: bool,
     pub invite_users: bool,
     pub pin_messages: bool,
+    pub manage_topics: bool,
+    pub send_photos: bool,
+    pub send_videos: bool,
+    pub send_roundvideos: bool,
+    pub send_audios: bool,
+    pub send_voices: bool,
+    pub send_docs: bool,
+    pub send_plain: bool,
+    pub edit_rank: bool,
     pub until_date: i32,
 }
 
@@ -866,13 +734,55 @@ impl BannedRightsBuilder {
         self.pin_messages = v;
         self
     }
+    pub fn manage_topics(mut self, v: bool) -> Self {
+        self.manage_topics = v;
+        self
+    }
+    pub fn send_photos(mut self, v: bool) -> Self {
+        self.send_photos = v;
+        self
+    }
+    pub fn send_videos(mut self, v: bool) -> Self {
+        self.send_videos = v;
+        self
+    }
+    pub fn send_roundvideos(mut self, v: bool) -> Self {
+        self.send_roundvideos = v;
+        self
+    }
+    pub fn send_audios(mut self, v: bool) -> Self {
+        self.send_audios = v;
+        self
+    }
+    pub fn send_voices(mut self, v: bool) -> Self {
+        self.send_voices = v;
+        self
+    }
+    pub fn send_docs(mut self, v: bool) -> Self {
+        self.send_docs = v;
+        self
+    }
+    pub fn send_plain(mut self, v: bool) -> Self {
+        self.send_plain = v;
+        self
+    }
+    /// Restrict changing the admin rank/title shown next to the user. Only
+    /// meaningful in the context that accepts `edit_rank`; harmless elsewhere.
+    pub fn edit_rank(mut self, v: bool) -> Self {
+        self.edit_rank = v;
+        self
+    }
     /// Ban until a Unix timestamp. `0` = permanent.
     pub fn until_date(mut self, ts: i32) -> Self {
         self.until_date = ts;
         self
     }
 
-    /// Full ban (all rights revoked, permanent).
+    /// Full ban: every restrictable right revoked, permanent.
+    ///
+    /// Sets all 22 `ChatBannedRights` flags, including the per-media-type
+    /// ones (`send_photos`, `send_videos`, `send_roundvideos`, `send_audios`,
+    /// `send_voices`, `send_docs`), not just the legacy `send_media` flag.
     pub fn full_ban() -> Self {
         Self {
             view_messages: true,
@@ -888,6 +798,15 @@ impl BannedRightsBuilder {
             change_info: true,
             invite_users: true,
             pin_messages: true,
+            manage_topics: true,
+            send_photos: true,
+            send_videos: true,
+            send_roundvideos: true,
+            send_audios: true,
+            send_voices: true,
+            send_docs: true,
+            send_plain: true,
+            edit_rank: true,
             until_date: 0,
         }
     }
@@ -906,15 +825,15 @@ impl BannedRightsBuilder {
             change_info: self.change_info,
             invite_users: self.invite_users,
             pin_messages: self.pin_messages,
-            manage_topics: false,
-            send_photos: false,
-            send_videos: false,
-            send_roundvideos: false,
-            send_audios: false,
-            send_voices: false,
-            send_docs: false,
-            send_plain: false,
-            edit_rank: false,
+            manage_topics: self.manage_topics,
+            send_photos: self.send_photos,
+            send_videos: self.send_videos,
+            send_roundvideos: self.send_roundvideos,
+            send_audios: self.send_audios,
+            send_voices: self.send_voices,
+            send_docs: self.send_docs,
+            send_plain: self.send_plain,
+            edit_rank: self.edit_rank,
             send_reactions: self.send_reactions,
             until_date: self.until_date,
         })
@@ -1074,6 +993,23 @@ impl Client {
     /// Apply granular ban rights to a user in a channel or supergroup.
     ///
     /// Use [`BannedRightsBuilder`] to specify which rights to restrict.
+    /// [`ban`](Client::ban) and [`kick`](Client::kick) are shortcuts built on
+    /// top of this method; reach for `restrict` directly when you need
+    /// anything less than a full ban.
+    ///
+    /// # Example: allow photos, block file uploads
+    ///
+    /// "Send as photo" and "send as file" are different upload paths on the
+    /// wire (`send_photos` vs `send_docs`), so they're independent flags:
+    ///
+    /// ```rust,no_run
+    /// # async fn f(client: ferogram::Client, channel: ferogram_tl_types::enums::Peer, user: i64) -> Result<(), Box<dyn std::error::Error>> {
+    /// client.restrict(channel, user, |b| b.send_docs(true)).await?;
+    /// # Ok(()) }
+    /// ```
+    /// `send_media`/`send_photos` are left at their default `false`, so
+    /// images sent as photos are still allowed; only uploads sent as raw
+    /// documents (including images sent as files) are blocked.
     pub async fn restrict(
         &self,
         channel: impl Into<PeerRef>,

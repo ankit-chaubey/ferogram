@@ -31,14 +31,14 @@ use crate::{
 /// Awaiting it directly downloads with no progress tracking. Chain
 /// [`.handle()`](DownloadFile::handle) before `.await` to track progress,
 /// pause, or cancel the transfer.
-pub struct DownloadFile<'a> {
+pub struct DownloadFile<'a, D: media::Downloadable> {
     client: &'a Client,
-    media: &'a tl::enums::MessageMedia,
+    item: &'a D,
     path: std::path::PathBuf,
     handle: Option<&'a crate::transfer::TransferHandle>,
 }
 
-impl<'a> DownloadFile<'a> {
+impl<'a, D: media::Downloadable> DownloadFile<'a, D> {
     /// Track progress, pause, or cancel this transfer with `handle`.
     pub fn handle(mut self, handle: &'a crate::transfer::TransferHandle) -> Self {
         self.handle = Some(handle);
@@ -46,7 +46,7 @@ impl<'a> DownloadFile<'a> {
     }
 }
 
-impl<'a> std::future::IntoFuture for DownloadFile<'a> {
+impl<'a, D: media::Downloadable + Sync> std::future::IntoFuture for DownloadFile<'a, D> {
     type Output = Result<u64, InvocationError>;
     type IntoFuture =
         std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
@@ -54,7 +54,7 @@ impl<'a> std::future::IntoFuture for DownloadFile<'a> {
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             self.client
-                .download_file_inner(self.media, &self.path, self.handle)
+                .download_file_inner(self.item, &self.path, self.handle)
                 .await
         })
     }
@@ -721,15 +721,16 @@ impl Client {
     /// ```
     pub async fn download(
         &self,
-        media: &tl::enums::MessageMedia,
+        item: &impl media::Downloadable,
         mut dest: impl tokio::io::AsyncWrite + Unpin,
         handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<u64, InvocationError> {
-        let (loc, dc) = crate::media::location_from_media(media).ok_or_else(|| {
-            InvocationError::Deserialize("media has no downloadable location".into())
+        let loc = item.to_input_location().ok_or_else(|| {
+            InvocationError::Deserialize("item has no downloadable location".into())
         })?;
+        let dc = item.dc_id();
         if let Some(h) = handle {
-            let total = crate::media::size_from_media(media).unwrap_or(0);
+            let total = item.size().unwrap_or(0);
             h.set_total(total as u64);
             h.reset_start();
         }
@@ -771,14 +772,14 @@ impl Client {
     /// client.download_file(msg.media().unwrap(), "downloaded.mp4").await?;
     /// # Ok(()) }
     /// ```
-    pub fn download_file<'a>(
+    pub fn download_file<'a, D: media::Downloadable>(
         &'a self,
-        media: &'a tl::enums::MessageMedia,
+        item: &'a D,
         path: impl AsRef<std::path::Path>,
-    ) -> DownloadFile<'a> {
+    ) -> DownloadFile<'a, D> {
         DownloadFile {
             client: self,
-            media,
+            item,
             path: path.as_ref().to_path_buf(),
             handle: None,
         }
@@ -786,17 +787,23 @@ impl Client {
 
     /// Inner implementation behind the [`download_file`] builder.
     ///
+    /// Also the shared engine behind [`download_media`](Self::download_media):
+    /// both funnel through this once the caller has a concrete
+    /// [`Downloadable`](media::Downloadable) in hand, so the
+    /// concurrent-vs-sequential decision lives in exactly one place.
+    ///
     /// [`download_file`]: Client::download_file
     async fn download_file_inner(
         &self,
-        media: &tl::enums::MessageMedia,
+        item: &impl media::Downloadable,
         path: &std::path::Path,
         handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<u64, InvocationError> {
-        let (loc, dc) = crate::media::location_from_media(media).ok_or_else(|| {
-            InvocationError::Deserialize("media has no downloadable location".into())
+        let loc = item.to_input_location().ok_or_else(|| {
+            InvocationError::Deserialize("item has no downloadable location".into())
         })?;
-        if let Some(size) = crate::media::size_from_media(media)
+        let dc = item.dc_id();
+        if let Some(size) = item.size()
             && size >= crate::media::DOWNLOAD_CONCURRENT_THRESHOLD
         {
             return self
@@ -845,28 +852,12 @@ impl Client {
         path: impl AsRef<std::path::Path>,
         handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<u64, InvocationError> {
-        let path = path.as_ref();
         let doc = crate::media::resolve_quality_document(media, quality).ok_or_else(|| {
             InvocationError::Deserialize(
                 "media has no downloadable document for the requested quality".into(),
             )
         })?;
-        let loc = doc.to_input_location().ok_or_else(|| {
-            InvocationError::Deserialize("chosen document has no download location".into())
-        })?;
-        let dc = doc.dc_id();
-        let size: usize = doc.size().try_into().unwrap_or(0);
-
-        if size >= crate::media::DOWNLOAD_CONCURRENT_THRESHOLD {
-            return self
-                .download_media_concurrent_on_dc_to_file_pipelined(loc, size, dc, path, handle)
-                .await;
-        }
-        let mut file = tokio::fs::File::create(path)
-            .await
-            .map_err(InvocationError::Io)?;
-        self.download_streaming_on_dc(loc, dc, &mut file, handle)
-            .await
+        self.download_file_inner(&doc, path.as_ref(), handle).await
     }
 
     /// Return a lazy chunk iterator for `media`.
@@ -892,9 +883,10 @@ impl Client {
     /// ```
     pub fn iter_download(
         &self,
-        media: &tl::enums::MessageMedia,
+        item: &impl media::Downloadable,
     ) -> Option<crate::media::DownloadIter> {
-        let (loc, dc) = crate::media::location_from_media(media)?;
+        let loc = item.to_input_location()?;
+        let dc = item.dc_id();
         Some(crate::media::DownloadIter::new(self.clone(), loc, dc))
     }
 

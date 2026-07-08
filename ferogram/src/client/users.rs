@@ -273,10 +273,14 @@ impl Client {
 
     /// Get full info for a user - bio, common chats count, blocked status,
     /// and other fields the basic user object doesn't carry.
+    ///
+    /// The returned [`crate::types::UserFull`] also bundles the `User`
+    /// object from the same response (`.user()` / `.status()`), so you
+    /// don't need a follow-up `users.getUsers` call just to read status.
     pub async fn get_user_full(
         &self,
         user_id: i64,
-    ) -> Result<tl::types::UserFull, InvocationError> {
+    ) -> Result<crate::types::UserFull, InvocationError> {
         let hash = self
             .inner
             .peer_cache
@@ -294,12 +298,11 @@ impl Client {
         };
         let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
-        let tl::enums::users::UserFull::UserFull(result) =
-            tl::enums::users::UserFull::deserialize(&mut cur)?;
+        let full = tl::enums::users::UserFull::deserialize(&mut cur)?;
+        let tl::enums::users::UserFull::UserFull(ref result) = full;
         self.cache_users_slice(&result.users).await;
         self.cache_chats_slice(&result.chats).await;
-        let tl::enums::UserFull::UserFull(full_user) = result.full_user;
-        Ok(full_user)
+        Ok(crate::types::UserFull::from_raw(full))
     }
 
     /// Retrieve channel or supergroup statistics.

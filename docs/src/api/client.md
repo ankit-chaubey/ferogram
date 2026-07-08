@@ -976,9 +976,9 @@ client.set_chat_reactions(peer.clone(),
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_user_full(user_id: i64) → Result&lt;tl::types::UserFull, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_user_full(user_id: i64) → Result&lt;ferogram::types::UserFull, InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Get the full info object for a user. Contains bio, common chats count, bot info, profile/fallback photos, privacy settings, pinned message ID, and more.</div>
+<div class="api-card-body">Get the full info object for a user. Contains bio, common chats count, bot info, profile/fallback photos, privacy settings, pinned message ID, and more. The returned <code>UserFull</code> also exposes <code>.user()</code> / <code>.status()</code> from the same response, so no follow-up <code>users.getUsers</code> call is needed for online status.</div>
 </div>
 
 <div class="api-card">

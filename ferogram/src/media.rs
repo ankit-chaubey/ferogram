@@ -102,25 +102,19 @@ pub const DOWNLOAD_CHUNK_SIZE: i32 = 256 * 1024;
 ///
 /// Telegram's `upload.getFile` rule: `(offset + limit)` must not cross a 1 MB
 /// boundary. Using chunk sizes that are powers of two and aligning offsets as
-/// `part * chunk` always satisfies this. 1 MB chunks are only used at >= 500 MB
-/// where the round-trip savings justify the stricter alignment requirement.
+/// `part * chunk` always satisfies this. 512 KB is the maximum chunk size
+/// used at any file size, matching the ceiling already used on the upload
+/// side (see [`upload_part_size`]).
 ///
-/// | File size    | Chunk  | Rationale                          |
-/// |--------------|--------|------------------------------------|
-/// | < 50 MB      | 256 KB | small files, fewer parts is fine   |
-/// | 50-500 MB    | 512 KB | halves round-trips vs 256 KB       |
-/// | >= 500 MB    | 1 MB   | halves round-trips vs 512 KB       |
+/// | File size | Chunk  | Rationale                        |
+/// |-----------|--------|-----------------------------------|
+/// | < 50 MB   | 256 KB | small files, fewer parts is fine  |
+/// | >= 50 MB  | 512 KB | halves round-trips vs 256 KB      |
 pub fn download_chunk_size(file_size: usize) -> i32 {
     if file_size < 50 * 1024 * 1024 {
         256 * 1024 // 256 KB
-    } else if file_size < 500 * 1024 * 1024 {
-        512 * 1024 // 512 KB
     } else {
-        // 1 MB chunks for files >= 500 MB.
-        // 1 MB-aligned offsets (0, 1 MB, 2 MB, ...) never cross a 1 MB boundary,
-        // satisfying Telegram's offset+limit constraint. This halves RPC round-trips
-        // vs 512 KB for very large files with negligible memory overhead.
-        1024 * 1024 // 1 MB
+        512 * 1024 // 512 KB
     }
 }
 
@@ -537,9 +531,14 @@ impl From<UploadedFile> for tl::enums::InputMedia {
 
 // Downloadable trait
 
-/// Something that can be downloaded via [`Client::iter_download`].
+/// Something that can be downloaded via [`Client::download`],
+/// [`Client::download_file`], or [`Client::iter_download`].
 ///
-/// Implemented by [`Photo`], [`Document`], and [`Sticker`].
+/// Implemented by [`Photo`], [`Document`], [`Sticker`],
+/// [`tl::enums::MessageMedia`] (resolved recursively through games, web
+/// page previews, polls, stories, and paid media), [`PhotoThumb`],
+/// [`DocumentThumb`], [`ProfilePhoto`], and [`RawLocation`] for anything
+/// else.
 pub trait Downloadable {
     /// Return the `InputFileLocation` needed for `upload.getFile`.
     fn to_input_location(&self) -> Option<tl::enums::InputFileLocation>;
@@ -567,14 +566,28 @@ impl Photo {
         Self { raw }
     }
 
-    /// Try to extract from a `MessageMedia` variant.
+    /// Try to extract from a `MessageMedia` variant, recursing through
+    /// every variant that carries a photo indirectly: games, web page
+    /// previews, poll attachments, story media, and paid-media wrappers.
     pub fn from_media(media: &tl::enums::MessageMedia) -> Option<Self> {
         if let tl::enums::MessageMedia::Photo(mp) = media
             && let Some(tl::enums::Photo::Photo(p)) = &mp.photo
         {
             return Some(Self { raw: p.clone() });
         }
-        None
+        if let tl::enums::MessageMedia::Game(mg) = media
+            && let tl::enums::Game::Game(g) = &mg.game
+            && let tl::enums::Photo::Photo(p) = &g.photo
+        {
+            return Some(Self { raw: p.clone() });
+        }
+        if let tl::enums::MessageMedia::WebPage(mw) = media
+            && let tl::enums::WebPage::WebPage(w) = &mw.webpage
+            && let Some(tl::enums::Photo::Photo(p)) = &w.photo
+        {
+            return Some(Self { raw: p.clone() });
+        }
+        unwrap_nested_media(media).and_then(Self::from_media)
     }
 
     pub fn id(&self) -> i64 {
@@ -618,6 +631,17 @@ impl Downloadable for Photo {
     fn dc_id(&self) -> i32 {
         self.raw.dc_id
     }
+    fn size(&self) -> Option<usize> {
+        self.raw
+            .sizes
+            .iter()
+            .filter_map(|s| match s {
+                tl::enums::PhotoSize::PhotoSize(ps) => Some(ps.size as usize),
+                tl::enums::PhotoSize::Progressive(ps) => ps.sizes.last().map(|&s| s as usize),
+                _ => None,
+            })
+            .max()
+    }
 }
 
 /// Typed wrapper over a Telegram document (file, video, audio).
@@ -631,14 +655,28 @@ impl Document {
         Self { raw }
     }
 
-    /// Try to extract from a `MessageMedia` variant.
+    /// Try to extract from a `MessageMedia` variant, recursing through
+    /// every variant that carries a document indirectly: games, web page
+    /// previews, poll attachments, story media, and paid-media wrappers.
     pub fn from_media(media: &tl::enums::MessageMedia) -> Option<Self> {
         if let tl::enums::MessageMedia::Document(md) = media
             && let Some(tl::enums::Document::Document(d)) = &md.document
         {
             return Some(Self { raw: d.clone() });
         }
-        None
+        if let tl::enums::MessageMedia::Game(mg) = media
+            && let tl::enums::Game::Game(g) = &mg.game
+            && let Some(tl::enums::Document::Document(d)) = &g.document
+        {
+            return Some(Self { raw: d.clone() });
+        }
+        if let tl::enums::MessageMedia::WebPage(mw) = media
+            && let tl::enums::WebPage::WebPage(w) = &mw.webpage
+            && let Some(tl::enums::Document::Document(d)) = &w.document
+        {
+            return Some(Self { raw: d.clone() });
+        }
+        unwrap_nested_media(media).and_then(Self::from_media)
     }
 
     pub fn id(&self) -> i64 {
@@ -753,6 +791,295 @@ impl Downloadable for Sticker {
     }
     fn size(&self) -> Option<usize> {
         Some(self.inner.raw.size as usize)
+    }
+}
+
+// Recursive MessageMedia resolution
+
+/// For wrapper variants that carry another `MessageMedia` one level down
+/// (poll attachments, story media, paid-media wrappers), return that
+/// inner media so `Photo::from_media`/`Document::from_media` can recurse
+/// into it. `Game` and `WebPage` are handled separately since they carry
+/// a `Photo`/`Document` field directly rather than a nested `MessageMedia`.
+fn unwrap_nested_media(media: &tl::enums::MessageMedia) -> Option<&tl::enums::MessageMedia> {
+    match media {
+        tl::enums::MessageMedia::Poll(mp) => mp.attached_media.as_ref(),
+        tl::enums::MessageMedia::Story(ms) => match ms.story.as_ref()? {
+            tl::enums::StoryItem::StoryItem(item) => Some(&item.media),
+            _ => None,
+        },
+        tl::enums::MessageMedia::PaidMedia(mpm) => {
+            mpm.extended_media.iter().find_map(|em| match em {
+                tl::enums::MessageExtendedMedia::MessageExtendedMedia(e) => Some(&e.media),
+                _ => None,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Extract the cover photo of a video document, if present
+/// (`messageMediaDocument.video_cover`). Already `Downloadable` for free
+/// since it's just a `Photo`.
+pub fn video_cover(media: &tl::enums::MessageMedia) -> Option<Photo> {
+    if let tl::enums::MessageMedia::Document(md) = media
+        && let Some(tl::enums::Photo::Photo(p)) = &md.video_cover
+    {
+        return Some(Photo { raw: p.clone() });
+    }
+    None
+}
+
+// Downloadable: MessageMedia itself, resolved recursively
+
+impl Downloadable for tl::enums::MessageMedia {
+    fn to_input_location(&self) -> Option<tl::enums::InputFileLocation> {
+        if let Some(doc) = Document::from_media(self) {
+            return doc.to_input_location();
+        }
+        Photo::from_media(self).and_then(|p| p.to_input_location())
+    }
+    fn dc_id(&self) -> i32 {
+        if let Some(doc) = Document::from_media(self) {
+            return doc.dc_id();
+        }
+        // Not meaningful when `to_input_location()` returns `None` - callers
+        // must check that first.
+        Photo::from_media(self).map(|p| p.dc_id()).unwrap_or(0)
+    }
+    fn size(&self) -> Option<usize> {
+        if let Some(doc) = Document::from_media(self) {
+            return Downloadable::size(&doc);
+        }
+        Photo::from_media(self).and_then(|p| p.size())
+    }
+}
+
+// Downloadable: raw InputFileLocation
+
+/// Wraps a raw `InputFileLocation` for direct download when nothing else
+/// in this module already covers the case you need.
+#[derive(Debug, Clone)]
+pub struct RawLocation {
+    pub location: tl::enums::InputFileLocation,
+    pub dc_id: i32,
+    pub size: Option<usize>,
+}
+
+impl RawLocation {
+    pub fn new(location: tl::enums::InputFileLocation, dc_id: i32) -> Self {
+        Self {
+            location,
+            dc_id,
+            size: None,
+        }
+    }
+
+    /// Attach a known size so the concurrent download path can be used.
+    /// Without it, download falls back to the sequential unknown-size path.
+    pub fn with_size(mut self, size: usize) -> Self {
+        self.size = Some(size);
+        self
+    }
+}
+
+impl Downloadable for RawLocation {
+    fn to_input_location(&self) -> Option<tl::enums::InputFileLocation> {
+        Some(self.location.clone())
+    }
+    fn dc_id(&self) -> i32 {
+        self.dc_id
+    }
+    fn size(&self) -> Option<usize> {
+        self.size
+    }
+}
+
+// Downloadable: profile / chat photos
+
+/// Unifies `UserProfilePhoto` and `ChatPhoto` behind one downloadable
+/// type. Unlike `Photo`, profile/chat photos are addressed by peer, not
+/// by the photo's own id, so the owning `InputPeer` has to travel with it.
+#[derive(Debug, Clone)]
+pub struct ProfilePhoto {
+    peer: tl::enums::InputPeer,
+    photo_id: i64,
+    dc_id: i32,
+    big: bool,
+}
+
+impl ProfilePhoto {
+    /// `big` selects the full-size photo; `false` is the small variant
+    /// clients use for avatar thumbnails.
+    pub fn new(peer: tl::enums::InputPeer, photo_id: i64, dc_id: i32, big: bool) -> Self {
+        Self {
+            peer,
+            photo_id,
+            dc_id,
+            big,
+        }
+    }
+
+    /// Build from a user's `UserProfilePhoto`. `None` if the user has no
+    /// photo (`userProfilePhotoEmpty`).
+    pub fn from_user(
+        peer: tl::enums::InputPeer,
+        photo: &tl::enums::UserProfilePhoto,
+    ) -> Option<Self> {
+        match photo {
+            tl::enums::UserProfilePhoto::UserProfilePhoto(p) => {
+                Some(Self::new(peer, p.photo_id, p.dc_id, true))
+            }
+            tl::enums::UserProfilePhoto::Empty => None,
+        }
+    }
+
+    /// Build from a chat or channel's `ChatPhoto`. `None` if empty
+    /// (`chatPhotoEmpty`).
+    pub fn from_chat(peer: tl::enums::InputPeer, photo: &tl::enums::ChatPhoto) -> Option<Self> {
+        match photo {
+            tl::enums::ChatPhoto::ChatPhoto(p) => Some(Self::new(peer, p.photo_id, p.dc_id, true)),
+            tl::enums::ChatPhoto::Empty => None,
+        }
+    }
+
+    /// Switch to the small (thumbnail) variant of this photo.
+    pub fn small(mut self) -> Self {
+        self.big = false;
+        self
+    }
+}
+
+impl Downloadable for ProfilePhoto {
+    fn to_input_location(&self) -> Option<tl::enums::InputFileLocation> {
+        Some(tl::enums::InputFileLocation::InputPeerPhotoFileLocation(
+            tl::types::InputPeerPhotoFileLocation {
+                big: self.big,
+                peer: self.peer.clone(),
+                photo_id: self.photo_id,
+            },
+        ))
+    }
+    fn dc_id(&self) -> i32 {
+        self.dc_id
+    }
+    // Profile/chat photos never carry a size on the wire - `size()` stays
+    // `None` (trait default) and the unknown-size sequential path handles it.
+}
+
+// Downloadable: a specific thumbnail size
+
+/// One specific thumbnail of a `Photo`, selected by its type letter
+/// (`"s"`, `"m"`, `"x"`, ...) instead of always downloading the largest.
+#[derive(Debug, Clone)]
+pub struct PhotoThumb {
+    photo: Photo,
+    thumb_type: String,
+}
+
+impl Downloadable for PhotoThumb {
+    fn to_input_location(&self) -> Option<tl::enums::InputFileLocation> {
+        Some(tl::enums::InputFileLocation::InputPhotoFileLocation(
+            tl::types::InputPhotoFileLocation {
+                id: self.photo.raw.id,
+                access_hash: self.photo.raw.access_hash,
+                file_reference: self.photo.raw.file_reference.clone(),
+                thumb_size: self.thumb_type.clone(),
+            },
+        ))
+    }
+    fn dc_id(&self) -> i32 {
+        self.photo.raw.dc_id
+    }
+    fn size(&self) -> Option<usize> {
+        self.photo.raw.sizes.iter().find_map(|s| match s {
+            tl::enums::PhotoSize::PhotoSize(ps) if ps.r#type == self.thumb_type => {
+                Some(ps.size as usize)
+            }
+            tl::enums::PhotoSize::Progressive(ps) if ps.r#type == self.thumb_type => {
+                ps.sizes.last().map(|&s| s as usize)
+            }
+            _ => None,
+        })
+    }
+}
+
+impl Photo {
+    /// A specific thumbnail size instead of the largest available one.
+    /// `None` if `thumb_type` doesn't exist on this photo.
+    pub fn thumb(&self, thumb_type: &str) -> Option<PhotoThumb> {
+        let exists = self.raw.sizes.iter().any(|s| match s {
+            tl::enums::PhotoSize::Empty(ps) => ps.r#type == thumb_type,
+            tl::enums::PhotoSize::PhotoSize(ps) => ps.r#type == thumb_type,
+            tl::enums::PhotoSize::PhotoCachedSize(ps) => ps.r#type == thumb_type,
+            tl::enums::PhotoSize::PhotoStrippedSize(ps) => ps.r#type == thumb_type,
+            tl::enums::PhotoSize::Progressive(ps) => ps.r#type == thumb_type,
+            tl::enums::PhotoSize::PhotoPathSize(ps) => ps.r#type == thumb_type,
+        });
+        exists.then(|| PhotoThumb {
+            photo: self.clone(),
+            thumb_type: thumb_type.to_string(),
+        })
+    }
+}
+
+/// One specific thumbnail of a `Document` (e.g. a video's preview
+/// frame), selected by type letter.
+#[derive(Debug, Clone)]
+pub struct DocumentThumb {
+    document: Document,
+    thumb_type: String,
+}
+
+impl Downloadable for DocumentThumb {
+    fn to_input_location(&self) -> Option<tl::enums::InputFileLocation> {
+        Some(tl::enums::InputFileLocation::InputDocumentFileLocation(
+            tl::types::InputDocumentFileLocation {
+                id: self.document.raw.id,
+                access_hash: self.document.raw.access_hash,
+                file_reference: self.document.raw.file_reference.clone(),
+                thumb_size: self.thumb_type.clone(),
+            },
+        ))
+    }
+    fn dc_id(&self) -> i32 {
+        self.document.raw.dc_id
+    }
+    fn size(&self) -> Option<usize> {
+        self.document
+            .raw
+            .thumbs
+            .as_ref()?
+            .iter()
+            .find_map(|s| match s {
+                tl::enums::PhotoSize::PhotoSize(ps) if ps.r#type == self.thumb_type => {
+                    Some(ps.size as usize)
+                }
+                tl::enums::PhotoSize::Progressive(ps) if ps.r#type == self.thumb_type => {
+                    ps.sizes.last().map(|&s| s as usize)
+                }
+                _ => None,
+            })
+    }
+}
+
+impl Document {
+    /// A specific thumbnail size for this document (e.g. a video preview
+    /// frame). `None` if `thumb_type` doesn't exist or the document has
+    /// no thumbs at all.
+    pub fn thumb(&self, thumb_type: &str) -> Option<DocumentThumb> {
+        let exists = self.raw.thumbs.as_ref()?.iter().any(|s| match s {
+            tl::enums::PhotoSize::Empty(ps) => ps.r#type == thumb_type,
+            tl::enums::PhotoSize::PhotoSize(ps) => ps.r#type == thumb_type,
+            tl::enums::PhotoSize::PhotoCachedSize(ps) => ps.r#type == thumb_type,
+            tl::enums::PhotoSize::PhotoStrippedSize(ps) => ps.r#type == thumb_type,
+            tl::enums::PhotoSize::Progressive(ps) => ps.r#type == thumb_type,
+            tl::enums::PhotoSize::PhotoPathSize(ps) => ps.r#type == thumb_type,
+        });
+        exists.then(|| DocumentThumb {
+            document: self.clone(),
+            thumb_type: thumb_type.to_string(),
+        })
     }
 }
 
@@ -3990,27 +4317,6 @@ impl Client {
         );
         Ok(total_written)
     }
-
-    /// Download any [`Downloadable`] item (internal).
-    ///
-    /// Public API: use [`Client::download`] with `&MessageMedia`.
-    #[allow(dead_code)]
-    pub(crate) async fn download_item<D: Downloadable>(
-        &self,
-        item: &D,
-    ) -> Result<Vec<u8>, InvocationError> {
-        let loc = item
-            .to_input_location()
-            .ok_or_else(|| InvocationError::Deserialize("item has no download location".into()))?;
-        let dc = item.dc_id();
-        // Always use concurrent path when size is known  - even for small files  -
-        // so every download gets a fresh dedicated connection (no idle-conn eof).
-        // When size is unknown fall back to sequential (also uses fresh conn now).
-        match item.size() {
-            Some(sz) => self.download_media_concurrent_on_dc(loc, sz, dc).await,
-            None => self.download_media_on_dc(loc, dc).await,
-        }
-    }
 }
 
 // InputFileLocation from IncomingMessage
@@ -4404,34 +4710,13 @@ fn make_input_file(
 pub fn location_from_media(
     media: &tl::enums::MessageMedia,
 ) -> Option<(tl::enums::InputFileLocation, i32)> {
-    if let Some(doc) = Document::from_media(media) {
-        return Some((doc.to_input_location()?, doc.dc_id()));
-    }
-    if let Some(photo) = Photo::from_media(media) {
-        return Some((photo.to_input_location()?, photo.dc_id()));
-    }
-    None
+    let loc = media.to_input_location()?;
+    Some((loc, media.dc_id()))
 }
 
 /// Return the known byte size of `media`, if available.
 pub fn size_from_media(media: &tl::enums::MessageMedia) -> Option<usize> {
-    if let Some(doc) = Document::from_media(media) {
-        return Some(doc.raw.size as usize);
-    }
-    if let Some(photo) = Photo::from_media(media) {
-        let sz = photo
-            .raw
-            .sizes
-            .iter()
-            .filter_map(|s| match s {
-                tl::enums::PhotoSize::PhotoSize(ps) => Some(ps.size as usize),
-                tl::enums::PhotoSize::Progressive(ps) => ps.sizes.last().map(|&s| s as usize),
-                _ => None,
-            })
-            .max();
-        return sz;
-    }
-    None
+    media.size()
 }
 
 // Helpers
