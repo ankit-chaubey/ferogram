@@ -82,4 +82,7 @@ pub use mtp_sender::MtpSender;
 pub use pool::{ConnSlot, DcPool};
 pub use retry::{AutoSleep, CircuitBreaker, NoRetries, RetryContext, RetryLoop, RetryPolicy};
 pub use sender::DcConnection;
-pub use sender_task::{FrameEvent, ReconnectRequest, RpcEnqueue, SenderHandle, spawn_sender_task};
+pub use sender_task::{
+    FrameEvent, PipelinedSender, ReconnectRequest, RpcEnqueue, SenderHandle, spawn_pipelined,
+    spawn_sender_task,
+};

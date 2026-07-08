@@ -489,69 +489,11 @@ pub(crate) struct ClientInner {
     pub(crate) future_auth_token: parking_lot::Mutex<Option<Vec<u8>>>,
 }
 
-/// A pipelined transfer connection: multiple chunk requests can be enqueued
-/// and in flight simultaneously, instead of `DcConnection::rpc_call`'s
-/// one-at-a-time blocking model.
-///
-/// Returned by [`Client::open_worker_sender`]. Backed by a background
-/// [`ferogram_mtsender::sender_task`] that owns the socket; this struct is
-/// just a cheap handle (an mpsc sender + a liveness flag) and can be cloned
-/// freely if multiple call sites need to share one pipelined connection.
-#[derive(Clone)]
-pub(crate) struct PipelinedSender {
-    rpc_tx: tokio::sync::mpsc::Sender<ferogram_mtsender::RpcEnqueue>,
-    /// Flipped to `false` by the background drain task once the sender
-    /// task reports a connection error. Callers check this after a failed
-    /// `enqueue` to decide whether to open a fresh `PipelinedSender` rather
-    /// than keep retrying on a dead connection.
-    alive: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl PipelinedSender {
-    /// `true` if the underlying sender task is still running. Does not
-    /// guarantee the *next* request will succeed (the connection could die
-    /// between this check and the next `enqueue`), but is enough to decide
-    /// whether to keep using this sender or fall back to opening a new one.
-    #[allow(dead_code)]
-    pub(crate) fn is_alive(&self) -> bool {
-        self.alive.load(std::sync::atomic::Ordering::Acquire)
-    }
-
-    /// Enqueue a pre-serialised TL request body and return a future that
-    /// resolves when the server responds. Does **not** wait for the
-    /// response itself  - callers can enqueue several of these before
-    /// awaiting any of them, which is exactly what gives this connection
-    /// X > 1 (multiple chunk requests in flight at once on one socket).
-    ///
-    /// Returns an error immediately if the sender task has already shut
-    /// down (e.g. the connection died); otherwise returns a future that
-    /// resolves to the eventual RPC result or a connection-failure error.
-    pub(crate) async fn enqueue(
-        &self,
-        body: Vec<u8>,
-    ) -> Result<
-        impl std::future::Future<Output = Result<Vec<u8>, InvocationError>> + Send + use<>,
-        InvocationError,
-    > {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.rpc_tx
-            .send(ferogram_mtsender::RpcEnqueue { body, tx })
-            .await
-            .map_err(|_| InvocationError::Deserialize("pipelined sender task shut down".into()))?;
-        Ok(async move {
-            rx.await
-                .map_err(|_| InvocationError::Deserialize("pipelined rpc channel closed".into()))?
-        })
-    }
-
-    /// Enqueue and immediately await a single request  - convenience for
-    /// call sites that don't need explicit pipelining (e.g. the final part
-    /// of a transfer, or error-recovery paths).
-    #[allow(dead_code)]
-    pub(crate) async fn call(&self, body: Vec<u8>) -> Result<Vec<u8>, InvocationError> {
-        self.enqueue(body).await?.await
-    }
-}
+/// Pipelined transfer connection handle. The struct itself now lives in
+/// `ferogram-mtsender` (it never depended on `Client` state, only on
+/// `ferogram_mtsender` types), so `ferogram-py` can use it directly through
+/// its existing dependency on that crate without going through `ferogram`.
+pub(crate) use ferogram_mtsender::PipelinedSender;
 
 /// The main Telegram client. Cheap to clone: internally Arc-wrapped.
 #[derive(Clone)]
@@ -4107,35 +4049,9 @@ impl Client {
     ) -> Result<PipelinedSender, InvocationError> {
         let conn = self.open_worker_conn(dc_id).await?;
         let (stream, frame_kind, enc) = conn.into_parts();
-        let (handle, mut frame_rx) =
-            ferogram_mtsender::spawn_sender_task(stream, enc, frame_kind, None);
-
-        // Transfer workers don't support reconnect mid-transfer today (same
-        // as the main session pool's slots): on failure the caller's retry
-        // loop opens a fresh `PipelinedSender` from scratch, same as it
-        // already does for `DcConnection` failures. Dropping reconnect_tx
-        // lets the sender task shut down cleanly on error instead of
-        // waiting for a reconnect that will never come.
-        drop(handle.reconnect_tx);
-
-        let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let alive_for_drain = alive.clone();
-        tokio::spawn(async move {
-            while let Some(event) = frame_rx.recv().await {
-                if let ferogram_mtsender::FrameEvent::Error(e) = event {
-                    tracing::debug!("[ferogram::transfer] pipelined worker conn dropped: {e}");
-                    alive_for_drain.store(false, std::sync::atomic::Ordering::Release);
-                    break;
-                }
-                // Update / Connected events: transfer connections don't
-                // dispatch updates, nothing to do with them.
-            }
-        });
-
-        Ok(PipelinedSender {
-            rpc_tx: handle.rpc_tx,
-            alive,
-        })
+        Ok(ferogram_mtsender::spawn_pipelined(
+            stream, enc, frame_kind, None,
+        ))
     }
 
     /// Like rpc_call_raw but takes a Serializable (for InvokeWithLayer wrappers).
