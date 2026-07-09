@@ -922,13 +922,18 @@ impl Client {
     /// walk past the skipped messages internally, so this does not scale
     /// well to very deep pagination - prefer [`Client::iter_messages`] for
     /// walking large histories.
+    ///
+    /// Returns a [`crate::types::MessagePage`], which also carries `count`
+    /// and `offset_id_offset` from the raw response - forward these to a
+    /// caller of your own (bot, UI, etc.) so *they* can ask for the next
+    /// page without you having to re-implement this RPC call by hand.
     pub async fn get_message_history(
         &self,
         peer: impl Into<PeerRef>,
         limit: i32,
         offset_id: i32,
         add_offset: i32,
-    ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
+    ) -> Result<crate::types::MessagePage, InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetHistory {
@@ -943,16 +948,39 @@ impl Client {
         };
         let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
-        let msgs = match tl::enums::messages::Messages::deserialize(&mut cur)? {
-            tl::enums::messages::Messages::Messages(m) => m.messages,
-            tl::enums::messages::Messages::Slice(m) => m.messages,
-            tl::enums::messages::Messages::ChannelMessages(m) => m.messages,
-            tl::enums::messages::Messages::NotModified(_) => vec![],
-        };
-        Ok(msgs
-            .into_iter()
-            .map(|m| update::IncomingMessage::from_raw(m).with_client(self.clone()))
-            .collect())
+        let (msgs, count, offset_id_offset, users, chats) =
+            match tl::enums::messages::Messages::deserialize(&mut cur)? {
+                tl::enums::messages::Messages::Messages(m) => {
+                    (m.messages, None, None, m.users, m.chats)
+                }
+                tl::enums::messages::Messages::Slice(m) => (
+                    m.messages,
+                    Some(m.count),
+                    m.offset_id_offset,
+                    m.users,
+                    m.chats,
+                ),
+                tl::enums::messages::Messages::ChannelMessages(m) => (
+                    m.messages,
+                    Some(m.count),
+                    m.offset_id_offset,
+                    m.users,
+                    m.chats,
+                ),
+                tl::enums::messages::Messages::NotModified(_) => {
+                    (vec![], None, None, vec![], vec![])
+                }
+            };
+        self.cache_users_slice(&users).await;
+        self.cache_chats_slice(&chats).await;
+        Ok(crate::types::MessagePage {
+            messages: msgs
+                .into_iter()
+                .map(|m| update::IncomingMessage::from_raw(m).with_client(self.clone()))
+                .collect(),
+            count,
+            offset_id_offset,
+        })
     }
 
     /// Show a chat action like "typing..." in a chat. Telegram clears it
@@ -1129,6 +1157,10 @@ impl Client {
     /// Fetch replies in a discussion thread. Same `add_offset` pagination
     /// trick as [`Client::get_message_history`]: skip this many messages
     /// past `offset_id` (which can stay 0) to jump straight to a given page.
+    ///
+    /// Returns a [`crate::types::MessagePage`] carrying `count` and
+    /// `offset_id_offset` alongside the messages, same as
+    /// [`Client::get_message_history`].
     pub async fn get_replies(
         &self,
         peer: impl Into<PeerRef>,
@@ -1136,7 +1168,7 @@ impl Client {
         limit: i32,
         offset_id: i32,
         add_offset: i32,
-    ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
+    ) -> Result<crate::types::MessagePage, InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let req = tl::functions::messages::GetReplies {
@@ -1152,16 +1184,39 @@ impl Client {
         };
         let body = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
-        let msgs = match tl::enums::messages::Messages::deserialize(&mut cur)? {
-            tl::enums::messages::Messages::Messages(m) => m.messages,
-            tl::enums::messages::Messages::Slice(m) => m.messages,
-            tl::enums::messages::Messages::ChannelMessages(m) => m.messages,
-            tl::enums::messages::Messages::NotModified(_) => vec![],
-        };
-        Ok(msgs
-            .into_iter()
-            .map(|m| update::IncomingMessage::from_raw(m).with_client(self.clone()))
-            .collect())
+        let (msgs, count, offset_id_offset, users, chats) =
+            match tl::enums::messages::Messages::deserialize(&mut cur)? {
+                tl::enums::messages::Messages::Messages(m) => {
+                    (m.messages, None, None, m.users, m.chats)
+                }
+                tl::enums::messages::Messages::Slice(m) => (
+                    m.messages,
+                    Some(m.count),
+                    m.offset_id_offset,
+                    m.users,
+                    m.chats,
+                ),
+                tl::enums::messages::Messages::ChannelMessages(m) => (
+                    m.messages,
+                    Some(m.count),
+                    m.offset_id_offset,
+                    m.users,
+                    m.chats,
+                ),
+                tl::enums::messages::Messages::NotModified(_) => {
+                    (vec![], None, None, vec![], vec![])
+                }
+            };
+        self.cache_users_slice(&users).await;
+        self.cache_chats_slice(&chats).await;
+        Ok(crate::types::MessagePage {
+            messages: msgs
+                .into_iter()
+                .map(|m| update::IncomingMessage::from_raw(m).with_client(self.clone()))
+                .collect(),
+            count,
+            offset_id_offset,
+        })
     }
 
     /// Get the discussion-group message linked to a channel post, for

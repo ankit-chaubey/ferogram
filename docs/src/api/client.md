@@ -426,9 +426,9 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_message_history(peer: impl Into&lt;PeerRef&gt;, limit: i32, offset_id: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_message_history(peer: impl Into&lt;PeerRef&gt;, limit: i32, offset_id: i32, add_offset: i32) → Result&lt;ferogram::types::MessagePage, InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Fetch a page of messages. Pass the lowest message ID from the previous page as <code>offset_id</code> to paginate.</div>
+<div class="api-card-body">Fetch a page of messages. Pass the lowest message ID from the previous page as <code>offset_id</code>, or use <code>add_offset</code> for simple limit-based pagination. The returned <code>MessagePage</code> also carries <code>count</code>/<code>offset_id_offset</code> from the raw response.</div>
 </div>
 
 <div class="api-card">
@@ -1024,9 +1024,9 @@ client.set_chat_reactions(peer.clone(),
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_replies(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, limit: i32, offset_id: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_replies(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, limit: i32, offset_id: i32, add_offset: i32) → Result&lt;ferogram::types::MessagePage, InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Fetch thread replies under a message. <code>msg_id</code> is the root message ID. Pass <code>offset_id = 0</code> for the first page; use the lowest ID from the previous page to paginate. Max <code>limit</code> is 100.</div>
+<div class="api-card-body">Fetch thread replies under a message. <code>msg_id</code> is the root message ID. Pass <code>offset_id = 0</code> for the first page; use the lowest ID from the previous page, or <code>add_offset</code>, to paginate. Max <code>limit</code> is 100. The returned <code>MessagePage</code> also carries <code>count</code>/<code>offset_id_offset</code>.</div>
 </div>
 
 <div class="api-card">

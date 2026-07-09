@@ -231,6 +231,7 @@ Manual resolution:
 - `join_link(link)`: join and resolve an invite link
 - `check_invite(link)`: inspect an invite link without joining
 - `warm_peer_cache_from_dialogs()`: prefetch peer info from dialog list
+- `cache_user(user)` / `cache_entities(users, chats)`: feed `User`/`Chat` objects from a hand-rolled RPC response into the peer cache, same as built-in methods do internally
 
 Peer ID helpers via `PeerExt` and `OptionPeerExt`:
 
@@ -341,7 +342,7 @@ Peer ID helpers via `PeerExt` and `OptionPeerExt`:
 
 - `search(peer, query)`: `SearchBuilder` for searching within a chat; supports filter, offset, limit
 - `search_global(query)`: `GlobalSearchBuilder` for searching across all chats
-- `get_message_history(peer, ...)`: paginated message history
+- `get_message_history(peer, ...)`: paginated message history, returns `MessagePage` (messages + count + offset_id_offset)
 - `get_messages(peer, ids)`: fetch specific messages by ID
 - `get_replies(peer, msg_id, ...)`: fetch comments under a channel post
 - `iter_messages(peer)`: lazy iterator over message history

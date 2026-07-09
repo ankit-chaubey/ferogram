@@ -3279,6 +3279,26 @@ impl Client {
         self.mark_session_snapshot_dirty();
     }
 
+    /// Feed `users`/`chats` from a raw RPC response into the peer cache.
+    ///
+    /// Every built-in method that gets `users`/`chats` back from Telegram
+    /// (`get_chat_full`, `get_message_history`, etc.) already calls this
+    /// internally. It's exposed publicly so that when you issue a raw RPC
+    /// call by hand for something not yet covered by the client's API
+    /// surface, you can still populate the cache exactly like the library
+    /// does - instead of losing access hashes and having to re-resolve
+    /// peers yourself, or making an extra `users.getUsers`/`getChats` call.
+    ///
+    /// ```rust,no_run
+    /// # use ferogram::{Client, tl};
+    /// # async fn example(client: Client, users: Vec<tl::enums::User>, chats: Vec<tl::enums::Chat>) {
+    /// client.cache_entities(&users, &chats).await;
+    /// # }
+    /// ```
+    pub async fn cache_entities(&self, users: &[tl::enums::User], chats: &[tl::enums::Chat]) {
+        self.cache_users_and_chats(users, chats).await;
+    }
+
     /// Warm the peer cache with access_hashes by fetching the first page of
     /// dialogs (`messages.getDialogs`).
     ///

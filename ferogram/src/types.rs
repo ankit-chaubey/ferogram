@@ -319,6 +319,56 @@ impl UserFull {
     }
 }
 
+// MessagePage
+
+/// A page of messages returned by [`Client::get_message_history`](crate::Client::get_message_history)
+/// or [`Client::get_replies`](crate::Client::get_replies), together with the
+/// pagination metadata Telegram sends alongside it.
+///
+/// The raw `messages.Messages` response comes in four shapes
+/// (`Messages`, `Slice`, `ChannelMessages`, `NotModified`), each carrying
+/// `count`/`offset_id_offset` differently (or not at all). This flattens
+/// that into one shape so you can hand `count`/`offset_id_offset` to a
+/// caller (e.g. a UI or bot client) that wants to request the next page,
+/// without re-implementing the raw RPC call by hand.
+#[derive(Debug, Clone)]
+pub struct MessagePage {
+    /// The messages in this page.
+    pub messages: Vec<crate::update::IncomingMessage>,
+    /// Total number of messages in the full result set, when known
+    /// (`messages.Slice` / `messages.channelMessages`). `None` for
+    /// `messages.Messages`, which means the returned list *is* the whole
+    /// result - there's no next page to fetch.
+    pub count: Option<i32>,
+    /// How many messages lie between the requested `offset_id` and the
+    /// start of this page. Add this to the `add_offset` you already used
+    /// (plus `limit`) to jump straight to the next page.
+    pub offset_id_offset: Option<i32>,
+}
+
+impl MessagePage {
+    /// `true` if `count` indicates there are more messages beyond this page.
+    ///
+    /// Only meaningful when `count` is `Some` (a `Slice`/`ChannelMessages`
+    /// response); always `false` for a full `Messages` response.
+    pub fn has_more(&self) -> bool {
+        matches!(self.count, Some(total) if (self.messages.len() as i32) < total)
+    }
+
+    /// The `add_offset` to pass to the next call, or `None` if there's no
+    /// next page.
+    ///
+    /// Equivalent to `offset_id_offset.unwrap_or(0) + messages.len()`, kept
+    /// as a method so callers don't have to hand-write that math (and get
+    /// the `unwrap_or` wrong) at every call site.
+    pub fn next_offset(&self) -> Option<i32> {
+        if !self.has_more() {
+            return None;
+        }
+        Some(self.offset_id_offset.unwrap_or(0) + self.messages.len() as i32)
+    }
+}
+
 // Group
 
 /// Typed wrapper over `tl::types::Chat`.

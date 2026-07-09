@@ -281,7 +281,7 @@ pub use session_backend::{
 pub use socks5::Socks5Config;
 pub use transfer::{TransferError, TransferHandle, TransferProgress};
 pub use transfer_limits::TransferLimits;
-pub use types::{Channel, ChannelKind, Chat, Group, User, UserFull};
+pub use types::{Channel, ChannelKind, Chat, Group, MessagePage, User, UserFull};
 pub use typing_guard::TypingGuard;
 pub use update::{BotStoppedUpdate, MessageReactionUpdate, PollVoteUpdate};
 pub use update::{ButtonFilter, Update};
