@@ -495,10 +495,111 @@ pub(crate) struct ClientInner {
 /// its existing dependency on that crate without going through `ferogram`.
 pub(crate) use ferogram_mtsender::PipelinedSender;
 
+#[inline]
+fn mark_session_snapshot_dirty_impl(inner: &Arc<ClientInner>) {
+    inner
+        .session_snapshot_dirty
+        .store(true, std::sync::atomic::Ordering::Release);
+}
+
+/// If `user` is a `User::User` with `is_self == true`, cache its numeric ID
+/// as the logged-in account's own ID (see `Inner::self_user_id`).
+///
+/// Telegram sets this flag on the account's own `User` object wherever it
+/// appears (sign-in response, `users.getUsers(InputUser::UserSelf)`,
+/// contact lists, etc.), so this captures it for free the first time any
+/// such object is cached - no dedicated network round-trip required.
+fn remember_self_id_impl(inner: &Arc<ClientInner>, user: &tl::enums::User) {
+    if let tl::enums::User::User(u) = user
+        && u.is_self
+    {
+        inner
+            .self_user_id
+            .store(u.id, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+async fn cache_user_impl(inner: &Arc<ClientInner>, user: &tl::enums::User) {
+    remember_self_id_impl(inner, user);
+    inner.peer_cache.write().await.cache_user(user);
+    mark_session_snapshot_dirty_impl(inner);
+}
+
+async fn cache_users_slice_impl(inner: &Arc<ClientInner>, users: &[tl::enums::User]) {
+    for u in users {
+        remember_self_id_impl(inner, u);
+    }
+    let mut cache: tokio::sync::RwLockWriteGuard<'_, PeerCache> = inner.peer_cache.write().await;
+    cache.cache_users(users);
+    drop(cache);
+    mark_session_snapshot_dirty_impl(inner);
+}
+
+async fn cache_chats_slice_impl(inner: &Arc<ClientInner>, chats: &[tl::enums::Chat]) {
+    let mut cache: tokio::sync::RwLockWriteGuard<'_, PeerCache> = inner.peer_cache.write().await;
+    cache.cache_chats(chats);
+    drop(cache);
+    mark_session_snapshot_dirty_impl(inner);
+}
+
+/// Cache users and chats in a single write-lock acquisition.
+async fn cache_users_and_chats_impl(
+    inner: &Arc<ClientInner>,
+    users: &[tl::enums::User],
+    chats: &[tl::enums::Chat],
+) {
+    let mut cache: tokio::sync::RwLockWriteGuard<'_, PeerCache> = inner.peer_cache.write().await;
+    cache.cache_users(users);
+    cache.cache_chats(chats);
+    drop(cache);
+    mark_session_snapshot_dirty_impl(inner);
+}
+
+/// Cache-management utilities, offered as an alternate entry point for code
+/// that issues raw RPC calls by hand and wants to feed the resulting
+/// `users`/`chats` into the peer cache without going through `Client`'s
+/// named methods (`cache_user`/`cache_entities`, unchanged and still the
+/// primary public API). Both entry points call the same underlying
+/// functions, so there's exactly one implementation of the cache-write
+/// logic - no drift risk between the two.
+///
+/// Cheap to clone: internally Arc-wrapped, same as `Client`.
+#[derive(Clone)]
+pub struct ClientInternal {
+    inner: Arc<ClientInner>,
+}
+
+impl ClientInternal {
+    /// Cache a `User` object's ID, access hash, and display info.
+    /// Equivalent to [`Client::cache_user`].
+    pub async fn cache_user(&self, user: &tl::enums::User) {
+        cache_user_impl(&self.inner, user).await;
+    }
+
+    pub async fn cache_users_slice(&self, users: &[tl::enums::User]) {
+        cache_users_slice_impl(&self.inner, users).await;
+    }
+
+    pub async fn cache_chats_slice(&self, chats: &[tl::enums::Chat]) {
+        cache_chats_slice_impl(&self.inner, chats).await;
+    }
+
+    /// Cache users and chats in a single write-lock acquisition.
+    /// Equivalent to [`Client::cache_entities`].
+    pub async fn cache_users_and_chats(
+        &self,
+        users: &[tl::enums::User],
+        chats: &[tl::enums::Chat],
+    ) {
+        cache_users_and_chats_impl(&self.inner, users, chats).await;
+    }
+}
+
 /// The main Telegram client. Cheap to clone: internally Arc-wrapped.
 #[derive(Clone)]
 pub struct Client {
     pub(crate) inner: Arc<ClientInner>,
+    pub __internal: ClientInternal,
     _update_rx: Arc<Mutex<mpsc::Receiver<update::Update>>>,
 }
 
@@ -798,7 +899,8 @@ impl Client {
         });
 
         let client = Self {
-            inner,
+            inner: inner.clone(),
+            __internal: ClientInternal { inner },
             _update_rx: Arc::new(Mutex::new(update_rx)),
         };
 
@@ -3213,9 +3315,7 @@ impl Client {
     /// knows a flush is needed on the next interval tick.
     #[inline]
     fn mark_session_snapshot_dirty(&self) {
-        self.inner
-            .session_snapshot_dirty
-            .store(true, std::sync::atomic::Ordering::Release);
+        mark_session_snapshot_dirty_impl(&self.inner);
     }
 
     /// Cache a `User` object's ID, access hash, and display info.
@@ -3224,45 +3324,15 @@ impl Client {
     /// doesn't already track, so later calls (e.g. sending a message) can
     /// resolve the peer without a redundant `users.getUsers`.
     pub async fn cache_user(&self, user: &tl::enums::User) {
-        self.remember_self_id(user);
-        self.inner.peer_cache.write().await.cache_user(user);
-        self.mark_session_snapshot_dirty();
-    }
-
-    /// If `user` is a `User::User` with `is_self == true`, cache its numeric ID
-    /// as the logged-in account's own ID (see `Inner::self_user_id`).
-    ///
-    /// Telegram sets this flag on the account's own `User` object wherever it
-    /// appears (sign-in response, `users.getUsers(InputUser::UserSelf)`,
-    /// contact lists, etc.), so this captures it for free the first time any
-    /// such object is cached - no dedicated network round-trip required.
-    fn remember_self_id(&self, user: &tl::enums::User) {
-        if let tl::enums::User::User(u) = user
-            && u.is_self
-        {
-            self.inner
-                .self_user_id
-                .store(u.id, std::sync::atomic::Ordering::Relaxed);
-        }
+        cache_user_impl(&self.inner, user).await;
     }
 
     pub(crate) async fn cache_users_slice(&self, users: &[tl::enums::User]) {
-        for u in users {
-            self.remember_self_id(u);
-        }
-        let mut cache: tokio::sync::RwLockWriteGuard<'_, PeerCache> =
-            self.inner.peer_cache.write().await;
-        cache.cache_users(users);
-        drop(cache);
-        self.mark_session_snapshot_dirty();
+        cache_users_slice_impl(&self.inner, users).await;
     }
 
     pub(crate) async fn cache_chats_slice(&self, chats: &[tl::enums::Chat]) {
-        let mut cache: tokio::sync::RwLockWriteGuard<'_, PeerCache> =
-            self.inner.peer_cache.write().await;
-        cache.cache_chats(chats);
-        drop(cache);
-        self.mark_session_snapshot_dirty();
+        cache_chats_slice_impl(&self.inner, chats).await;
     }
 
     /// Cache users and chats in a single write-lock acquisition.
@@ -3271,12 +3341,7 @@ impl Client {
         users: &[tl::enums::User],
         chats: &[tl::enums::Chat],
     ) {
-        let mut cache: tokio::sync::RwLockWriteGuard<'_, PeerCache> =
-            self.inner.peer_cache.write().await;
-        cache.cache_users(users);
-        cache.cache_chats(chats);
-        drop(cache);
-        self.mark_session_snapshot_dirty();
+        cache_users_and_chats_impl(&self.inner, users, chats).await;
     }
 
     /// Feed `users`/`chats` from a raw RPC response into the peer cache.
@@ -3288,6 +3353,10 @@ impl Client {
     /// surface, you can still populate the cache exactly like the library
     /// does - instead of losing access hashes and having to re-resolve
     /// peers yourself, or making an extra `users.getUsers`/`getChats` call.
+    ///
+    /// Equivalent to [`ClientInternal::cache_users_and_chats`] - same
+    /// underlying cache, different entry point. Both call the same
+    /// implementation, so there's no drift between them.
     ///
     /// ```rust,no_run
     /// # use ferogram::{Client, tl};
