@@ -542,7 +542,7 @@ Built-in: `all`, `none`, `private`, `group`, `channel`, `text`, `media`, `photo`
 
 - `client.invoke(&req)`: call any TL function against the current DC
 - `client.invoke_on_dc(dc_id, &req)`: call any TL function against a specific DC
-- Full Layer 227 type coverage via `ferogram::tl`: `tl::types`, `tl::enums`, `tl::functions`
+- Full current-layer type coverage via `ferogram::tl`: `tl::types`, `tl::enums`, `tl::functions`
 
 ---
 

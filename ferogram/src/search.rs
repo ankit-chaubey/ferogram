@@ -266,6 +266,7 @@ impl GlobalSearchBuilder {
             groups_only: self.groups_only,
             users_only: self.users_only,
             folder_id: self.folder_id,
+            community: None,
             q: self.query,
             filter: self.filter,
             min_date: self.min_date,

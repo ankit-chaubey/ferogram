@@ -214,6 +214,11 @@ impl Client {
                     "get_chat_participants: peer is a channel, use get_participants with a Channel peer instead".into()
                 ));
             }
+            tl::enums::ChatFull::CommunityFull(_) => {
+                return Err(InvocationError::Deserialize(
+                    "get_chat_participants: peer is a community, which has no basic-chat-style participant list".into()
+                ));
+            }
         };
 
         let mut result = Vec::new();
@@ -358,6 +363,7 @@ impl Client {
                 delete_stories: false,
                 manage_direct_messages: false,
                 manage_ranks: false,
+                manage_linked_peers: false,
             }
         } else {
             tl::types::ChatAdminRights {
@@ -378,6 +384,7 @@ impl Client {
                 delete_stories: false,
                 manage_direct_messages: false,
                 manage_ranks: false,
+                manage_linked_peers: false,
             }
         };
 
@@ -526,6 +533,7 @@ impl Client {
             let current = match f.full_chat {
                 tl::enums::ChatFull::ChatFull(c) => c.chat_photo,
                 tl::enums::ChatFull::ChannelFull(c) => Some(c.chat_photo),
+                tl::enums::ChatFull::CommunityFull(c) => Some(c.chat_photo),
             };
             if let Some(tl::enums::Photo::Photo(p)) = current {
                 seen_id = Some(p.id);
@@ -835,6 +843,7 @@ impl BannedRightsBuilder {
             send_plain: self.send_plain,
             edit_rank: self.edit_rank,
             send_reactions: self.send_reactions,
+            manage_linked_peers: false,
             until_date: self.until_date,
         })
     }
@@ -950,6 +959,7 @@ impl AdminRightsBuilder {
             delete_stories: false,
             manage_direct_messages: false,
             manage_ranks: false,
+            manage_linked_peers: false,
         })
     }
 }

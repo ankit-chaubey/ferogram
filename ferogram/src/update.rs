@@ -2279,6 +2279,10 @@ fn tl_constructor_id(upd: &tl::enums::Update) -> u32 {
         NewBotConnection(_) => 0xb22083a6,
         WebBrowserSettings(_) => 0xc39a2ade,
         WebBrowserException(_) => 0x140502d1,
+        NewEphemeralMessage(_) => 0x20bcbba1,
+        DeleteEphemeralMessages(_) => 0x56dbfcf8,
+        EditEphemeralMessage(_) => 0x4bbb8f01,
+        BotStarsSubscription(_) => 0x6c0d8e23,
     }
 }
 

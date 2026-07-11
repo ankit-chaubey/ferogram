@@ -306,6 +306,9 @@ pub(super) fn adapt(updates: UpdatesLike) -> Result<tl::types::UpdatesCombined, 
                         ))
                     }
                     tl::enums::InputReplyTo::MonoForum(_) => None,
+                    // Ephemeral messages aren't `Message`s and don't fit the
+                    // regular reply-header shape being built here.
+                    tl::enums::InputReplyTo::EphemeralMessage(_) => None,
                 });
                 let msg = tl::types::Message {
                     out: update.out,
@@ -416,6 +419,9 @@ pub(super) fn adapt_channel_difference(
                 }
                 tl::enums::Dialog::Folder(_) => {
                     panic!("channelDifferenceTooLong: unexpected folder dialog");
+                }
+                tl::enums::Dialog::Community(_) => {
+                    panic!("channelDifferenceTooLong: unexpected community dialog");
                 }
             };
             tl::types::updates::ChannelDifference {

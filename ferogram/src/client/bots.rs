@@ -317,6 +317,7 @@ impl Client {
             .iter()
             .map(|(cmd, desc)| {
                 tl::enums::BotCommand::BotCommand(tl::types::BotCommand {
+                    ephemeral: false,
                     command: cmd.to_string(),
                     description: desc.to_string(),
                 })

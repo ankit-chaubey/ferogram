@@ -83,6 +83,8 @@ impl Client {
                     tl::enums::Chat::Channel(x) => x.id,
                     tl::enums::Chat::ChannelForbidden(x) => x.id,
                     tl::enums::Chat::Empty(x) => x.id,
+                    tl::enums::Chat::Community(x) => x.id,
+                    tl::enums::Chat::CommunityForbidden(x) => x.id,
                 };
                 (id, c)
             })
@@ -379,6 +381,8 @@ impl Client {
                     tl::enums::Chat::Channel(x) => x.id,
                     tl::enums::Chat::ChannelForbidden(x) => x.id,
                     tl::enums::Chat::Empty(x) => x.id,
+                    tl::enums::Chat::Community(x) => x.id,
+                    tl::enums::Chat::CommunityForbidden(x) => x.id,
                 };
                 (id, c)
             })

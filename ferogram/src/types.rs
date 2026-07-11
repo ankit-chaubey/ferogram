@@ -379,14 +379,16 @@ pub struct Group {
 
 impl Group {
     /// Wrap from a raw `tl::enums::Chat`, returning `None` if it is not a
-    /// basic group (i.e. empty, forbidden, or a channel).
+    /// basic group (i.e. empty, forbidden, a channel, or a community).
     pub fn from_raw(raw: tl::enums::Chat) -> Option<Self> {
         match raw {
             tl::enums::Chat::Chat(c) => Some(Self { raw: c }),
             tl::enums::Chat::Empty(_)
             | tl::enums::Chat::Forbidden(_)
             | tl::enums::Chat::Channel(_)
-            | tl::enums::Chat::ChannelForbidden(_) => None,
+            | tl::enums::Chat::ChannelForbidden(_)
+            | tl::enums::Chat::Community(_)
+            | tl::enums::Chat::CommunityForbidden(_) => None,
         }
     }
 

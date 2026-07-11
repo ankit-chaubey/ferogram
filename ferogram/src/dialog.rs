@@ -46,16 +46,24 @@ impl Dialog {
                 tl::enums::Chat::Channel(c) => c.title.clone(),
                 tl::enums::Chat::ChannelForbidden(c) => c.title.clone(),
                 tl::enums::Chat::Empty(_) => "(empty)".into(),
+                tl::enums::Chat::Community(c) => c.title.clone(),
+                tl::enums::Chat::CommunityForbidden(c) => c.title.clone(),
             };
         }
         "(Unknown)".to_string()
     }
 
     /// Peer of this dialog.
+    ///
+    /// `None` for folders and for community dialogs - communities are
+    /// addressed by `community_id` (see `dialogCommunity`), not by a
+    /// `Peer`, since layer 228 didn't add a corresponding `Peer::Community`
+    /// variant.
     pub fn peer(&self) -> Option<&tl::enums::Peer> {
         match &self.raw {
             tl::enums::Dialog::Dialog(d) => Some(&d.peer),
             tl::enums::Dialog::Folder(_) => None,
+            tl::enums::Dialog::Community(_) => None,
         }
     }
 

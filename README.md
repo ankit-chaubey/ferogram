@@ -7,7 +7,7 @@ Async Rust library for Telegram's MTProto protocol.
 [![Crates.io](https://img.shields.io/crates/v/ferogram?style=flat-square&color=fc8d62)](https://crates.io/crates/ferogram)
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram-5865F2?style=flat-square)](https://docs.rs/ferogram)
 [![License](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue?style=flat-square)](LICENSE-MIT)
-[![TL Layer](https://img.shields.io/badge/TL%20Layer-227-8b5cf6?style=flat-square)](https://core.telegram.org/schema)
+[![TL Layer](https://img.shields.io/badge/TL%20Layer-228-8b5cf6?style=flat-square)](https://core.telegram.org/schema)
 [![Telegram Channel](https://img.shields.io/badge/channel-%40Ferogram-2CA5E0?style=flat-square&logo=telegram)](https://t.me/Ferogram)
 [![Telegram Chat](https://img.shields.io/badge/chat-%40FerogramChat-2CA5E0?style=flat-square&logo=telegram)](https://t.me/FerogramChat)
 

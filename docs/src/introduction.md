@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/ferogram?color=fc8d62&label=ferogram&style=flat-square)](https://crates.io/crates/ferogram)
 [![docs.rs](https://img.shields.io/docsrs/ferogram?style=flat-square&color=22c55e)](https://docs.rs/ferogram)
-[![TL Layer](https://img.shields.io/badge/TL%20Layer-227-8b5cf6?style=flat-square)](https://core.telegram.org/schema)
+[![TL Layer](https://img.shields.io/badge/TL%20Layer-228-8b5cf6?style=flat-square)](https://core.telegram.org/schema)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square)](#license)
 
 Hey, glad you're here.
@@ -51,7 +51,7 @@ Most people only need `ferogram`. But each crate is independently published if y
 | [`ferogram-connect`](https://docs.rs/ferogram-connect) | Raw TCP, MTProto framing, obfuscation, SOCKS5, MTProxy, gzip. |
 | [`ferogram-mtproto`](https://docs.rs/ferogram-mtproto) | MTProto 2.0 session, DH key exchange, message framing, PFS key binding. |
 | [`ferogram-crypto`](https://docs.rs/ferogram-crypto) | AES-IGE, RSA, SHA, Diffie-Hellman, PQ factorization, auth key derivation. |
-| [`ferogram-tl-types`](https://docs.rs/ferogram-tl-types) | Auto-generated TL types, functions, and enums for Layer 227. |
+| [`ferogram-tl-types`](https://docs.rs/ferogram-tl-types) | Auto-generated TL types, functions, and enums (tracks `tl::LAYER`). |
 | [`ferogram-tl-gen`](https://docs.rs/ferogram-tl-gen) | Build-time code generator from TL AST to Rust source. |
 | [`ferogram-tl-parser`](https://docs.rs/ferogram-tl-parser) | Parses `.tl` schema text into a Definition AST. |
 

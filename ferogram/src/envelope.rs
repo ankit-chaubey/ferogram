@@ -52,5 +52,9 @@ pub fn chat_to_peer(chat: &tl::enums::Chat) -> Option<tl::enums::Peer> {
             Some(tl::enums::Peer::Chat(tl::types::PeerChat { chat_id: c.id }))
         }
         tl::enums::Chat::Empty(_) => None,
+        // No `Peer::Community` variant exists (layer 228 didn't add one) -
+        // communities aren't addressable as a `Peer` at all.
+        tl::enums::Chat::Community(_) => None,
+        tl::enums::Chat::CommunityForbidden(_) => None,
     }
 }

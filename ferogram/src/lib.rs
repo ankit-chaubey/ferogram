@@ -107,7 +107,8 @@
 //!
 //! # Raw API
 //!
-//! If something isn't wrapped yet, you can call any Layer 227 TL function directly:
+//! If something isn't wrapped yet, you can call any TL function directly
+//! (the current layer is exposed as `tl::LAYER`):
 //!
 //! ```rust,ignore
 //! use ferogram::tl;

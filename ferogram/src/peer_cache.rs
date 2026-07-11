@@ -59,6 +59,8 @@ pub fn build_peer_map(chats: &[tl::enums::Chat]) -> Option<PeerMap> {
             tl::enums::Chat::ChannelForbidden(c) => c.id,
             tl::enums::Chat::Chat(c) => c.id,
             tl::enums::Chat::Forbidden(c) => c.id,
+            tl::enums::Chat::Community(c) => c.id,
+            tl::enums::Chat::CommunityForbidden(c) => c.id,
             tl::enums::Chat::Empty(_) => continue,
         };
         map.insert(id, chat.clone());
