@@ -211,6 +211,7 @@ pub mod middleware;
 pub mod resume;
 pub mod transfer;
 pub mod transfer_limits;
+pub mod transfer_safety;
 pub mod update_config;
 pub mod util;
 
@@ -282,6 +283,7 @@ pub use session_backend::{
 pub use socks5::Socks5Config;
 pub use transfer::{TransferError, TransferHandle, TransferProgress};
 pub use transfer_limits::TransferLimits;
+pub use transfer_safety::TransferSafety;
 pub use types::{Channel, ChannelKind, Chat, Group, MessagePage, User, UserFull};
 pub use typing_guard::TypingGuard;
 pub use update::{BotStoppedUpdate, MessageReactionUpdate, PollVoteUpdate};

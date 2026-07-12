@@ -43,6 +43,7 @@ mp4            = { version = "0.14", optional = true }
 sha1           = "0.10.6"
 sha2           = "0.10.9"
 regex          = "1"
+governor       = "0.6"
 
 [features]
 default = ["parsers", "html"]

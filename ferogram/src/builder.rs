@@ -50,6 +50,7 @@ pub struct ClientBuilder {
     update_config: crate::update_config::UpdateConfig,
     future_auth_token: Option<Vec<u8>>,
     transfer_limits: TransferLimits,
+    transfer_safety: crate::transfer_safety::TransferSafety,
 }
 
 impl Default for ClientBuilder {
@@ -80,6 +81,7 @@ impl Default for ClientBuilder {
             update_config: crate::update_config::UpdateConfig::default(),
             future_auth_token: None,
             transfer_limits: TransferLimits::default(),
+            transfer_safety: crate::transfer_safety::TransferSafety::default(),
         }
     }
 }
@@ -493,6 +495,36 @@ impl ClientBuilder {
         self
     }
 
+    /// Hard safety ceilings for file transfers - a weighted in-flight-bytes
+    /// cap and a requests/sec limiter - enforced independently of whatever
+    /// [`transfer_limits`](Self::transfer_limits) requests. See
+    /// [`TransferSafety`](crate::TransferSafety) for the full explanation
+    /// of why this is a separate mechanism from `transfer_limits`.
+    ///
+    /// Not applied to `upload_exp`/`download_exp` (`experimental` feature)
+    /// - those stay fully unprotected, as documented.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use ferogram::{Client, TransferSafety};
+    /// # const ID: i32 = 0;
+    /// # const HASH: &str = "";
+    /// # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let (client, _) = Client::builder()
+    ///     .api_id(ID).api_hash(HASH)
+    ///     .transfer_safety(TransferSafety {
+    ///         max_connections: Some(4),
+    ///         max_in_flight_bytes: 4 * 1024 * 1024,
+    ///         max_requests_per_sec: Some(20),
+    ///     })
+    ///     .connect().await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn transfer_safety(mut self, safety: crate::transfer_safety::TransferSafety) -> Self {
+        self.transfer_safety = safety;
+        self
+    }
+
     /// Y: max parallel connections a single download may open for itself.
     /// Small files always use 1 regardless of this value. Tuned separately
     /// from uploads since a link's download and upload bandwidth often
@@ -718,6 +750,7 @@ impl ClientBuilder {
             update_config: self.update_config,
             future_auth_token: self.future_auth_token,
             transfer_limits: self.transfer_limits.normalized(),
+            transfer_safety: self.transfer_safety,
         })
     }
 

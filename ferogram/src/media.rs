@@ -1447,6 +1447,7 @@ impl Client {
         } else {
             upload_worker_count(total, self.inner.transfer_limits.upload_tcp_connections)
         };
+        let n_workers = self.inner.transfer_safety.cap_workers(n_workers);
 
         let home_dc = *self.inner.home_dc_id.lock().await;
         let started = std::time::Instant::now();
@@ -1575,6 +1576,11 @@ impl Client {
                     //   Server Timeout (-503) / IO → reconnect with exponential backoff
                     //   Any other RPC error       → propagate immediately
                     loop {
+                        let _safety_permit = client
+                            .inner
+                            .transfer_safety
+                            .acquire(chunk_len as usize)
+                            .await;
                         let result = if big {
                             conn.rpc_call(&tl::functions::upload::SaveBigFilePart {
                                 file_id,
@@ -1591,6 +1597,7 @@ impl Client {
                             })
                             .await
                         };
+                        drop(_safety_permit);
                         let err = match result {
                             Ok(_) => {
                                 if let Some(ref h) = worker_handle {
@@ -1756,6 +1763,7 @@ impl Client {
         } else {
             upload_worker_count(total, self.inner.transfer_limits.upload_tcp_connections)
         };
+        let n_workers = self.inner.transfer_safety.cap_workers(n_workers);
 
         let home_dc = *self.inner.home_dc_id.lock().await;
         let started = std::time::Instant::now();
@@ -2139,6 +2147,7 @@ impl Client {
         } else {
             upload_worker_count(total, self.inner.transfer_limits.upload_tcp_connections)
         };
+        let n_workers = self.inner.transfer_safety.cap_workers(n_workers);
 
         let home_dc = *self.inner.home_dc_id.lock().await;
         let started = std::time::Instant::now();
@@ -2270,6 +2279,8 @@ impl Client {
                     }
 
                     loop {
+                        let _safety_permit =
+                            client.inner.transfer_safety.acquire(chunk_len).await;
                         let result = if big {
                             conn.rpc_call(&tl::functions::upload::SaveBigFilePart {
                                 file_id,
@@ -2286,6 +2297,7 @@ impl Client {
                             })
                             .await
                         };
+                        drop(_safety_permit);
                         let err = match result {
                             Ok(_) => {
                                 if let Some(ref h) = worker_handle {
@@ -2462,6 +2474,7 @@ impl Client {
         } else {
             upload_worker_count(total, self.inner.transfer_limits.upload_tcp_connections)
         };
+        let n_workers = self.inner.transfer_safety.cap_workers(n_workers);
 
         let home_dc = *self.inner.home_dc_id.lock().await;
         let started = std::time::Instant::now();
@@ -3324,6 +3337,7 @@ impl Client {
         } else {
             download_worker_count(size, self.inner.transfer_limits.download_tcp_connections)
         };
+        let n_workers = self.inner.transfer_safety.cap_workers(n_workers);
         let _global_guard = self
             .inner
             .worker_semaphore
@@ -3436,7 +3450,10 @@ impl Client {
                     //   Server Timeout (-503) / IO → reconnect with exponential backoff
                     //   Any other RPC error       → propagate immediately
                     let raw = loop {
-                        let err = match conn.rpc_call(&req).await {
+                        let _safety_permit = client.inner.transfer_safety.acquire(chunk).await;
+                        let call_result = conn.rpc_call(&req).await;
+                        drop(_safety_permit);
+                        let err = match call_result {
                             Ok(r) => break r,
                             Err(e) => e,
                         };
@@ -3637,6 +3654,7 @@ impl Client {
         } else {
             download_worker_count(size, self.inner.transfer_limits.download_tcp_connections)
         };
+        let n_workers = self.inner.transfer_safety.cap_workers(n_workers);
 
         let home = {
             let _g = self.inner.home_dc_id.lock().await;
@@ -3764,7 +3782,10 @@ impl Client {
                         limit: chunk as i32,
                     };
                     let raw = loop {
-                        let err = match conn.rpc_call(&req).await {
+                        let _safety_permit = client.inner.transfer_safety.acquire(chunk).await;
+                        let call_result = conn.rpc_call(&req).await;
+                        drop(_safety_permit);
+                        let err = match call_result {
                             Ok(r) => break r,
                             Err(e) => e,
                         };
@@ -3953,6 +3974,7 @@ impl Client {
         } else {
             download_worker_count(size, self.inner.transfer_limits.download_tcp_connections)
         };
+        let n_workers = self.inner.transfer_safety.cap_workers(n_workers);
 
         let home = {
             let _g = self.inner.home_dc_id.lock().await;

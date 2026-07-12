@@ -161,6 +161,13 @@ pub struct Config {
     /// max_tcp_connections: 12, download_pipeline_depth: 4, upload_pipeline_depth: 4,
     /// bypass_tcp_allotments: false`.
     pub transfer_limits: TransferLimits,
+    /// Hard safety ceilings for file transfers, enforced independently of
+    /// `transfer_limits`. See [`TransferSafety`].
+    ///
+    /// Default: `max_connections: None, max_in_flight_bytes: 16 MiB,
+    /// max_requests_per_sec: None` (i.e. only the byte ceiling is active
+    /// out of the box).
+    pub transfer_safety: crate::transfer_safety::TransferSafety,
 }
 
 impl Config {
@@ -308,6 +315,7 @@ impl Default for Config {
             update_config: crate::update_config::UpdateConfig::default(),
             future_auth_token: None,
             transfer_limits: TransferLimits::default(),
+            transfer_safety: crate::transfer_safety::TransferSafety::default(),
         }
     }
 }
@@ -400,6 +408,13 @@ pub(crate) struct ClientInner {
     /// for the highway/trucks model. Normalized (clamped to the safe range)
     /// on construction regardless of how `Config` was built.
     pub(crate) transfer_limits: TransferLimits,
+    /// Runtime governor for [`TransferSafety`](crate::TransferSafety): a
+    /// weighted in-flight-bytes ceiling and requests/sec limiter enforced
+    /// independently of `transfer_limits`. Client-wide default; individual
+    /// calls may pass their own `TransferSafety` to a `_with_safety`
+    /// method instead of using this one. Not consulted by
+    /// `upload_exp`/`download_exp`.
+    pub(crate) transfer_safety: Arc<crate::transfer_safety::TransferSafetyGovernor>,
     /// Guards against calling `stream_updates()` more than once.
     stream_active: std::sync::atomic::AtomicBool,
 
@@ -873,6 +888,9 @@ impl Client {
                 config.transfer_limits.normalized().max_tcp_connections,
             )),
             transfer_limits: config.transfer_limits.normalized(),
+            transfer_safety: Arc::new(crate::transfer_safety::TransferSafetyGovernor::new(
+                config.transfer_safety,
+            )),
             stream_active: std::sync::atomic::AtomicBool::new(false),
 
             dh_in_progress: std::sync::atomic::AtomicBool::new(false),
