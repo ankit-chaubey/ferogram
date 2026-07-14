@@ -30,18 +30,34 @@ use crate::{
 ///
 /// Awaiting it directly downloads with no progress tracking. Chain
 /// [`.handle()`](DownloadFile::handle) before `.await` to track progress,
-/// pause, or cancel the transfer.
+/// pause, or cancel the transfer. Chain
+/// [`.with_safety()`](DownloadFile::with_safety) to use a different
+/// [`TransferSafety`](crate::TransferSafety) policy than the client's
+/// default for just this one download.
 pub struct DownloadFile<'a, D: media::Downloadable> {
     client: &'a Client,
     item: &'a D,
     path: std::path::PathBuf,
     handle: Option<&'a crate::transfer::TransferHandle>,
+    safety: Option<crate::transfer_safety::TransferSafety>,
 }
 
 impl<'a, D: media::Downloadable> DownloadFile<'a, D> {
     /// Track progress, pause, or cancel this transfer with `handle`.
     pub fn handle(mut self, handle: &'a crate::transfer::TransferHandle) -> Self {
         self.handle = Some(handle);
+        self
+    }
+
+    /// Use `safety` instead of the client's default
+    /// [`TransferSafety`](crate::TransferSafety) for this download only -
+    /// e.g. a tighter budget for a large file, or a looser one for a
+    /// trusted DC. Everything else about the transfer (worker count,
+    /// pipeline depth magnitude) still comes from
+    /// [`TransferLimits`](crate::TransferLimits) as usual; this only
+    /// changes the hard ceiling layered on top.
+    pub fn with_safety(mut self, safety: crate::transfer_safety::TransferSafety) -> Self {
+        self.safety = Some(safety);
         self
     }
 }
@@ -52,9 +68,15 @@ impl<'a, D: media::Downloadable + Sync> std::future::IntoFuture for DownloadFile
         std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
+        let governor = match self.safety {
+            Some(safety) => {
+                std::sync::Arc::new(crate::transfer_safety::TransferSafetyGovernor::new(safety))
+            }
+            None => self.client.inner.transfer_safety.clone(),
+        };
         Box::pin(async move {
             self.client
-                .download_file_inner(self.item, &self.path, self.handle)
+                .download_file_inner(self.item, &self.path, self.handle, governor)
                 .await
         })
     }
@@ -64,18 +86,28 @@ impl<'a, D: media::Downloadable + Sync> std::future::IntoFuture for DownloadFile
 ///
 /// Awaiting it directly uploads with no progress tracking. Chain
 /// [`.handle()`](Upload::handle) before `.await` to track progress, pause,
-/// or cancel the transfer.
+/// or cancel the transfer. Chain [`.with_safety()`](Upload::with_safety) to
+/// use a different [`TransferSafety`](crate::TransferSafety) policy than
+/// the client's default for just this one upload.
 pub struct Upload<'a, R> {
     client: &'a Client,
     source: R,
     name: String,
     handle: Option<&'a crate::transfer::TransferHandle>,
+    safety: Option<crate::transfer_safety::TransferSafety>,
 }
 
 impl<'a, R> Upload<'a, R> {
     /// Track progress, pause, or cancel this transfer with `handle`.
     pub fn handle(mut self, handle: &'a crate::transfer::TransferHandle) -> Self {
         self.handle = Some(handle);
+        self
+    }
+
+    /// Use `safety` instead of the client's default
+    /// [`TransferSafety`](crate::TransferSafety) for this upload only.
+    pub fn with_safety(mut self, safety: crate::transfer_safety::TransferSafety) -> Self {
+        self.safety = Some(safety);
         self
     }
 }
@@ -89,9 +121,15 @@ where
         std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
+        let governor = match self.safety {
+            Some(safety) => {
+                std::sync::Arc::new(crate::transfer_safety::TransferSafetyGovernor::new(safety))
+            }
+            None => self.client.inner.transfer_safety.clone(),
+        };
         Box::pin(async move {
             self.client
-                .upload_inner(self.source, &self.name, self.handle)
+                .upload_inner(self.source, &self.name, self.handle, governor)
                 .await
         })
     }
@@ -101,17 +139,28 @@ where
 ///
 /// Awaiting it directly uploads with no progress tracking. Chain
 /// [`.handle()`](UploadFile::handle) before `.await` to track progress,
-/// pause, or cancel the transfer.
+/// pause, or cancel the transfer. Chain
+/// [`.with_safety()`](UploadFile::with_safety) to use a different
+/// [`TransferSafety`](crate::TransferSafety) policy than the client's
+/// default for just this one upload.
 pub struct UploadFile<'a> {
     client: &'a Client,
     path: std::path::PathBuf,
     handle: Option<&'a crate::transfer::TransferHandle>,
+    safety: Option<crate::transfer_safety::TransferSafety>,
 }
 
 impl<'a> UploadFile<'a> {
     /// Track progress, pause, or cancel this transfer with `handle`.
     pub fn handle(mut self, handle: &'a crate::transfer::TransferHandle) -> Self {
         self.handle = Some(handle);
+        self
+    }
+
+    /// Use `safety` instead of the client's default
+    /// [`TransferSafety`](crate::TransferSafety) for this upload only.
+    pub fn with_safety(mut self, safety: crate::transfer_safety::TransferSafety) -> Self {
+        self.safety = Some(safety);
         self
     }
 }
@@ -122,7 +171,17 @@ impl<'a> std::future::IntoFuture for UploadFile<'a> {
         std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move { self.client.upload_file_inner(&self.path, self.handle).await })
+        let governor = match self.safety {
+            Some(safety) => {
+                std::sync::Arc::new(crate::transfer_safety::TransferSafetyGovernor::new(safety))
+            }
+            None => self.client.inner.transfer_safety.clone(),
+        };
+        Box::pin(async move {
+            self.client
+                .upload_file_inner(&self.path, self.handle, governor)
+                .await
+        })
     }
 }
 
@@ -260,7 +319,14 @@ impl Client {
         // Download the tail (from resume_offset onward) into a scratch buffer.
         let mut tail: Vec<u8> = Vec::new();
         let result = self
-            .download_streaming_on_dc_from(loc.clone(), dc, &mut tail, Some(handle), resume_offset)
+            .download_streaming_on_dc_from(
+                loc.clone(),
+                dc,
+                &mut tail,
+                Some(handle),
+                resume_offset,
+                self.inner.transfer_safety.clone(),
+            )
             .await;
         done.store(true, Ordering::Release);
 
@@ -734,8 +800,43 @@ impl Client {
             h.set_total(total as u64);
             h.reset_start();
         }
-        self.download_streaming_on_dc(loc, dc, &mut dest, handle)
-            .await
+        self.download_streaming_on_dc(
+            loc,
+            dc,
+            &mut dest,
+            handle,
+            self.inner.transfer_safety.clone(),
+        )
+        .await
+    }
+
+    /// Like [`download`](Self::download) but with `safety` instead of the
+    /// client's default [`TransferSafety`](crate::TransferSafety) for this
+    /// one download.
+    pub async fn download_with_safety(
+        &self,
+        item: &impl media::Downloadable,
+        mut dest: impl tokio::io::AsyncWrite + Unpin,
+        handle: Option<&crate::transfer::TransferHandle>,
+        safety: crate::transfer_safety::TransferSafety,
+    ) -> Result<u64, InvocationError> {
+        let loc = item.to_input_location().ok_or_else(|| {
+            InvocationError::Deserialize("item has no downloadable location".into())
+        })?;
+        let dc = item.dc_id();
+        if let Some(h) = handle {
+            let total = item.size().unwrap_or(0);
+            h.set_total(total as u64);
+            h.reset_start();
+        }
+        self.download_streaming_on_dc(
+            loc,
+            dc,
+            &mut dest,
+            handle,
+            std::sync::Arc::new(crate::transfer_safety::TransferSafetyGovernor::new(safety)),
+        )
+        .await
     }
 
     /// Download message media and save it directly to a file at `path`.
@@ -782,6 +883,7 @@ impl Client {
             item,
             path: path.as_ref().to_path_buf(),
             handle: None,
+            safety: None,
         }
     }
 
@@ -798,6 +900,7 @@ impl Client {
         item: &impl media::Downloadable,
         path: &std::path::Path,
         handle: Option<&crate::transfer::TransferHandle>,
+        safety: std::sync::Arc<crate::transfer_safety::TransferSafetyGovernor>,
     ) -> Result<u64, InvocationError> {
         let loc = item.to_input_location().ok_or_else(|| {
             InvocationError::Deserialize("item has no downloadable location".into())
@@ -807,13 +910,15 @@ impl Client {
             && size >= crate::media::DOWNLOAD_CONCURRENT_THRESHOLD
         {
             return self
-                .download_media_concurrent_on_dc_to_file_pipelined(loc, size, dc, path, handle)
+                .download_media_concurrent_on_dc_to_file_pipelined(
+                    loc, size, dc, path, handle, safety,
+                )
                 .await;
         }
         let mut file = tokio::fs::File::create(path)
             .await
             .map_err(InvocationError::Io)?;
-        self.download_streaming_on_dc(loc, dc, &mut file, handle)
+        self.download_streaming_on_dc(loc, dc, &mut file, handle, safety)
             .await
     }
 
@@ -857,7 +962,38 @@ impl Client {
                 "media has no downloadable document for the requested quality".into(),
             )
         })?;
-        self.download_file_inner(&doc, path.as_ref(), handle).await
+        self.download_file_inner(
+            &doc,
+            path.as_ref(),
+            handle,
+            self.inner.transfer_safety.clone(),
+        )
+        .await
+    }
+
+    /// Like [`download_media`](Self::download_media) but with `safety`
+    /// instead of the client's default [`TransferSafety`](crate::TransferSafety)
+    /// for this one download.
+    pub async fn download_media_with_safety(
+        &self,
+        media: &tl::enums::MessageMedia,
+        quality: crate::media::MediaQuality,
+        path: impl AsRef<std::path::Path>,
+        handle: Option<&crate::transfer::TransferHandle>,
+        safety: crate::transfer_safety::TransferSafety,
+    ) -> Result<u64, InvocationError> {
+        let doc = crate::media::resolve_quality_document(media, quality).ok_or_else(|| {
+            InvocationError::Deserialize(
+                "media has no downloadable document for the requested quality".into(),
+            )
+        })?;
+        self.download_file_inner(
+            &doc,
+            path.as_ref(),
+            handle,
+            std::sync::Arc::new(crate::transfer_safety::TransferSafetyGovernor::new(safety)),
+        )
+        .await
     }
 
     /// Return a lazy chunk iterator for `media`.
@@ -936,6 +1072,7 @@ impl Client {
             source,
             name: name.to_string(),
             handle: None,
+            safety: None,
         }
     }
 
@@ -947,6 +1084,7 @@ impl Client {
         mut source: impl tokio::io::AsyncRead + Unpin + Send,
         name: &str,
         handle: Option<&crate::transfer::TransferHandle>,
+        safety: std::sync::Arc<crate::transfer_safety::TransferSafetyGovernor>,
     ) -> Result<crate::media::UploadedFile, InvocationError> {
         use tokio::io::AsyncReadExt;
         let mut data = Vec::new();
@@ -955,10 +1093,16 @@ impl Client {
             .await
             .map_err(InvocationError::Io)?;
         if data.len() > crate::media::BIG_FILE_THRESHOLD {
-            self.upload_file_concurrent_pipelined(std::sync::Arc::new(data), name, "", handle)
-                .await
+            self.upload_file_concurrent_pipelined_inner(
+                std::sync::Arc::new(data),
+                name,
+                "",
+                handle,
+                safety,
+            )
+            .await
         } else {
-            self.upload_bytes(&data, name, "", handle).await
+            self.upload_bytes(&data, name, "", handle, safety).await
         }
     }
 
@@ -1004,6 +1148,7 @@ impl Client {
             client: self,
             path: path.as_ref().to_path_buf(),
             handle: None,
+            safety: None,
         }
     }
 
@@ -1014,6 +1159,7 @@ impl Client {
         &self,
         path: &std::path::Path,
         handle: Option<&crate::transfer::TransferHandle>,
+        safety: std::sync::Arc<crate::transfer_safety::TransferSafetyGovernor>,
     ) -> Result<crate::media::UploadedFile, InvocationError> {
         use tokio::io::AsyncReadExt;
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
@@ -1023,7 +1169,7 @@ impl Client {
         let size = meta.len() as usize;
         if size >= crate::media::BIG_FILE_THRESHOLD {
             return self
-                .upload_file_concurrent_streaming_pipelined(path, name, "", handle)
+                .upload_file_concurrent_streaming_pipelined(path, name, "", handle, safety)
                 .await;
         }
         let mut file = tokio::fs::File::open(path)
@@ -1033,7 +1179,7 @@ impl Client {
         file.read_to_end(&mut data)
             .await
             .map_err(InvocationError::Io)?;
-        self.upload_bytes(&data, name, "", handle).await
+        self.upload_bytes(&data, name, "", handle, safety).await
     }
     /// Get every message in the same media group (album) as `msg_id`, given
     /// any one message from that group.

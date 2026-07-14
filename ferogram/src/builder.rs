@@ -513,6 +513,8 @@ impl ClientBuilder {
     /// let (client, _) = Client::builder()
     ///     .api_id(ID).api_hash(HASH)
     ///     .transfer_safety(TransferSafety {
+    ///         allow_pipelining: true,
+    ///         allow_multiple_connections: true,
     ///         max_connections: Some(4),
     ///         max_in_flight_bytes: 4 * 1024 * 1024,
     ///         max_requests_per_sec: Some(20),

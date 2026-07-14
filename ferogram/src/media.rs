@@ -18,6 +18,7 @@ use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable};
 use tokio::sync::Mutex;
 
+use crate::transfer_safety::{TransferSafety, TransferSafetyGovernor};
 use crate::{Client, InvocationError};
 
 /// One in-flight pipelined upload request: (part index, part length in
@@ -27,6 +28,7 @@ type PipelinedUploadSlot = (
     i32,
     u64,
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, InvocationError>> + Send>>,
+    crate::transfer_safety::SafetyPermit,
 );
 
 /// One in-flight pipelined download request: (part index, response future).
@@ -35,6 +37,7 @@ type PipelinedUploadSlot = (
 type PipelinedDownloadSlot = (
     usize,
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, InvocationError>> + Send>>,
+    crate::transfer_safety::SafetyPermit,
 );
 
 /// A single item in a multi-media album send.
@@ -1344,6 +1347,7 @@ impl Client {
         name: &str,
         mime_type: &str,
         handle: Option<&crate::transfer::TransferHandle>,
+        safety: Arc<TransferSafetyGovernor>,
     ) -> Result<UploadedFile, InvocationError> {
         // Zero-byte upload produces parts=0; add 1 to satisfy FILE_PART_0_MISSING check.
         if data.is_empty() {
@@ -1373,6 +1377,7 @@ impl Client {
                 h.poll_pause_cancel().await?;
             }
             let chunk_len = chunk.len();
+            let _safety_permit = safety.acquire(chunk_len).await;
             if big {
                 // Always through transfer pool, never main session.
                 self.rpc_transfer_on_dc_pub(
@@ -1396,6 +1401,7 @@ impl Client {
                 )
                 .await?;
             }
+            drop(_safety_permit);
             if let Some(h) = handle {
                 h.add_bytes(chunk_len as u64);
             }
@@ -1417,19 +1423,17 @@ impl Client {
         })
     }
 
-    /// Upload bytes with parallel worker sessions.
-    ///
-    /// Parallel upload using per-worker connections. Worker count scales with file size.
-    /// Part size: 128 KB for tiny files, up to 512 KB otherwise.
-    ///
-    /// - Files < 10 MB  -> `upload.saveFilePart`    (small-file API)
-    /// - Files >= 10 MB -> `upload.saveBigFilePart`  (big-file API)
-    pub async fn upload_file_concurrent(
+    /// Shared implementation behind [`upload_file_concurrent`](Self::upload_file_concurrent)
+    /// and [`upload_file_concurrent_with_safety`](Self::upload_file_concurrent_with_safety) -
+    /// see those for documentation. Takes an explicit `safety` governor so
+    /// both public entry points can share this one implementation.
+    pub(crate) async fn upload_file_concurrent_inner(
         &self,
         data: Arc<Vec<u8>>,
         name: &str,
         mime_type: &str,
         handle: Option<&crate::transfer::TransferHandle>,
+        safety: Arc<TransferSafetyGovernor>,
     ) -> Result<UploadedFile, InvocationError> {
         // Zero-byte upload produces parts=0; add 1 to satisfy FILE_PART_0_MISSING check.
         if data.is_empty() {
@@ -1447,7 +1451,7 @@ impl Client {
         } else {
             upload_worker_count(total, self.inner.transfer_limits.upload_tcp_connections)
         };
-        let n_workers = self.inner.transfer_safety.cap_workers(n_workers);
+        let n_workers = safety.cap_workers(n_workers);
 
         let home_dc = *self.inner.home_dc_id.lock().await;
         let started = std::time::Instant::now();
@@ -1513,7 +1517,7 @@ impl Client {
                 "[ferogram::transfer] no worker connections available; uploading sequentially"
             );
             return self
-                .upload_bytes(&data, name, mime_type, shared_handle.as_ref())
+                .upload_bytes(&data, name, mime_type, shared_handle.as_ref(), safety)
                 .await;
         }
         let actual_workers = conns.len();
@@ -1526,6 +1530,7 @@ impl Client {
             let data = Arc::clone(&data);
             let next_part = Arc::clone(&next_part);
             let client = self.clone();
+            let safety = safety.clone();
             let upload_dc = Arc::clone(&upload_dc);
             let file_id_atomic = std::sync::Arc::clone(&file_id_atomic);
             let worker_handle = shared_handle.clone();
@@ -1576,11 +1581,7 @@ impl Client {
                     //   Server Timeout (-503) / IO → reconnect with exponential backoff
                     //   Any other RPC error       → propagate immediately
                     loop {
-                        let _safety_permit = client
-                            .inner
-                            .transfer_safety
-                            .acquire(chunk_len as usize)
-                            .await;
+                        let _safety_permit = safety.acquire(chunk_len as usize).await;
                         let result = if big {
                             conn.rpc_call(&tl::functions::upload::SaveBigFilePart {
                                 file_id,
@@ -1724,31 +1725,62 @@ impl Client {
         })
     }
 
-    /// Like [`upload_file_concurrent`](Self::upload_file_concurrent) but uses
-    /// [`PipelinedSender`](crate::client::PipelinedSender) connections instead
-    /// of blocking [`DcConnection`](crate::dc_pool::DcConnection)s.
+    /// Upload bytes with parallel worker sessions.
     ///
-    /// Each worker keeps up to `transfer_limits.upload_pipeline_depth` (X)
-    /// `SaveFilePart`/`SaveBigFilePart` requests in flight on its single
-    /// connection at once, instead of awaiting each part's ack before sending
-    /// the next (X=1, what `upload_file_concurrent` does). Combined with
-    /// `n_workers` separate connections (Y), total in-flight chunks for an
-    /// upload is `n_workers * upload_pipeline_depth` instead of just
-    /// `n_workers`. See [`TransferLimits`](crate::TransferLimits) for the
-    /// highway/trucks model this implements.
+    /// Parallel upload using per-worker connections. Worker count scales with file size.
+    /// Part size: 128 KB for tiny files, up to 512 KB otherwise.
     ///
-    /// `data` is already fully in memory, so unlike the path-based streaming
-    /// variant there is no file handle to juggle on reconnect or DC
-    /// migration - every worker just slices the same `Arc<Vec<u8>>`.
-    ///
-    /// Falls back to the existing non-pipelined path if pipelined connections
-    /// fail to open, same reliability guarantees either way.
-    pub async fn upload_file_concurrent_pipelined(
+    /// - Files < 10 MB  -> `upload.saveFilePart`    (small-file API)
+    /// - Files >= 10 MB -> `upload.saveBigFilePart`  (big-file API)
+    pub async fn upload_file_concurrent(
         &self,
         data: Arc<Vec<u8>>,
         name: &str,
         mime_type: &str,
         handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<UploadedFile, InvocationError> {
+        self.upload_file_concurrent_inner(
+            data,
+            name,
+            mime_type,
+            handle,
+            self.inner.transfer_safety.clone(),
+        )
+        .await
+    }
+
+    /// Like [`upload_file_concurrent`](Self::upload_file_concurrent) but with
+    /// `safety` instead of the client's default
+    /// [`TransferSafety`](crate::TransferSafety) for this one upload.
+    pub async fn upload_file_concurrent_with_safety(
+        &self,
+        data: Arc<Vec<u8>>,
+        name: &str,
+        mime_type: &str,
+        handle: Option<&crate::transfer::TransferHandle>,
+        safety: TransferSafety,
+    ) -> Result<UploadedFile, InvocationError> {
+        self.upload_file_concurrent_inner(
+            data,
+            name,
+            mime_type,
+            handle,
+            Arc::new(TransferSafetyGovernor::new(safety)),
+        )
+        .await
+    }
+
+    /// Shared implementation behind [`upload_file_concurrent_pipelined`](Self::upload_file_concurrent_pipelined)
+    /// and [`upload_file_concurrent_pipelined_with_safety`](Self::upload_file_concurrent_pipelined_with_safety) -
+    /// see those for documentation. Takes an explicit `safety` governor so
+    /// both public entry points can share this one implementation.
+    pub(crate) async fn upload_file_concurrent_pipelined_inner(
+        &self,
+        data: Arc<Vec<u8>>,
+        name: &str,
+        mime_type: &str,
+        handle: Option<&crate::transfer::TransferHandle>,
+        safety: Arc<TransferSafetyGovernor>,
     ) -> Result<UploadedFile, InvocationError> {
         if data.is_empty() {
             return Err(InvocationError::Deserialize(
@@ -1763,7 +1795,9 @@ impl Client {
         } else {
             upload_worker_count(total, self.inner.transfer_limits.upload_tcp_connections)
         };
-        let n_workers = self.inner.transfer_safety.cap_workers(n_workers);
+        let n_workers = safety.cap_workers(n_workers);
+        let pipeline_depth =
+            safety.cap_pipeline_depth(self.inner.transfer_limits.upload_pipeline_depth);
 
         let home_dc = *self.inner.home_dc_id.lock().await;
         let started = std::time::Instant::now();
@@ -1777,7 +1811,7 @@ impl Client {
             part_size,
             home_dc,
             n_workers,
-            self.inner.transfer_limits.upload_pipeline_depth
+            pipeline_depth
         );
 
         if let Some(h) = handle {
@@ -1793,11 +1827,14 @@ impl Client {
             .await
             .expect("worker semaphore unexpectedly closed");
 
-        // Single-worker small files: skip pipelined setup overhead entirely.
-        if n_workers == 1 {
+        // Single-worker small files: skip the pipelined sender setup only if
+        // pipelining itself is also disallowed - a single connection can
+        // still pipeline multiple requests on itself. Only fall back to the
+        // plain sequential path when both are collapsed to 1.
+        if n_workers == 1 && !safety.pipelining_allowed() {
             drop(_global_guard);
             return self
-                .upload_bytes(&data, name, mime_type, shared_handle.as_ref())
+                .upload_bytes(&data, name, mime_type, shared_handle.as_ref(), safety)
                 .await;
         }
 
@@ -1830,7 +1867,7 @@ impl Client {
             );
             drop(_global_guard);
             return self
-                .upload_file_concurrent(data, name, mime_type, handle)
+                .upload_file_concurrent_inner(data, name, mime_type, handle, safety)
                 .await;
         }
         let actual_workers = senders.len();
@@ -1843,6 +1880,7 @@ impl Client {
             let data = Arc::clone(&data);
             let next_part = Arc::clone(&next_part);
             let client = self.clone();
+            let safety = safety.clone();
             let upload_dc = Arc::clone(&upload_dc);
             let file_id_atomic = std::sync::Arc::clone(&file_id_atomic);
             let worker_handle = shared_handle.clone();
@@ -1858,7 +1896,7 @@ impl Client {
                 // doesn't need to inspect the payload, just that it succeeded.
                 let mut window: std::collections::VecDeque<PipelinedUploadSlot> =
                     std::collections::VecDeque::with_capacity(
-                        client.inner.transfer_limits.upload_pipeline_depth,
+                        safety.cap_pipeline_depth(client.inner.transfer_limits.upload_pipeline_depth),
                     );
 
                 let slice_part = |part_num: i32| -> Vec<u8> {
@@ -1869,7 +1907,7 @@ impl Client {
 
                 loop {
                     // Top up the window to upload_pipeline_depth before draining the front.
-                    while window.len() < client.inner.transfer_limits.upload_pipeline_depth {
+                    while window.len() < safety.cap_pipeline_depth(client.inner.transfer_limits.upload_pipeline_depth) {
                         let (part_num, file_id, current_dc) = {
                             let mut g = next_part.lock().await;
                             let fid = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
@@ -1915,11 +1953,13 @@ impl Client {
                         };
                         let body = ferogram_connect::util::maybe_gz_pack(&raw_req);
 
+                        let permit = safety.acquire(chunk_len as usize).await;
                         match sender.enqueue(body).await {
                             Ok(fut) => {
-                                window.push_back((part_num, chunk_len, Box::pin(fut)))
+                                window.push_back((part_num, chunk_len, Box::pin(fut), permit))
                             }
                             Err(e) => {
+                                drop(permit);
                                 tracing::debug!(
                                     "[ferogram::transfer] pipelined upload enqueue failed, reconnecting: {e}"
                                 );
@@ -1938,7 +1978,7 @@ impl Client {
                                 // still in the window before clearing.
                                 let min_part = window
                                     .iter()
-                                    .map(|(p, _, _)| *p)
+                                    .map(|(p, _, _, _)| *p)
                                     .min()
                                     .unwrap_or(part_num)
                                     .min(part_num);
@@ -1955,9 +1995,10 @@ impl Client {
                         break;
                     }
 
-                    let (part_num, chunk_len, fut) =
+                    let (part_num, chunk_len, fut, permit) =
                         window.pop_front().expect("window checked non-empty above");
                     let result = fut.await;
+                    drop(permit);
                     let err = match result {
                         Ok(_) => {
                             if let Some(ref h) = worker_handle {
@@ -1996,12 +2037,16 @@ impl Client {
                                 })
                             };
                             let body = ferogram_connect::util::maybe_gz_pack(&raw_req);
+                            let retry_permit = safety.acquire(chunk_len as usize).await;
                             match sender.enqueue(body).await {
                                 Ok(retry_fut) => {
-                                    window.push_front((part_num, chunk_len, Box::pin(retry_fut)));
+                                    window.push_front((part_num, chunk_len, Box::pin(retry_fut), retry_permit));
                                     continue;
                                 }
-                                Err(e) => return Err(e),
+                                Err(e) => {
+                                    drop(retry_permit);
+                                    return Err(e);
+                                }
                             }
                         }
                         if rpc.code == 303 {
@@ -2039,7 +2084,7 @@ impl Client {
                             tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                             let min_part = window
                                 .iter()
-                                .map(|(p, _, _)| *p)
+                                .map(|(p, _, _, _)| *p)
                                 .min()
                                 .unwrap_or(part_num)
                                 .min(part_num);
@@ -2069,7 +2114,7 @@ impl Client {
                     tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                     let min_part = window
                         .iter()
-                        .map(|(p, _, _)| *p)
+                        .map(|(p, _, _, _)| *p)
                         .min()
                         .unwrap_or(part_num)
                         .min(part_num);
@@ -2106,7 +2151,7 @@ impl Client {
             part_size,
             home_dc,
             actual_workers,
-            self.inner.transfer_limits.upload_pipeline_depth,
+            safety.cap_pipeline_depth(self.inner.transfer_limits.upload_pipeline_depth),
             started.elapsed().as_secs_f64()
         );
         Ok(UploadedFile {
@@ -2127,6 +2172,7 @@ impl Client {
         name: &str,
         mime_type: &str,
         handle: Option<&crate::transfer::TransferHandle>,
+        safety: Arc<TransferSafetyGovernor>,
     ) -> Result<UploadedFile, InvocationError> {
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
@@ -2147,7 +2193,7 @@ impl Client {
         } else {
             upload_worker_count(total, self.inner.transfer_limits.upload_tcp_connections)
         };
-        let n_workers = self.inner.transfer_safety.cap_workers(n_workers);
+        let n_workers = safety.cap_workers(n_workers);
 
         let home_dc = *self.inner.home_dc_id.lock().await;
         let started = std::time::Instant::now();
@@ -2209,7 +2255,7 @@ impl Client {
                 .await
                 .map_err(InvocationError::Io)?;
             return self
-                .upload_bytes(&data, name, mime_type, shared_handle.as_ref())
+                .upload_bytes(&data, name, mime_type, shared_handle.as_ref(), safety)
                 .await;
         }
         let actual_workers = conns.len();
@@ -2223,6 +2269,7 @@ impl Client {
         for mut conn in conns {
             let next_part = Arc::clone(&next_part);
             let client = self.clone();
+            let safety = safety.clone();
             let upload_dc = Arc::clone(&upload_dc);
             let file_id_atomic = std::sync::Arc::clone(&file_id_atomic);
             let worker_handle = shared_handle.clone();
@@ -2279,8 +2326,7 @@ impl Client {
                     }
 
                     loop {
-                        let _safety_permit =
-                            client.inner.transfer_safety.acquire(chunk_len).await;
+                        let _safety_permit = safety.acquire(chunk_len).await;
                         let result = if big {
                             conn.rpc_call(&tl::functions::upload::SaveBigFilePart {
                                 file_id,
@@ -2433,6 +2479,63 @@ impl Client {
         })
     }
 
+    /// Like [`upload_file_concurrent`](Self::upload_file_concurrent) but uses
+    /// [`PipelinedSender`](crate::client::PipelinedSender) connections instead
+    /// of blocking [`DcConnection`](crate::dc_pool::DcConnection)s.
+    ///
+    /// Each worker keeps up to `transfer_limits.upload_pipeline_depth` (X)
+    /// `SaveFilePart`/`SaveBigFilePart` requests in flight on its single
+    /// connection at once, instead of awaiting each part's ack before sending
+    /// the next (X=1, what `upload_file_concurrent` does). Combined with
+    /// `n_workers` separate connections (Y), total in-flight chunks for an
+    /// upload is `n_workers * upload_pipeline_depth` instead of just
+    /// `n_workers`. See [`TransferLimits`](crate::TransferLimits) for the
+    /// highway/trucks model this implements.
+    ///
+    /// `data` is already fully in memory, so unlike the path-based streaming
+    /// variant there is no file handle to juggle on reconnect or DC
+    /// migration - every worker just slices the same `Arc<Vec<u8>>`.
+    ///
+    /// Falls back to the existing non-pipelined path if pipelined connections
+    /// fail to open, same reliability guarantees either way.
+    pub async fn upload_file_concurrent_pipelined(
+        &self,
+        data: Arc<Vec<u8>>,
+        name: &str,
+        mime_type: &str,
+        handle: Option<&crate::transfer::TransferHandle>,
+    ) -> Result<UploadedFile, InvocationError> {
+        self.upload_file_concurrent_pipelined_inner(
+            data,
+            name,
+            mime_type,
+            handle,
+            self.inner.transfer_safety.clone(),
+        )
+        .await
+    }
+
+    /// Like [`upload_file_concurrent_pipelined`](Self::upload_file_concurrent_pipelined)
+    /// but with `safety` instead of the client's default
+    /// [`TransferSafety`](crate::TransferSafety) for this one upload.
+    pub async fn upload_file_concurrent_pipelined_with_safety(
+        &self,
+        data: Arc<Vec<u8>>,
+        name: &str,
+        mime_type: &str,
+        handle: Option<&crate::transfer::TransferHandle>,
+        safety: TransferSafety,
+    ) -> Result<UploadedFile, InvocationError> {
+        self.upload_file_concurrent_pipelined_inner(
+            data,
+            name,
+            mime_type,
+            handle,
+            Arc::new(TransferSafetyGovernor::new(safety)),
+        )
+        .await
+    }
+
     /// Like [`upload_file_concurrent_streaming`](Self::upload_file_concurrent_streaming)
     /// but uses [`PipelinedSender`](crate::client::PipelinedSender) connections
     /// instead of blocking [`DcConnection`](crate::dc_pool::DcConnection)s.
@@ -2454,6 +2557,7 @@ impl Client {
         name: &str,
         mime_type: &str,
         handle: Option<&crate::transfer::TransferHandle>,
+        safety: Arc<TransferSafetyGovernor>,
     ) -> Result<UploadedFile, InvocationError> {
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
@@ -2474,7 +2578,9 @@ impl Client {
         } else {
             upload_worker_count(total, self.inner.transfer_limits.upload_tcp_connections)
         };
-        let n_workers = self.inner.transfer_safety.cap_workers(n_workers);
+        let n_workers = safety.cap_workers(n_workers);
+        let pipeline_depth =
+            safety.cap_pipeline_depth(self.inner.transfer_limits.upload_pipeline_depth);
 
         let home_dc = *self.inner.home_dc_id.lock().await;
         let started = std::time::Instant::now();
@@ -2488,7 +2594,7 @@ impl Client {
             part_size,
             home_dc,
             n_workers,
-            self.inner.transfer_limits.upload_pipeline_depth
+            pipeline_depth
         );
 
         if let Some(h) = handle {
@@ -2504,8 +2610,11 @@ impl Client {
             .await
             .expect("worker semaphore unexpectedly closed");
 
-        // Single-worker small files: skip pipelined setup overhead entirely.
-        if n_workers == 1 {
+        // Single-worker small files: skip the pipelined sender setup only if
+        // pipelining itself is also disallowed - a single connection can
+        // still pipeline multiple requests on itself. Only fall back to the
+        // plain sequential path when both are collapsed to 1.
+        if n_workers == 1 && !safety.pipelining_allowed() {
             drop(_global_guard);
             let mut data = Vec::with_capacity(total);
             tokio::fs::File::open(path)
@@ -2515,7 +2624,7 @@ impl Client {
                 .await
                 .map_err(InvocationError::Io)?;
             return self
-                .upload_bytes(&data, name, mime_type, shared_handle.as_ref())
+                .upload_bytes(&data, name, mime_type, shared_handle.as_ref(), safety)
                 .await;
         }
 
@@ -2548,7 +2657,7 @@ impl Client {
             );
             drop(_global_guard);
             return self
-                .upload_file_concurrent_streaming(path, name, mime_type, handle)
+                .upload_file_concurrent_streaming(path, name, mime_type, handle, safety)
                 .await;
         }
         let actual_workers = senders.len();
@@ -2561,6 +2670,7 @@ impl Client {
         for sender in senders {
             let next_part = Arc::clone(&next_part);
             let client = self.clone();
+            let safety = safety.clone();
             let upload_dc = Arc::clone(&upload_dc);
             let file_id_atomic = std::sync::Arc::clone(&file_id_atomic);
             let worker_handle = shared_handle.clone();
@@ -2581,12 +2691,12 @@ impl Client {
                 // doesn't need to inspect the payload, just that it succeeded.
                 let mut window: std::collections::VecDeque<PipelinedUploadSlot> =
                     std::collections::VecDeque::with_capacity(
-                        client.inner.transfer_limits.upload_pipeline_depth,
+                        safety.cap_pipeline_depth(client.inner.transfer_limits.upload_pipeline_depth),
                     );
 
                 loop {
                     // Top up the window to upload_pipeline_depth before draining the front.
-                    while window.len() < client.inner.transfer_limits.upload_pipeline_depth {
+                    while window.len() < safety.cap_pipeline_depth(client.inner.transfer_limits.upload_pipeline_depth) {
                         let (part_num, file_id, current_dc) = {
                             let mut g = next_part.lock().await;
                             let fid = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
@@ -2644,11 +2754,13 @@ impl Client {
                         };
                         let body = ferogram_connect::util::maybe_gz_pack(&raw_req);
 
+                        let permit = safety.acquire(chunk_len).await;
                         match sender.enqueue(body).await {
                             Ok(fut) => {
-                                window.push_back((part_num, chunk_len as u64, Box::pin(fut)))
+                                window.push_back((part_num, chunk_len as u64, Box::pin(fut), permit))
                             }
                             Err(e) => {
+                                drop(permit);
                                 tracing::debug!(
                                     "[ferogram::transfer] pipelined upload enqueue failed, reconnecting: {e}"
                                 );
@@ -2667,7 +2779,7 @@ impl Client {
                                 // still in the window before clearing.
                                 let min_part = window
                                     .iter()
-                                    .map(|(p, _, _)| *p)
+                                    .map(|(p, _, _, _)| *p)
                                     .min()
                                     .unwrap_or(part_num)
                                     .min(part_num);
@@ -2684,9 +2796,10 @@ impl Client {
                         break;
                     }
 
-                    let (part_num, chunk_len, fut) =
+                    let (part_num, chunk_len, fut, permit) =
                         window.pop_front().expect("window checked non-empty above");
                     let result = fut.await;
+                    drop(permit);
                     let err = match result {
                         Ok(_) => {
                             if let Some(ref h) = worker_handle {
@@ -2734,12 +2847,16 @@ impl Client {
                                 })
                             };
                             let body = ferogram_connect::util::maybe_gz_pack(&raw_req);
+                            let retry_permit = safety.acquire(chunk_len as usize).await;
                             match sender.enqueue(body).await {
                                 Ok(retry_fut) => {
-                                    window.push_front((part_num, chunk_len, Box::pin(retry_fut)));
+                                    window.push_front((part_num, chunk_len, Box::pin(retry_fut), retry_permit));
                                     continue;
                                 }
-                                Err(e) => return Err(e),
+                                Err(e) => {
+                                    drop(retry_permit);
+                                    return Err(e);
+                                }
                             }
                         }
                         if rpc.code == 303 {
@@ -2780,7 +2897,7 @@ impl Client {
                             tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                             let min_part = window
                                 .iter()
-                                .map(|(p, _, _)| *p)
+                                .map(|(p, _, _, _)| *p)
                                 .min()
                                 .unwrap_or(part_num)
                                 .min(part_num);
@@ -2810,7 +2927,7 @@ impl Client {
                     tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                     let min_part = window
                         .iter()
-                        .map(|(p, _, _)| *p)
+                        .map(|(p, _, _, _)| *p)
                         .min()
                         .unwrap_or(part_num)
                         .min(part_num);
@@ -2868,7 +2985,7 @@ impl Client {
             part_size,
             home_dc,
             actual_workers,
-            self.inner.transfer_limits.upload_pipeline_depth,
+            safety.cap_pipeline_depth(self.inner.transfer_limits.upload_pipeline_depth),
             started.elapsed().as_secs_f64()
         );
         Ok(UploadedFile {
@@ -3205,8 +3322,9 @@ impl Client {
         dc_id: i32,
         writer: &mut W,
         handle: Option<&crate::transfer::TransferHandle>,
+        safety: Arc<TransferSafetyGovernor>,
     ) -> Result<u64, InvocationError> {
-        self.download_streaming_on_dc_from(location, dc_id, writer, handle, 0)
+        self.download_streaming_on_dc_from(location, dc_id, writer, handle, 0, safety)
             .await
     }
 
@@ -3221,6 +3339,7 @@ impl Client {
         writer: &mut W,
         handle: Option<&crate::transfer::TransferHandle>,
         start_offset: i64,
+        safety: Arc<TransferSafetyGovernor>,
     ) -> Result<u64, InvocationError> {
         use tokio::io::AsyncWriteExt;
         let chunk = 512 * 1024i32;
@@ -3249,7 +3368,10 @@ impl Client {
                 offset,
                 limit: chunk,
             };
-            match conn.rpc_call(&req).await {
+            let _safety_permit = safety.acquire(chunk as usize).await;
+            let call_result = conn.rpc_call(&req).await;
+            drop(_safety_permit);
+            match call_result {
                 Ok(raw) => {
                     let mut cur = Cursor::from_slice(&raw);
                     match tl::enums::upload::File::deserialize(&mut cur)? {
@@ -3644,6 +3766,7 @@ impl Client {
         dc_id: i32,
         path: &std::path::Path,
         handle: Option<&crate::transfer::TransferHandle>,
+        safety: Arc<TransferSafetyGovernor>,
     ) -> Result<u64, InvocationError> {
         use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
@@ -3654,7 +3777,7 @@ impl Client {
         } else {
             download_worker_count(size, self.inner.transfer_limits.download_tcp_connections)
         };
-        let n_workers = self.inner.transfer_safety.cap_workers(n_workers);
+        let n_workers = safety.cap_workers(n_workers);
 
         let home = {
             let _g = self.inner.home_dc_id.lock().await;
@@ -3695,7 +3818,7 @@ impl Client {
                 .await
                 .map_err(InvocationError::Io)?;
             return self
-                .download_streaming_on_dc(location, dc_id, &mut file, handle)
+                .download_streaming_on_dc(location, dc_id, &mut file, handle, safety)
                 .await;
         }
 
@@ -3738,7 +3861,7 @@ impl Client {
                 .await
                 .map_err(InvocationError::Io)?;
             return self
-                .download_streaming_on_dc(location, dc_id, &mut file, handle)
+                .download_streaming_on_dc(location, dc_id, &mut file, handle, safety)
                 .await;
         }
 
@@ -3754,6 +3877,7 @@ impl Client {
             let next_part = Arc::clone(&next_part);
             let tx = tx.clone();
             let client = self.clone();
+            let safety = safety.clone();
             let abort = Arc::clone(&abort);
             let mut worker_dc = effective_dc;
 
@@ -3782,7 +3906,7 @@ impl Client {
                         limit: chunk as i32,
                     };
                     let raw = loop {
-                        let _safety_permit = client.inner.transfer_safety.acquire(chunk).await;
+                        let _safety_permit = safety.acquire(chunk).await;
                         let call_result = conn.rpc_call(&req).await;
                         drop(_safety_permit);
                         let err = match call_result {
@@ -3964,6 +4088,7 @@ impl Client {
         dc_id: i32,
         path: &std::path::Path,
         handle: Option<&crate::transfer::TransferHandle>,
+        safety: Arc<TransferSafetyGovernor>,
     ) -> Result<u64, InvocationError> {
         use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
@@ -3974,7 +4099,9 @@ impl Client {
         } else {
             download_worker_count(size, self.inner.transfer_limits.download_tcp_connections)
         };
-        let n_workers = self.inner.transfer_safety.cap_workers(n_workers);
+        let n_workers = safety.cap_workers(n_workers);
+        let pipeline_depth =
+            safety.cap_pipeline_depth(self.inner.transfer_limits.download_pipeline_depth);
 
         let home = {
             let _g = self.inner.home_dc_id.lock().await;
@@ -3994,7 +4121,7 @@ impl Client {
             chunk,
             effective_dc,
             n_workers,
-            self.inner.transfer_limits.download_pipeline_depth
+            pipeline_depth
         );
 
         if let Some(h) = handle {
@@ -4009,16 +4136,18 @@ impl Client {
             .await
             .expect("worker semaphore unexpectedly closed");
 
-        // Single-worker small files: skip parallel/pipelined setup overhead
-        // entirely  - pipelining only pays off once there's more than one
-        // chunk worth queuing.
-        if n_workers == 1 && effective_dc == home {
+        // Single-worker small files: skip the pipelined sender setup
+        // entirely only if pipelining itself is also disallowed - a single
+        // connection can still pipeline multiple requests on itself, that's
+        // a distinct axis from connection *count*. Only fall back to the
+        // plain sequential path when both are collapsed to 1.
+        if n_workers == 1 && effective_dc == home && !safety.pipelining_allowed() {
             drop(_global_guard);
             let mut file = tokio::fs::File::create(path)
                 .await
                 .map_err(InvocationError::Io)?;
             return self
-                .download_streaming_on_dc(location, dc_id, &mut file, handle)
+                .download_streaming_on_dc(location, dc_id, &mut file, handle, safety)
                 .await;
         }
 
@@ -4057,7 +4186,9 @@ impl Client {
             );
             drop(_global_guard);
             return self
-                .download_media_concurrent_on_dc_to_file(location, size, dc_id, path, handle)
+                .download_media_concurrent_on_dc_to_file(
+                    location, size, dc_id, path, handle, safety,
+                )
                 .await;
         }
 
@@ -4073,6 +4204,7 @@ impl Client {
             let next_part = Arc::clone(&next_part);
             let tx = tx.clone();
             let client = self.clone();
+            let safety = safety.clone();
             let abort = Arc::clone(&abort);
             let mut worker_dc = effective_dc;
             let mut sender = sender;
@@ -4089,7 +4221,7 @@ impl Client {
                 // future to its own msg_id internally.
                 let mut window: std::collections::VecDeque<PipelinedDownloadSlot> =
                     std::collections::VecDeque::with_capacity(
-                        client.inner.transfer_limits.download_pipeline_depth,
+                        safety.cap_pipeline_depth(client.inner.transfer_limits.download_pipeline_depth),
                     );
 
                 loop {
@@ -4098,7 +4230,7 @@ impl Client {
                     }
 
                     // Top up the window to download_pipeline_depth before draining the front.
-                    while window.len() < client.inner.transfer_limits.download_pipeline_depth && !abort.load(Ordering::Relaxed) {
+                    while window.len() < safety.cap_pipeline_depth(client.inner.transfer_limits.download_pipeline_depth) && !abort.load(Ordering::Relaxed) {
                         let part = {
                             let mut g = next_part.lock().await;
                             if *g >= n_parts {
@@ -4121,10 +4253,13 @@ impl Client {
                         };
                         let body =
                             ferogram_connect::util::maybe_gz_pack(&tl::Serializable::to_bytes(&req));
+                        let permit = safety.acquire(chunk).await;
                         match sender.enqueue(body).await {
-                            Ok(fut) => window.push_back((part, Box::pin(fut))),
+                            Ok(fut) => window.push_back((part, Box::pin(fut), permit)),
                             Err(e) => {
-                                // Sender task is dead; reconnect and retry filling the window.
+                                // Sender task is dead; release the unused permit and
+                                // reconnect and retry filling the window.
+                                drop(permit);
                                 tracing::debug!(
                                     "[ferogram::transfer] pipelined enqueue failed, reconnecting: {e}"
                                 );
@@ -4159,10 +4294,14 @@ impl Client {
                         break;
                     }
 
-                    let (part, fut) = window.pop_front().expect("window checked non-empty above");
+                    let (part, fut, permit) = window.pop_front().expect("window checked non-empty above");
                     let raw = match fut.await {
-                        Ok(r) => r,
+                        Ok(r) => {
+                            drop(permit);
+                            r
+                        }
                         Err(err) => {
+                            drop(permit);
                             if let InvocationError::Rpc(ref rpc) = err {
                                 if rpc.code == 420 {
                                     let secs = rpc.value.unwrap_or(1) as u64;
@@ -4180,12 +4319,14 @@ impl Client {
                                     let body = ferogram_connect::util::maybe_gz_pack(
                                         &tl::Serializable::to_bytes(&req),
                                     );
+                                    let retry_permit = safety.acquire(chunk).await;
                                     match sender.enqueue(body).await {
                                         Ok(retry_fut) => {
-                                            window.push_front((part, Box::pin(retry_fut)));
+                                            window.push_front((part, Box::pin(retry_fut), retry_permit));
                                             continue;
                                         }
                                         Err(e) => {
+                                            drop(retry_permit);
                                             abort.store(true, Ordering::Relaxed);
                                             return Err(e);
                                         }
@@ -4203,7 +4344,7 @@ impl Client {
                                             // silently dropped and the file ends up with gaps.
                                             let min_part = window
                                                 .iter()
-                                                .map(|(p, _)| *p)
+                                                .map(|(p, _, _)| *p)
                                                 .min()
                                                 .unwrap_or(part)
                                                 .min(part);
@@ -4235,7 +4376,7 @@ impl Client {
                                     // account for everything still queued in `window`.
                                     let min_part = window
                                         .iter()
-                                        .map(|(p, _)| *p)
+                                        .map(|(p, _, _)| *p)
                                         .min()
                                         .unwrap_or(part)
                                         .min(part);
@@ -4334,7 +4475,7 @@ impl Client {
             chunk,
             effective_dc,
             actual_workers,
-            self.inner.transfer_limits.download_pipeline_depth,
+            safety.cap_pipeline_depth(self.inner.transfer_limits.download_pipeline_depth),
             started.elapsed().as_secs_f64()
         );
         Ok(total_written)
