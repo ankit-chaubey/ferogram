@@ -11,7 +11,7 @@
 // Please keep this notice when redistributing.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-tl-types/0.6.3")]
+#![doc(html_root_url = "https://docs.rs/ferogram-tl-types/0.6.4")]
 //! Auto-generated Telegram API types, functions, and enums, regenerated from
 //! `api.tl` on every build (current layer exposed as the `LAYER` constant).
 //!

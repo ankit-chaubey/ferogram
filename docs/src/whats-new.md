@@ -57,7 +57,7 @@ match result {
 ### Upgrading from 0.5.2
 
 ```toml
-ferogram = "0.6.3"
+ferogram = "0.6.4"
 ```
 
 Rename `upload_file_from_path` call sites to `upload_file`. Add `None` as the last argument to all upload and download calls.

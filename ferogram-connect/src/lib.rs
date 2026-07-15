@@ -11,7 +11,7 @@
 // Please keep this notice when redistributing.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-connect/0.6.3")]
+#![doc(html_root_url = "https://docs.rs/ferogram-connect/0.6.4")]
 //! Raw TCP connection, MTProto framing, and transport for ferogram.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust

@@ -7,24 +7,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] - 0.6.4
+## [0.6.4] - 2026-07-14
+
+TL layer bumped to 228 (Telegram Communities, ephemeral/one-time messages). Granular
+channel-ban rights, tunable transfer concurrency, richer media downloading (profile
+photos, thumbnails, quality selection), a callback/inline-query dispatcher, and a
+pipelined MTProto sender for higher-throughput transfers.
 
 ### Added
 
-- `dispatcher` module: routes callback queries and inline queries alongside the existing message dispatcher.
-- `Client::get_chat_photos(peer, limit)`: photo/avatar history for groups and channels. Current photo comes from the chat's full info (survives message deletion); older photos come from `messageActionChatEditPhoto` search history.
-- `ClientBuilder::dc_id_override(dc_id)`: register a fresh connection under a custom `dc_id`, paired with `.dc_addr(...)`, instead of the hardcoded DC2 default.
-
-### Fixed
-
-- MTProto handshake: stopped sending the dc-tagged `p_q_inner_data` constructor on normal connects. Telegram rejects it with RPC 444 outside of DC2; it's now only used for flows that actually need dc verification.
-- Reconnect: keep the cached auth key on a timeout and drop stale in-flight RPCs before re-initializing, instead of discarding a still-valid key.
-- `#[derive(FsmState)]`: corrected match-arm codegen and crate path resolution.
+- `BannedRightsBuilder`: fluent builder for granular channel ban rights (e.g. block file
+  uploads but allow photos). `Client::ban`/`kick`/`restrict` are now thin wrappers around
+  one shared `restrict` implementation built on it, instead of each hand-assembling its
+  own `ChatBannedRights`.
+- `TransferLimits` and `ClientBuilder::transfer_limits(...)` (plus the shorthands
+  `download_tcp_connections`, `upload_tcp_connections`, `max_tcp_connections`,
+  `download_pipeline_depth`, `upload_pipeline_depth`, `bypass_tcp_allotments`): tune how
+  many parallel connections a single transfer may open and how deep each connection's
+  request pipeline goes, instead of the previous fixed constants.
+- `ferogram-mtsender::PipelinedSender` / `spawn_pipelined`: a background sender task that
+  keeps multiple chunk requests in flight on one connection (the "X pieces in flight" half
+  of Telegram's upload/download performance guidance), used internally by the new
+  pipelined upload/download paths.
+- `Downloadable` now covers far more than `Photo`/`Document`/`Sticker`:
+  - `tl::enums::MessageMedia` itself, resolved recursively through games, web page
+    previews, polls, stories, and paid-media wrappers.
+  - `ProfilePhoto` (`Client`-independent wrapper over `UserProfilePhoto`/`ChatPhoto`, with
+    a `.small()` variant), `PhotoThumb`/`DocumentThumb` (a specific thumbnail size via
+    `Photo::thumb(type)` / `Document::thumb(type)`), and `RawLocation` for anything else.
+  - `video_cover(media)`: extract a video's cover photo (`video_cover` field).
+  - `MediaQuality` (`Original`/`Highest`/`Lowest`) and `available_qualities(media)`: pick
+    among a video's `alt_documents` transcode variants by resolution.
+- `Client::request_login_code_with_options`, `Client::resend_code`, `SendCodeOptions`
+  (flash call / missed call / Firebase delivery, logout tokens), and
+  `ClientBuilder::future_auth_token(...)`: `sign_out()` now captures the
+  `future_auth_token` Telegram returns on logout and replays it automatically on the next
+  `request_login_code`, letting a re-login skip code entry when Telegram still recognizes
+  the device (surfaced via the new `SendCodeOutcome::AlreadyAuthorized` variant).
+- `Client::interactive_sign_in`: the stdin-prompt sign-in flow used by `quick_connect`,
+  now exposed as a reusable public method.
+- `dispatcher` module: routes callback queries and inline queries alongside the existing
+  message dispatcher, via `Router::on_callback_query`/`on_inline_query`/`on_inline_send`/
+  `on_callback_query_fsm`. `Filter`/`BoxFilter` are now generic over the update type
+  (`Filter<T>`, default `T = IncomingMessage`) so the same `&`/`|`/`!` combinators work
+  over `CallbackQuery` and `InlineQuery` too.
+- `Client::get_chat_photos(peer, limit)`: photo/avatar history for groups and channels.
+  Current photo comes from the chat's full info (survives message deletion); older photos
+  come from `messageActionChatEditPhoto` search history.
+- `Client::cache_entities(users, chats)`: public entry point to feed `users`/`chats` from
+  a hand-issued raw RPC call into the peer cache, so custom calls not yet covered by the
+  client's API surface can still populate access hashes correctly.
+- `ClientBuilder::dc_id_override(dc_id)`: register a fresh connection under a custom
+  `dc_id`, paired with `.dc_addr(...)`, instead of the hardcoded DC2 default.
+- `PeerCache::stats()` / `PeerCacheStats` and `PeerCache::clear_min_contexts()` for
+  inspecting and pruning cache size; `ExperimentalFeatures::cache_min_peers` (default
+  `false`) gates whether min-user message contexts are stored at all.
+- `PersistedSession::stats()` / `SessionStats` for inspecting a session's size and
+  contents (DC count, peer counts, approximate byte size, ...).
+- `UserFull` and `MessagePage` typed wrappers: `UserFull` pairs `users.getFull`'s bare
+  response with the account's name/username/status from the same reply; `MessagePage`
+  flattens the four `messages.Messages` response shapes into one with `has_more()` /
+  `next_offset()`.
+- `PhotoSize`-aware `Downloadable::size()` on `Photo`, so known-size photos can use the
+  concurrent download path instead of always falling back to the sequential unknown-size
+  one.
+- TL layer 228: Telegram Communities (`communities.*` methods, `Chat::Community`,
+  `ChatFull::CommunityFull`, `Dialog::Community`) and ephemeral/one-time messages
+  (`ephemeral.*` methods, `EphemeralMessage`, `InputReplyTo::EphemeralMessage`), plus
+  related `AiCompose`, admin-rights (`manage_linked_peers`), and rich-message additions.
 
 ### Changed
 
-- Session backend I/O now runs on `spawn_blocking`, so SQLite/file writes no longer stall async tasks when multiple clients share a runtime.
+- `Client::request_login_code` now returns `SendCodeOutcome` instead of `LoginToken`
+  directly (see Breaking Changes).
+- `download_chunk_size`/`upload_part_size` tables simplified: downloads cap at 512 KB
+  (previously stepping up to 1 MB past 500 MB) and uploads use a 3-tier table instead of
+  5, matching the pipelined transfer engine's chunk-size assumptions.
+- `download_worker_count`/`upload_worker_count` now take a `max_workers` ceiling supplied
+  by `TransferLimits` and clamp their tiered result to it, instead of always resolving up
+  to the previous hard-coded `MAX_WORKERS_PER_FILE` (4).
+- `Client::download_file` (and the underlying `DownloadFile` builder) are generic over any
+  `D: Downloadable`, not just the built-in media types.
+- `order_router()` / `Router::on_callback_query_fsm` etc. now take a `StateStorage` handle
+  directly rather than relying on ambient state.
+- Session backend I/O (`save_session`, periodic snapshot flush, update-state persistence)
+  now runs on `spawn_blocking`, so SQLite/file writes no longer stall async tasks when
+  multiple clients share a runtime.
 - `order_bot` example: bootstraps its initial FSM state correctly.
+
+### Fixed
+
+- MTProto handshake: stopped sending the dc-tagged `p_q_inner_data` constructor on normal
+  connects. Telegram rejects it with RPC 444 outside of DC2; it's now only used for flows
+  that actually need dc verification (`step2_dc_tagged`).
+- Reconnect: keep the cached auth key on a timeout and drop stale in-flight RPCs before
+  re-initializing, instead of discarding a still-valid key. Also clear the cached key and
+  retry with fresh DH when the server rejects it outright (RPC 401,
+  `AUTH_KEY_UNREGISTERED`) rather than looping on a dead key.
+- `Client::get_chat_participants`: return a clear error for `ChatFull::CommunityFull`
+  instead of failing deserialization, since communities have no basic-chat-style
+  participant list.
+- `#[derive(FsmState)]`: corrected match-arm codegen and crate path resolution.
+
+### Breaking Changes
+
+- `Client::request_login_code` and `Client::resend_code` return `Result<SendCodeOutcome, InvocationError>`
+  instead of `Result<LoginToken, InvocationError>`. Match on `SendCodeOutcome::CodeRequired(token)`
+  to get the previous `LoginToken`.
+- `media::download_worker_count`/`media::upload_worker_count` take an additional
+  `max_workers: usize` argument.
+- `Client::kick`'s channel path no longer takes a snapshot of the user's access hash
+  before dispatching; it now delegates to `restrict`, which resolves it internally. No
+  signature change, but custom callers relying on the old private `ban_participant_raw`
+  helper (removed) will need to switch to `Client::ban`/`restrict`.
 
 ---
 

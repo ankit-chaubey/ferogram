@@ -12,7 +12,7 @@
 
 #![deny(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-session/0.6.3")]
+#![doc(html_root_url = "https://docs.rs/ferogram-session/0.6.4")]
 //! Session persistence types and storage backends for ferogram.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust

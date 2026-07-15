@@ -11,7 +11,7 @@
 // Please keep this notice when redistributing.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-tl-parser/0.6.3")]
+#![doc(html_root_url = "https://docs.rs/ferogram-tl-parser/0.6.4")]
 //! Parser for Telegram's Type Language (TL) schema files.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust

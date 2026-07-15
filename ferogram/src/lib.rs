@@ -149,7 +149,7 @@
 //! - GitHub: [ankit-chaubey/ferogram](https://github.com/ankit-chaubey/ferogram)
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram/0.6.3")]
+#![doc(html_root_url = "https://docs.rs/ferogram/0.6.4")]
 #![deny(unsafe_code)]
 
 pub mod builder;

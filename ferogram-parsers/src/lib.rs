@@ -11,7 +11,7 @@
 // Please keep this notice when redistributing.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-parsers/0.6.3")]
+#![doc(html_root_url = "https://docs.rs/ferogram-parsers/0.6.4")]
 //! Telegram HTML and Markdown entity parsers for ferogram.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
