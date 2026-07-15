@@ -23,10 +23,8 @@ It talks to Telegram directly over MTProto, no Bot API proxy in between. It work
 
 The major use cases are covered: messaging, media, inline keyboards, CDN downloads, FSM for multi-step conversations, FakeTLS and MTProxy for censored networks, and a raw `invoke()` escape hatch for anything the high-level API doesn't wrap yet.
 
-## Bot API?
+## Bot API
 If you want the Bot API instead, take a look at [ferobot](https://github.com/ankit-chaubey/ferobot).
-
-The longer-term goal is to support [multiple languages](https://github.com/ankit-chaubey/ferogram/blob/main/FEATURES.md#multi-language-bindings) from the same Rust core.
 
 ## Python support
 Ferogram is also available for Python as [ferogram-py](https://github.com/ankit-chaubey/ferogram-py) on PyPI, [pre-built wheels](https://pypi.org/project/ferogram), no Rust toolchain needed.
