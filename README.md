@@ -15,6 +15,7 @@ Built by **[Ankit Chaubey](https://github.com/ankit-chaubey)**
 
 </div>
 
+## Why ferogram?
 I built ferogram because I kept hitting walls with other MTProto libraries. Things that should have been straightforward weren't, and I kept needing the library to behave slightly differently than it would let me. So I wrote my own.
 
 
@@ -22,14 +23,16 @@ It talks to Telegram directly over MTProto, no Bot API proxy in between. It work
 
 The major use cases are covered: messaging, media, inline keyboards, CDN downloads, FSM for multi-step conversations, FakeTLS and MTProxy for censored networks, and a raw `invoke()` escape hatch for anything the high-level API doesn't wrap yet.
 
----
-
+## Bot API?
 If you want the Bot API instead, take a look at [ferobot](https://github.com/ankit-chaubey/ferobot).
 
-The longer-term goal is to support [multiple languages](https://github.com/ankit-chaubey/ferogram/blob/main/FEATURES.md#multi-language-bindings) from the same Rust core. Python is already live as [ferogram-py](https://github.com/ankit-chaubey/ferogram-py) on PyPI, [pre-built wheels](https://pypi.org/project/ferogram), no Rust toolchain needed.
+The longer-term goal is to support [multiple languages](https://github.com/ankit-chaubey/ferogram/blob/main/FEATURES.md#multi-language-bindings) from the same Rust core.
+
+## Python support
+Ferogram is also available for Python as [ferogram-py](https://github.com/ankit-chaubey/ferogram-py) on PyPI, [pre-built wheels](https://pypi.org/project/ferogram), no Rust toolchain needed.
 
 > [!NOTE]
-> ferogram is still in active development. It covers major use cases and runs in production, but the API may still shift. Check [CHANGELOG](CHANGELOG.md) before upgrading.
+> ferogram is still in active development. It covers major use cases and runs in production, but the API may still shift.
 
 ---
 
@@ -41,11 +44,9 @@ ferogram = "0.6.4"
 tokio    = { version = "1", features = ["full"] }
 ```
 
-Get `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org). For optional feature flags (SQLite session, HTML parser, FSM derive macro) see the [`ferogram` crate README](ferogram/README.md#installation).
-
 ---
 
-Development on GitHub moves faster than crates.io. Releases are pushed to [crates.io](https://crates.io/crates/ferogram) when there's a patch or a proper release, so there may be fixes and features on `main` that aren't published yet. If you need something from `main`, you can point directly to a specific commit:
+Development on GitHub moves faster than crates.io. Releases are pushed to [crates.io](https://crates.io/crates/ferogram) when there's a patch or a proper release, so there may be fixes and features on `main` or `dev` that aren't published yet. If you need something from `main`, you can point directly to a specific commit:
 
 ```toml
 ferogram = { git = "https://github.com/ankit-chaubey/ferogram", rev = "COMMIT_SHA" }
@@ -101,46 +102,9 @@ async fn main() -> anyhow::Result<()> {
 ## Core features
 
 ### Dispatcher and filters
+Ferogram includes a powerful dispatcher with composable filters (&, |, !), a flexible FSM with pluggable state storage, session backends, media transfer utilities, and much more.
 
-```rust
-use ferogram::filters::{Dispatcher, command, private, text_contains};
-
-let mut dp = Dispatcher::new();
-
-dp.on_message(command("start"), |msg| async move {
-    msg.reply("Hello!").await.ok();
-});
-
-dp.on_message(private() & text_contains("help"), |msg| async move {
-    msg.reply("Type /start to begin.").await.ok();
-});
-
-while let Some(upd) = stream.next().await {
-    dp.dispatch(upd).await;
-}
-```
-
-Filters compose with `&`, `|`, `!`. Built-ins cover `command`, `private`, `group`, `channel`, `text`, `media`, `forwarded`, `reply`, `album`, `custom`, and more.
-
-### FSM
-
-```rust
-use ferogram::{FsmState, fsm::MemoryStorage};
-use std::sync::Arc;
-
-#[derive(FsmState, Clone, Debug, PartialEq)]
-enum Form { Name, Age }
-
-dp.with_state_storage(Arc::new(MemoryStorage::new()));
-
-dp.on_message_fsm(text(), Form::Name, |msg, state| async move {
-    state.set_data("name", msg.text().unwrap()).await.ok();
-    state.transition(Form::Age).await.ok();
-    msg.reply("How old are you?").await.ok();
-});
-```
-
-Storage is swappable. Implement `StateStorage` to use Redis, a database, or anything else.
+For detailed usage examples and API documentation, check the README files and documentation of the dedicated crates in this workspace.
 
 ### Raw API
 
@@ -165,24 +129,21 @@ client.invoke_on_dc(2, &req).await?;
 
 By default the session is a binary file on disk. Switch to SQLite, LibSQL (Turso), or a base64 string for serverless setups. You can also bring your own by implementing `SessionBackend`.
 
-```rust
-let s = client.export_session_string().await?;
-let (client, _) = Client::builder().session_string(s).connect().await?;
-```
-
 ---
 
 ## What's covered
 
-See **[FEATURES.md](FEATURES.md)** for the full list with method signatures. Runnable examples are in [`ferogram/examples/`](ferogram/examples/).
+See **[This](FEATURES.md)** for the quick list with method signatures. Runnable examples are in [`ferogram/examples/`](ferogram/examples/).
 
 If something is missing, open a feature request or drop by [t.me/FerogramChat](https://t.me/FerogramChat). If the high-level API isn't enough, the raw API is always there.
 
 ---
 
-**Secret chats** (end-to-end encrypted) are fully implemented but not published to crates.io yet. The plan is to release once there is enough community demand for it.
+### **Secret chats** 
+Secret Chats (end-to-end encrypted) are fully implemented but not published to crates.io yet. The plan is to release once there is enough community demand for it.
 
-**Voice and video calls** : group audio is fully implemented, stable, and already in production use. Group video is implemented with some codec edge cases still being ironed out. P2P is partially implemented and in active development. All of this will be published as separate crates when it comes out of the workspace.
+### **Voice and video calls**
+Group audio, video and P2P calling are now fully implemented. To get started, check out the [tgcalls](https://crates.io/crates/tgcalls) crate and its examples in [tgcalls](https://github.com/ankit-chaubey/tgcalls) repository. It provides seamless integration between Ferogram and the official [ntgcalls](https://crates.io/crates/ntgcalls) Rust bindings for building Telegram voice and video calling applications.
 
 ---
 
@@ -199,14 +160,11 @@ cargo test --workspace --all-features
 
 - **Channel** (releases, announcements): [t.me/Ferogram](https://t.me/Ferogram)
 - **Chat** (questions, discussion): [t.me/FerogramChat](https://t.me/FerogramChat)
-- **Guide**: [ferogram.ankitchaubey.in](https://ferogram.ankitchaubey.in/)
 - **API docs**: [docs.rs/ferogram](https://docs.rs/ferogram)
-- **Crates.io**: [crates.io/crates/ferogram](https://crates.io/crates/ferogram)
-- **GitHub**: [github.com/ankit-chaubey/ferogram](https://github.com/ankit-chaubey/ferogram)
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR. Run `cargo fmt --all`, `cargo test --workspace`, and `cargo clippy --workspace` first. Security issues: see [SECURITY.md](SECURITY.md).
+Read [contribution guide](CONTRIBUTING.md) before opening a PR and as well Security issues: see [security.md](SECURITY.md).
 
 ## Acknowledgments
 
