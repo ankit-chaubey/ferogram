@@ -147,15 +147,6 @@ Group audio, video and P2P calling are now fully implemented. To get started, ch
 
 ---
 
-## Testing
-
-```bash
-cargo test --workspace
-cargo test --workspace --all-features
-```
-
----
-
 ## Community and links
 
 - **Channel** (releases, announcements): [t.me/Ferogram](https://t.me/Ferogram)
@@ -168,7 +159,7 @@ Read [contribution guide](CONTRIBUTING.md) before opening a PR and as well Secur
 
 ## Acknowledgments
 
-Big shoutout to [Lonami](https://codeberg.org/Lonami/grammers) for grammers. It was one of the most helpful references while building ferogram, and grammers and Telethon are two of my all-time favorites. Love those projects.
+Big shoutout to [Lonami](https://codeberg.org/Lonami/grammers) for grammers. It was one of the most helpful references while building ferogram initially.
 
 Protocol behavior references from [Telegram Desktop](https://github.com/telegramdesktop/tdesktop) and [TDLib](https://github.com/tdlib/td).
 
