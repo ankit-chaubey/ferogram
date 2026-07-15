@@ -15,8 +15,8 @@
         <link rel="icon" href="favicon-de23e50b.svg">
         <link rel="shortcut icon" href="favicon-8114d1fc.png">
         <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-0392ca55.css">
-        <link rel="stylesheet" href="css/chrome-fc474251.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
         <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-13e43010.js";
+            window.path_to_searchindex_js = "searchindex-04b1db19.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5d15c526.js"></script>
@@ -184,7 +184,7 @@
                         <h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
 <h2 id="add-to-cargotoml"><a class="header" href="#add-to-cargotoml">Add to Cargo.toml</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.6.3"
+ferogram = "0.6.4"
 tokio        = { version = "1", features = ["full"] }
 </code></pre>
 <p><code>ferogram</code> re-exports everything you need for both user clients and bots.</p>
@@ -225,11 +225,11 @@ let api_hash = "deadbeef..."; // ← never do this in a public repo
 <hr>
 <h2 id="optional-features"><a class="header" href="#optional-features">Optional features</a></h2>
 <h3 id="sqlite-session-storage"><a class="header" href="#sqlite-session-storage">SQLite session storage</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.6.3", features = ["sqlite-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.4", features = ["sqlite-session"] }
 </code></pre>
 <p>Stores session data in a SQLite database instead of a binary file. Better choice for long-running servers where crash-corruption of the binary file is a concern.</p>
 <h3 id="libsql--turso-session-storage-new-in-v020"><a class="header" href="#libsql--turso-session-storage-new-in-v020">LibSQL / Turso session storage: New in v0.2.0</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.6.3", features = ["libsql-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.4", features = ["libsql-session"] }
 </code></pre>
 <p>Backed by <a href="https://github.com/tursodatabase/libsql">libsql</a>: supports local embedded databases and remote Turso cloud databases. Ideal for serverless or distributed deployments.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -263,10 +263,10 @@ let (client, _shutdown) = Client::builder()
 <p>See <a href="./authentication/session-backends.html">Session Backends</a> for the full guide.</p>
 <h3 id="html-entity-parsing"><a class="header" href="#html-entity-parsing">HTML entity parsing</a></h3>
 <pre><code class="language-toml"># Built-in hand-rolled HTML parser (no extra deps)
-ferogram = { version = "0.6.3", features = ["html"] }
+ferogram = { version = "0.6.4", features = ["html"] }
 
 # OR: spec-compliant html5ever tokenizer (overrides built-in)
-ferogram = { version = "0.6.3", features = ["html5ever"] }
+ferogram = { version = "0.6.4", features = ["html5ever"] }
 </code></pre>
 <div class="table-wrapper">
 <table>
@@ -281,7 +281,7 @@ ferogram = { version = "0.6.3", features = ["html5ever"] }
 </div>
 <h3 id="raw-type-system-features-ferogram-tl-types"><a class="header" href="#raw-type-system-features-ferogram-tl-types">Raw type system features (<code>ferogram-tl-types</code>)</a></h3>
 <p>If you use <code>ferogram-tl-types</code> directly for raw API access:</p>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.3", features = [
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.4", features = [
     "tl-api",          # Telegram API types (required)
     "tl-mtproto",      # Low-level MTProto types
     "impl-debug",      # Debug trait on all types (default ON)
@@ -297,7 +297,7 @@ ferogram = { version = "0.6.3", features = ["html5ever"] }
 
 fn main() {
     println!("Using Telegram API Layer {}", LAYER);
-    // → Using Telegram API Layer 227
+    // → Using Telegram API Layer 228
 }</code></pre>
 <hr>
 <h2 id="platform-notes"><a class="header" href="#platform-notes">Platform notes</a></h2>
@@ -364,7 +364,7 @@ fn main() {
 
         <script src="clipboard-1626706a.min.js"></script>
         <script src="highlight-abc7f01d.js"></script>
-        <script src="book-c22b7243.js"></script>
+        <script src="book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
         <script src="theme/custom-a37c2a24.js"></script>

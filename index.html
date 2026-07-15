@@ -15,8 +15,8 @@
         <link rel="icon" href="favicon-de23e50b.svg">
         <link rel="shortcut icon" href="favicon-8114d1fc.png">
         <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-0392ca55.css">
-        <link rel="stylesheet" href="css/chrome-fc474251.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
         <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-13e43010.js";
+            window.path_to_searchindex_js = "searchindex-04b1db19.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5d15c526.js"></script>
@@ -184,7 +184,7 @@
                         <h1 id="ferogram"><a class="header" href="#ferogram">ferogram</a></h1>
 <p><a href="https://crates.io/crates/ferogram"><img src="https://img.shields.io/crates/v/ferogram?color=fc8d62&amp;label=ferogram&amp;style=flat-square" alt="Crates.io"></a>
 <a href="https://docs.rs/ferogram"><img src="https://img.shields.io/docsrs/ferogram?style=flat-square&amp;color=22c55e" alt="docs.rs"></a>
-<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-227-8b5cf6?style=flat-square" alt="TL Layer"></a>
+<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-228-8b5cf6?style=flat-square" alt="TL Layer"></a>
 <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License"></a></p>
 <p>Hey, glad you’re here.</p>
 <p>ferogram is an async Rust library for Telegram’s MTProto protocol, built by <a href="https://github.com/ankit-chaubey">Ankit Chaubey</a>. It talks to Telegram directly, no Bot API proxy in between, and it works for both bots and user accounts from the same API.</p>
@@ -193,7 +193,7 @@
 <p>If something’s missing for you, drop by <a href="https://t.me/FerogramChat">t.me/FerogramChat</a>. I genuinely like hearing what people are building with it.</p>
 <h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.6.3"
+ferogram = "0.6.4"
 tokio    = { version = "1", features = ["full"] }
 </code></pre>
 <p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
@@ -223,7 +223,7 @@ tokio    = { version = "1", features = ["full"] }
 <tr><td><a href="https://docs.rs/ferogram-connect"><code>ferogram-connect</code></a></td><td>Raw TCP, MTProto framing, obfuscation, SOCKS5, MTProxy, gzip.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-mtproto"><code>ferogram-mtproto</code></a></td><td>MTProto 2.0 session, DH key exchange, message framing, PFS key binding.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-crypto"><code>ferogram-crypto</code></a></td><td>AES-IGE, RSA, SHA, Diffie-Hellman, PQ factorization, auth key derivation.</td></tr>
-<tr><td><a href="https://docs.rs/ferogram-tl-types"><code>ferogram-tl-types</code></a></td><td>Auto-generated TL types, functions, and enums for Layer 227.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-tl-types"><code>ferogram-tl-types</code></a></td><td>Auto-generated TL types, functions, and enums (tracks <code>tl::LAYER</code>).</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-tl-gen"><code>ferogram-tl-gen</code></a></td><td>Build-time code generator from TL AST to Rust source.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-tl-parser"><code>ferogram-tl-parser</code></a></td><td>Parses <code>.tl</code> schema text into a Definition AST.</td></tr>
 </tbody>
@@ -304,7 +304,7 @@ tokio    = { version = "1", features = ["full"] }
 
         <script src="clipboard-1626706a.min.js"></script>
         <script src="highlight-abc7f01d.js"></script>
-        <script src="book-c22b7243.js"></script>
+        <script src="book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
         <script src="theme/custom-a37c2a24.js"></script>

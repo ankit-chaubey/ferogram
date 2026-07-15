@@ -15,8 +15,8 @@
         <link rel="icon" href="favicon-de23e50b.svg">
         <link rel="shortcut icon" href="favicon-8114d1fc.png">
         <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-0392ca55.css">
-        <link rel="stylesheet" href="css/chrome-fc474251.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
         <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-13e43010.js";
+            window.path_to_searchindex_js = "searchindex-04b1db19.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5d15c526.js"></script>
@@ -214,19 +214,19 @@
 <li><code>ClientBuilder</code>: fluent connection builder</li>
 </ul>
 <pre><code class="language-toml"># SQLite session only
-ferogram = { version = "0.6.3", features = ["sqlite-session"] }
+ferogram = { version = "0.6.4", features = ["sqlite-session"] }
 
 # LibSQL / Turso session (new in 0.2.0)
-ferogram = { version = "0.6.3", features = ["libsql-session"] }
+ferogram = { version = "0.6.4", features = ["libsql-session"] }
 
 # HTML parsing (minimal, no extra deps)
-ferogram = { version = "0.6.3", features = ["html"] }
+ferogram = { version = "0.6.4", features = ["html"] }
 
 # HTML parsing (spec-compliant, adds html5ever dep)
-ferogram = { version = "0.6.3", features = ["html5ever"] }
+ferogram = { version = "0.6.4", features = ["html5ever"] }
 
 # Multiple features at once
-ferogram = { version = "0.6.3", features = ["sqlite-session", "html"] }
+ferogram = { version = "0.6.4", features = ["sqlite-session", "html"] }
 </code></pre>
 <hr>
 <h2 id="ferogram-tl-types"><a class="header" href="#ferogram-tl-types">ferogram-tl-types</a></h2>
@@ -248,14 +248,14 @@ ferogram = { version = "0.6.3", features = ["sqlite-session", "html"] }
 </table>
 </div>
 <h3 id="example-enable-serde"><a class="header" href="#example-enable-serde">Example: enable serde</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.3", features = ["tl-api", "impl-serde"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.4", features = ["tl-api", "impl-serde"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let json = serde_json::to_string(&amp;some_tl_type)?;
 <span class="boring">}</span></code></pre>
 <h3 id="example-name_for_id-debugging"><a class="header" href="#example-name_for_id-debugging">Example: name_for_id (debugging)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.3", features = ["tl-api", "name-for-id"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.4", features = ["tl-api", "name-for-id"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -266,13 +266,13 @@ if let Some(name) = name_for_id(0x74ae4240) {
 }
 <span class="boring">}</span></code></pre>
 <h3 id="example-minimal-no-debug-no-conversions"><a class="header" href="#example-minimal-no-debug-no-conversions">Example: minimal (no Debug, no conversions)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.3", default-features = false, features = ["tl-api"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.4", default-features = false, features = ["tl-api"] }
 </code></pre>
 <p>Reduces compile time when you don’t need convenience traits.</p>
 <hr>
 <h2 id="string-session-no-feature-flag-needed"><a class="header" href="#string-session-no-feature-flag-needed">String session: no feature flag needed</a></h2>
 <p><code>StringSessionBackend</code> and <code>export_session_string()</code> are available in the default build: no feature flag required:</p>
-<pre><code class="language-toml">ferogram = "0.6.3"   # already includes StringSessionBackend
+<pre><code class="language-toml">ferogram = "0.6.4"   # already includes StringSessionBackend
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -329,7 +329,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
         <script src="clipboard-1626706a.min.js"></script>
         <script src="highlight-abc7f01d.js"></script>
-        <script src="book-c22b7243.js"></script>
+        <script src="book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
         <script src="theme/custom-a37c2a24.js"></script>

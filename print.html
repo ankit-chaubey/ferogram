@@ -16,8 +16,8 @@
         <link rel="icon" href="favicon-de23e50b.svg">
         <link rel="shortcut icon" href="favicon-8114d1fc.png">
         <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-0392ca55.css">
-        <link rel="stylesheet" href="css/chrome-fc474251.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
         <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-13e43010.js";
+            window.path_to_searchindex_js = "searchindex-04b1db19.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5d15c526.js"></script>
@@ -182,7 +182,7 @@
                         <h1 id="ferogram"><a class="header" href="#ferogram">ferogram</a></h1>
 <p><a href="https://crates.io/crates/ferogram"><img src="https://img.shields.io/crates/v/ferogram?color=fc8d62&amp;label=ferogram&amp;style=flat-square" alt="Crates.io"></a>
 <a href="https://docs.rs/ferogram"><img src="https://img.shields.io/docsrs/ferogram?style=flat-square&amp;color=22c55e" alt="docs.rs"></a>
-<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-227-8b5cf6?style=flat-square" alt="TL Layer"></a>
+<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-228-8b5cf6?style=flat-square" alt="TL Layer"></a>
 <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License"></a></p>
 <p>Hey, glad you’re here.</p>
 <p>ferogram is an async Rust library for Telegram’s MTProto protocol, built by <a href="https://github.com/ankit-chaubey">Ankit Chaubey</a>. It talks to Telegram directly, no Bot API proxy in between, and it works for both bots and user accounts from the same API.</p>
@@ -191,7 +191,7 @@
 <p>If something’s missing for you, drop by <a href="https://t.me/FerogramChat">t.me/FerogramChat</a>. I genuinely like hearing what people are building with it.</p>
 <h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.6.3"
+ferogram = "0.6.4"
 tokio    = { version = "1", features = ["full"] }
 </code></pre>
 <p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
@@ -221,7 +221,7 @@ tokio    = { version = "1", features = ["full"] }
 <tr><td><a href="https://docs.rs/ferogram-connect"><code>ferogram-connect</code></a></td><td>Raw TCP, MTProto framing, obfuscation, SOCKS5, MTProxy, gzip.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-mtproto"><code>ferogram-mtproto</code></a></td><td>MTProto 2.0 session, DH key exchange, message framing, PFS key binding.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-crypto"><code>ferogram-crypto</code></a></td><td>AES-IGE, RSA, SHA, Diffie-Hellman, PQ factorization, auth key derivation.</td></tr>
-<tr><td><a href="https://docs.rs/ferogram-tl-types"><code>ferogram-tl-types</code></a></td><td>Auto-generated TL types, functions, and enums for Layer 227.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-tl-types"><code>ferogram-tl-types</code></a></td><td>Auto-generated TL types, functions, and enums (tracks <code>tl::LAYER</code>).</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-tl-gen"><code>ferogram-tl-gen</code></a></td><td>Build-time code generator from TL AST to Rust source.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-tl-parser"><code>ferogram-tl-parser</code></a></td><td>Parses <code>.tl</code> schema text into a Definition AST.</td></tr>
 </tbody>
@@ -304,7 +304,7 @@ match result {
 <li><code>send_file</code> now takes <code>impl Into&lt;InputMedia&gt;</code> instead of <code>InputMedia</code> directly.</li>
 </ul>
 <h3 id="upgrading-from-052"><a class="header" href="#upgrading-from-052">Upgrading from 0.5.2</a></h3>
-<pre><code class="language-toml">ferogram = "0.6.3"
+<pre><code class="language-toml">ferogram = "0.6.4"
 </code></pre>
 <p>Rename <code>upload_file_from_path</code> call sites to <code>upload_file</code>. Add <code>None</code> as the last argument to all upload and download calls.</p>
 <hr>
@@ -807,7 +807,7 @@ See <a href="#peer-cache-helpers">Raw API Access</a> for usage details.</p>
 <h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
 <h2 id="add-to-cargotoml"><a class="header" href="#add-to-cargotoml">Add to Cargo.toml</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.6.3"
+ferogram = "0.6.4"
 tokio        = { version = "1", features = ["full"] }
 </code></pre>
 <p><code>ferogram</code> re-exports everything you need for both user clients and bots.</p>
@@ -848,11 +848,11 @@ let api_hash = "deadbeef..."; // ← never do this in a public repo
 <hr>
 <h2 id="optional-features"><a class="header" href="#optional-features">Optional features</a></h2>
 <h3 id="sqlite-session-storage"><a class="header" href="#sqlite-session-storage">SQLite session storage</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.6.3", features = ["sqlite-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.4", features = ["sqlite-session"] }
 </code></pre>
 <p>Stores session data in a SQLite database instead of a binary file. Better choice for long-running servers where crash-corruption of the binary file is a concern.</p>
 <h3 id="libsql--turso-session-storage-new-in-v020"><a class="header" href="#libsql--turso-session-storage-new-in-v020">LibSQL / Turso session storage: New in v0.2.0</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.6.3", features = ["libsql-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.4", features = ["libsql-session"] }
 </code></pre>
 <p>Backed by <a href="https://github.com/tursodatabase/libsql">libsql</a>: supports local embedded databases and remote Turso cloud databases. Ideal for serverless or distributed deployments.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -886,10 +886,10 @@ let (client, _shutdown) = Client::builder()
 <p>See <a href="#session-backends-1">Session Backends</a> for the full guide.</p>
 <h3 id="html-entity-parsing"><a class="header" href="#html-entity-parsing">HTML entity parsing</a></h3>
 <pre><code class="language-toml"># Built-in hand-rolled HTML parser (no extra deps)
-ferogram = { version = "0.6.3", features = ["html"] }
+ferogram = { version = "0.6.4", features = ["html"] }
 
 # OR: spec-compliant html5ever tokenizer (overrides built-in)
-ferogram = { version = "0.6.3", features = ["html5ever"] }
+ferogram = { version = "0.6.4", features = ["html5ever"] }
 </code></pre>
 <div class="table-wrapper">
 <table>
@@ -904,7 +904,7 @@ ferogram = { version = "0.6.3", features = ["html5ever"] }
 </div>
 <h3 id="raw-type-system-features-ferogram-tl-types"><a class="header" href="#raw-type-system-features-ferogram-tl-types">Raw type system features (<code>ferogram-tl-types</code>)</a></h3>
 <p>If you use <code>ferogram-tl-types</code> directly for raw API access:</p>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.3", features = [
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.4", features = [
     "tl-api",          # Telegram API types (required)
     "tl-mtproto",      # Low-level MTProto types
     "impl-debug",      # Debug trait on all types (default ON)
@@ -920,7 +920,7 @@ ferogram = { version = "0.6.3", features = ["html5ever"] }
 
 fn main() {
     println!("Using Telegram API Layer {}", LAYER);
-    // → Using Telegram API Layer 227
+    // → Using Telegram API Layer 228
 }</code></pre>
 <hr>
 <h2 id="platform-notes"><a class="header" href="#platform-notes">Platform notes</a></h2>
@@ -5114,10 +5114,10 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_message_history(peer: impl Into&lt;PeerRef&gt;, limit: i32, offset_id: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_message_history(peer: impl Into&lt;PeerRef&gt;, limit: i32, offset_id: i32, add_offset: i32) → Result&lt;ferogram::types::MessagePage, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Fetch a page of messages. Pass the lowest message ID from the previous page as <code>offset_id</code> to paginate.</div>
+<div class="api-card-body">Fetch a page of messages. Pass the lowest message ID from the previous page as <code>offset_id</code>, or use <code>add_offset</code> for simple limit-based pagination. The returned <code>MessagePage</code> also carries <code>count</code>/<code>offset_id_offset</code> from the raw response.</div>
 
 </div>
 
@@ -5478,7 +5478,7 @@ Resolution is cache-first; an RPC is only made on a cache miss.
 </div>
 
 <div class="api-card-body">
-Call any Layer 227 API method directly. See <a href="#raw-api-access">Raw API Access</a> for the full guide.
+Call any TL API method directly. See <a href="#raw-api-access">Raw API Access</a> for the full guide.
 <pre><code>use ferogram_tl_types::functions;
 let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></pre>
 
@@ -5770,10 +5770,10 @@ tl::enums::ChatReactions::ChatReactionsNone
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_user_full(user_id: i64) → Result&lt;tl::types::UserFull, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_user_full(user_id: i64) → Result&lt;ferogram::types::UserFull, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Get the full info object for a user. Contains bio, common chats count, bot info, profile/fallback photos, privacy settings, pinned message ID, and more.</div>
+<div class="api-card-body">Get the full info object for a user. Contains bio, common chats count, bot info, profile/fallback photos, privacy settings, pinned message ID, and more. The returned <code>UserFull</code> also exposes <code>.user()</code> / <code>.status()</code> from the same response, so no follow-up <code>users.getUsers</code> call is needed for online status.</div>
 
 </div>
 
@@ -5830,10 +5830,10 @@ tl::enums::ChatReactions::ChatReactionsNone
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_replies(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, limit: i32, offset_id: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_replies(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, limit: i32, offset_id: i32, add_offset: i32) → Result&lt;ferogram::types::MessagePage, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Fetch thread replies under a message. <code>msg_id</code> is the root message ID. Pass <code>offset_id = 0</code> for the first page; use the lowest ID from the previous page to paginate. Max <code>limit</code> is 100.</div>
+<div class="api-card-body">Fetch thread replies under a message. <code>msg_id</code> is the root message ID. Pass <code>offset_id = 0</code> for the first page; use the lowest ID from the previous page, or <code>add_offset</code>, to paginate. Max <code>limit</code> is 100. The returned <code>MessagePage</code> also carries <code>count</code>/<code>offset_id_offset</code>.</div>
 
 </div>
 
@@ -12615,7 +12615,7 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <p><strong>All generated Telegram API types.</strong> Auto-regenerated at <code>cargo build</code> from <code>tl/api.tl</code>.</p>
 <h3 id="what-it-provides-1"><a class="header" href="#what-it-provides-1">What it provides</a></h3>
 <ul>
-<li><code>LAYER: i32</code> (currently 227)</li>
+<li><code>LAYER: i32</code> (read via <code>tl::LAYER</code>, patched from <code>api.tl</code> on every build)</li>
 <li><code>types::*</code>: 1,200+ concrete structs (<code>types::Message</code>, <code>types::User</code>, etc.)</li>
 <li><code>enums::*</code>: 400+ boxed type enums (<code>enums::Message</code>, <code>enums::Peer</code>, etc.)</li>
 <li><code>functions::*</code>: 500+ RPC function structs implementing <code>RemoteCall</code></li>
@@ -12828,19 +12828,19 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <li><code>ClientBuilder</code>: fluent connection builder</li>
 </ul>
 <pre><code class="language-toml"># SQLite session only
-ferogram = { version = "0.6.3", features = ["sqlite-session"] }
+ferogram = { version = "0.6.4", features = ["sqlite-session"] }
 
 # LibSQL / Turso session (new in 0.2.0)
-ferogram = { version = "0.6.3", features = ["libsql-session"] }
+ferogram = { version = "0.6.4", features = ["libsql-session"] }
 
 # HTML parsing (minimal, no extra deps)
-ferogram = { version = "0.6.3", features = ["html"] }
+ferogram = { version = "0.6.4", features = ["html"] }
 
 # HTML parsing (spec-compliant, adds html5ever dep)
-ferogram = { version = "0.6.3", features = ["html5ever"] }
+ferogram = { version = "0.6.4", features = ["html5ever"] }
 
 # Multiple features at once
-ferogram = { version = "0.6.3", features = ["sqlite-session", "html"] }
+ferogram = { version = "0.6.4", features = ["sqlite-session", "html"] }
 </code></pre>
 <hr>
 <h2 id="ferogram-tl-types-1"><a class="header" href="#ferogram-tl-types-1">ferogram-tl-types</a></h2>
@@ -12862,14 +12862,14 @@ ferogram = { version = "0.6.3", features = ["sqlite-session", "html"] }
 </table>
 </div>
 <h3 id="example-enable-serde"><a class="header" href="#example-enable-serde">Example: enable serde</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.3", features = ["tl-api", "impl-serde"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.4", features = ["tl-api", "impl-serde"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let json = serde_json::to_string(&amp;some_tl_type)?;
 <span class="boring">}</span></code></pre>
 <h3 id="example-name_for_id-debugging"><a class="header" href="#example-name_for_id-debugging">Example: name_for_id (debugging)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.3", features = ["tl-api", "name-for-id"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.4", features = ["tl-api", "name-for-id"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -12880,13 +12880,13 @@ if let Some(name) = name_for_id(0x74ae4240) {
 }
 <span class="boring">}</span></code></pre>
 <h3 id="example-minimal-no-debug-no-conversions"><a class="header" href="#example-minimal-no-debug-no-conversions">Example: minimal (no Debug, no conversions)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.3", default-features = false, features = ["tl-api"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.4", default-features = false, features = ["tl-api"] }
 </code></pre>
 <p>Reduces compile time when you don’t need convenience traits.</p>
 <hr>
 <h2 id="string-session-no-feature-flag-needed"><a class="header" href="#string-session-no-feature-flag-needed">String session: no feature flag needed</a></h2>
 <p><code>StringSessionBackend</code> and <code>export_session_string()</code> are available in the default build: no feature flag required:</p>
-<pre><code class="language-toml">ferogram = "0.6.3"   # already includes StringSessionBackend
+<pre><code class="language-toml">ferogram = "0.6.4"   # already includes StringSessionBackend
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -12937,7 +12937,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
         <script src="clipboard-1626706a.min.js"></script>
         <script src="highlight-abc7f01d.js"></script>
-        <script src="book-c22b7243.js"></script>
+        <script src="book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
         <script src="theme/custom-a37c2a24.js"></script>
