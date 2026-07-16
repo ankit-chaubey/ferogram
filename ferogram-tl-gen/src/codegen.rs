@@ -10,6 +10,7 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
@@ -34,6 +35,9 @@ pub struct Config {
     pub impl_from_enum: bool,
     /// Derive `serde::{Serialize, Deserialize}` on all types.
     pub impl_serde: bool,
+    /// Emit `.field()` accessors on enums whose variants share a field name
+    /// and type (see [`write_enum_accessors`]).
+    pub gen_field_accessors: bool,
 }
 
 impl Default for Config {
@@ -45,6 +49,7 @@ impl Default for Config {
             impl_from_type: true,
             impl_from_enum: true,
             impl_serde: false,
+            gen_field_accessors: true,
         }
     }
 }
@@ -598,6 +603,9 @@ fn write_enums_mod<W: Write>(
             if config.impl_from_enum {
                 write_impl_try_from(out, &indent, ty, meta)?;
             }
+            if config.gen_field_accessors {
+                write_enum_accessors(out, &indent, ty, meta)?;
+            }
         }
 
         if key.is_some() {
@@ -808,5 +816,173 @@ fn write_impl_try_from<W: Write>(
         writeln!(out, "{indent}    }}")?;
         writeln!(out, "{indent}}}")?;
     }
+    Ok(())
+}
+
+// Field accessor generation
+//
+// For an enum type with several constructors, look for parameter names that
+// resolve to the same Rust type across variants and emit a `.field()`
+// accessor. This is scoped narrowly on purpose:
+//
+// - A field name only qualifies if every variant that defines it agrees on
+//   the exact Rust type. Any mismatch drops that field entirely, no partial
+//   generation, no coercion.
+// - If the field is present (optionally behind a flag) in every variant, the
+//   accessor returns `&Ty` and the match is exhaustive.
+// - If only a subset of variants carry it, the accessor returns `Option<&Ty>`
+//   with a `_ => None` arm covering the rest.
+// - Fields whose type touches a generic parameter are skipped, since the
+//   accessor lives on the (non-generic) enum itself.
+// - This does not attempt struct-like restructuring across mismatched shapes
+//   (e.g. collapsing a `name`/`site_name` pair into one field) that stays
+//   hand-written.
+
+/// Per-field bookkeeping while scanning a type's constructors.
+struct FieldAgg {
+    /// Rust type once, `None` before the first sighting.
+    rust_type: Option<String>,
+    /// Set once two variants disagree on `rust_type`; excludes the field.
+    mismatched: bool,
+    /// One slot per constructor, in the same order as `defs_for_type`.
+    /// `Some(is_flag_optional)` if that constructor carries the field.
+    presence: Vec<Option<bool>>,
+}
+
+/// True if `ty` (or any nested generic argument) refers to a generic
+/// parameter, meaning it can't be named from outside the constructor.
+fn type_is_generic(ty: &ferogram_tl_parser::tl::Type) -> bool {
+    ty.generic_ref
+        || ty
+            .generic_arg
+            .as_deref()
+            .map(type_is_generic)
+            .unwrap_or(false)
+}
+
+fn write_enum_accessors<W: Write>(
+    out: &mut W,
+    indent: &str,
+    ty: &ferogram_tl_parser::tl::Type,
+    meta: &Metadata,
+) -> io::Result<()> {
+    let defs = meta.defs_for_type(ty);
+    if defs.len() < 2 {
+        return Ok(());
+    }
+
+    // Insertion-ordered field names so output stays stable across runs
+    // (HashMap iteration order isn't).
+    let mut order: Vec<String> = Vec::new();
+    let mut fields: HashMap<String, FieldAgg> = HashMap::new();
+
+    for (i, def) in defs.iter().enumerate() {
+        for param in &def.params {
+            let ParameterType::Normal { ty: pty, flag } = &param.ty else {
+                continue;
+            };
+            if type_is_generic(pty) {
+                continue;
+            }
+
+            let field = n::param_attr_name(param);
+            let (rust_type, is_optional) = if flag.is_some() && pty.name == "true" {
+                ("bool".to_owned(), false)
+            } else {
+                (n::type_qual_name(pty, meta), flag.is_some())
+            };
+
+            let agg = fields.entry(field.clone()).or_insert_with(|| {
+                order.push(field.clone());
+                FieldAgg {
+                    rust_type: None,
+                    mismatched: false,
+                    presence: vec![None; defs.len()],
+                }
+            });
+
+            match &agg.rust_type {
+                None => agg.rust_type = Some(rust_type),
+                Some(existing) if *existing != rust_type => agg.mismatched = true,
+                _ => {}
+            }
+            agg.presence[i] = Some(is_optional);
+        }
+    }
+
+    let mut emitted_header = false;
+
+    for field in &order {
+        let agg = &fields[field];
+        if agg.mismatched {
+            continue;
+        }
+        let Some(rust_type) = &agg.rust_type else {
+            continue;
+        };
+
+        // Not worth a match statement over a single variant.
+        let present_count = agg.presence.iter().filter(|p| p.is_some()).count();
+        if present_count < 2 {
+            continue;
+        }
+
+        let all_present = present_count == defs.len();
+        let any_optional = agg.presence.iter().any(|p| matches!(p, Some(true)));
+        // Guaranteed on every variant and never behind a flag: skip the
+        // Option wrapper and the catch-all arm entirely.
+        let direct = all_present && !any_optional;
+
+        if !emitted_header {
+            writeln!(out, "\n{indent}impl {} {{", n::type_name(ty))?;
+            emitted_header = true;
+        }
+
+        let ret_ty = if direct {
+            format!("&{rust_type}")
+        } else {
+            format!("Option<&{rust_type}>")
+        };
+
+        writeln!(
+            out,
+            "{indent}    /// Returns `{field}` if present in this variant."
+        )?;
+        writeln!(out, "{indent}    pub fn {field}(&self) -> {ret_ty} {{")?;
+        writeln!(out, "{indent}        match self {{")?;
+
+        for (i, def) in defs.iter().enumerate() {
+            let variant = n::def_variant_name(def);
+            let bind = if def.params.is_empty() { "" } else { "(x)" };
+
+            match agg.presence[i] {
+                Some(true) => writeln!(
+                    out,
+                    "{indent}            Self::{variant}{bind} => x.{field}.as_ref(),"
+                )?,
+                Some(false) => {
+                    let expr = if direct {
+                        format!("&x.{field}")
+                    } else {
+                        format!("Some(&x.{field})")
+                    };
+                    writeln!(out, "{indent}            Self::{variant}{bind} => {expr},")?
+                }
+                None => {} // covered by the wildcard arm below
+            }
+        }
+
+        if !all_present {
+            writeln!(out, "{indent}            _ => None,")?;
+        }
+
+        writeln!(out, "{indent}        }}")?;
+        writeln!(out, "{indent}    }}")?;
+    }
+
+    if emitted_header {
+        writeln!(out, "{indent}}}")?;
+    }
+
     Ok(())
 }

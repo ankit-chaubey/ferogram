@@ -70,6 +70,7 @@ fn main() -> io::Result<()> {
         impl_from_type: cfg!(feature = "impl-from-type"),
         impl_from_enum: cfg!(feature = "impl-from-enum"),
         impl_serde: cfg!(feature = "impl-serde"),
+        gen_field_accessors: cfg!(feature = "field-accessors"),
     };
 
     // Generate code

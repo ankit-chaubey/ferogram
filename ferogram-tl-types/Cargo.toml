@@ -19,7 +19,7 @@ ferogram-tl-parser = { workspace = true }
 ferogram-tl-gen    = { workspace = true }
 
 [features]
-default = ["impl-debug", "impl-from-type", "impl-from-enum", "tl-api"]
+default = ["impl-debug", "impl-from-type", "impl-from-enum", "tl-api", "field-accessors"]
 impl-debug               = []
 impl-from-type           = []
 impl-from-enum           = []
@@ -28,7 +28,8 @@ name-for-id              = []
 tl-api                   = []
 tl-mtproto               = []
 impl-serde               = []
+field-accessors          = []
 
 [package.metadata.docs.rs]
-features     = ["impl-debug", "impl-from-type", "impl-from-enum", "tl-api", "tl-mtproto", "deserializable-functions", "name-for-id"]
+features     = ["impl-debug", "impl-from-type", "impl-from-enum", "tl-api", "tl-mtproto", "deserializable-functions", "name-for-id", "field-accessors"]
 rustdoc-args = ["--cfg", "docsrs"]
