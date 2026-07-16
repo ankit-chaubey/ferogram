@@ -548,7 +548,8 @@ impl Client {
 
     /// Forward one or more messages from `source` to `destination`. Forwards
     /// keep the "Forwarded from" attribution by default; set `opts` to
-    /// strip it or to reply to an existing message in the destination.
+    /// strip it, reply to an existing message in the destination, or land
+    /// them in a specific forum topic via `opts.topic_id`.
     pub async fn forward_messages(
         &self,
         destination: impl Into<PeerRef>,
@@ -560,15 +561,23 @@ impl Client {
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
         let dest = destination.into().resolve(self).await?;
         let src = source.into().resolve(self).await?;
+        let send_as_peer = match opts.send_as {
+            Some(p) => Some(p.resolve(self).await?),
+            None => None,
+        };
         let cache: tokio::sync::RwLockReadGuard<'_, PeerCache> = self.inner.peer_cache.read().await;
         let to_peer = cache.peer_to_input(&dest)?;
         let from_peer = cache.peer_to_input(&src)?;
+        let send_as = match send_as_peer {
+            Some(p) => Some(cache.peer_to_input(&p)?),
+            None => None,
+        };
         drop(cache);
 
         let reply_to = opts.reply_to.map(|id| {
             tl::enums::InputReplyTo::Message(tl::types::InputReplyToMessage {
                 reply_to_msg_id: id,
-                top_msg_id: None,
+                top_msg_id: opts.topic_id,
                 reply_to_peer_id: None,
                 quote_text: None,
                 quote_entities: None,
@@ -581,8 +590,8 @@ impl Client {
 
         let req = tl::functions::messages::ForwardMessages {
             silent: opts.silent,
-            background: false,
-            with_my_score: false,
+            background: opts.background,
+            with_my_score: opts.with_my_score,
             drop_author: opts.drop_author,
             drop_media_captions: opts.drop_media_captions,
             noforwards: opts.noforwards,
@@ -590,17 +599,17 @@ impl Client {
             id: message_ids.to_vec(),
             random_id: (0..message_ids.len()).map(|_| random_i64()).collect(),
             to_peer,
-            top_msg_id: None,
+            top_msg_id: opts.topic_id,
             reply_to,
             schedule_date: opts.schedule_date,
-            schedule_repeat_period: None,
-            send_as: None,
-            quick_reply_shortcut: None,
-            effect: None,
-            video_timestamp: None,
-            allow_paid_stars: None,
-            allow_paid_floodskip: false,
-            suggested_post: None,
+            schedule_repeat_period: opts.schedule_repeat_period,
+            send_as,
+            quick_reply_shortcut: opts.quick_reply_shortcut,
+            effect: opts.effect,
+            video_timestamp: opts.video_timestamp,
+            allow_paid_stars: opts.allow_paid_stars,
+            allow_paid_floodskip: opts.allow_paid_floodskip,
+            suggested_post: opts.suggested_post,
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         // Parse the Updates container, cache peer info, and collect messages.

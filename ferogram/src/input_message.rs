@@ -58,11 +58,17 @@ pub struct InputMessage {
 /// Options for forwarding messages.
 ///
 /// Used by [`crate::Client::forward_messages`] and
-/// `IncomingMessage::forward_to_ex`.  All fields default to `false`/`None`.
+/// `IncomingMessage::forward_to_ex`. All fields default to `false`/`None`,
+/// matching every field Telegram's `messages.forwardMessages` accepts - if
+/// Telegram adds a new one later, add it here rather than hardcoding it.
 #[derive(Default, Clone)]
 pub struct ForwardOptions {
     /// Send silently (no notification for recipient).
     pub silent: bool,
+    /// Send as a background message (doesn't bump the chat to the top).
+    pub background: bool,
+    /// Also forward the sender's high score, for messages containing a game.
+    pub with_my_score: bool,
     /// Strip the original author attribution (`Forwarded from …`).
     pub drop_author: bool,
     /// Remove captions from forwarded media.
@@ -71,8 +77,32 @@ pub struct ForwardOptions {
     pub noforwards: bool,
     /// Reply to an existing message in the destination chat.
     pub reply_to: Option<i32>,
+    /// Forward into this forum topic thread (the `top_msg_id` of the topic,
+    /// see [`crate::Client::get_forum_topics`]). Needed when the
+    /// destination is a supergroup that has forum topics enabled - without
+    /// it, forwarded messages land outside any topic instead of the one
+    /// you meant.
+    pub topic_id: Option<i32>,
     /// Schedule forwarding for this Unix timestamp (seconds).
     pub schedule_date: Option<i32>,
+    /// Repeat the scheduled forward every N seconds. Only meaningful with
+    /// `schedule_date` set.
+    pub schedule_repeat_period: Option<i32>,
+    /// Forward as a different identity you're allowed to send as (e.g. an
+    /// anonymous admin identity, or a linked channel) instead of yourself.
+    pub send_as: Option<crate::PeerRef>,
+    /// Attach a message effect (Premium sticker/emoji effect) by its ID.
+    pub effect: Option<i64>,
+    /// Start the forwarded video's preview at this timestamp (seconds).
+    pub video_timestamp: Option<i32>,
+    /// Stars you're willing to pay if the destination charges for messages.
+    pub allow_paid_stars: Option<i64>,
+    /// Bypass paid-messages flood limits by paying Stars.
+    pub allow_paid_floodskip: bool,
+    /// Associate the forward with a business-account quick reply shortcut.
+    pub quick_reply_shortcut: Option<tl::enums::InputQuickReplyShortcut>,
+    /// Forward as a channel "suggested post" instead of posting directly.
+    pub suggested_post: Option<tl::enums::SuggestedPost>,
 }
 
 /// Selects which flavour of message link [`crate::Client::export_message_link`] should produce.
