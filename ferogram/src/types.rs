@@ -263,6 +263,18 @@ impl UserFull {
         }
     }
 
+    /// The raw `userFull` constructor, with every field Telegram sent.
+    ///
+    /// This wrapper only gives its own method to a handful of fields
+    /// (`about`, `blocked`, `common_chats_count`, the phone-call flags).
+    /// Everything else Telegram puts on `userFull` - `can_pin_message`,
+    /// `has_scheduled`, `voice_messages_forbidden`, `translations_disabled`,
+    /// and so on - is still here and still `pub`, just reachable through
+    /// this instead of its own method.
+    pub fn full(&self) -> &tl::types::UserFull {
+        &self.full
+    }
+
     /// Bio / "about" text.
     pub fn about(&self) -> Option<&str> {
         self.full.about.as_deref()
