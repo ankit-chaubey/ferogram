@@ -246,7 +246,12 @@ impl std::fmt::Display for User {
 /// `users.getUsers` round-trip.
 #[derive(Debug, Clone)]
 pub struct UserFull {
-    full: tl::types::UserFull,
+    /// The raw `userFull` constructor, with every field Telegram sent.
+    ///
+    /// Public so you can move an owned field out directly
+    /// (`user.full.about` instead of `user.full().about.clone()`) when you
+    /// don't need the rest of the wrapper afterwards.
+    pub full: tl::types::UserFull,
     chats: Vec<tl::enums::Chat>,
     users: Vec<tl::enums::User>,
 }
@@ -263,14 +268,10 @@ impl UserFull {
         }
     }
 
-    /// The raw `userFull` constructor, with every field Telegram sent.
-    ///
-    /// This wrapper only gives its own method to a handful of fields
-    /// (`about`, `blocked`, `common_chats_count`, the phone-call flags).
-    /// Everything else Telegram puts on `userFull` - `can_pin_message`,
-    /// `has_scheduled`, `voice_messages_forbidden`, `translations_disabled`,
-    /// and so on - is still here and still `pub`, just reachable through
-    /// this instead of its own method.
+    /// Same as the `full` field, as a reference. Use this if you're
+    /// borrowing `self` and don't need to move a field out; use `self.full`
+    /// directly if you do (e.g. `user.full.about` moves the `String` out
+    /// instead of cloning it).
     pub fn full(&self) -> &tl::types::UserFull {
         &self.full
     }
