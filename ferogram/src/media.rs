@@ -615,6 +615,21 @@ impl Photo {
             .next_back()
             .unwrap_or("s")
     }
+
+    /// Start building `InputMedia` to re-send this photo elsewhere, e.g.
+    /// forwarding without the `fwd_from` header. See [`PhotoMedia`] for
+    /// the available overrides.
+    pub fn to_input_media(&self) -> PhotoMedia {
+        PhotoMedia {
+            id: self.raw.id,
+            access_hash: self.raw.access_hash,
+            file_reference: self.raw.file_reference.clone(),
+            spoiler: false,
+            live_photo: false,
+            ttl_seconds: None,
+            video: None,
+        }
+    }
 }
 
 impl Downloadable for Photo {
@@ -641,6 +656,59 @@ impl Downloadable for Photo {
                 _ => None,
             })
             .max()
+    }
+}
+
+/// Builder for re-sending an existing [`Photo`] as `InputMedia`. Built via
+/// [`Photo::to_input_media`]. Same pattern as [`DocumentMedia`]: sane
+/// defaults, chain setters for full control, accepted anywhere via `Into`.
+#[derive(Debug, Clone)]
+pub struct PhotoMedia {
+    id: i64,
+    access_hash: i64,
+    file_reference: Vec<u8>,
+    spoiler: bool,
+    live_photo: bool,
+    ttl_seconds: Option<i32>,
+    video: Option<tl::enums::InputDocument>,
+}
+
+impl PhotoMedia {
+    /// Mark the media as spoiler-blurred.
+    pub fn spoiler(mut self, v: bool) -> Self {
+        self.spoiler = v;
+        self
+    }
+    /// Mark this as a "live photo" with an attached video component.
+    pub fn live_photo(mut self, v: bool) -> Self {
+        self.live_photo = v;
+        self
+    }
+    /// Self-destruct timer in seconds.
+    pub fn ttl_seconds(mut self, v: i32) -> Self {
+        self.ttl_seconds = Some(v);
+        self
+    }
+    /// The video component of a live photo.
+    pub fn video(mut self, v: tl::enums::InputDocument) -> Self {
+        self.video = Some(v);
+        self
+    }
+}
+
+impl From<PhotoMedia> for tl::enums::InputMedia {
+    fn from(m: PhotoMedia) -> Self {
+        tl::enums::InputMedia::Photo(tl::types::InputMediaPhoto {
+            spoiler: m.spoiler,
+            live_photo: m.live_photo,
+            id: tl::enums::InputPhoto::InputPhoto(tl::types::InputPhoto {
+                id: m.id,
+                access_hash: m.access_hash,
+                file_reference: m.file_reference,
+            }),
+            ttl_seconds: m.ttl_seconds,
+            video: m.video,
+        })
     }
 }
 
@@ -710,6 +778,22 @@ impl Document {
             .iter()
             .any(|a| matches!(a, tl::enums::DocumentAttribute::Animated))
     }
+
+    /// Start building `InputMedia` to re-send this document elsewhere, e.g.
+    /// forwarding without the `fwd_from` header. See [`DocumentMedia`] for
+    /// the available overrides.
+    pub fn to_input_media(&self) -> DocumentMedia {
+        DocumentMedia {
+            id: self.raw.id,
+            access_hash: self.raw.access_hash,
+            file_reference: self.raw.file_reference.clone(),
+            spoiler: false,
+            video_cover: None,
+            video_timestamp: None,
+            ttl_seconds: None,
+            query: None,
+        }
+    }
 }
 
 impl Downloadable for Document {
@@ -731,7 +815,84 @@ impl Downloadable for Document {
     }
 }
 
+/// Builder for re-sending an existing [`Document`] as `InputMedia`, e.g.
+/// forwarding without the `fwd_from` header. Built via [`Document::to_input_media`].
+///
+/// Defaults to no spoiler/ttl/query/video_cover. Chain setters for full
+/// control, or pass it straight to [`crate::InputMessage::copy_media`] /
+/// [`Client::send_file`], both of which accept `impl Into<InputMedia>`.
+///
+/// ```rust,no_run
+/// # use ferogram::{InputMessage, media::Document};
+/// # fn example(doc: Document) {
+/// // simple case: just re-send as-is
+/// InputMessage::text("").copy_media(doc.to_input_media());
+///
+/// // full control
+/// InputMessage::text("").copy_media(
+///     doc.to_input_media().spoiler(true).ttl_seconds(30)
+/// );
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+pub struct DocumentMedia {
+    id: i64,
+    access_hash: i64,
+    file_reference: Vec<u8>,
+    spoiler: bool,
+    video_cover: Option<tl::enums::InputPhoto>,
+    video_timestamp: Option<i32>,
+    ttl_seconds: Option<i32>,
+    query: Option<String>,
+}
+
+impl DocumentMedia {
+    /// Mark the media as spoiler-blurred.
+    pub fn spoiler(mut self, v: bool) -> Self {
+        self.spoiler = v;
+        self
+    }
+    /// Attach a video cover photo (for videos sent with a custom thumbnail).
+    pub fn video_cover(mut self, v: tl::enums::InputPhoto) -> Self {
+        self.video_cover = Some(v);
+        self
+    }
+    /// Timestamp (seconds) the video should start playback from.
+    pub fn video_timestamp(mut self, v: i32) -> Self {
+        self.video_timestamp = Some(v);
+        self
+    }
+    /// Self-destruct timer in seconds.
+    pub fn ttl_seconds(mut self, v: i32) -> Self {
+        self.ttl_seconds = Some(v);
+        self
+    }
+    /// Inline bot query string this document originated from.
+    pub fn query(mut self, v: impl Into<String>) -> Self {
+        self.query = Some(v.into());
+        self
+    }
+}
+
+impl From<DocumentMedia> for tl::enums::InputMedia {
+    fn from(m: DocumentMedia) -> Self {
+        tl::enums::InputMedia::Document(tl::types::InputMediaDocument {
+            spoiler: m.spoiler,
+            id: tl::enums::InputDocument::InputDocument(tl::types::InputDocument {
+                id: m.id,
+                access_hash: m.access_hash,
+                file_reference: m.file_reference,
+            }),
+            video_cover: m.video_cover,
+            video_timestamp: m.video_timestamp,
+            ttl_seconds: m.ttl_seconds,
+            query: m.query,
+        })
+    }
+}
+
 /// Typed wrapper over a Telegram sticker.
+
 #[derive(Debug, Clone)]
 pub struct Sticker {
     pub inner: Document,

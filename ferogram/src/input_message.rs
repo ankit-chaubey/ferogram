@@ -319,21 +319,22 @@ impl InputMessage {
 
     /// Attach media copied from an existing message.
     ///
-    /// Pass the `InputMedia` obtained from [`crate::media::Photo`],
-    /// [`crate::media::Document`], or directly from a raw `MessageMedia`.
+    /// Accepts a raw `tl::enums::InputMedia`, or the builder returned by
+    /// [`crate::media::Document::to_input_media`] / [`crate::media::Photo::to_input_media`]
+    /// directly (both convert via `Into`).
     ///
     /// When a `media` is set, the message is sent via `messages.SendMedia`
     /// instead of `messages.SendMessage`.
     ///
     /// ```rust,no_run
-    /// # use ferogram::{InputMessage, tl};
-    /// # fn example(media: tl::enums::InputMedia) {
+    /// # use ferogram::{InputMessage, media::Document};
+    /// # fn example(doc: Document) {
     /// let msg = InputMessage::text("Here is the file again")
-    /// .copy_media(media);
+    /// .copy_media(doc.to_input_media());
     /// # }
     /// ```
-    pub fn copy_media(mut self, media: tl::enums::InputMedia) -> Self {
-        self.media = Some(media);
+    pub fn copy_media(mut self, media: impl Into<tl::enums::InputMedia>) -> Self {
+        self.media = Some(media.into());
         self
     }
 
