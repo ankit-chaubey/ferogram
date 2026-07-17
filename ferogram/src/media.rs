@@ -2881,14 +2881,15 @@ impl Client {
         // access_hash, so Telegram drops it. Resolve it to InputMessageEntityMentionName
         // first, or markdown/html user-mention links render as plain text.
         let entities = self.resolve_outgoing_entities(msg.entities.clone()).await;
+        let send_as = self.resolve_send_as(msg.send_as.clone()).await?;
         let req = tl::functions::messages::SendMedia {
             silent: msg.silent,
             background: msg.background,
             clear_draft: msg.clear_draft,
-            noforwards: false,
-            update_stickersets_order: false,
+            noforwards: msg.noforwards,
+            update_stickersets_order: msg.update_stickersets_order,
             invert_media: msg.invert_media,
-            allow_paid_floodskip: false,
+            allow_paid_floodskip: msg.allow_paid_floodskip,
             peer: input_peer,
             reply_to: msg.reply_header(),
             media,
@@ -2897,12 +2898,12 @@ impl Client {
             reply_markup: msg.reply_markup.clone(),
             entities,
             schedule_date: msg.schedule_date,
-            schedule_repeat_period: None,
-            send_as: None,
-            quick_reply_shortcut: None,
-            effect: None,
-            allow_paid_stars: None,
-            suggested_post: None,
+            schedule_repeat_period: msg.schedule_repeat_period,
+            send_as,
+            quick_reply_shortcut: msg.quick_reply_shortcut(),
+            effect: msg.effect,
+            allow_paid_stars: msg.allow_paid_stars,
+            suggested_post: msg.suggested_post.clone(),
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         Ok(self.parse_send_response(&body, msg, &peer).await)

@@ -39,6 +39,13 @@ pub struct InputMessage {
     pub background: bool,
     pub clear_draft: bool,
     pub no_webpage: bool,
+    /// Prevent recipients from forwarding this message.
+    pub noforwards: bool,
+    /// Reorder the sender's installed sticker sets to put a set used in
+    /// this message first, like the official clients do.
+    pub update_stickersets_order: bool,
+    /// Bypass paid-messages flood limits by paying Stars.
+    pub allow_paid_floodskip: bool,
     /// Show media above the caption instead of below (Telegram ≥ 10.3).\
     pub invert_media: bool,
     /// Schedule to send when the user goes online (`schedule_date = 0x7FFFFFFE`).\
@@ -51,6 +58,15 @@ pub struct InputMessage {
     pub schedule_repeat_period: Option<i32>,
     /// Associate with a business-account quick reply shortcut, by ID.
     pub quick_reply_shortcut_id: Option<i32>,
+    /// Send as a different identity you're allowed to send as (e.g. an
+    /// anonymous admin identity, or a linked channel) instead of yourself.
+    pub send_as: Option<crate::PeerRef>,
+    /// Attach a message effect (Premium sticker/emoji effect) by its ID.
+    pub effect: Option<i64>,
+    /// Stars you're willing to pay if the destination charges for messages.
+    pub allow_paid_stars: Option<i64>,
+    /// Send as a channel "suggested post" instead of posting directly.
+    pub suggested_post: Option<tl::enums::SuggestedPost>,
     /// Attached media to send alongside the message.
     /// Use [`InputMessage::copy_media`] to attach media copied from an existing message.
     pub media: Option<tl::enums::InputMedia>,
@@ -209,6 +225,25 @@ impl InputMessage {
         self
     }
 
+    /// Prevent recipients from forwarding this message.
+    pub fn noforwards(mut self, v: bool) -> Self {
+        self.noforwards = v;
+        self
+    }
+
+    /// Reorder the sender's installed sticker sets to put a set used in
+    /// this message first, like the official clients do.
+    pub fn update_stickersets_order(mut self, v: bool) -> Self {
+        self.update_stickersets_order = v;
+        self
+    }
+
+    /// Bypass paid-messages flood limits by paying Stars.
+    pub fn allow_paid_floodskip(mut self, v: bool) -> Self {
+        self.allow_paid_floodskip = v;
+        self
+    }
+
     /// Show media above the caption rather than below (requires Telegram ≥ 10.3).
     pub fn invert_media(mut self, v: bool) -> Self {
         self.invert_media = v;
@@ -253,6 +288,32 @@ impl InputMessage {
     /// Associate this message with a business-account quick reply shortcut.
     pub fn quick_reply_shortcut_id(mut self, id: Option<i32>) -> Self {
         self.quick_reply_shortcut_id = id;
+        self
+    }
+
+    /// Send as a different identity you're allowed to send as (e.g. an
+    /// anonymous admin identity, or a linked channel) instead of yourself.
+    pub fn send_as(mut self, peer: impl Into<crate::PeerRef>) -> Self {
+        self.send_as = Some(peer.into());
+        self
+    }
+
+    /// Attach a message effect (Premium sticker/emoji effect) by its ID.
+    pub fn effect(mut self, id: Option<i64>) -> Self {
+        self.effect = id;
+        self
+    }
+
+    /// Set the amount of Stars you're willing to pay if the destination
+    /// charges for messages.
+    pub fn allow_paid_stars(mut self, stars: Option<i64>) -> Self {
+        self.allow_paid_stars = stars;
+        self
+    }
+
+    /// Send as a channel "suggested post" instead of posting directly.
+    pub fn suggested_post(mut self, post: tl::enums::SuggestedPost) -> Self {
+        self.suggested_post = Some(post);
         self
     }
 
@@ -320,6 +381,14 @@ impl InputMessage {
                 monoforum_peer_id: None,
                 todo_item_id: None,
                 poll_option: None,
+            })
+        })
+    }
+
+    pub(crate) fn quick_reply_shortcut(&self) -> Option<tl::enums::InputQuickReplyShortcut> {
+        self.quick_reply_shortcut_id.map(|shortcut_id| {
+            tl::enums::InputQuickReplyShortcut::Id(tl::types::InputQuickReplyShortcutId {
+                shortcut_id,
             })
         })
     }

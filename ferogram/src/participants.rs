@@ -239,16 +239,20 @@ impl Client {
 
     /// Kick a user from a group chat or channel.
     ///
-    /// For basic groups, this removes the user immediately.
+    /// For basic groups, this removes the user immediately; `revoke_history:
+    /// true` also deletes all messages they sent in the chat, for everyone.
     /// For channels and supergroups, it's a shortcut for [`restrict`] with
     /// [`BannedRightsBuilder::full_ban`] followed immediately by [`restrict`]
-    /// with the default (all-`false`) builder, i.e. ban then unban.
+    /// with the default (all-`false`) builder, i.e. ban then unban -
+    /// `revoke_history` has no effect there, use [`Client::delete_history`]
+    /// instead.
     ///
     /// [`restrict`]: Client::restrict
     pub async fn kick(
         &self,
         peer: impl Into<PeerRef>,
         user_id: i64,
+        revoke_history: bool,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
@@ -264,7 +268,7 @@ impl Client {
                     .copied()
                     .unwrap_or(0);
                 let req = tl::functions::messages::DeleteChatUser {
-                    revoke_history: false,
+                    revoke_history,
                     chat_id: c.chat_id,
                     user_id: tl::enums::InputUser::InputUser(tl::types::InputUser {
                         user_id,

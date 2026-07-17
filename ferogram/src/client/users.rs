@@ -56,23 +56,26 @@ impl Client {
         self.rpc_write(&req).await
     }
 
-    /// Block or unblock a user or peer. `block: true` blocks, `block: false` unblocks.
+    /// Block or unblock a user or peer. `block: true` blocks, `block: false`
+    /// unblocks. `my_stories_from: true` only affects whether they can see
+    /// your stories, rather than a full block.
     pub async fn block(
         &self,
         peer: impl Into<PeerRef>,
         block: bool,
+        my_stories_from: bool,
     ) -> Result<(), InvocationError> {
         let peer = peer.into().resolve(self).await?;
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         if block {
             let req = tl::functions::contacts::Block {
-                my_stories_from: false,
+                my_stories_from,
                 id: input_peer,
             };
             self.rpc_write(&req).await
         } else {
             let req = tl::functions::contacts::Unblock {
-                my_stories_from: false,
+                my_stories_from,
                 id: input_peer,
             };
             self.rpc_write(&req).await
@@ -157,13 +160,16 @@ impl Client {
     }
 
     /// List the users you've blocked. `offset`/`limit` page through results.
+    /// `my_stories_from: true` lists only the story-visibility-only blocks
+    /// rather than full blocks.
     pub async fn get_blocked_users(
         &self,
         offset: i32,
         limit: i32,
+        my_stories_from: bool,
     ) -> Result<Vec<tl::enums::Peer>, InvocationError> {
         let req = tl::functions::contacts::GetBlocked {
-            my_stories_from: false,
+            my_stories_from,
             offset,
             limit,
         };
