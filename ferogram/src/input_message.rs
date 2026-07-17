@@ -46,6 +46,11 @@ pub struct InputMessage {
     pub entities: Option<Vec<tl::enums::MessageEntity>>,
     pub reply_markup: Option<tl::enums::ReplyMarkup>,
     pub schedule_date: Option<i32>,
+    /// Repeat the scheduled send every N seconds. Only meaningful with
+    /// `schedule_date` set.
+    pub schedule_repeat_period: Option<i32>,
+    /// Associate with a business-account quick reply shortcut, by ID.
+    pub quick_reply_shortcut_id: Option<i32>,
     /// Attached media to send alongside the message.
     /// Use [`InputMessage::copy_media`] to attach media copied from an existing message.
     pub media: Option<tl::enums::InputMedia>,
@@ -235,6 +240,19 @@ impl InputMessage {
     /// Schedule the message for a future Unix timestamp.
     pub fn schedule_date(mut self, ts: Option<i32>) -> Self {
         self.schedule_date = ts;
+        self
+    }
+
+    /// Repeat the scheduled send every N seconds. Only meaningful with
+    /// `schedule_date` set.
+    pub fn schedule_repeat_period(mut self, seconds: Option<i32>) -> Self {
+        self.schedule_repeat_period = seconds;
+        self
+    }
+
+    /// Associate this message with a business-account quick reply shortcut.
+    pub fn quick_reply_shortcut_id(mut self, id: Option<i32>) -> Self {
+        self.quick_reply_shortcut_id = id;
         self
     }
 

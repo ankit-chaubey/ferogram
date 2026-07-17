@@ -534,14 +534,14 @@ impl Client {
             invert_media: msg.invert_media,
             peer: input_peer,
             id: message_id,
-            message: Some(msg.text.clone()),
-            media: msg.media.clone(),
-            reply_markup: msg.reply_markup.clone(),
-            entities: msg.entities.clone(),
+            message: Some(msg.text),
+            media: msg.media,
+            reply_markup: msg.reply_markup,
+            entities: msg.entities,
             schedule_date: msg.schedule_date,
-            quick_reply_shortcut_id: None,
-            schedule_repeat_period: None,
-            rich_message: None,
+            quick_reply_shortcut_id: msg.quick_reply_shortcut_id,
+            schedule_repeat_period: msg.schedule_repeat_period,
+            rich_message: msg.rich_message,
         };
         self.rpc_write(&req).await
     }
