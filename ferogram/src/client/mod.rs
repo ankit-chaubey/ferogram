@@ -1182,7 +1182,9 @@ impl Client {
             let mut cache: tokio::sync::RwLockWriteGuard<'_, PeerCache> =
                 client.inner.peer_cache.write().await;
             for p in &s.peers {
-                if p.is_chat {
+                if p.is_community {
+                    cache.communities.entry(p.id).or_insert(p.access_hash);
+                } else if p.is_chat {
                     cache.chats.insert(p.id);
                 } else if p.is_channel {
                     if p.access_hash != 0 {
@@ -1208,9 +1210,10 @@ impl Client {
                 }
             }
             tracing::debug!(
-                "[ferogram::client] peer cache restored: {} users, {} channels, {} chats, {} channels_min, {} min-peer contexts",
+                "[ferogram::client] peer cache restored: {} users, {} channels, {} communities, {} chats, {} channels_min, {} min-peer contexts",
                 cache.users.len(),
                 cache.channels.len(),
+                cache.communities.len(),
                 cache.chats.len(),
                 cache.channels_min.len(),
                 cache.min_contexts.len(),
@@ -1617,6 +1620,7 @@ impl Client {
             let mut v = Vec::with_capacity(
                 cache.users.len()
                     + cache.channels.len()
+                    + cache.communities.len()
                     + cache.chats.len()
                     + cache.channels_min.len(),
             );
@@ -1627,6 +1631,7 @@ impl Client {
                     is_channel: false,
                     is_chat: false,
                     channel_kind: None,
+                    is_community: false,
                 });
             }
             for (&id, &(hash, kind)) in &cache.channels {
@@ -1636,6 +1641,7 @@ impl Client {
                     is_channel: true,
                     is_chat: false,
                     channel_kind: kind.map(Into::into),
+                    is_community: false,
                 });
             }
             for &id in &cache.chats {
@@ -1645,6 +1651,7 @@ impl Client {
                     is_channel: false,
                     is_chat: true,
                     channel_kind: None,
+                    is_community: false,
                 });
             }
             // channels_min: type byte 3. No access_hash; just existence tracking.
@@ -1656,6 +1663,20 @@ impl Client {
                     is_channel: true,
                     is_chat: false,
                     channel_kind: None,
+                    is_community: false,
+                });
+            }
+            // Communities: same wire shape as a channel, cached separately so
+            // they round-trip as communities instead of collapsing into a
+            // plain channel entry on reload.
+            for (&id, &hash) in &cache.communities {
+                v.push(CachedPeer {
+                    id,
+                    access_hash: hash,
+                    is_channel: false,
+                    is_chat: false,
+                    channel_kind: None,
+                    is_community: true,
                 });
             }
             v

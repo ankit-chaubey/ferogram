@@ -115,11 +115,17 @@ impl Client {
                     tl::enums::Peer::User(u) => user_map.get(&u.user_id).cloned(),
                     _ => None,
                 });
-                let chat = peer.and_then(|p| match p {
-                    tl::enums::Peer::Chat(c) => chat_map.get(&c.chat_id).cloned(),
-                    tl::enums::Peer::Channel(c) => chat_map.get(&c.channel_id).cloned(),
-                    _ => None,
-                });
+                // Communities aren't addressed through a `Peer`, so they need
+                // their own lookup by `community_id` instead of falling
+                // through the `peer`-based chat/channel match below.
+                let chat = match &d {
+                    tl::enums::Dialog::Community(c) => chat_map.get(&c.community_id).cloned(),
+                    _ => peer.and_then(|p| match p {
+                        tl::enums::Peer::Chat(c) => chat_map.get(&c.chat_id).cloned(),
+                        tl::enums::Peer::Channel(c) => chat_map.get(&c.channel_id).cloned(),
+                        _ => None,
+                    }),
+                };
 
                 Dialog {
                     raw: d,
@@ -404,11 +410,17 @@ impl Client {
                     tl::enums::Peer::User(u) => user_map.get(&u.user_id).cloned(),
                     _ => None,
                 });
-                let chat = peer.and_then(|p| match p {
-                    tl::enums::Peer::Chat(c) => chat_map.get(&c.chat_id).cloned(),
-                    tl::enums::Peer::Channel(c) => chat_map.get(&c.channel_id).cloned(),
-                    _ => None,
-                });
+                // Communities aren't addressed through a `Peer`, so they need
+                // their own lookup by `community_id` instead of falling
+                // through the `peer`-based chat/channel match below.
+                let chat = match &d {
+                    tl::enums::Dialog::Community(c) => chat_map.get(&c.community_id).cloned(),
+                    _ => peer.and_then(|p| match p {
+                        tl::enums::Peer::Chat(c) => chat_map.get(&c.chat_id).cloned(),
+                        tl::enums::Peer::Channel(c) => chat_map.get(&c.channel_id).cloned(),
+                        _ => None,
+                    }),
+                };
                 Dialog {
                     raw: d,
                     message,

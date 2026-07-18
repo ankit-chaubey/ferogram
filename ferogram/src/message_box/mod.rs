@@ -732,7 +732,7 @@ impl MessageBoxes {
         );
         self.update_entry(key, |e| e.possible_gap = None);
 
-        let tl::types::updates::ChannelDifference {
+        let Ok(tl::types::updates::ChannelDifference {
             r#final,
             pts,
             timeout,
@@ -740,7 +740,15 @@ impl MessageBoxes {
             other_updates: updates,
             chats,
             users,
-        } = adaptor::adapt_channel_difference(difference);
+        }) = adaptor::adapt_channel_difference(difference)
+        else {
+            // Malformed-but-legitimate shape (no pts to advance to); give up on
+            // this response and let the channel retry through the normal path
+            // instead of applying garbage state or crashing.
+            self.channel_diff_in_flight = Some(channel_id);
+            self.end_channel_difference(PrematureEndReason::TemporaryServerIssues);
+            return (Vec::new(), Vec::new(), Vec::new());
+        };
 
         if r#final {
             tracing::debug!(

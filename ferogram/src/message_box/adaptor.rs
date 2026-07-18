@@ -401,8 +401,8 @@ fn adapt_updates(updates: tl::enums::Updates) -> Result<tl::types::UpdatesCombin
 
 pub(super) fn adapt_channel_difference(
     diff: tl::enums::updates::ChannelDifference,
-) -> tl::types::updates::ChannelDifference {
-    match diff {
+) -> Result<tl::types::updates::ChannelDifference, Gap> {
+    Ok(match diff {
         tl::enums::updates::ChannelDifference::Empty(e) => tl::types::updates::ChannelDifference {
             r#final: e.r#final,
             pts: e.pts,
@@ -414,14 +414,30 @@ pub(super) fn adapt_channel_difference(
         },
         tl::enums::updates::ChannelDifference::TooLong(t) => {
             let pts = match t.dialog {
-                tl::enums::Dialog::Dialog(d) => {
-                    d.pts.expect("channelDifferenceTooLong: dialog had no pts")
-                }
+                tl::enums::Dialog::Dialog(d) => match d.pts {
+                    Some(pts) => pts,
+                    None => {
+                        tracing::warn!(
+                            "[ferogram::msgbox] channelDifferenceTooLong: dialog had no pts; \
+                             deferring to retry via getDifference"
+                        );
+                        return Err(Gap);
+                    }
+                },
+                // Folders and communities carry no `pts`, so there is nothing to
+                // extract here. Defer instead of crashing on unexpected-but-legitimate
+                // server data; the normal retry path picks it back up.
                 tl::enums::Dialog::Folder(_) => {
-                    panic!("channelDifferenceTooLong: unexpected folder dialog");
+                    tracing::warn!(
+                        "[ferogram::msgbox] channelDifferenceTooLong: unexpected folder dialog"
+                    );
+                    return Err(Gap);
                 }
                 tl::enums::Dialog::Community(_) => {
-                    panic!("channelDifferenceTooLong: unexpected community dialog");
+                    tracing::warn!(
+                        "[ferogram::msgbox] channelDifferenceTooLong: unexpected community dialog"
+                    );
+                    return Err(Gap);
                 }
             };
             tl::types::updates::ChannelDifference {
@@ -435,7 +451,7 @@ pub(super) fn adapt_channel_difference(
             }
         }
         tl::enums::updates::ChannelDifference::ChannelDifference(d) => d,
-    }
+    })
 }
 
 // PtsInfo::from_update - extract pts/count/key from a single tl::enums::Update

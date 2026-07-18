@@ -621,13 +621,71 @@ impl std::fmt::Display for Channel {
     }
 }
 
+// Community
+
+/// Typed wrapper over `tl::types::Community`.
+#[derive(Debug, Clone)]
+pub struct Community {
+    pub raw: tl::types::Community,
+}
+
+impl Community {
+    /// Wrap from a raw `tl::enums::Chat`, returning `None` if it is not a community.
+    pub fn from_raw(raw: tl::enums::Chat) -> Option<Self> {
+        match raw {
+            tl::enums::Chat::Community(c) => Some(Self { raw: c }),
+            _ => None,
+        }
+    }
+
+    /// Community ID.
+    pub fn id(&self) -> i64 {
+        self.raw.id
+    }
+
+    /// Community title.
+    pub fn title(&self) -> &str {
+        &self.raw.title
+    }
+
+    /// Convert to a `Peer`.
+    ///
+    /// Always `None`: layer 228 gave communities their own `dialogCommunity`
+    /// entry addressed by `community_id`, not a `Peer` variant. Use
+    /// [`Community::as_input_peer`] for API calls instead.
+    pub fn as_peer(&self) -> Option<tl::enums::Peer> {
+        None
+    }
+
+    /// Convert to an `InputPeer` (requires access hash).
+    ///
+    /// A community has no dedicated `InputPeer` variant either, it is
+    /// addressed exactly like a channel on the wire.
+    pub fn as_input_peer(&self) -> tl::enums::InputPeer {
+        match self.raw.access_hash {
+            Some(ah) => tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                channel_id: self.id(),
+                access_hash: ah,
+            }),
+            None => tl::enums::InputPeer::Empty,
+        }
+    }
+}
+
+impl std::fmt::Display for Community {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} [community {}]", self.title(), self.id())
+    }
+}
+
 // Chat enum (unified)
 
-/// A unified chat type: either a basic [`Group`] or a [`Channel`]/supergroup.
+/// A unified chat type: a basic [`Group`], a [`Channel`]/supergroup, or a [`Community`].
 #[derive(Debug, Clone)]
 pub enum Chat {
     Group(Group),
     Channel(Box<Channel>),
+    Community(Box<Community>),
 }
 
 impl Chat {
@@ -638,6 +696,9 @@ impl Chat {
             tl::enums::Chat::Channel(_) => {
                 Channel::from_raw(raw).map(|c| Chat::Channel(Box::new(c)))
             }
+            tl::enums::Chat::Community(_) => {
+                Community::from_raw(raw).map(|c| Chat::Community(Box::new(c)))
+            }
             _ => None,
         }
     }
@@ -647,6 +708,7 @@ impl Chat {
         match self {
             Chat::Group(g) => g.id(),
             Chat::Channel(c) => c.id(),
+            Chat::Community(c) => c.id(),
         }
     }
 
@@ -655,14 +717,16 @@ impl Chat {
         match self {
             Chat::Group(g) => g.title(),
             Chat::Channel(c) => c.title(),
+            Chat::Community(c) => c.title(),
         }
     }
 
-    /// Convert to a `Peer`.
-    pub fn as_peer(&self) -> tl::enums::Peer {
+    /// Convert to a `Peer`. `None` for communities, which have no `Peer` variant.
+    pub fn as_peer(&self) -> Option<tl::enums::Peer> {
         match self {
-            Chat::Group(g) => g.as_peer(),
-            Chat::Channel(c) => c.as_peer(),
+            Chat::Group(g) => Some(g.as_peer()),
+            Chat::Channel(c) => Some(c.as_peer()),
+            Chat::Community(c) => c.as_peer(),
         }
     }
 
@@ -671,6 +735,7 @@ impl Chat {
         match self {
             Chat::Group(g) => g.as_input_peer(),
             Chat::Channel(c) => c.as_input_peer(),
+            Chat::Community(c) => c.as_input_peer(),
         }
     }
 }
