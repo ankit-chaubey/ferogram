@@ -1,6 +1,6 @@
 [package]
 name        = "ferogram"
-description = "Production-grade async Telegram MTProto client: updates, bots, flood-wait, dialogs, messages"
+description = "A native, elegant, and asynchronous MTProto framework in Rust for Telegram clients, bots, and applications."
 readme      = "README.md"
 version.workspace    = true
 edition.workspace    = true
@@ -43,6 +43,7 @@ mp4            = { version = "0.14", optional = true }
 sha1           = "0.10.6"
 sha2           = "0.10.9"
 regex          = "1"
+futures        = "0.3"
 
 [features]
 default = ["parsers", "html"]

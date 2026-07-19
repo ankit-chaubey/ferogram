@@ -243,7 +243,7 @@ pub use client::Client;
 #[cfg(feature = "experimental")]
 pub use client::files::TransferConfig;
 pub use client::{Config, ShutdownToken, UpdateStream};
-pub use dialog::{Dialog, DialogIter, MessageIter};
+pub use dialog::{Dialog, DialogCursor, DialogIter, DialogsStream, GetDialogsOptions, MessageIter};
 pub use errors::{
     ErrorKind, InvocationError, InvocationErrorExt, LoginToken, PasswordToken, RpcError,
     SendCodeOptions, SendCodeOutcome, SignInError,

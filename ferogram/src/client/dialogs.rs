@@ -21,15 +21,23 @@ use ferogram_tl_types::{Cursor, Deserializable};
 use std::collections::{HashMap, VecDeque};
 
 impl Client {
-    /// Fetch up to `limit` dialogs, most recent first. Populates entity/message.
-    pub async fn get_dialogs(&self, limit: i32) -> Result<Vec<Dialog>, InvocationError> {
+    /// Fetch dialogs, most recent first. Populates entity/message.
+    ///
+    /// Accepts a bare `i32` limit (`get_dialogs(10)`) or a
+    /// [`GetDialogsOptions`](crate::dialog::GetDialogsOptions) for
+    /// `exclude_pinned`/`folder_id` too.
+    pub async fn get_dialogs(
+        &self,
+        opts: impl Into<crate::dialog::GetDialogsOptions>,
+    ) -> Result<Vec<Dialog>, InvocationError> {
+        let opts = opts.into();
         let req = tl::functions::messages::GetDialogs {
-            exclude_pinned: false,
-            folder_id: None,
+            exclude_pinned: opts.exclude_pinned,
+            folder_id: opts.folder_id,
             offset_date: 0,
             offset_id: 0,
             offset_peer: tl::enums::InputPeer::Empty,
-            limit,
+            limit: opts.limit,
             hash: 0,
         };
 
@@ -139,9 +147,6 @@ impl Client {
         Ok(result)
     }
 
-    // Internal helper: fetch dialogs with a custom GetDialogs request.
-    // Like `get_messages` but also returns the total count from `messages.Slice`.
-
     /// Remove a dialog from your chat list, clearing its history on your
     /// side. For a group or channel this also makes you leave it.
     pub async fn delete_dialog(&self, peer: impl Into<PeerRef>) -> Result<(), InvocationError> {
@@ -237,9 +242,9 @@ impl Client {
         None
     }
 
+    /// Fetch dialogs, page by page, without loading them all at once.
     ///
     /// Returns a [`DialogIter`] that can be advanced with [`DialogIter::next`].
-    /// Lets you page through all dialogs without loading them all at once.
     ///
     /// # Example
     /// ```rust,no_run
@@ -255,10 +260,75 @@ impl Client {
             offset_date: 0,
             offset_id: 0,
             offset_peer: tl::enums::InputPeer::Empty,
+            exclude_pinned: false,
+            folder_id: None,
             done: false,
             buffer: VecDeque::new(),
             total: None,
         }
+    }
+
+    /// Resume paging dialogs from a [`DialogCursor`] saved earlier with
+    /// [`DialogIter::cursor`] - e.g. after the app was backgrounded or
+    /// restarted mid-scroll.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use ferogram::dialog::DialogCursor;
+    /// # async fn f(client: ferogram::Client, saved: DialogCursor) -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut iter = client.iter_dialogs_from(saved)?;
+    /// while let Some(dialog) = iter.next(&client).await? {
+    ///     println!("{}", dialog.title());
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub fn iter_dialogs_from(
+        &self,
+        cursor: crate::dialog::DialogCursor,
+    ) -> Result<DialogIter, InvocationError> {
+        let mut buf = Cursor::from_slice(&cursor.offset_peer);
+        let offset_peer = tl::enums::InputPeer::deserialize(&mut buf)?;
+        Ok(DialogIter {
+            offset_date: cursor.offset_date,
+            offset_id: cursor.offset_id,
+            offset_peer,
+            exclude_pinned: cursor.exclude_pinned,
+            folder_id: cursor.folder_id,
+            done: false,
+            buffer: VecDeque::new(),
+            total: cursor.total,
+        })
+    }
+
+    /// Stream dialogs via `futures::Stream` - lets you use `StreamExt`/
+    /// `TryStreamExt` combinators (`.map()`, `.take()`, `.try_for_each()`,
+    /// etc.) instead of a manual `while let` loop.
+    ///
+    /// Accepts a bare `i32` or [`GetDialogsOptions`](crate::dialog::GetDialogsOptions)
+    /// like [`Client::get_dialogs`] - `limit` is ignored here the same way
+    /// it's ignored by [`DialogIter`](crate::dialog::DialogIter), which this
+    /// streams from internally; only `exclude_pinned`/`folder_id` apply.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use futures::TryStreamExt;
+    /// # async fn f(client: ferogram::Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut stream = client.stream_dialogs(0);
+    /// while let Some(dialog) = stream.try_next().await? {
+    ///     println!("{}", dialog.title());
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub fn stream_dialogs(
+        &self,
+        opts: impl Into<crate::dialog::GetDialogsOptions>,
+    ) -> crate::dialog::DialogsStream {
+        let opts = opts.into();
+        let iter = self
+            .iter_dialogs()
+            .exclude_pinned(opts.exclude_pinned)
+            .folder_id(opts.folder_id);
+        crate::dialog::DialogsStream::new(self.clone(), iter)
     }
 
     /// Fetch messages from a peer, page by page.
@@ -336,6 +406,9 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    // Internal helper: fetch dialogs with a custom GetDialogs request.
+    // Like `get_messages_with_count` but for dialogs - also returns the
+    // total count from `messages.DialogsSlice`.
     pub(crate) async fn get_dialogs_raw_with_count(
         &self,
         req: tl::functions::messages::GetDialogs,
