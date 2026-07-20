@@ -3012,6 +3012,7 @@ impl Client {
             match self.do_rpc_call(req).await {
                 Ok(body) => {
                     metrics::counter!("ferogram.rpc_calls_total", "result" => "ok").increment(1);
+                    self.feed_own_updates(&body).await;
                     return Ok(body);
                 }
                 Err(e) if e.migrate_dc_id().is_some() => {
@@ -3125,10 +3126,70 @@ impl Client {
             .await
             .map_err(|_| InvocationError::Deserialize("sender task shut down".into()))?;
         match rx.await {
-            Ok(result) => result.map(|_| ()),
+            Ok(Ok(body)) => {
+                self.feed_own_updates(&body).await;
+                Ok(())
+            }
+            Ok(Err(e)) => Err(e),
             Err(_) => Err(InvocationError::Deserialize(
                 "rpc_write channel closed (sender task died?)".into(),
             )),
+        }
+    }
+
+    /// Feed the raw body of one of our own RPC responses into `MessageBoxes`
+    /// so self-initiated actions (sending/editing/deleting a message, etc.)
+    /// advance local `pts` the same way a pushed update would.
+    ///
+    /// Without this, ferogram's local pts only ever moves on updates
+    /// received from the socket. Any pts advanced purely as a side effect of
+    /// our own write RPCs (e.g. sending a message bumps server pts by 1)
+    /// goes unnoticed, so the next real incoming update looks like a gap and
+    /// triggers a spurious `getDifference` - the delay reported in
+    /// https://github.com/ankit-chaubey/ferogram (FSM getDifference-per-message).
+    ///
+    /// Every top-level TL type used as an RPC return value is prefixed on
+    /// the wire with a 4-byte constructor ID, and `Updates::deserialize`
+    /// checks that ID itself before matching a variant, returning a plain
+    /// error on anything else. So probing every response here is safe: a
+    /// response that isn't `Updates` or `messages.AffectedMessages` (the
+    /// two shapes that carry pts) simply fails to match and this is a
+    /// no-op, exactly as before this change.
+    async fn feed_own_updates(&self, body: &[u8]) {
+        use ferogram_tl_types::Identifiable;
+
+        if body.len() < 4 {
+            return;
+        }
+
+        // Most write RPCs (sendMessage, editMessage, forwardMessages,
+        // leaveChannel, ...) return `Updates`.
+        let mut cur = Cursor::from_slice(body);
+        if let Ok(updates) = tl::enums::Updates::deserialize(&mut cur) {
+            let _ = self
+                .inner
+                .message_box
+                .lock()
+                .await
+                .process_updates(message_box::UpdatesLike::Updates(Box::new(updates)));
+            return;
+        }
+
+        // A few (deleteMessages, readHistory, ...) return the bare
+        // `messages.AffectedMessages { pts, pts_count }` struct instead.
+        // Its deserialize() doesn't self-check the constructor ID (it's not
+        // an enum), so we check it manually before parsing the rest.
+        let id = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+        if id == <tl::types::messages::AffectedMessages as Identifiable>::CONSTRUCTOR_ID {
+            let mut cur = Cursor::from_slice(&body[4..]);
+            if let Ok(affected) = tl::types::messages::AffectedMessages::deserialize(&mut cur) {
+                let _ = self
+                    .inner
+                    .message_box
+                    .lock()
+                    .await
+                    .process_updates(message_box::UpdatesLike::AffectedMessages(affected));
+            }
         }
     }
 
