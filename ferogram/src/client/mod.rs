@@ -3138,23 +3138,14 @@ impl Client {
     }
 
     /// Feed the raw body of one of our own RPC responses into `MessageBoxes`
-    /// so self-initiated actions (sending/editing/deleting a message, etc.)
-    /// advance local `pts` the same way a pushed update would.
+    /// so self-sent actions (sending/editing/deleting a message, etc.)
+    /// advance local pts the same way a pushed update would. Otherwise the
+    /// next real update looks like a gap and triggers a spurious getDifference.
     ///
-    /// Without this, ferogram's local pts only ever moves on updates
-    /// received from the socket. Any pts advanced purely as a side effect of
-    /// our own write RPCs (e.g. sending a message bumps server pts by 1)
-    /// goes unnoticed, so the next real incoming update looks like a gap and
-    /// triggers a spurious `getDifference` - the delay reported in
-    /// https://github.com/ankit-chaubey/ferogram (FSM getDifference-per-message).
-    ///
-    /// Every top-level TL type used as an RPC return value is prefixed on
-    /// the wire with a 4-byte constructor ID, and `Updates::deserialize`
-    /// checks that ID itself before matching a variant, returning a plain
-    /// error on anything else. So probing every response here is safe: a
-    /// response that isn't `Updates` or `messages.AffectedMessages` (the
-    /// two shapes that carry pts) simply fails to match and this is a
-    /// no-op, exactly as before this change.
+    /// Safe to call on any response: every TL type is prefixed with a
+    /// 4-byte constructor ID, and `Updates::deserialize` checks it before
+    /// matching a variant. A response that's neither `Updates` nor
+    /// `messages.AffectedMessages` just fails to match and this is a no-op.
     async fn feed_own_updates(&self, body: &[u8]) {
         use ferogram_tl_types::Identifiable;
 
@@ -3162,8 +3153,7 @@ impl Client {
             return;
         }
 
-        // Most write RPCs (sendMessage, editMessage, forwardMessages,
-        // leaveChannel, ...) return `Updates`.
+        // Most write RPCs return `Updates` (sendMessage, editMessage, forwardMessages, leaveChannel, ...).
         let mut cur = Cursor::from_slice(body);
         if let Ok(updates) = tl::enums::Updates::deserialize(&mut cur) {
             let _ = self
@@ -3175,10 +3165,8 @@ impl Client {
             return;
         }
 
-        // A few (deleteMessages, readHistory, ...) return the bare
-        // `messages.AffectedMessages { pts, pts_count }` struct instead.
-        // Its deserialize() doesn't self-check the constructor ID (it's not
-        // an enum), so we check it manually before parsing the rest.
+        // A few (deleteMessages, readHistory, ...) return bare messages.AffectedMessages
+        // instead. It's not an enum, so deserialize() won't check the ctor id for us.
         let id = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
         if id == <tl::types::messages::AffectedMessages as Identifiable>::CONSTRUCTOR_ID {
             let mut cur = Cursor::from_slice(&body[4..]);
