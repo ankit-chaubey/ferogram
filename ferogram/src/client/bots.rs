@@ -287,18 +287,19 @@ impl Client {
     pub async fn edit_inline_message(
         &self,
         id: tl::enums::InputBotInlineMessageId,
-        new_text: &str,
+        new_text: impl Into<InputMessage>,
         reply_markup: Option<tl::enums::ReplyMarkup>,
     ) -> Result<bool, InvocationError> {
+        let msg = new_text.into();
         let req = tl::functions::messages::EditInlineBotMessage {
-            no_webpage: false,
-            invert_media: false,
+            no_webpage: msg.no_webpage,
+            invert_media: msg.invert_media,
             id,
-            message: Some(new_text.to_string()),
-            media: None,
-            reply_markup,
-            entities: None,
-            rich_message: None,
+            message: Some(msg.text),
+            media: msg.media,
+            reply_markup: msg.reply_markup.or(reply_markup),
+            entities: msg.entities,
+            rich_message: msg.rich_message,
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         Ok(body.len() >= 4 && u32::from_le_bytes(body[..4].try_into().unwrap()) == 0x997275b5)

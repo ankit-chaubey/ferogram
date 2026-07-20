@@ -47,6 +47,12 @@ impl Client {
         let input_peer = self.inner.peer_cache.read().await.peer_to_input(&peer)?;
         let msg = msg.into();
         let entities = self.resolve_outgoing_entities(msg.entities.clone()).await;
+        // msg is borrowed whole in parse_send_response below, so anything
+        // non-Copy we need for the request has to be cloned out here rather
+        // than moved - same reason entities is cloned above.
+        let send_as = self.resolve_send_as(msg.send_as.clone()).await?;
+        let quick_reply_shortcut = msg.quick_reply_shortcut();
+        let suggested_post = msg.suggested_post.clone();
 
         let body: Vec<u8> = if let Some(media) = msg.media.clone() {
             if msg.rich_message.is_some() {
@@ -59,10 +65,10 @@ impl Client {
                 silent: msg.silent,
                 background: msg.background,
                 clear_draft: msg.clear_draft,
-                noforwards: false,
-                update_stickersets_order: false,
+                noforwards: msg.noforwards,
+                update_stickersets_order: msg.update_stickersets_order,
                 invert_media: msg.invert_media,
-                allow_paid_floodskip: false,
+                allow_paid_floodskip: msg.allow_paid_floodskip,
                 peer: input_peer,
                 reply_to: msg.reply_header(),
                 media,
@@ -71,12 +77,12 @@ impl Client {
                 reply_markup: msg.reply_markup.clone(),
                 entities,
                 schedule_date: msg.schedule_date,
-                schedule_repeat_period: None,
-                send_as: None,
-                quick_reply_shortcut: None,
-                effect: None,
-                allow_paid_stars: None,
-                suggested_post: None,
+                schedule_repeat_period: msg.schedule_repeat_period,
+                send_as,
+                quick_reply_shortcut,
+                effect: msg.effect,
+                allow_paid_stars: msg.allow_paid_stars,
+                suggested_post,
             };
             self.rpc_call_raw(&req).await?
         } else {
@@ -85,10 +91,10 @@ impl Client {
                 silent: msg.silent,
                 background: msg.background,
                 clear_draft: msg.clear_draft,
-                noforwards: false,
-                update_stickersets_order: false,
+                noforwards: msg.noforwards,
+                update_stickersets_order: msg.update_stickersets_order,
                 invert_media: msg.invert_media,
-                allow_paid_floodskip: false,
+                allow_paid_floodskip: msg.allow_paid_floodskip,
                 peer: input_peer,
                 reply_to: msg.reply_header(),
                 message: msg.text.clone(),
@@ -96,12 +102,12 @@ impl Client {
                 reply_markup: msg.reply_markup.clone(),
                 entities,
                 schedule_date: msg.schedule_date,
-                schedule_repeat_period: None,
-                send_as: None,
-                quick_reply_shortcut: None,
-                effect: None,
-                allow_paid_stars: None,
-                suggested_post: None,
+                schedule_repeat_period: msg.schedule_repeat_period,
+                send_as,
+                quick_reply_shortcut,
+                effect: msg.effect,
+                allow_paid_stars: msg.allow_paid_stars,
+                suggested_post,
                 rich_message: msg.rich_message.clone(),
             };
             self.rpc_call_raw(&req).await?
@@ -126,6 +132,22 @@ impl Client {
     /// server would reject anyway. The peer cache is populated automatically
     /// from incoming updates, so mentioning someone who has recently messaged
     /// the chat (e.g. the sender you're replying to) works as expected.
+    /// Resolve `InputMessage::send_as` into the `InputPeer` the raw request
+    /// needs, through the same peer cache every other peer argument uses.
+    pub(crate) async fn resolve_send_as(
+        &self,
+        send_as: Option<PeerRef>,
+    ) -> Result<Option<tl::enums::InputPeer>, InvocationError> {
+        match send_as {
+            Some(p) => {
+                let peer = p.resolve(self).await?;
+                let cache = self.inner.peer_cache.read().await;
+                Ok(Some(cache.peer_to_input(&peer)?))
+            }
+            None => Ok(None),
+        }
+    }
+
     pub(crate) async fn resolve_outgoing_entities(
         &self,
         entities: Option<Vec<tl::enums::MessageEntity>>,
@@ -490,29 +512,31 @@ impl Client {
         msg: impl Into<InputMessage>,
     ) -> Result<update::IncomingMessage, InvocationError> {
         let msg = msg.into();
+        let entities = self.resolve_outgoing_entities(msg.entities.clone()).await;
+        let send_as = self.resolve_send_as(msg.send_as.clone()).await?;
         let req = tl::functions::messages::SendMessage {
             no_webpage: msg.no_webpage,
             silent: msg.silent,
             background: msg.background,
             clear_draft: msg.clear_draft,
-            noforwards: false,
-            update_stickersets_order: false,
+            noforwards: msg.noforwards,
+            update_stickersets_order: msg.update_stickersets_order,
             invert_media: msg.invert_media,
-            allow_paid_floodskip: false,
+            allow_paid_floodskip: msg.allow_paid_floodskip,
             peer: tl::enums::InputPeer::PeerSelf,
             reply_to: msg.reply_header(),
             message: msg.text.clone(),
             random_id: random_i64(),
             reply_markup: msg.reply_markup.clone(),
-            entities: msg.entities.clone(),
+            entities,
             schedule_date: msg.schedule_date,
-            schedule_repeat_period: None,
-            send_as: None,
-            quick_reply_shortcut: None,
-            effect: None,
-            allow_paid_stars: None,
-            suggested_post: None,
-            rich_message: None,
+            schedule_repeat_period: msg.schedule_repeat_period,
+            send_as,
+            quick_reply_shortcut: msg.quick_reply_shortcut(),
+            effect: msg.effect,
+            allow_paid_stars: msg.allow_paid_stars,
+            suggested_post: msg.suggested_post.clone(),
+            rich_message: msg.rich_message.clone(),
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let self_peer = tl::enums::Peer::User(tl::types::PeerUser { user_id: 0 });
@@ -534,21 +558,22 @@ impl Client {
             invert_media: msg.invert_media,
             peer: input_peer,
             id: message_id,
-            message: Some(msg.text.clone()),
-            media: msg.media.clone(),
-            reply_markup: msg.reply_markup.clone(),
-            entities: msg.entities.clone(),
+            message: Some(msg.text),
+            media: msg.media,
+            reply_markup: msg.reply_markup,
+            entities: msg.entities,
             schedule_date: msg.schedule_date,
-            quick_reply_shortcut_id: None,
-            schedule_repeat_period: None,
-            rich_message: None,
+            quick_reply_shortcut_id: msg.quick_reply_shortcut_id,
+            schedule_repeat_period: msg.schedule_repeat_period,
+            rich_message: msg.rich_message,
         };
         self.rpc_write(&req).await
     }
 
     /// Forward one or more messages from `source` to `destination`. Forwards
     /// keep the "Forwarded from" attribution by default; set `opts` to
-    /// strip it or to reply to an existing message in the destination.
+    /// strip it, reply to an existing message in the destination, or land
+    /// them in a specific forum topic via `opts.topic_id`.
     pub async fn forward_messages(
         &self,
         destination: impl Into<PeerRef>,
@@ -560,15 +585,23 @@ impl Client {
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
         let dest = destination.into().resolve(self).await?;
         let src = source.into().resolve(self).await?;
+        let send_as_peer = match opts.send_as {
+            Some(p) => Some(p.resolve(self).await?),
+            None => None,
+        };
         let cache: tokio::sync::RwLockReadGuard<'_, PeerCache> = self.inner.peer_cache.read().await;
         let to_peer = cache.peer_to_input(&dest)?;
         let from_peer = cache.peer_to_input(&src)?;
+        let send_as = match send_as_peer {
+            Some(p) => Some(cache.peer_to_input(&p)?),
+            None => None,
+        };
         drop(cache);
 
         let reply_to = opts.reply_to.map(|id| {
             tl::enums::InputReplyTo::Message(tl::types::InputReplyToMessage {
                 reply_to_msg_id: id,
-                top_msg_id: None,
+                top_msg_id: opts.topic_id,
                 reply_to_peer_id: None,
                 quote_text: None,
                 quote_entities: None,
@@ -581,8 +614,8 @@ impl Client {
 
         let req = tl::functions::messages::ForwardMessages {
             silent: opts.silent,
-            background: false,
-            with_my_score: false,
+            background: opts.background,
+            with_my_score: opts.with_my_score,
             drop_author: opts.drop_author,
             drop_media_captions: opts.drop_media_captions,
             noforwards: opts.noforwards,
@@ -590,17 +623,17 @@ impl Client {
             id: message_ids.to_vec(),
             random_id: (0..message_ids.len()).map(|_| random_i64()).collect(),
             to_peer,
-            top_msg_id: None,
+            top_msg_id: opts.topic_id,
             reply_to,
             schedule_date: opts.schedule_date,
-            schedule_repeat_period: None,
-            send_as: None,
-            quick_reply_shortcut: None,
-            effect: None,
-            video_timestamp: None,
-            allow_paid_stars: None,
-            allow_paid_floodskip: false,
-            suggested_post: None,
+            schedule_repeat_period: opts.schedule_repeat_period,
+            send_as,
+            quick_reply_shortcut: opts.quick_reply_shortcut,
+            effect: opts.effect,
+            video_timestamp: opts.video_timestamp,
+            allow_paid_stars: opts.allow_paid_stars,
+            allow_paid_floodskip: opts.allow_paid_floodskip,
+            suggested_post: opts.suggested_post,
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         // Parse the Updates container, cache peer info, and collect messages.

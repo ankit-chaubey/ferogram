@@ -243,7 +243,7 @@ pub use client::Client;
 #[cfg(feature = "experimental")]
 pub use client::files::TransferConfig;
 pub use client::{Config, ShutdownToken, UpdateStream};
-pub use dialog::{Dialog, DialogIter, MessageIter};
+pub use dialog::{Dialog, DialogCursor, DialogIter, DialogsStream, GetDialogsOptions, MessageIter};
 pub use errors::{
     ErrorKind, InvocationError, InvocationErrorExt, LoginToken, PasswordToken, RpcError,
     SendCodeOptions, SendCodeOutcome, SignInError,
@@ -282,7 +282,7 @@ pub use session_backend::{
 pub use socks5::Socks5Config;
 pub use transfer::{TransferError, TransferHandle, TransferProgress};
 pub use transfer_limits::TransferLimits;
-pub use types::{Channel, ChannelKind, Chat, Group, MessagePage, User, UserFull};
+pub use types::{Channel, ChannelKind, Chat, Community, Group, MessagePage, User, UserFull};
 pub use typing_guard::TypingGuard;
 pub use update::{BotStoppedUpdate, MessageReactionUpdate, PollVoteUpdate};
 pub use update::{ButtonFilter, Update};

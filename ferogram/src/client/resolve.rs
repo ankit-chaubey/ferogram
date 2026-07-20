@@ -316,6 +316,16 @@ impl Client {
                         }));
                     }
                 }
+                // A community joined by invite link is addressed like a channel
+                // on the wire, just tracked in its own cache bucket.
+                tl::enums::Chat::Community(c) if !c.min => {
+                    if let Some(&hash) = cache.communities.get(&c.id) {
+                        return Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                            channel_id: c.id,
+                            access_hash: hash,
+                        }));
+                    }
+                }
                 tl::enums::Chat::Chat(c) => {
                     return Ok(tl::enums::InputPeer::Chat(tl::types::InputPeerChat {
                         chat_id: c.id,

@@ -17,7 +17,7 @@ use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable};
 
 use crate::peer_cache::PeerMap;
-use crate::{Client, InvocationError as Error};
+use crate::{Client, InputMessage, InvocationError as Error};
 
 /// Filter for [`IncomingMessage::find_button`].
 #[derive(Debug, Clone)]
@@ -1429,7 +1429,7 @@ impl InlineSend {
     pub async fn edit_message(
         &self,
         client: &Client,
-        new_text: &str,
+        new_text: impl Into<InputMessage>,
         reply_markup: Option<tl::enums::ReplyMarkup>,
     ) -> Result<bool, Error> {
         let msg_id =
@@ -1440,15 +1440,16 @@ impl InlineSend {
                         .into(),
                 )),
             };
+        let msg = new_text.into();
         let req = tl::functions::messages::EditInlineBotMessage {
-            no_webpage: false,
-            invert_media: false,
+            no_webpage: msg.no_webpage,
+            invert_media: msg.invert_media,
             id: msg_id,
-            message: Some(new_text.to_string()),
-            media: None,
-            reply_markup,
-            entities: None,
-            rich_message: None,
+            message: Some(msg.text),
+            media: msg.media,
+            reply_markup: msg.reply_markup.or(reply_markup),
+            entities: msg.entities,
+            rich_message: msg.rich_message,
         };
         let body: Vec<u8> = client.rpc_call_raw(&req).await?;
         // Returns Bool

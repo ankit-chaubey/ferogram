@@ -39,6 +39,13 @@ pub struct InputMessage {
     pub background: bool,
     pub clear_draft: bool,
     pub no_webpage: bool,
+    /// Prevent recipients from forwarding this message.
+    pub noforwards: bool,
+    /// Reorder the sender's installed sticker sets to put a set used in
+    /// this message first, like the official clients do.
+    pub update_stickersets_order: bool,
+    /// Bypass paid-messages flood limits by paying Stars.
+    pub allow_paid_floodskip: bool,
     /// Show media above the caption instead of below (Telegram ≥ 10.3).\
     pub invert_media: bool,
     /// Schedule to send when the user goes online (`schedule_date = 0x7FFFFFFE`).\
@@ -46,6 +53,20 @@ pub struct InputMessage {
     pub entities: Option<Vec<tl::enums::MessageEntity>>,
     pub reply_markup: Option<tl::enums::ReplyMarkup>,
     pub schedule_date: Option<i32>,
+    /// Repeat the scheduled send every N seconds. Only meaningful with
+    /// `schedule_date` set.
+    pub schedule_repeat_period: Option<i32>,
+    /// Associate with a business-account quick reply shortcut, by ID.
+    pub quick_reply_shortcut_id: Option<i32>,
+    /// Send as a different identity you're allowed to send as (e.g. an
+    /// anonymous admin identity, or a linked channel) instead of yourself.
+    pub send_as: Option<crate::PeerRef>,
+    /// Attach a message effect (Premium sticker/emoji effect) by its ID.
+    pub effect: Option<i64>,
+    /// Stars you're willing to pay if the destination charges for messages.
+    pub allow_paid_stars: Option<i64>,
+    /// Send as a channel "suggested post" instead of posting directly.
+    pub suggested_post: Option<tl::enums::SuggestedPost>,
     /// Attached media to send alongside the message.
     /// Use [`InputMessage::copy_media`] to attach media copied from an existing message.
     pub media: Option<tl::enums::InputMedia>,
@@ -58,11 +79,17 @@ pub struct InputMessage {
 /// Options for forwarding messages.
 ///
 /// Used by [`crate::Client::forward_messages`] and
-/// `IncomingMessage::forward_to_ex`.  All fields default to `false`/`None`.
+/// `IncomingMessage::forward_to_ex`. All fields default to `false`/`None`,
+/// matching every field Telegram's `messages.forwardMessages` accepts - if
+/// Telegram adds a new one later, add it here rather than hardcoding it.
 #[derive(Default, Clone)]
 pub struct ForwardOptions {
     /// Send silently (no notification for recipient).
     pub silent: bool,
+    /// Send as a background message (doesn't bump the chat to the top).
+    pub background: bool,
+    /// Also forward the sender's high score, for messages containing a game.
+    pub with_my_score: bool,
     /// Strip the original author attribution (`Forwarded from …`).
     pub drop_author: bool,
     /// Remove captions from forwarded media.
@@ -71,8 +98,32 @@ pub struct ForwardOptions {
     pub noforwards: bool,
     /// Reply to an existing message in the destination chat.
     pub reply_to: Option<i32>,
+    /// Forward into this forum topic thread (the `top_msg_id` of the topic,
+    /// see [`crate::Client::get_forum_topics`]). Needed when the
+    /// destination is a supergroup that has forum topics enabled - without
+    /// it, forwarded messages land outside any topic instead of the one
+    /// you meant.
+    pub topic_id: Option<i32>,
     /// Schedule forwarding for this Unix timestamp (seconds).
     pub schedule_date: Option<i32>,
+    /// Repeat the scheduled forward every N seconds. Only meaningful with
+    /// `schedule_date` set.
+    pub schedule_repeat_period: Option<i32>,
+    /// Forward as a different identity you're allowed to send as (e.g. an
+    /// anonymous admin identity, or a linked channel) instead of yourself.
+    pub send_as: Option<crate::PeerRef>,
+    /// Attach a message effect (Premium sticker/emoji effect) by its ID.
+    pub effect: Option<i64>,
+    /// Start the forwarded video's preview at this timestamp (seconds).
+    pub video_timestamp: Option<i32>,
+    /// Stars you're willing to pay if the destination charges for messages.
+    pub allow_paid_stars: Option<i64>,
+    /// Bypass paid-messages flood limits by paying Stars.
+    pub allow_paid_floodskip: bool,
+    /// Associate the forward with a business-account quick reply shortcut.
+    pub quick_reply_shortcut: Option<tl::enums::InputQuickReplyShortcut>,
+    /// Forward as a channel "suggested post" instead of posting directly.
+    pub suggested_post: Option<tl::enums::SuggestedPost>,
 }
 
 /// Selects which flavour of message link [`crate::Client::export_message_link`] should produce.
@@ -174,6 +225,25 @@ impl InputMessage {
         self
     }
 
+    /// Prevent recipients from forwarding this message.
+    pub fn noforwards(mut self, v: bool) -> Self {
+        self.noforwards = v;
+        self
+    }
+
+    /// Reorder the sender's installed sticker sets to put a set used in
+    /// this message first, like the official clients do.
+    pub fn update_stickersets_order(mut self, v: bool) -> Self {
+        self.update_stickersets_order = v;
+        self
+    }
+
+    /// Bypass paid-messages flood limits by paying Stars.
+    pub fn allow_paid_floodskip(mut self, v: bool) -> Self {
+        self.allow_paid_floodskip = v;
+        self
+    }
+
     /// Show media above the caption rather than below (requires Telegram ≥ 10.3).
     pub fn invert_media(mut self, v: bool) -> Self {
         self.invert_media = v;
@@ -208,23 +278,63 @@ impl InputMessage {
         self
     }
 
+    /// Repeat the scheduled send every N seconds. Only meaningful with
+    /// `schedule_date` set.
+    pub fn schedule_repeat_period(mut self, seconds: Option<i32>) -> Self {
+        self.schedule_repeat_period = seconds;
+        self
+    }
+
+    /// Associate this message with a business-account quick reply shortcut.
+    pub fn quick_reply_shortcut_id(mut self, id: Option<i32>) -> Self {
+        self.quick_reply_shortcut_id = id;
+        self
+    }
+
+    /// Send as a different identity you're allowed to send as (e.g. an
+    /// anonymous admin identity, or a linked channel) instead of yourself.
+    pub fn send_as(mut self, peer: impl Into<crate::PeerRef>) -> Self {
+        self.send_as = Some(peer.into());
+        self
+    }
+
+    /// Attach a message effect (Premium sticker/emoji effect) by its ID.
+    pub fn effect(mut self, id: Option<i64>) -> Self {
+        self.effect = id;
+        self
+    }
+
+    /// Set the amount of Stars you're willing to pay if the destination
+    /// charges for messages.
+    pub fn allow_paid_stars(mut self, stars: Option<i64>) -> Self {
+        self.allow_paid_stars = stars;
+        self
+    }
+
+    /// Send as a channel "suggested post" instead of posting directly.
+    pub fn suggested_post(mut self, post: tl::enums::SuggestedPost) -> Self {
+        self.suggested_post = Some(post);
+        self
+    }
+
     /// Attach media copied from an existing message.
     ///
-    /// Pass the `InputMedia` obtained from [`crate::media::Photo`],
-    /// [`crate::media::Document`], or directly from a raw `MessageMedia`.
+    /// Accepts a raw `tl::enums::InputMedia`, or the builder returned by
+    /// [`crate::media::Document::to_input_media`] / [`crate::media::Photo::to_input_media`]
+    /// directly (both convert via `Into`).
     ///
     /// When a `media` is set, the message is sent via `messages.SendMedia`
     /// instead of `messages.SendMessage`.
     ///
     /// ```rust,no_run
-    /// # use ferogram::{InputMessage, tl};
-    /// # fn example(media: tl::enums::InputMedia) {
+    /// # use ferogram::{InputMessage, media::Document};
+    /// # fn example(doc: Document) {
     /// let msg = InputMessage::text("Here is the file again")
-    /// .copy_media(media);
+    /// .copy_media(doc.to_input_media());
     /// # }
     /// ```
-    pub fn copy_media(mut self, media: tl::enums::InputMedia) -> Self {
-        self.media = Some(media);
+    pub fn copy_media(mut self, media: impl Into<tl::enums::InputMedia>) -> Self {
+        self.media = Some(media.into());
         self
     }
 
@@ -272,6 +382,14 @@ impl InputMessage {
                 monoforum_peer_id: None,
                 todo_item_id: None,
                 poll_option: None,
+            })
+        })
+    }
+
+    pub(crate) fn quick_reply_shortcut(&self) -> Option<tl::enums::InputQuickReplyShortcut> {
+        self.quick_reply_shortcut_id.map(|shortcut_id| {
+            tl::enums::InputQuickReplyShortcut::Id(tl::types::InputQuickReplyShortcutId {
+                shortcut_id,
             })
         })
     }

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- `ferogram-session`: binary session format bumped to v8, adding a per-peer
+  `is_community` flag (`CachedPeer::is_community`) so Telegram Community
+  entities survive a session restore instead of collapsing into a plain
+  channel. Older session files load unchanged and upgrade automatically on
+  the next save, no migration step or user action required. `SqliteBackend`
+  and `LibSqlBackend` gain a matching `is_community` column with the same
+  idempotent migration used for `channel_kind`.
+- `PeerCache::communities`: Community chats are now cached by ID with their
+  own access-hash map instead of being silently dropped by `cache_chat`'s
+  catch-all. `PeerCache::community_input_peer` resolves a cached community
+  to the `InputPeer::Channel` shape Telegram expects for it. Wired into the
+  session save/restore loop in `Client` alongside `channels`/`chats`.
+- `GetDialogsOptions`: Added configurable dialog retrieval options, allowing
+  `exclude_pinned` and `folder_id` to be specified while keeping
+  `Client::get_dialogs(limit)` fully backward compatible via `From<i32>`.
+- `DialogCursor`: Added a serializable pagination cursor for dialogs,
+  enabling iterator state to be saved and later resumed with
+  `Client::iter_dialogs_from()`.
+- `Client::stream_dialogs`: Added a `futures::Stream`-based dialog iterator
+  (`DialogsStream`) for seamless integration with `StreamExt` and
+  `TryStreamExt` combinators.
+
+---
+
 ## [0.6.4] - 2026-07-14
 
 TL layer bumped to 228 (Telegram Communities, ephemeral/one-time messages). Granular

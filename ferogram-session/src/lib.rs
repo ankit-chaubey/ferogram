@@ -54,8 +54,10 @@
 //! - `0x02`: current (DC table + update state + peer cache).
 //! - `0x06`: adds per-channel `ChannelKind` byte to each peer entry.
 //! - `0x07`: adds `future_auth_token` for fast re-login after `sign_out()`.
+//! - `0x08`: adds a per-peer `is_community` byte, marking Telegram Community
+//!   entities so they no longer collapse into a plain channel on reload.
 //!
-//! `load()` handles all versions. `save()` always writes v7.
+//! `load()` handles all versions. `save()` always writes v8.
 //!
 //! # Example: export and re-import a session
 //!
@@ -306,6 +308,11 @@ pub struct CachedPeer {
     /// For channel peers: the kind (broadcast / megagroup / gigagroup).
     /// `None` for users, regular groups, and channels loaded from a pre-v6 session.
     pub channel_kind: Option<ChannelKind>,
+    /// `true` → Telegram Community entity, addressed the same way as a
+    /// channel on the wire but tracked separately so it is never mistaken
+    /// for one. `false` for every other peer kind, and for any peer loaded
+    /// from a pre-v8 session.
+    pub is_community: bool,
 }
 
 /// A min-user context entry: the user was seen with `min=true` (access_hash
@@ -346,11 +353,11 @@ pub struct PersistedSession {
 }
 
 impl PersistedSession {
-    /// Encode the session to raw bytes (v7 binary format).
+    /// Encode the session to raw bytes (v8 binary format).
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(512);
 
-        b.push(0x07u8); // version
+        b.push(0x08u8); // version
 
         b.extend_from_slice(&self.home_dc_id.to_le_bytes());
 
@@ -385,7 +392,8 @@ impl PersistedSession {
             b.extend_from_slice(&cpts.to_le_bytes());
         }
 
-        // v6 peer encoding: peer_type byte (0=user,1=channel,2=chat) + channel_kind byte
+        // Peer encoding: peer_type byte (0=user,1=channel,2=chat), channel_kind
+        // byte (v6+), is_community byte (v8+).
         b.extend_from_slice(&(self.peers.len() as u16).to_le_bytes());
         for p in &self.peers {
             b.extend_from_slice(&p.id.to_le_bytes());
@@ -400,6 +408,8 @@ impl PersistedSession {
             b.push(peer_type);
             // channel_kind byte: 0xFF = absent, otherwise ChannelKind::to_byte()
             b.push(p.channel_kind.map(|k| k.to_byte()).unwrap_or(0xFF));
+            // v8: is_community byte (1 = community, 0 = not).
+            b.push(p.is_community as u8);
         }
 
         b.extend_from_slice(&(self.min_peers.len() as u16).to_le_bytes());
@@ -480,7 +490,9 @@ impl PersistedSession {
 
         let first_byte = r_u8!();
 
-        let (home_dc_id, version) = if first_byte == 0x07 {
+        let (home_dc_id, version) = if first_byte == 0x08 {
+            (r_i32!(), 8u8)
+        } else if first_byte == 0x07 {
             (r_i32!(), 7u8)
         } else if first_byte == 0x06 {
             (r_i32!(), 6u8)
@@ -574,12 +586,18 @@ impl PersistedSession {
             } else {
                 None
             };
+            // v8+: is_community byte. Absent on older sessions, so every peer
+            // loaded from a pre-v8 file defaults to `false` and simply isn't
+            // a community, which is the correct reading, communities did not
+            // exist in any earlier version of this format.
+            let is_community = if version >= 8 { r_u8!() != 0 } else { false };
             peers.push(CachedPeer {
                 id,
                 access_hash,
                 is_channel,
                 is_chat,
                 channel_kind,
+                is_community,
             });
         }
 
@@ -1136,6 +1154,7 @@ mod tests {
             is_channel: false,
             is_chat: false,
             channel_kind: None,
+            is_community: false,
         }
     }
 
@@ -1411,6 +1430,7 @@ mod tests {
             is_channel: true,
             is_chat: false,
             channel_kind: Some(ChannelKind::Broadcast),
+            is_community: false,
         });
         s.peers.push(CachedPeer {
             id: 1002,
@@ -1418,6 +1438,7 @@ mod tests {
             is_channel: true,
             is_chat: false,
             channel_kind: Some(ChannelKind::Megagroup),
+            is_community: false,
         });
         s.peers.push(CachedPeer {
             id: 1003,
@@ -1425,6 +1446,7 @@ mod tests {
             is_channel: true,
             is_chat: false,
             channel_kind: Some(ChannelKind::Gigagroup),
+            is_community: false,
         });
         s.peers.push(CachedPeer {
             id: 1004,
@@ -1432,10 +1454,11 @@ mod tests {
             is_channel: false,
             is_chat: false,
             channel_kind: None,
+            is_community: false,
         });
 
         let bytes = s.to_bytes();
-        assert_eq!(bytes[0], 0x07, "version byte must be 7");
+        assert_eq!(bytes[0], 0x08, "version byte must be 8");
 
         let loaded = PersistedSession::from_bytes(&bytes).unwrap();
         assert_eq!(loaded.peers.len(), 4);
@@ -1464,7 +1487,7 @@ mod tests {
         s.future_auth_token = Some(vec![1, 2, 3, 4, 5]);
 
         let bytes = s.to_bytes();
-        assert_eq!(bytes[0], 0x07, "version byte must be 7");
+        assert_eq!(bytes[0], 0x08, "version byte must be 8");
 
         let loaded = PersistedSession::from_bytes(&bytes).unwrap();
         assert_eq!(loaded.future_auth_token, Some(vec![1, 2, 3, 4, 5]));
@@ -1508,9 +1531,74 @@ mod tests {
             is_channel: false,
             is_chat: false,
             channel_kind: None,
+            is_community: false,
         });
         let loaded = PersistedSession::from_bytes(&s.to_bytes()).unwrap();
         assert_eq!(loaded.peers[0].channel_kind, None);
+    }
+
+    #[test]
+    fn v8_community_flag_roundtrip() {
+        let mut s = PersistedSession::default();
+        s.home_dc_id = 1;
+        s.peers.push(CachedPeer {
+            id: 2001,
+            access_hash: 0xeeee,
+            is_channel: false,
+            is_chat: false,
+            channel_kind: None,
+            is_community: true,
+        });
+        s.peers.push(CachedPeer {
+            id: 2002,
+            access_hash: 0xffff,
+            is_channel: true,
+            is_chat: false,
+            channel_kind: Some(ChannelKind::Megagroup),
+            is_community: false,
+        });
+
+        let bytes = s.to_bytes();
+        assert_eq!(bytes[0], 0x08, "version byte must be 8");
+
+        let loaded = PersistedSession::from_bytes(&bytes).unwrap();
+        assert_eq!(loaded.peers.len(), 2);
+        assert!(loaded.peers[0].is_community);
+        assert!(!loaded.peers[1].is_community);
+    }
+
+    #[test]
+    fn v7_file_without_community_byte_defaults_false() {
+        // Hand-build a v7 peer entry (id, access_hash, peer_type, channel_kind)
+        // with no is_community byte at all, this is exactly what a genuine
+        // pre-v8 session file looks like on disk. Loading it must not fail,
+        // and the missing flag must default to `false` rather than garbage.
+        let mut bytes = Vec::new();
+        bytes.push(0x07u8); // version
+        bytes.extend_from_slice(&4i32.to_le_bytes()); // home_dc_id
+        bytes.push(0); // dc_count
+        bytes.extend_from_slice(&0i32.to_le_bytes()); // pts
+        bytes.extend_from_slice(&0i32.to_le_bytes()); // qts
+        bytes.extend_from_slice(&0i32.to_le_bytes()); // date
+        bytes.extend_from_slice(&0i32.to_le_bytes()); // seq
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // channel pts count
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // peer count
+        bytes.extend_from_slice(&777i64.to_le_bytes()); // id
+        bytes.extend_from_slice(&0x99i64.to_le_bytes()); // access_hash
+        bytes.push(0); // peer_type: user
+        bytes.push(0xFF); // channel_kind: absent
+        // no is_community byte here, that's the point of this test
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // min_peers count
+        bytes.push(0); // future_auth_token: absent
+
+        let loaded = PersistedSession::from_bytes(&bytes).unwrap();
+        assert_eq!(loaded.peers.len(), 1);
+        assert_eq!(loaded.peers[0].id, 777);
+        assert!(!loaded.peers[0].is_community);
+
+        // And the automatic-migration guarantee: the very next save writes v8.
+        let resaved = loaded.to_bytes();
+        assert_eq!(resaved[0], 0x08, "resave must upgrade to v8");
     }
 }
 
@@ -1584,7 +1672,8 @@ impl SqliteBackend {
             access_hash  INTEGER NOT NULL,
             is_channel   INTEGER NOT NULL DEFAULT 0,
             is_chat      INTEGER NOT NULL DEFAULT 0,
-            channel_kind INTEGER
+            channel_kind INTEGER,
+            is_community INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS min_peers (
@@ -1660,6 +1749,26 @@ impl SqliteBackend {
         if !has_channel_kind {
             conn.execute_batch("ALTER TABLE peers ADD COLUMN channel_kind INTEGER;")
                 .map_err(Self::map_err)?;
+        }
+        // v8 migration: is_community column (0 = not a community).
+        let mut has_is_community = false;
+        let mut stmt3 = conn
+            .prepare("PRAGMA table_info(peers)")
+            .map_err(Self::map_err)?;
+        let cols3 = stmt3
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(Self::map_err)?;
+        for col in cols3.filter_map(|r| r.ok()) {
+            if col == "is_community" {
+                has_is_community = true;
+                break;
+            }
+        }
+        if !has_is_community {
+            conn.execute_batch(
+                "ALTER TABLE peers ADD COLUMN is_community INTEGER NOT NULL DEFAULT 0;",
+            )
+            .map_err(Self::map_err)?;
         }
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS min_peers (
@@ -1758,7 +1867,9 @@ impl SqliteBackend {
 
         // peers
         let mut peer_stmt = conn
-            .prepare("SELECT id, access_hash, is_channel, is_chat, channel_kind FROM peers")
+            .prepare(
+                "SELECT id, access_hash, is_channel, is_chat, channel_kind, is_community FROM peers",
+            )
             .map_err(Self::map_err)?;
         let peers: Vec<CachedPeer> = peer_stmt
             .query_map([], |r| {
@@ -1769,6 +1880,7 @@ impl SqliteBackend {
                     is_channel: r.get::<_, i32>(2)? != 0,
                     is_chat: r.get::<_, i32>(3)? != 0,
                     channel_kind: kind_raw.and_then(|k| ChannelKind::from_byte(k as u8)),
+                    is_community: r.get::<_, i32>(5)? != 0,
                 })
             })
             .map_err(Self::map_err)?
@@ -1874,13 +1986,14 @@ impl SqliteBackend {
             .map_err(Self::map_err)?;
         for p in &s.peers {
             conn.execute(
-                "INSERT INTO peers (id, access_hash, is_channel, is_chat, channel_kind) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO peers (id, access_hash, is_channel, is_chat, channel_kind, is_community) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 rusqlite::params![
                     p.id,
                     p.access_hash,
                     p.is_channel as i32,
                     p.is_chat as i32,
                     p.channel_kind.map(|k| k.to_byte() as i32),
+                    p.is_community as i32,
                 ],
             )
             .map_err(Self::map_err)?;
@@ -2029,18 +2142,20 @@ impl SessionBackend for SqliteBackend {
     fn cache_peer(&self, peer: &CachedPeer) -> io::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO peers (id, access_hash, is_channel, is_chat, channel_kind) VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO peers (id, access_hash, is_channel, is_chat, channel_kind, is_community) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
                access_hash  = excluded.access_hash,
                is_channel   = excluded.is_channel,
                is_chat      = excluded.is_chat,
-               channel_kind = excluded.channel_kind",
+               channel_kind = excluded.channel_kind,
+               is_community = excluded.is_community",
             rusqlite::params![
                 peer.id,
                 peer.access_hash,
                 peer.is_channel as i32,
                 peer.is_chat as i32,
                 peer.channel_kind.map(|k| k.to_byte() as i32),
+                peer.is_community as i32,
             ],
         )
         .map(|_| ())
@@ -2079,6 +2194,61 @@ mod sqlite_backend_tests {
         s.future_auth_token = None;
         b.save(&s).unwrap();
         assert_eq!(b.load().unwrap().unwrap().future_auth_token, None);
+    }
+
+    #[test]
+    fn is_community_roundtrip() {
+        let b = SqliteBackend::in_memory().unwrap();
+        let mut s = PersistedSession::default();
+        s.home_dc_id = 2;
+        s.peers.push(CachedPeer {
+            id: 42,
+            access_hash: 0x1111,
+            is_channel: false,
+            is_chat: false,
+            channel_kind: None,
+            is_community: true,
+        });
+        b.save(&s).unwrap();
+
+        let loaded = b.load().unwrap().unwrap();
+        assert_eq!(loaded.peers.len(), 1);
+        assert!(loaded.peers[0].is_community);
+    }
+
+    #[test]
+    fn is_community_migrates_from_legacy_schema() {
+        // A database created before the is_community column existed must
+        // open cleanly and default every existing peer to `false`.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE dcs (
+                 dc_id INTEGER NOT NULL, flags INTEGER NOT NULL DEFAULT 0,
+                 addr TEXT NOT NULL, auth_key BLOB,
+                 first_salt INTEGER NOT NULL DEFAULT 0, time_offset INTEGER NOT NULL DEFAULT 0,
+                 PRIMARY KEY (dc_id, flags)
+             );
+             CREATE TABLE update_state (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 pts INTEGER NOT NULL DEFAULT 0, qts INTEGER NOT NULL DEFAULT 0,
+                 date INTEGER NOT NULL DEFAULT 0, seq INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE channel_pts (channel_id INTEGER PRIMARY KEY, pts INTEGER NOT NULL);
+             CREATE TABLE peers (
+                 id INTEGER PRIMARY KEY, access_hash INTEGER NOT NULL,
+                 is_channel INTEGER NOT NULL DEFAULT 0, is_chat INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO meta (key, value) VALUES ('home_dc_id', 5);
+             INSERT INTO peers (id, access_hash, is_channel, is_chat) VALUES (9, 123, 0, 0);",
+        )
+        .unwrap();
+
+        SqliteBackend::migrate_legacy_sqlite_schema(&conn).unwrap();
+
+        let loaded = SqliteBackend::read_session(&conn).unwrap();
+        assert_eq!(loaded.peers.len(), 1);
+        assert!(!loaded.peers[0].is_community);
     }
 }
 
@@ -2139,7 +2309,8 @@ impl LibSqlBackend {
             access_hash INTEGER NOT NULL,
             is_channel  INTEGER NOT NULL DEFAULT 0,
             is_chat     INTEGER NOT NULL DEFAULT 0,
-            channel_kind INTEGER
+            channel_kind INTEGER,
+            is_community INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS min_peers (
             user_id INTEGER PRIMARY KEY,
@@ -2164,6 +2335,10 @@ impl LibSqlBackend {
         // best-effort ALTER TABLE that is silently ignored if the column exists.
         let _ = conn
             .execute_batch("ALTER TABLE peers ADD COLUMN channel_kind INTEGER;")
+            .await;
+        // v8 migration: add is_community column to existing databases.
+        let _ = conn
+            .execute_batch("ALTER TABLE peers ADD COLUMN is_community INTEGER NOT NULL DEFAULT 0;")
             .await;
         Ok(())
     }
@@ -2315,19 +2490,21 @@ impl LibSqlBackend {
         // peers
         let mut peer_rows = conn
             .query(
-                "SELECT id, access_hash, is_channel, is_chat, channel_kind FROM peers",
+                "SELECT id, access_hash, is_channel, is_chat, channel_kind, is_community FROM peers",
                 (),
             )
             .await?;
         let mut peers = Vec::new();
         while let Some(r) = peer_rows.next().await? {
             let kind_raw: Option<i32> = r.get(4).ok();
+            let is_community: i32 = r.get(5).unwrap_or(0);
             peers.push(CachedPeer {
                 id: r.get(0)?,
                 access_hash: r.get(1)?,
                 is_channel: r.get::<i32>(2)? != 0,
                 is_chat: r.get::<i32>(3)? != 0,
                 channel_kind: kind_raw.and_then(|k| ChannelKind::from_byte(k as u8)),
+                is_community: is_community != 0,
             });
         }
 
@@ -2426,13 +2603,14 @@ impl LibSqlBackend {
         conn.execute("DELETE FROM peers", ()).await?;
         for p in &s.peers {
             conn.execute(
-                "INSERT INTO peers (id, access_hash, is_channel, is_chat, channel_kind) VALUES (?1,?2,?3,?4,?5)",
+                "INSERT INTO peers (id, access_hash, is_channel, is_chat, channel_kind, is_community) VALUES (?1,?2,?3,?4,?5,?6)",
                 libsql::params![
                     p.id,
                     p.access_hash,
                     p.is_channel as i32,
                     p.is_chat as i32,
                     p.channel_kind.map(|k| k.to_byte() as i32),
+                    p.is_community as i32,
                 ],
             )
             .await?;
@@ -2586,22 +2764,24 @@ impl SessionBackend for LibSqlBackend {
 
     fn cache_peer(&self, peer: &CachedPeer) -> io::Result<()> {
         let conn = self.conn.clone();
-        let (id, hash, is_ch, is_ct, kind) = (
+        let (id, hash, is_ch, is_ct, kind, is_comm) = (
             peer.id,
             peer.access_hash,
             peer.is_channel as i32,
             peer.is_chat as i32,
             peer.channel_kind.map(|k| k.to_byte() as i32),
+            peer.is_community as i32,
         );
         Self::block(async move {
             conn.execute(
-                "INSERT INTO peers (id,access_hash,is_channel,is_chat,channel_kind) VALUES (?1,?2,?3,?4,?5)
+                "INSERT INTO peers (id,access_hash,is_channel,is_chat,channel_kind,is_community) VALUES (?1,?2,?3,?4,?5,?6)
                  ON CONFLICT(id) DO UPDATE SET
                    access_hash=excluded.access_hash,
                    is_channel=excluded.is_channel,
                    is_chat=excluded.is_chat,
-                   channel_kind=excluded.channel_kind",
-                libsql::params![id, hash, is_ch, is_ct, kind],
+                   channel_kind=excluded.channel_kind,
+                   is_community=excluded.is_community",
+                libsql::params![id, hash, is_ch, is_ct, kind, is_comm],
             )
             .await
             .map(|_| ())
@@ -2649,5 +2829,25 @@ mod libsql_backend_tests {
         LibSqlBackend::write_session_async(&conn, &s).await.unwrap();
         let loaded = LibSqlBackend::read_session_async(&conn).await.unwrap();
         assert_eq!(loaded.future_auth_token, None);
+    }
+
+    #[tokio::test]
+    async fn is_community_roundtrip() {
+        let conn = open_in_memory().await;
+        let mut s = PersistedSession::default();
+        s.home_dc_id = 2;
+        s.peers.push(CachedPeer {
+            id: 42,
+            access_hash: 0x1111,
+            is_channel: false,
+            is_chat: false,
+            channel_kind: None,
+            is_community: true,
+        });
+        LibSqlBackend::write_session_async(&conn, &s).await.unwrap();
+
+        let loaded = LibSqlBackend::read_session_async(&conn).await.unwrap();
+        assert_eq!(loaded.peers.len(), 1);
+        assert!(loaded.peers[0].is_community);
     }
 }

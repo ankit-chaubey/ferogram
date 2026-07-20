@@ -169,6 +169,8 @@ pub struct PeerCacheStats {
     pub users: usize,
     /// Full channels with a valid access_hash.
     pub channels: usize,
+    /// Full communities with a valid access_hash.
+    pub communities: usize,
     /// Regular group chats tracked by existence (no hash needed).
     pub chats: usize,
     /// Channels seen with `min=true` (no usable access_hash yet).
@@ -198,6 +200,11 @@ pub struct PeerCache {
     pub users: HashMap<i64, i64>,
     /// channel_id -> (access_hash, `Option<ChannelKind>`) (full channels only, min=false)
     pub channels: HashMap<i64, (i64, Option<ChannelKind>)>,
+    /// community_id -> access_hash (full communities only, min=false).
+    /// Kept separate from `channels`: a Community is a distinct Chat variant
+    /// with no `ChannelKind`, even though it resolves to the same
+    /// `InputPeer::Channel` shape on the wire.
+    pub communities: HashMap<i64, i64>,
     /// Regular group chat IDs (Chat::Chat / ChatForbidden).
     /// Groups need no access_hash; track existence for peer validation.
     pub chats: HashSet<i64>,
@@ -232,6 +239,7 @@ impl PeerCache {
         Self {
             users: HashMap::new(),
             channels: HashMap::new(),
+            communities: HashMap::new(),
             chats: HashSet::new(),
             channels_min: HashSet::new(),
             min_contexts: HashMap::new(),
@@ -351,6 +359,30 @@ impl PeerCache {
             }
             tl::enums::Chat::Forbidden(c) => {
                 self.chats.insert(c.id);
+            }
+            tl::enums::Chat::Community(c) => {
+                if c.min {
+                    // min community: no usable access_hash yet. Unlike channels,
+                    // there is no separate min-tracking set for communities;
+                    // a min community that has never had a full hash simply
+                    // stays absent from `communities` until one arrives.
+                } else if let Some(hash) = c.access_hash {
+                    // Never overwrite a valid non-zero hash with zero.
+                    if hash != 0 {
+                        self.communities.insert(c.id, hash);
+                    } else {
+                        self.communities.entry(c.id).or_insert(0);
+                    }
+                }
+            }
+            tl::enums::Chat::CommunityForbidden(c) => {
+                if let Some(hash) = c.access_hash {
+                    if hash != 0 {
+                        self.communities.insert(c.id, hash);
+                    } else {
+                        self.communities.entry(c.id).or_insert(0);
+                    }
+                }
             }
             _ => {}
         }
@@ -570,6 +602,45 @@ impl PeerCache {
         }
     }
 
+    /// Resolve a cached community ID to an `InputPeer`.
+    ///
+    /// A Community has no dedicated `InputPeer` variant on the wire, it is
+    /// addressed exactly like a channel (`InputPeer::Channel`), just tracked
+    /// in a separate cache bucket so it is never mistaken for one. Called
+    /// from [`PeerCache::peer_to_input`] as the fallback for a `Peer::Channel`
+    /// whose ID isn't in `channels` - a bare numeric ID always decodes to
+    /// `Peer::Channel` since there is no `Peer::Community`, so a community
+    /// looks exactly like an uncached channel until this check runs.
+    pub(crate) fn community_input_peer(
+        &self,
+        community_id: i64,
+    ) -> Result<tl::enums::InputPeer, InvocationError> {
+        if let Some(&hash) = self.communities.get(&community_id) {
+            return Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                channel_id: community_id,
+                access_hash: hash,
+            }));
+        }
+
+        if self.experimental.allow_zero_hash {
+            tracing::warn!(
+                "[ferogram::peer_cache] no access_hash cached for community {community_id}, using 0. \
+                 This is valid for bots but will cause CHANNEL_INVALID on user accounts. \
+                 Disable ExperimentalFeatures::allow_zero_hash or call resolve_peer() first."
+            );
+            Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                channel_id: community_id,
+                access_hash: 0,
+            }))
+        } else {
+            Err(InvocationError::PeerNotCached(format!(
+                "no access_hash cached for community {community_id}. \
+                 Ensure the community flows through the update loop before using \
+                 it as a peer, or call client.resolve_peer() first."
+            )))
+        }
+    }
+
     /// Drop all cached min-user contexts.
     ///
     /// Safe to call at any time. After this, any min user that has no full
@@ -590,6 +661,7 @@ impl PeerCache {
         PeerCacheStats {
             users: self.users.len(),
             channels: self.channels.len(),
+            communities: self.communities.len(),
             chats: self.chats.len(),
             min_channels: self.channels_min.len(),
             min_contexts: self.min_contexts.len(),
@@ -607,7 +679,127 @@ impl PeerCache {
             tl::enums::Peer::Chat(c) => Ok(tl::enums::InputPeer::Chat(tl::types::InputPeerChat {
                 chat_id: c.chat_id,
             })),
-            tl::enums::Peer::Channel(c) => self.channel_input_peer(c.channel_id),
+            // `Peer::Channel` is what a bare numeric ID always decodes to
+            // (there is no `Peer::Community`), so a community and a channel
+            // are indistinguishable at this point. Check the community
+            // bucket before falling into `channel_input_peer`'s zero-hash
+            // fallback, otherwise a cached community hash would never be
+            // reached on accounts with `allow_zero_hash` enabled.
+            tl::enums::Peer::Channel(c) => {
+                if self.channels.contains_key(&c.channel_id) {
+                    self.channel_input_peer(c.channel_id)
+                } else if self.communities.contains_key(&c.channel_id) {
+                    self.community_input_peer(c.channel_id)
+                } else {
+                    self.channel_input_peer(c.channel_id)
+                }
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn community(id: i64, min: bool, access_hash: Option<i64>) -> tl::enums::Chat {
+        tl::enums::Chat::Community(tl::types::Community {
+            creator: false,
+            left: false,
+            min,
+            collapsed_in_dialogs: false,
+            id,
+            access_hash,
+            title: format!("community-{id}"),
+            photo: tl::enums::ChatPhoto::Empty,
+            date: 0,
+            admin_rights: None,
+            default_banned_rights: None,
+        })
+    }
+
+    fn community_forbidden(id: i64, access_hash: Option<i64>) -> tl::enums::Chat {
+        tl::enums::Chat::CommunityForbidden(tl::types::CommunityForbidden {
+            id,
+            access_hash,
+            title: format!("community-{id}"),
+        })
+    }
+
+    #[test]
+    fn cache_chat_stores_full_community() {
+        let mut cache = PeerCache::default();
+        cache.cache_chat(&community(100, false, Some(0xabc)));
+        assert_eq!(cache.communities.get(&100), Some(&0xabc));
+    }
+
+    #[test]
+    fn cache_chat_ignores_min_community() {
+        let mut cache = PeerCache::default();
+        cache.cache_chat(&community(101, true, None));
+        assert!(!cache.communities.contains_key(&101));
+    }
+
+    #[test]
+    fn cache_chat_never_downgrades_community_hash_to_zero() {
+        let mut cache = PeerCache::default();
+        cache.cache_chat(&community(102, false, Some(0xdead)));
+        cache.cache_chat(&community(102, false, Some(0)));
+        assert_eq!(cache.communities.get(&102), Some(&0xdead));
+    }
+
+    #[test]
+    fn cache_chat_stores_community_forbidden() {
+        let mut cache = PeerCache::default();
+        cache.cache_chat(&community_forbidden(103, Some(0x111)));
+        assert_eq!(cache.communities.get(&103), Some(&0x111));
+    }
+
+    #[test]
+    fn community_input_peer_resolves_cached_hash() {
+        let mut cache = PeerCache::default();
+        cache.cache_chat(&community(200, false, Some(0x999)));
+
+        let input = cache.community_input_peer(200).unwrap();
+        match input {
+            tl::enums::InputPeer::Channel(c) => {
+                assert_eq!(c.channel_id, 200);
+                assert_eq!(c.access_hash, 0x999);
+            }
+            other => panic!("expected InputPeer::Channel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn community_input_peer_errors_when_uncached() {
+        let cache = PeerCache::default();
+        assert!(matches!(
+            cache.community_input_peer(999),
+            Err(InvocationError::PeerNotCached(_))
+        ));
+    }
+
+    #[test]
+    fn community_input_peer_falls_back_to_zero_hash_when_enabled() {
+        let cache = PeerCache::new(ExperimentalFeatures {
+            allow_zero_hash: true,
+            ..Default::default()
+        });
+        let input = cache.community_input_peer(321).unwrap();
+        match input {
+            tl::enums::InputPeer::Channel(c) => {
+                assert_eq!(c.channel_id, 321);
+                assert_eq!(c.access_hash, 0);
+            }
+            other => panic!("expected InputPeer::Channel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stats_reports_community_count() {
+        let mut cache = PeerCache::default();
+        cache.cache_chat(&community(400, false, Some(0x1)));
+        cache.cache_chat(&community(401, false, Some(0x2)));
+        assert_eq!(cache.stats().communities, 2);
     }
 }
