@@ -10,7 +10,7 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -87,6 +87,178 @@ impl Dialog {
             _ => 0,
         }
     }
+
+    /// Whether this dialog belongs to the given chat folder.
+    ///
+    /// `exclude_peers` always loses, `pinned_peers`/`include_peers` always
+    /// win, and everything else falls back to the contacts/non_contacts/
+    /// groups/broadcasts/bots flags plus exclude_muted/read/archived. The
+    /// "All Chats" default filter always matches; folders (no `Peer`) never do.
+    ///
+    /// Takes a pre-flattened filter rather than the raw `tl::enums::DialogFilter`
+    /// - build one once per filter with [`FlattenedDialogFilter::from`] and
+    ///   reuse it across every dialog in the scroll, rather than re-scanning
+    ///   the filter's peer lists on every single call.
+    pub fn matches_filter(&self, filter: &FlattenedDialogFilter) -> bool {
+        if filter.is_default {
+            return true;
+        }
+        let Some(peer) = self.peer() else {
+            return false;
+        };
+        let id = peer_id(peer);
+
+        if filter.exclude_peers.contains(&id) {
+            return false;
+        }
+        if filter.pinned_peers.contains_key(&id) || filter.include_peers.contains(&id) {
+            return true;
+        }
+
+        if filter.exclude_archived
+            && let tl::enums::Dialog::Dialog(d) = &self.raw
+            && d.folder_id == Some(1)
+        {
+            return false;
+        }
+        if filter.exclude_read && self.unread_count() == 0 {
+            return false;
+        }
+        if filter.exclude_muted
+            && let tl::enums::Dialog::Dialog(d) = &self.raw
+        {
+            let tl::enums::PeerNotifySettings::PeerNotifySettings(n) = &d.notify_settings;
+            if let Some(until) = n.mute_until
+                && until > chrono::Utc::now().timestamp() as i32
+            {
+                return false;
+            }
+        }
+
+        let is_bot = matches!(&self.entity, Some(tl::enums::User::User(u)) if u.bot);
+        let is_contact = matches!(&self.entity, Some(tl::enums::User::User(u)) if u.contact);
+        let is_broadcast = matches!(&self.chat, Some(tl::enums::Chat::Channel(c)) if c.broadcast);
+        let is_group = self.chat.is_some() && !is_broadcast;
+
+        (filter.include_bots && is_bot)
+            || (filter.include_contacts && self.entity.is_some() && is_contact && !is_bot)
+            || (filter.include_non_contacts && self.entity.is_some() && !is_contact && !is_bot)
+            || (filter.include_groups && is_group)
+            || (filter.include_broadcasts && is_broadcast)
+    }
+}
+
+fn peer_id(peer: &tl::enums::Peer) -> i64 {
+    match peer {
+        tl::enums::Peer::User(p) => p.user_id,
+        tl::enums::Peer::Chat(p) => p.chat_id,
+        tl::enums::Peer::Channel(p) => p.channel_id,
+    }
+}
+
+fn input_peer_id(peer: &tl::enums::InputPeer) -> Option<i64> {
+    match peer {
+        tl::enums::InputPeer::User(p) => Some(p.user_id),
+        tl::enums::InputPeer::Chat(p) => Some(p.chat_id),
+        tl::enums::InputPeer::Channel(p) => Some(p.channel_id),
+        _ => None,
+    }
+}
+
+fn peer_id_set(list: &[tl::enums::InputPeer]) -> HashSet<i64> {
+    list.iter().filter_map(input_peer_id).collect()
+}
+
+/// Peer id -> position in the list, so callers can sort a folder's pinned
+/// chats to match Telegram's own per-folder pin order instead of whatever
+/// order the server happens to stream dialogs in.
+fn peer_id_index(list: &[tl::enums::InputPeer]) -> HashMap<i64, usize> {
+    list.iter()
+        .filter_map(input_peer_id)
+        .enumerate()
+        .map(|(i, id)| (id, i))
+        .collect()
+}
+
+/// Flattened, cheap-to-query form of a `tl::enums::DialogFilter`.
+///
+/// Checking `pinned_peers`/`include_peers`/`exclude_peers` membership
+/// against the raw `Vec<InputPeer>` on every dialog in a scroll is an O(n·m)
+/// linear scan; building this once per filter and reusing it makes each
+/// check O(1) instead. Get one with [`FlattenedDialogFilter::from`].
+#[derive(Debug, Clone, Default)]
+pub struct FlattenedDialogFilter {
+    /// Whether this is the "All Chats" pseudo-filter - always matches, and
+    /// every other field here is meaningless when this is set.
+    pub is_default: bool,
+    pub include_contacts: bool,
+    pub include_non_contacts: bool,
+    pub include_groups: bool,
+    pub include_broadcasts: bool,
+    pub include_bots: bool,
+    pub exclude_muted: bool,
+    pub exclude_read: bool,
+    pub exclude_archived: bool,
+    pub include_peers: HashSet<i64>,
+    pub exclude_peers: HashSet<i64>,
+    /// Peer id -> pin position within this folder.
+    pub pinned_peers: HashMap<i64, usize>,
+}
+
+impl From<&tl::enums::DialogFilter> for FlattenedDialogFilter {
+    fn from(filter: &tl::enums::DialogFilter) -> Self {
+        match filter {
+            tl::enums::DialogFilter::Default => Self {
+                is_default: true,
+                ..Self::default()
+            },
+            // Chatlist (shared folder link) only ever includes chats via its
+            // explicit lists - no category flags, no exclude_peers, no
+            // exclude_muted/read/archived toggles. Leaving those at their
+            // `Default::default()` (false / empty) reproduces exactly that:
+            // nothing gets excluded, nothing gets auto-included by category.
+            tl::enums::DialogFilter::Chatlist(f) => Self {
+                include_peers: peer_id_set(&f.include_peers),
+                pinned_peers: peer_id_index(&f.pinned_peers),
+                ..Self::default()
+            },
+            tl::enums::DialogFilter::DialogFilter(f) => Self {
+                is_default: false,
+                include_contacts: f.contacts,
+                include_non_contacts: f.non_contacts,
+                include_groups: f.groups,
+                include_broadcasts: f.broadcasts,
+                include_bots: f.bots,
+                exclude_muted: f.exclude_muted,
+                exclude_read: f.exclude_read,
+                exclude_archived: f.exclude_archived,
+                include_peers: peer_id_set(&f.include_peers),
+                exclude_peers: peer_id_set(&f.exclude_peers),
+                pinned_peers: peer_id_index(&f.pinned_peers),
+            },
+        }
+    }
+}
+
+/// A filter's own id (`0` for the "All Chats" pseudo-filter, which Telegram
+/// doesn't actually include in `getDialogFilters`' response).
+pub(crate) fn dialog_filter_id(filter: &tl::enums::DialogFilter) -> i32 {
+    match filter {
+        tl::enums::DialogFilter::Default => 0,
+        tl::enums::DialogFilter::DialogFilter(f) => f.id,
+        tl::enums::DialogFilter::Chatlist(f) => f.id,
+    }
+}
+
+/// Whether a filter can include Archive dialogs at all, so callers can skip
+/// paging Archive entirely instead of fetching it just to discard it.
+///
+/// "All Chats" (`Default`) never does - that's the same folder-0/folder-1
+/// split as the regular chat list, Archive only shows up if you open it
+/// explicitly. Custom filters can pull in archived chats unless they were
+/// built with "Exclude archived chats" on.
+pub(crate) fn scan_archive_for(filter: &FlattenedDialogFilter) -> bool {
+    !filter.is_default && !filter.exclude_archived
 }
 
 /// Options for [`crate::Client::get_dialogs`]. Also used by [`DialogIter`]
@@ -164,6 +336,25 @@ impl Default for DialogCursor {
 }
 
 impl DialogCursor {
+    /// Build a cursor directly - e.g. resuming from a position you tracked
+    /// yourself, rather than one saved earlier via [`DialogIter::cursor`].
+    pub fn new(
+        offset_date: i32,
+        offset_id: i32,
+        offset_peer: tl::enums::InputPeer,
+        exclude_pinned: bool,
+        folder_id: Option<i32>,
+    ) -> Self {
+        Self {
+            offset_date,
+            offset_id,
+            offset_peer: offset_peer.to_bytes(),
+            exclude_pinned,
+            folder_id,
+            total: None,
+        }
+    }
+
     /// The `exclude_pinned` filter this cursor was saved with.
     ///
     /// Unlike the position fields, this is intentionally public - filters
@@ -323,6 +514,86 @@ impl DialogsStream {
             inner: Box::pin(raw),
         }
     }
+
+    /// Wrap an arbitrary dialog stream - used for combinations `DialogIter`
+    /// alone can't express, e.g. chaining folders together for
+    /// [`Client::stream_dialogs_in_filter`](crate::Client::stream_dialogs_in_filter).
+    pub(crate) fn boxed(
+        inner: impl Stream<Item = Result<Dialog, InvocationError>> + Send + 'static,
+    ) -> Self {
+        Self {
+            inner: Box::pin(inner),
+        }
+    }
+}
+
+/// Cursor-based iterator over dialogs in one chat folder (`DialogFilter`).
+/// Created by [`Client::iter_dialogs_in_filter`].
+///
+/// A folder's chats can live in either the main list or Archive, so this
+/// pages through the main list first, then Archive (skipped entirely for
+/// filters that can't include it - see [`scan_archive_for`]), yielding only
+/// dialogs [`Dialog::matches_filter`] accepts.
+pub struct DialogFilterIter {
+    pub(crate) filter_id: i32,
+    pub(crate) filter: FlattenedDialogFilter,
+    pub(crate) main: DialogIter,
+    pub(crate) archived: DialogIter,
+    pub(crate) scan_archive: bool,
+    pub(crate) in_archive: bool,
+}
+
+impl DialogFilterIter {
+    /// Fetch the next matching dialog. Returns `None` once both folders
+    /// (or just the main one, if this filter can't include Archive) are exhausted.
+    pub async fn next(&mut self, client: &Client) -> Result<Option<Dialog>, InvocationError> {
+        loop {
+            let next = if !self.in_archive {
+                match self.main.next(client).await? {
+                    Some(d) => Some(d),
+                    None => {
+                        if !self.scan_archive {
+                            return Ok(None);
+                        }
+                        self.in_archive = true;
+                        continue;
+                    }
+                }
+            } else {
+                self.archived.next(client).await?
+            };
+
+            match next {
+                Some(d) if d.matches_filter(&self.filter) => return Ok(Some(d)),
+                Some(_) => continue,
+                None => return Ok(None),
+            }
+        }
+    }
+
+    /// Snapshot the current position as a serializable [`DialogFilterCursor`].
+    /// Persist it and hand it to
+    /// [`Client::iter_dialogs_in_filter_from`](crate::Client::iter_dialogs_in_filter_from)
+    /// later to resume this exact scroll.
+    pub fn cursor(&self) -> DialogFilterCursor {
+        DialogFilterCursor {
+            filter_id: self.filter_id,
+            main: self.main.cursor(),
+            archived: self.archived.cursor(),
+            in_archive: self.in_archive,
+        }
+    }
+}
+
+/// Serializable snapshot of a [`DialogFilterIter`]'s position. Get one via
+/// [`DialogFilterIter::cursor`], resume with
+/// [`Client::iter_dialogs_in_filter_from`](crate::Client::iter_dialogs_in_filter_from).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DialogFilterCursor {
+    pub(crate) filter_id: i32,
+    pub(crate) main: DialogCursor,
+    pub(crate) archived: DialogCursor,
+    pub(crate) in_archive: bool,
 }
 
 impl Stream for DialogsStream {
