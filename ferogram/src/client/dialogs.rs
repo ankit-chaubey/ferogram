@@ -10,6 +10,8 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
+#[allow(unused_imports)]
+use super::updates_entities;
 use crate::*;
 #[allow(unused_imports)]
 use crate::{
@@ -212,7 +214,19 @@ impl Client {
                         access_hash: c.access_hash,
                     }),
                 };
-                self.rpc_call_raw(&req).await?;
+                let body: Vec<u8> = self.rpc_call_raw(&req).await?;
+                let mut cur = Cursor::from_slice(&body);
+                match tl::enums::messages::ChatInviteJoinResult::deserialize(&mut cur)? {
+                    tl::enums::messages::ChatInviteJoinResult::Ok(ok) => {
+                        let (users, chats) = updates_entities(&ok.updates);
+                        self.cache_users_and_chats(&users, &chats).await;
+                    }
+                    // WebView (e.g. paid channels) needs a bot flow we don't
+                    // support yet - cache users and move on, we already have the peer.
+                    tl::enums::messages::ChatInviteJoinResult::WebView(wv) => {
+                        self.cache_users_slice(&wv.users).await;
+                    }
+                }
             }
             tl::enums::InputPeer::Chat(c) => {
                 let req = tl::functions::messages::AddChatUser {

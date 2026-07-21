@@ -723,6 +723,11 @@ impl IncomingMessage {
                         ));
                     }
                 };
+                // TODO: response has channel-scoped pts but client.invoke() auto-feeds
+                // it as global pts (feed_own_updates can't tell which RPC this was).
+                // Harmless for now (getDifference will catch the drift), but the fix is
+                // a rpc_call_raw sibling that skips auto-feed, then feed
+                // AffectedChannelMessages{ affected, channel_id } here manually.
                 let req = tl::functions::channels::DeleteMessages {
                     channel,
                     id: vec![self.id()],

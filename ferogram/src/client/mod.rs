@@ -3165,6 +3165,23 @@ impl Client {
             return;
         }
 
+        // importChatInvite/joinChannel return ChatInviteJoinResult now, not a
+        // bare Updates, so the check above misses them. Ok still wraps a
+        // real Updates (pts/seq) - unwrap and feed it. WebView has no
+        // updates to feed.
+        let mut cur = Cursor::from_slice(body);
+        if let Ok(tl::enums::messages::ChatInviteJoinResult::Ok(ok)) =
+            tl::enums::messages::ChatInviteJoinResult::deserialize(&mut cur)
+        {
+            let _ = self
+                .inner
+                .message_box
+                .lock()
+                .await
+                .process_updates(message_box::UpdatesLike::Updates(Box::new(ok.updates)));
+            return;
+        }
+
         // A few (deleteMessages, readHistory, ...) return bare messages.AffectedMessages
         // instead. It's not an enum, so deserialize() won't check the ctor id for us.
         let id = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
