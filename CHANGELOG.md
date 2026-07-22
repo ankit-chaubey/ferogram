@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `ferogram-mtsender`: `MtpSender` now AES-CTR decrypts Obfuscated and
+  PaddedIntermediate (`dd` MTProxy) bytes before Intermediate/Abridged peel,
+  and strips PaddedIntermediate random padding before MTProto unpack. Without
+  this, the first server frames were treated as plaintext length prefixes and
+  failed with random `transport code -<n>` errors after a successful proxy
+  handshake.
+
 ### Added
 
 - `ferogram-session`: binary session format bumped to v8, adding a per-peer

@@ -53,7 +53,8 @@ struct Request {
 }
 
 enum StepOutcome {
-    Frames,
+    /// `n` newly read ciphertext bytes sit at `read_buf[read_tail..read_tail+n]`.
+    Read(usize),
     Wrote(usize),
     Ping,
 }
@@ -197,7 +198,7 @@ impl MtpSender {
     /// Returns `Err` on I/O / transport / crypto failure.  The caller must call
     /// `fail_all()` then reconnect.
     pub async fn step(&mut self) -> Result<Vec<Vec<u8>>, InvocationError> {
-        self.try_fill_write();
+        self.try_fill_write()?;
 
         let has_write = self.write_head < self.write_buf.len();
 
@@ -222,10 +223,7 @@ impl MtpSender {
                             "server closed connection",
                         )));
                     }
-                    Ok(Ok(n)) => {
-                        self.read_tail += n;
-                        Ok::<_, InvocationError>(StepOutcome::Frames)
-                    }
+                    Ok(Ok(n)) => Ok::<_, InvocationError>(StepOutcome::Read(n)),
                 }
             }
 
@@ -243,7 +241,11 @@ impl MtpSender {
 
         // rh/wh borrows end here; self is fully accessible again.
         match result {
-            StepOutcome::Frames => self.drain_frames(),
+            StepOutcome::Read(n) => {
+                self.decrypt_incoming(n)?;
+                self.read_tail += n;
+                self.drain_frames()
+            }
             StepOutcome::Wrote(n) => {
                 self.write_head += n;
                 if self.write_head >= self.write_buf.len() {
@@ -274,11 +276,32 @@ impl MtpSender {
         }
     }
 
+    /// AES-CTR decrypt newly read Obfuscated / PaddedIntermediate bytes in place.
+    ///
+    /// FakeTLS is intentionally skipped: TLS record headers stay plaintext.
+    fn decrypt_incoming(&mut self, n: usize) -> Result<(), InvocationError> {
+        let start = self.read_tail;
+        let end = start + n;
+        let cipher = match &self.frame_kind {
+            FrameKind::Obfuscated { cipher } | FrameKind::PaddedIntermediate { cipher } => {
+                Some(std::sync::Arc::clone(cipher))
+            }
+            _ => None,
+        };
+        if let Some(cipher) = cipher {
+            let mut c = cipher
+                .try_lock()
+                .map_err(|_| io_err("obfuscated cipher lock contended".into()))?;
+            c.decrypt(&mut self.read_buf[start..end]);
+        }
+        Ok(())
+    }
+
     /// Pack pending requests (+ ACKs + resends) into one encrypted frame.
-    fn try_fill_write(&mut self) {
+    fn try_fill_write(&mut self) -> Result<(), InvocationError> {
         // Only fill when the previous frame has been fully sent.
         if self.write_head < self.write_buf.len() {
-            return;
+            return Ok(());
         }
         self.write_buf.clear();
         self.write_head = 0;
@@ -305,7 +328,7 @@ impl MtpSender {
         }
 
         if msgs.is_empty() {
-            return;
+            return Ok(());
         }
 
         let wire = if msgs.len() == 1 {
@@ -335,7 +358,8 @@ impl MtpSender {
             wire
         };
 
-        self.write_buf = self.frame_encode(&wire);
+        self.write_buf = self.frame_encode(&wire)?;
+        Ok(())
     }
 
     /// Find the Pending request with matching body and advance to Serialised.
@@ -358,8 +382,16 @@ impl MtpSender {
 
         loop {
             match self.peel_one(offset) {
-                Peel::Complete { payload, end } => {
+                Peel::Complete { mut payload, end } => {
                     offset = end;
+                    // PaddedIntermediate appends 0-15 random bytes after the
+                    // MTProto packet; strip them before auth-key unpack.
+                    if matches!(self.frame_kind, FrameKind::PaddedIntermediate { .. })
+                        && payload.len() >= 24
+                    {
+                        let pad = (payload.len() - 24) % 16;
+                        payload.truncate(payload.len() - pad);
+                    }
                     match self.process_payload(payload) {
                         Ok(mut u) => updates.append(&mut u),
                         Err(e) => {
@@ -626,7 +658,7 @@ impl MtpSender {
     }
 
     /// Encode encrypted bytes into wire-ready transport frames.
-    fn frame_encode(&self, data: &[u8]) -> Vec<u8> {
+    fn frame_encode(&self, data: &[u8]) -> Result<Vec<u8>, InvocationError> {
         match &self.frame_kind {
             FrameKind::Full { send_seqno, .. } => {
                 let seq = send_seqno.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -637,22 +669,23 @@ impl MtpSender {
                 pkt.extend_from_slice(data);
                 let crc = crc32_ieee(&pkt);
                 pkt.extend_from_slice(&crc.to_le_bytes());
-                pkt
+                Ok(pkt)
             }
-            FrameKind::Abridged => abridged_frame(data),
+            FrameKind::Abridged => Ok(abridged_frame(data)),
             FrameKind::Intermediate => {
                 let mut f = Vec::with_capacity(4 + data.len());
                 f.extend_from_slice(&(data.len() as u32).to_le_bytes());
                 f.extend_from_slice(data);
-                f
+                Ok(f)
             }
             FrameKind::Obfuscated { cipher } => {
                 let mut f = abridged_frame(data);
                 // Synchronous lock is fine: we are the only task touching this.
-                if let Ok(mut c) = cipher.try_lock() {
-                    c.encrypt(&mut f);
-                }
-                f
+                let mut c = cipher
+                    .try_lock()
+                    .map_err(|_| io_err("obfuscated cipher lock contended".into()))?;
+                c.encrypt(&mut f);
+                Ok(f)
             }
             FrameKind::PaddedIntermediate { cipher } => {
                 let mut pad_buf = [0u8; 1];
@@ -665,28 +698,30 @@ impl MtpSender {
                 let mut pad = vec![0u8; pad_len];
                 ferogram_crypto::fill_random(&mut pad);
                 f.extend_from_slice(&pad);
-                if let Ok(mut c) = cipher.try_lock() {
-                    c.encrypt(&mut f);
-                }
-                f
+                let mut c = cipher
+                    .try_lock()
+                    .map_err(|_| io_err("obfuscated cipher lock contended".into()))?;
+                c.encrypt(&mut f);
+                Ok(f)
             }
             FrameKind::FakeTls { cipher } => {
                 const TLS_APP_DATA: u8 = 0x17;
                 const CHUNK: usize = 2878;
                 let mut out = Vec::new();
-                if let Ok(mut c) = cipher.try_lock() {
-                    for chunk in data.chunks(CHUNK) {
-                        let len = chunk.len() as u16;
-                        let mut rec = Vec::with_capacity(5 + chunk.len());
-                        rec.push(TLS_APP_DATA);
-                        rec.extend_from_slice(&[0x03, 0x03]);
-                        rec.extend_from_slice(&len.to_be_bytes());
-                        rec.extend_from_slice(chunk);
-                        c.encrypt(&mut rec[5..]);
-                        out.extend_from_slice(&rec);
-                    }
+                let mut c = cipher
+                    .try_lock()
+                    .map_err(|_| io_err("obfuscated cipher lock contended".into()))?;
+                for chunk in data.chunks(CHUNK) {
+                    let len = chunk.len() as u16;
+                    let mut rec = Vec::with_capacity(5 + chunk.len());
+                    rec.push(TLS_APP_DATA);
+                    rec.extend_from_slice(&[0x03, 0x03]);
+                    rec.extend_from_slice(&len.to_be_bytes());
+                    rec.extend_from_slice(chunk);
+                    c.encrypt(&mut rec[5..]);
+                    out.extend_from_slice(&rec);
                 }
-                out
+                Ok(out)
             }
         }
     }
@@ -702,6 +737,7 @@ impl MtpSender {
     }
 }
 
+#[derive(Debug)]
 enum Peel {
     Complete { payload: Vec<u8>, end: usize },
     Incomplete,
@@ -828,4 +864,92 @@ fn peel_full(
 
 fn io_err(msg: String) -> InvocationError {
     InvocationError::Io(std::io::Error::other(msg))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferogram_crypto::ObfuscatedCipher;
+
+    /// Peer RX keys = our TX keys so encrypt(TX) then decrypt(RX) round-trips.
+    fn peer_rx_cipher(tx_key: &[u8; 32], tx_iv: &[u8; 16]) -> ObfuscatedCipher {
+        let dummy = [0u8; 32];
+        let dummy_iv = [0u8; 16];
+        ObfuscatedCipher::from_keys(&dummy, &dummy_iv, tx_key, tx_iv)
+    }
+
+    fn strip_padded_intermediate_pad(payload: &mut Vec<u8>) {
+        if payload.len() >= 24 {
+            let pad = (payload.len() - 24) % 16;
+            payload.truncate(payload.len() - pad);
+        }
+    }
+
+    #[test]
+    fn peel_intermediate_after_decrypt_roundtrip() {
+        let tx_key = [0x11u8; 32];
+        let tx_iv = [0x22u8; 16];
+        let mut sender = ObfuscatedCipher::from_keys(&tx_key, &tx_iv, &[0u8; 32], &[0u8; 16]);
+        let mut receiver = peer_rx_cipher(&tx_key, &tx_iv);
+
+        // 24-byte MTProto-shaped body + 5 pad bytes (PaddedIntermediate).
+        let body = vec![0xABu8; 24];
+        let pad = [0xCDu8; 5];
+        let total = body.len() + pad.len();
+        let mut frame = Vec::with_capacity(4 + total);
+        frame.extend_from_slice(&(total as u32).to_le_bytes());
+        frame.extend_from_slice(&body);
+        frame.extend_from_slice(&pad);
+
+        sender.encrypt(&mut frame);
+        receiver.decrypt(&mut frame);
+
+        match peel_intermediate(&frame, 0) {
+            Peel::Complete { mut payload, end } => {
+                assert_eq!(end, frame.len());
+                assert_eq!(payload.len(), total);
+                assert_eq!(&payload[..24], body.as_slice());
+                strip_padded_intermediate_pad(&mut payload);
+                assert_eq!(payload, body);
+            }
+            other => panic!("expected Complete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peel_intermediate_ciphertext_yields_transport_code() {
+        // Negative Intermediate length dword as if ciphertext were peeled raw.
+        let ciphertext = (-149_480_985i32).to_le_bytes();
+        match peel_intermediate(&ciphertext, 0) {
+            Peel::Err(InvocationError::Io(e)) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("transport code"),
+                    "unexpected error message: {msg}"
+                );
+            }
+            other => panic!("expected transport code Err, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peel_abridged_after_decrypt_roundtrip() {
+        let tx_key = [0x33u8; 32];
+        let tx_iv = [0x44u8; 16];
+        let mut sender = ObfuscatedCipher::from_keys(&tx_key, &tx_iv, &[0u8; 32], &[0u8; 16]);
+        let mut receiver = peer_rx_cipher(&tx_key, &tx_iv);
+
+        let body = vec![0x55u8; 32]; // 8 words
+        let mut frame = abridged_frame(&body);
+        sender.encrypt(&mut frame);
+        receiver.decrypt(&mut frame);
+
+        match peel_abridged(&frame, 0) {
+            Peel::Complete { payload, end } => {
+                assert_eq!(end, frame.len());
+                assert_eq!(payload, body);
+            }
+            other => panic!("expected Complete, got {other:?}"),
+        }
+    }
 }
