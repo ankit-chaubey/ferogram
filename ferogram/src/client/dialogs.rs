@@ -247,14 +247,11 @@ impl Client {
     }
 
     /// Extract hash from `https://t.me/+HASH` or `https://t.me/joinchat/HASH`.
+    ///
+    /// Delegates to [`PeerRef::parse_invite_hash`], which also handles
+    /// `tg://join?invite=HASH`.
     pub fn parse_invite_hash(link: &str) -> Option<&str> {
-        if let Some(pos) = link.find("/+") {
-            return Some(&link[pos + 2..]);
-        }
-        if let Some(pos) = link.find("/joinchat/") {
-            return Some(&link[pos + 10..]);
-        }
-        None
+        PeerRef::parse_invite_hash(link)
     }
 
     /// Fetch dialogs, page by page, without loading them all at once.

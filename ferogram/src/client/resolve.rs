@@ -293,10 +293,19 @@ impl Client {
         &self,
         link: &str,
     ) -> Result<Option<tl::enums::InputPeer>, InvocationError> {
-        let hash = PeerRef::parse_invite_hash(link)
+        let hash = InviteHash::from_link(link)
             .ok_or_else(|| InvocationError::Deserialize(format!("invalid invite link: {link}")))?;
+        self.join_invite_hash(&hash).await
+    }
+
+    /// Same as [`Client::join_link`], but for a hash you already have
+    /// instead of a full link.
+    pub async fn join_invite_hash(
+        &self,
+        hash: &InviteHash,
+    ) -> Result<Option<tl::enums::InputPeer>, InvocationError> {
         let req = tl::functions::messages::ImportChatInvite {
-            hash: hash.to_string(),
+            hash: hash.as_str().to_string(),
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
@@ -360,10 +369,19 @@ impl Client {
     ///
     /// Returns the title and participant count of the chat the link points to.
     pub async fn check_invite(&self, link: &str) -> Result<tl::enums::ChatInvite, InvocationError> {
-        let hash = PeerRef::parse_invite_hash(link)
+        let hash = InviteHash::from_link(link)
             .ok_or_else(|| InvocationError::Deserialize(format!("invalid invite link: {link}")))?;
+        self.check_invite_hash(&hash).await
+    }
+
+    /// Same as [`Client::check_invite`], but for a hash you already have
+    /// instead of a full link.
+    pub async fn check_invite_hash(
+        &self,
+        hash: &InviteHash,
+    ) -> Result<tl::enums::ChatInvite, InvocationError> {
         let req = tl::functions::messages::CheckChatInvite {
-            hash: hash.to_string(),
+            hash: hash.as_str().to_string(),
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
