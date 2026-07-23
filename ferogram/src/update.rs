@@ -828,6 +828,33 @@ impl IncomingMessage {
             .ok_or_else(|| Error::Deserialize("forward returned no message".into()))
     }
 
+    /// Copy this message to another chat, without the "Forwarded from"
+    /// attribution (clientless - uses the client attached to this message).
+    ///
+    /// Works for text or media. Returns the copy as it landed in the
+    /// destination chat.
+    pub async fn copy(
+        &self,
+        destination: impl Into<crate::PeerRef>,
+    ) -> Result<IncomingMessage, Error> {
+        let client = self.require_client("copy")?.clone();
+        let src = self
+            .peer_id()
+            .cloned()
+            .ok_or_else(|| Error::Deserialize("cannot copy: unknown source peer".into()))?;
+        client
+            .copy_messages(
+                destination,
+                &[self.id()],
+                src,
+                crate::CopyOptions::default(),
+            )
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::Deserialize("copy returned no message".into()))
+    }
+
     /// Re-fetch this message from Telegram (clientless).
     ///
     /// Useful to get updated view/forward counts, reactions, edit state, etc.

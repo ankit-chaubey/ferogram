@@ -126,6 +126,73 @@ pub struct ForwardOptions {
     pub suggested_post: Option<tl::enums::SuggestedPost>,
 }
 
+/// Options for copying messages (forward without the "Forwarded from" attribution).
+///
+/// Used by [`crate::Client::copy_messages`] and `IncomingMessage::copy`. This
+/// is the same underlying `messages.forwardMessages` call as
+/// [`ForwardOptions`], with `drop_author` always forced to `true` - which is
+/// exactly what Telegram's own "copy" feature does under the hood.
+#[derive(Default, Clone)]
+pub struct CopyOptions {
+    /// Send silently (no notification for recipient).
+    pub silent: bool,
+    /// Send as a background message (doesn't bump the chat to the top).
+    pub background: bool,
+    /// Remove captions from copied media.
+    pub drop_captions: bool,
+    /// Prevent recipients from forwarding the message further.
+    pub noforwards: bool,
+    /// Reply to an existing message in the destination chat.
+    pub reply_to: Option<i32>,
+    /// Copy into this forum topic thread (the `top_msg_id` of the topic,
+    /// see [`crate::Client::get_forum_topics`]).
+    pub topic_id: Option<i32>,
+    /// Schedule the copy for this Unix timestamp (seconds).
+    pub schedule_date: Option<i32>,
+    /// Repeat the scheduled copy every N seconds. Only meaningful with
+    /// `schedule_date` set.
+    pub schedule_repeat_period: Option<i32>,
+    /// Send as a different identity you're allowed to send as (e.g. an
+    /// anonymous admin identity, or a linked channel) instead of yourself.
+    pub send_as: Option<crate::PeerRef>,
+    /// Attach a message effect (Premium sticker/emoji effect) by its ID.
+    pub effect: Option<i64>,
+    /// Start the copied video's preview at this timestamp (seconds).
+    pub video_timestamp: Option<i32>,
+    /// Stars you're willing to pay if the destination charges for messages.
+    pub allow_paid_stars: Option<i64>,
+    /// Bypass paid-messages flood limits by paying Stars.
+    pub allow_paid_floodskip: bool,
+    /// Associate the copy with a business-account quick reply shortcut.
+    pub quick_reply_shortcut: Option<tl::enums::InputQuickReplyShortcut>,
+    /// Send as a channel "suggested post" instead of posting directly.
+    pub suggested_post: Option<tl::enums::SuggestedPost>,
+}
+
+impl From<CopyOptions> for ForwardOptions {
+    fn from(o: CopyOptions) -> Self {
+        ForwardOptions {
+            silent: o.silent,
+            background: o.background,
+            with_my_score: false,
+            drop_author: true,
+            drop_media_captions: o.drop_captions,
+            noforwards: o.noforwards,
+            reply_to: o.reply_to,
+            topic_id: o.topic_id,
+            schedule_date: o.schedule_date,
+            schedule_repeat_period: o.schedule_repeat_period,
+            send_as: o.send_as,
+            effect: o.effect,
+            video_timestamp: o.video_timestamp,
+            allow_paid_stars: o.allow_paid_stars,
+            allow_paid_floodskip: o.allow_paid_floodskip,
+            quick_reply_shortcut: o.quick_reply_shortcut,
+            suggested_post: o.suggested_post,
+        }
+    }
+}
+
 /// Selects which flavour of message link [`crate::Client::export_message_link`] should produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LinkKind {

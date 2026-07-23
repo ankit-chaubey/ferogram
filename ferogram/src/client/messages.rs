@@ -679,6 +679,26 @@ impl Client {
         Ok(out)
     }
 
+    /// Copy one or more messages from `source` to `destination`, without the
+    /// "Forwarded from" attribution. Handles text or media, single or
+    /// multiple messages in one call - pass a one-element slice to copy just
+    /// one.
+    ///
+    /// This is `forward_messages` with `drop_author` forced to `true`, which
+    /// is exactly what Telegram's own "copy" feature does under the hood.
+    pub async fn copy_messages(
+        &self,
+        destination: impl Into<PeerRef>,
+
+        message_ids: &[i32],
+        source: impl Into<PeerRef>,
+
+        opts: CopyOptions,
+    ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
+        self.forward_messages(destination, message_ids, source, opts.into())
+            .await
+    }
+
     #[allow(dead_code)]
     pub(crate) async fn delete_messages_raw(
         &self,

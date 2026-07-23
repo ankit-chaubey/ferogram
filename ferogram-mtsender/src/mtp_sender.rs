@@ -137,15 +137,13 @@ impl MtpSender {
         if let FrameKind::FakeTls {
             decoded_pending, ..
         } = frame_kind
+            && let Ok(mut leftover) = decoded_pending.try_lock()
+            && !leftover.is_empty()
         {
-            if let Ok(mut leftover) = decoded_pending.try_lock() {
-                if !leftover.is_empty() {
-                    let n = leftover.len().min(read_buf.len());
-                    read_buf[..n].copy_from_slice(&leftover[..n]);
-                    leftover.drain(..n);
-                    return n;
-                }
-            }
+            let n = leftover.len().min(read_buf.len());
+            read_buf[..n].copy_from_slice(&leftover[..n]);
+            leftover.drain(..n);
+            return n;
         }
         0
     }

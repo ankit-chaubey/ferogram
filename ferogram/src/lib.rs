@@ -252,7 +252,7 @@ pub use ferogram_connect::TransportKind;
 pub use ferogram_connect::random_i64 as random_i64_pub;
 pub use file_info::{FileInfo, detect_mime, file_info, file_info_from_path};
 pub use guest_chat::GuestChatQuery;
-pub use input_message::{ForwardOptions, InputMessage, InvoiceOptions, LinkKind};
+pub use input_message::{CopyOptions, ForwardOptions, InputMessage, InvoiceOptions, LinkKind};
 pub use keyboard::{Button, InlineKeyboard, ReplyKeyboard};
 pub use media::{
     Document, DocumentThumb, Downloadable, MediaQuality, Photo, PhotoThumb, ProfilePhoto,
