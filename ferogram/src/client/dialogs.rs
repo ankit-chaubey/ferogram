@@ -10,6 +10,8 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
+#[allow(unused_imports)]
+use super::updates_entities;
 use crate::*;
 #[allow(unused_imports)]
 use crate::{
@@ -18,6 +20,7 @@ use crate::{
     inline_iter, media, participants, search, update,
 };
 use ferogram_tl_types::{Cursor, Deserializable};
+use futures::stream::try_unfold;
 use std::collections::{HashMap, VecDeque};
 
 impl Client {
@@ -212,7 +215,19 @@ impl Client {
                         access_hash: c.access_hash,
                     }),
                 };
-                self.rpc_call_raw(&req).await?;
+                let body: Vec<u8> = self.rpc_call_raw(&req).await?;
+                let mut cur = Cursor::from_slice(&body);
+                match tl::enums::messages::ChatInviteJoinResult::deserialize(&mut cur)? {
+                    tl::enums::messages::ChatInviteJoinResult::Ok(ok) => {
+                        let (users, chats) = updates_entities(&ok.updates);
+                        self.cache_users_and_chats(&users, &chats).await;
+                    }
+                    // WebView (e.g. paid channels) needs a bot flow we don't
+                    // support yet - cache users and move on, we already have the peer.
+                    tl::enums::messages::ChatInviteJoinResult::WebView(wv) => {
+                        self.cache_users_slice(&wv.users).await;
+                    }
+                }
             }
             tl::enums::InputPeer::Chat(c) => {
                 let req = tl::functions::messages::AddChatUser {
@@ -232,14 +247,11 @@ impl Client {
     }
 
     /// Extract hash from `https://t.me/+HASH` or `https://t.me/joinchat/HASH`.
+    ///
+    /// Delegates to [`PeerRef::parse_invite_hash`], which also handles
+    /// `tg://join?invite=HASH`.
     pub fn parse_invite_hash(link: &str) -> Option<&str> {
-        if let Some(pos) = link.find("/+") {
-            return Some(&link[pos + 2..]);
-        }
-        if let Some(pos) = link.find("/joinchat/") {
-            return Some(&link[pos + 10..]);
-        }
-        None
+        PeerRef::parse_invite_hash(link)
     }
 
     /// Fetch dialogs, page by page, without loading them all at once.
@@ -329,6 +341,101 @@ impl Client {
             .exclude_pinned(opts.exclude_pinned)
             .folder_id(opts.folder_id);
         crate::dialog::DialogsStream::new(self.clone(), iter)
+    }
+
+    /// Fetch the user's chat folders (Settings > Chat Folders), a.k.a.
+    /// `DialogFilter`s. Doesn't include the "All Chats" pseudo-folder
+    /// (id `0`) - Telegram doesn't return it here, but every dialog matches
+    /// it anyway (see [`Dialog::matches_filter`](crate::dialog::Dialog::matches_filter)).
+    pub async fn get_dialog_filters(
+        &self,
+    ) -> Result<Vec<tl::enums::DialogFilter>, InvocationError> {
+        let req = tl::functions::messages::GetDialogFilters {};
+        match self.invoke(&req).await? {
+            tl::enums::messages::DialogFilters::DialogFilters(f) => Ok(f.filters),
+        }
+    }
+
+    /// Look up a `DialogFilter` by id. `0` is the "All Chats" pseudo-filter,
+    /// synthesized locally since Telegram doesn't return it from `getDialogFilters`.
+    async fn resolve_dialog_filter(
+        &self,
+        filter_id: i32,
+    ) -> Result<tl::enums::DialogFilter, InvocationError> {
+        if filter_id == 0 {
+            return Ok(tl::enums::DialogFilter::Default);
+        }
+        self.get_dialog_filters()
+            .await?
+            .into_iter()
+            .find(|f| crate::dialog::dialog_filter_id(f) == filter_id)
+            .ok_or_else(|| {
+                InvocationError::Deserialize(format!("no dialog filter with id {filter_id}"))
+            })
+    }
+
+    /// Iterate the dialogs in a given chat folder (`filter_id`, `0` for
+    /// "All Chats"), page by page.
+    ///
+    /// `getDialogs` has no filter-id parameter of its own, and a folder's
+    /// chats can come from either the main list or Archive - so this pages
+    /// through both (skipping Archive entirely for filters that can't
+    /// include it, e.g. "All Chats" itself) and keeps only what
+    /// [`Dialog::matches_filter`](crate::dialog::Dialog::matches_filter) accepts.
+    pub async fn iter_dialogs_in_filter(
+        &self,
+        filter_id: i32,
+    ) -> Result<crate::dialog::DialogFilterIter, InvocationError> {
+        let filter = crate::dialog::FlattenedDialogFilter::from(
+            &self.resolve_dialog_filter(filter_id).await?,
+        );
+        let scan_archive = crate::dialog::scan_archive_for(&filter);
+        Ok(crate::dialog::DialogFilterIter {
+            filter_id,
+            filter,
+            main: self.iter_dialogs().folder_id(Some(0)),
+            archived: self.iter_dialogs().folder_id(Some(1)),
+            scan_archive,
+            in_archive: false,
+        })
+    }
+
+    /// Resume [`Client::iter_dialogs_in_filter`] from a
+    /// [`DialogFilterCursor`](crate::dialog::DialogFilterCursor) saved earlier
+    /// with [`DialogFilterIter::cursor`](crate::dialog::DialogFilterIter::cursor).
+    pub async fn iter_dialogs_in_filter_from(
+        &self,
+        cursor: crate::dialog::DialogFilterCursor,
+    ) -> Result<crate::dialog::DialogFilterIter, InvocationError> {
+        let filter = crate::dialog::FlattenedDialogFilter::from(
+            &self.resolve_dialog_filter(cursor.filter_id).await?,
+        );
+        let scan_archive = crate::dialog::scan_archive_for(&filter);
+        Ok(crate::dialog::DialogFilterIter {
+            filter_id: cursor.filter_id,
+            filter,
+            main: self.iter_dialogs_from(cursor.main)?,
+            archived: self.iter_dialogs_from(cursor.archived)?,
+            scan_archive,
+            in_archive: cursor.in_archive,
+        })
+    }
+
+    /// Stream only the dialogs in a given chat folder - the non-resumable,
+    /// `futures::Stream` counterpart to [`Client::iter_dialogs_in_filter`].
+    pub async fn stream_dialogs_in_filter(
+        &self,
+        filter_id: i32,
+    ) -> Result<crate::dialog::DialogsStream, InvocationError> {
+        let iter = self.iter_dialogs_in_filter(filter_id).await?;
+        let client = self.clone();
+        let raw = try_unfold((client, iter), |(client, mut iter)| async move {
+            match iter.next(&client).await? {
+                Some(d) => Ok(Some((d, (client, iter)))),
+                None => Ok(None),
+            }
+        });
+        Ok(crate::dialog::DialogsStream::boxed(raw))
     }
 
     /// Fetch messages from a peer, page by page.

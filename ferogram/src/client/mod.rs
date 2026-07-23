@@ -3012,6 +3012,7 @@ impl Client {
             match self.do_rpc_call(req).await {
                 Ok(body) => {
                     metrics::counter!("ferogram.rpc_calls_total", "result" => "ok").increment(1);
+                    self.feed_own_updates(&body).await;
                     return Ok(body);
                 }
                 Err(e) if e.migrate_dc_id().is_some() => {
@@ -3125,10 +3126,75 @@ impl Client {
             .await
             .map_err(|_| InvocationError::Deserialize("sender task shut down".into()))?;
         match rx.await {
-            Ok(result) => result.map(|_| ()),
+            Ok(Ok(body)) => {
+                self.feed_own_updates(&body).await;
+                Ok(())
+            }
+            Ok(Err(e)) => Err(e),
             Err(_) => Err(InvocationError::Deserialize(
                 "rpc_write channel closed (sender task died?)".into(),
             )),
+        }
+    }
+
+    /// Feed the raw body of one of our own RPC responses into `MessageBoxes`
+    /// so self-sent actions (sending/editing/deleting a message, etc.)
+    /// advance local pts the same way a pushed update would. Otherwise the
+    /// next real update looks like a gap and triggers a spurious getDifference.
+    ///
+    /// Safe to call on any response: every TL type is prefixed with a
+    /// 4-byte constructor ID, and `Updates::deserialize` checks it before
+    /// matching a variant. A response that's neither `Updates` nor
+    /// `messages.AffectedMessages` just fails to match and this is a no-op.
+    async fn feed_own_updates(&self, body: &[u8]) {
+        use ferogram_tl_types::Identifiable;
+
+        if body.len() < 4 {
+            return;
+        }
+
+        // Most write RPCs return `Updates` (sendMessage, editMessage, forwardMessages, leaveChannel, ...).
+        let mut cur = Cursor::from_slice(body);
+        if let Ok(updates) = tl::enums::Updates::deserialize(&mut cur) {
+            let _ = self
+                .inner
+                .message_box
+                .lock()
+                .await
+                .process_updates(message_box::UpdatesLike::Updates(Box::new(updates)));
+            return;
+        }
+
+        // importChatInvite/joinChannel return ChatInviteJoinResult now, not a
+        // bare Updates, so the check above misses them. Ok still wraps a
+        // real Updates (pts/seq) - unwrap and feed it. WebView has no
+        // updates to feed.
+        let mut cur = Cursor::from_slice(body);
+        if let Ok(tl::enums::messages::ChatInviteJoinResult::Ok(ok)) =
+            tl::enums::messages::ChatInviteJoinResult::deserialize(&mut cur)
+        {
+            let _ = self
+                .inner
+                .message_box
+                .lock()
+                .await
+                .process_updates(message_box::UpdatesLike::Updates(Box::new(ok.updates)));
+            return;
+        }
+
+        // A few (deleteMessages, readHistory, ...) return bare messages.AffectedMessages
+        // instead. It's not an enum, so deserialize() won't check the ctor id for us.
+        let id = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+        if id == <tl::types::messages::AffectedMessages as Identifiable>::CONSTRUCTOR_ID {
+            let mut cur = Cursor::from_slice(&body[4..]);
+            if let Ok(affected) = tl::types::messages::AffectedMessages::deserialize(&mut cur) {
+                let _ = self
+                    .inner
+                    .message_box
+                    .lock()
+                    .await
+                    .process_updates(message_box::UpdatesLike::AffectedMessages(affected));
+            }
         }
     }
 

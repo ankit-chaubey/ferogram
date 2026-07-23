@@ -86,7 +86,9 @@ pub mod srp;
 pub use auth_key::AuthKey;
 pub use deque_buffer::DequeBuffer;
 pub use factorize::factorize;
-pub use obfuscated::{ObfuscatedCipher, build_fake_tls_keys, build_obfuscated_init};
+pub use obfuscated::{
+    ObfuscatedCipher, build_obfuscated_init, fake_tls_client_digest, fake_tls_verify_server_digest,
+};
 
 /// Fill `buf` with cryptographically secure random bytes.
 ///
@@ -198,14 +200,24 @@ pub fn decrypt_data_v2<'a>(
         .collect::<Vec<_>>()
         .join(" ");
 
-    if buffer.len() < 24 || !(buffer.len() - 24).is_multiple_of(16) {
-        // Expected: frame_len >= 24, (frame_len - 24) % 16 == 0
+    // `buffer` here is whatever the transport framing handed up. Abridged/
+    // Intermediate frames are exactly key_id(8)+msg_key(16)+ciphertext with
+    // no trailer, so (len-24) is already a multiple of 16. PaddedIntermediate
+    // and FakeTls (dd/ee) frames may have 0-15 extra random bytes appended
+    // by the sender *outside* the AES-256-IGE ciphertext purely for traffic
+    // size obfuscation -- those bytes were never part of the encrypted
+    // message and must be dropped, not decrypted. Floor to the nearest
+    // 16-byte boundary rather than rejecting the whole frame.
+    let usable_cipher_len = buffer.len().saturating_sub(24) / 16 * 16;
+    if buffer.len() < 24 || usable_cipher_len == 0 {
+        // Expected: frame_len >= 24 and at least one full AES block of
+        // ciphertext once any trailing transport padding is floored off.
         // Minimum valid frame: key_id(8) + msg_key(16) + 1 AES block(16) = 40 bytes
         tracing::warn!(
             frame_len,
             first_bytes = %frame_hex,
-            "decrypt failed: frame too short or not block-aligned \
-             (need >= 24 bytes and (len-24) % 16 == 0)"
+            "decrypt failed: frame too short to contain even one AES block \
+             (need >= 40 bytes)"
         );
         return Err(DecryptError::InvalidBuffer);
     }
@@ -240,14 +252,15 @@ pub fn decrypt_data_v2<'a>(
     msg_key.copy_from_slice(&buffer[8..24]);
 
     let (key, iv) = calc_key(auth_key, &msg_key, Side::Server);
-    aes::ige_decrypt(&mut buffer[24..], &key, &iv);
+    let cipher_end = 24 + usable_cipher_len;
+    aes::ige_decrypt(&mut buffer[24..cipher_end], &key, &iv);
 
     let x = Side::Server.x();
-    let our_key = sha256!(&auth_key.data[88 + x..88 + x + 32], &buffer[24..]);
+    let our_key = sha256!(&auth_key.data[88 + x..88 + x + 32], &buffer[24..cipher_end]);
     if msg_key != our_key[8..24] {
         return Err(DecryptError::MessageKeyMismatch);
     }
-    Ok(&mut buffer[24..])
+    Ok(&mut buffer[24..cipher_end])
 }
 
 /// Derive `(key, iv)` from nonces for decrypting `ServerDhParams.encrypted_answer`.

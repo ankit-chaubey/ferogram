@@ -33,6 +33,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`DialogsStream`) for seamless integration with `StreamExt` and
   `TryStreamExt` combinators.
 
+### Fixed
+
+- `ferogram-connect`: FakeTLS (`ee` secret) ClientHello was a bare 4-extension
+  hello with no `key_share`, no `signature_algorithms`, no GREASE, and no
+  padding - not a valid TLS 1.3 ClientHello, so DPI-aware proxies dropped the
+  connection before replying. Rebuilt it with GREASE cipher/group/version/
+  extension values, `key_share` (X25519), `signature_algorithms`, ALPN,
+  `ec_point_formats`, `psk_key_exchange_modes`, `extended_master_secret`,
+  `renegotiation_info`, and padding to ~517 bytes.
+- `ferogram-connect`: FakeTLS send/recv framing was wrapping/reading raw TLS
+  Application Data records directly as MTProto frames (2878-byte chunks, one
+  MTProto message per record). Real MTProxy FakeTLS is Obfuscated2/
+  PaddedIntermediate (the same `dd` transport) carried inside the decoy TLS
+  record stream - rewrote both directions to match: `frame.rs`/`sender.rs`
+  now build a length-prefixed, padded, AES-256-CTR-encrypted PaddedIntermediate
+  frame and wrap that in TLS Application Data records; the read side
+  (`tls_record::unwrap_records`, `faketls_read_exact`) unwraps TLS records and
+  decrypts the extracted stream instead of treating each TLS record as one
+  frame.
+- `ferogram-crypto`: `build_fake_tls_keys` derived the data cipher from the
+  ClientHello HMAC - real MTProxy FakeTLS never does this; the decoy
+  handshake is camouflage only, and the actual data cipher is a fresh
+  Obfuscated2 nonce sent after the decoy handshake completes. Replaced with
+  `fake_tls_client_digest` (anti-replay HMAC for the ClientHello random
+  field) and `fake_tls_verify_server_digest` (verifies the ServerHello +
+  ChangeCipherSpec + first Application-Data record against the same HMAC).
+  `build_fake_tls_keys` removed, it had no remaining callers.
+- `ferogram-mtsender`: `MtpSender::ingest_read` and `frame_encode` silently
+  skipped `cipher.try_lock()` failures and fell through as if the chunk had
+  been encrypted/decrypted. AES-256-CTR is a keystream cipher - skipping one
+  chunk permanently desyncs the counter for every frame after it. Read path
+  now returns an error instead of proceeding on a failed lock.
+- `ferogram-crypto`: `decrypt_data_v2` rejected any frame where
+  `(len - 24) % 16 != 0`. PaddedIntermediate/FakeTls (`dd`/`ee`) legitimately
+  append 0–15 random bytes after the encrypted payload for traffic-size
+  obfuscation, outside the AES-256-IGE ciphertext. This was rejecting valid
+  frames as soon as the server picked a non-zero pad length, surfacing as
+  intermittent `Crypto(InvalidBuffer)` right after a successful handshake.
+  Now floors to the nearest 16-byte boundary, decrypts/verifies only that
+  portion, and drops the trailing pad bytes.
+
 ---
 
 ## [0.6.4] - 2026-07-14

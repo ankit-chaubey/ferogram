@@ -57,9 +57,19 @@ pub enum FrameKind {
     PaddedIntermediate {
         cipher: std::sync::Arc<tokio::sync::Mutex<ferogram_crypto::ObfuscatedCipher>>,
     },
-    /// FakeTLS framing (`0xEE` MTProxy).
+    /// FakeTLS framing (`0xEE` MTProxy). Same Obfuscated2/PaddedIntermediate
+    /// transport as `PaddedIntermediate`, carried inside a decoy TLS
+    /// handshake + TLS record byte-stream framing. `cipher` is the *real*
+    /// data cipher (a fresh Obfuscated2 keypair generated after the decoy
+    /// handshake completes) -- never derived from the ClientHello HMAC.
     FakeTls {
         cipher: std::sync::Arc<tokio::sync::Mutex<ferogram_crypto::ObfuscatedCipher>>,
+        /// Raw wire bytes not yet unwrapped from TLS record framing (may
+        /// hold a partial trailing record between reads).
+        tls_raw_pending: std::sync::Arc<tokio::sync::Mutex<Vec<u8>>>,
+        /// Decrypted PaddedIntermediate-stream bytes extracted from
+        /// complete TLS records but not yet consumed by frame peeling.
+        decoded_pending: std::sync::Arc<tokio::sync::Mutex<Vec<u8>>>,
     },
 }
 
@@ -170,16 +180,46 @@ impl Connection {
                 Ok((stream, FrameKind::PaddedIntermediate { cipher: cipher_arc }))
             }
             TransportKind::FakeTls { secret, domain } => {
-                // Fake TLS 1.3 ClientHello with HMAC-SHA256 random field.
-                // After the handshake, data flows as TLS Application Data records
-                // over a shared Obfuscated2 cipher seeded from the secret+HMAC.
+                // Real MTProxy FakeTLS is the *same* Obfuscated2/PaddedIntermediate
+                // transport used by `dd` secrets, carried inside a decoy TLS 1.3
+                // handshake + TLS record byte-stream framing so the traffic looks
+                // like ordinary HTTPS to DPI. The ClientHello HMAC below only
+                // proves we know `secret` to the proxy -- it is NOT the data
+                // cipher. The real data cipher is a fresh Obfuscated2 nonce
+                // generated *after* this decoy handshake completes (see below).
                 let domain_bytes = domain.as_bytes();
                 let mut session_id = [0u8; 32];
                 ferogram_crypto::fill_random(&mut session_id);
 
+                // GREASE values (RFC 8701): reserved cipher/extension/group/
+                // version IDs of the form 0x?A?A. A real FakeTLS/DPI-aware
+                // proxy expects to see these -- a ClientHello that omits them
+                // (and omits key_share/signature_algorithms entirely, as the
+                // previous minimal hello did) doesn't parse as a plausible
+                // TLS 1.3 ClientHello and gets dropped before any reply is
+                // sent, which is exactly the "early eof" symptom.
+                let mut grease_seed = [0u8; 4];
+                ferogram_crypto::fill_random(&mut grease_seed);
+                let grease_u16 = |b: u8| -> u16 {
+                    let v = (b & 0xf0) | 0x0a;
+                    ((v as u16) << 8) | v as u16
+                };
+                let grease_cipher = grease_u16(grease_seed[0]);
+                let grease_group = grease_u16(grease_seed[1]);
+                let grease_version = grease_u16(grease_seed[2]);
+                let grease_ext = grease_u16(grease_seed[3]);
+
                 // Build ClientHello body (random placeholder = zeros)
-                let cipher_suites: &[u8] = &[0x00, 0x04, 0x13, 0x01, 0x13, 0x02];
+                let mut cipher_suites = Vec::new();
+                cipher_suites.extend_from_slice(&grease_cipher.to_be_bytes());
+                for c in [
+                    0x1301u16, 0x1302, 0x1303, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8,
+                    0xc013, 0xc014, 0x009c, 0x009d, 0x002f, 0x0035,
+                ] {
+                    cipher_suites.extend_from_slice(&c.to_be_bytes());
+                }
                 let compression: &[u8] = &[0x01, 0x00];
+
                 let sni_name_len = domain_bytes.len() as u16;
                 let sni_list_len = sni_name_len + 3;
                 let sni_ext_len = sni_list_len + 2;
@@ -190,23 +230,96 @@ impl Connection {
                 sni_ext.push(0x00);
                 sni_ext.extend_from_slice(&sni_name_len.to_be_bytes());
                 sni_ext.extend_from_slice(domain_bytes);
-                let sup_ver: &[u8] = &[0x00, 0x2b, 0x00, 0x03, 0x02, 0x03, 0x04];
-                let sup_grp: &[u8] = &[0x00, 0x0a, 0x00, 0x04, 0x00, 0x02, 0x00, 0x1d];
+
+                let sup_grp: [u8; 12] = [
+                    0x00,
+                    0x0a,
+                    0x00,
+                    0x08,
+                    0x00,
+                    0x06,
+                    (grease_group >> 8) as u8,
+                    grease_group as u8,
+                    0x00,
+                    0x1d,
+                    0x00,
+                    0x17,
+                ];
+                let ec_point_fmt: &[u8] = &[0x00, 0x0b, 0x00, 0x02, 0x01, 0x00];
+                let sig_algs: &[u8] = &[
+                    0x00, 0x0d, 0x00, 0x12, 0x00, 0x10, 0x04, 0x03, 0x08, 0x04, 0x04, 0x01, 0x05,
+                    0x03, 0x08, 0x05, 0x05, 0x01, 0x08, 0x06, 0x06, 0x01,
+                ];
+                let alpn: &[u8] = &[
+                    0x00, 0x10, 0x00, 0x0e, 0x00, 0x0c, 0x02, b'h', b'2', 0x08, b'h', b't', b't',
+                    b'p', b'/', b'1', b'.', b'1',
+                ];
+                let ems: &[u8] = &[0x00, 0x17, 0x00, 0x00];
                 let sess_tick: &[u8] = &[0x00, 0x23, 0x00, 0x00];
-                let ext_body_len = sni_ext.len() + sup_ver.len() + sup_grp.len() + sess_tick.len();
+                let sup_ver: Vec<u8> = {
+                    let mut v = vec![0x00, 0x2b, 0x00, 0x05, 0x04];
+                    v.extend_from_slice(&grease_version.to_be_bytes());
+                    v.extend_from_slice(&[0x03, 0x04]);
+                    v
+                };
+                let psk_modes: &[u8] = &[0x00, 0x2d, 0x00, 0x02, 0x01, 0x01];
+                let mut key_share_pub = [0u8; 32];
+                ferogram_crypto::fill_random(&mut key_share_pub);
+                let key_share: Vec<u8> = {
+                    let mut v = vec![0x00, 0x33, 0x00, 0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20];
+                    v.extend_from_slice(&key_share_pub);
+                    v
+                };
+                let reneg_info: &[u8] = &[0xff, 0x01, 0x00, 0x01, 0x00];
+                let grease_ext_entry: [u8; 6] = [
+                    (grease_ext >> 8) as u8,
+                    grease_ext as u8,
+                    0x00,
+                    0x02,
+                    0x00,
+                    0x00,
+                ];
+
+                let mut ext_body = Vec::new();
+                ext_body.extend_from_slice(&sni_ext);
+                ext_body.extend_from_slice(&sup_grp);
+                ext_body.extend_from_slice(ec_point_fmt);
+                ext_body.extend_from_slice(sig_algs);
+                ext_body.extend_from_slice(alpn);
+                ext_body.extend_from_slice(ems);
+                ext_body.extend_from_slice(sess_tick);
+                ext_body.extend_from_slice(&sup_ver);
+                ext_body.extend_from_slice(psk_modes);
+                ext_body.extend_from_slice(&key_share);
+                ext_body.extend_from_slice(reneg_info);
+                ext_body.extend_from_slice(&grease_ext_entry);
+
+                // Pad the whole ClientHello up to a size typical of a real
+                // browser hello (avoids a suspiciously short record, which
+                // is itself a signal a FakeTLS-detecting DPI box looks for).
+                const TARGET_HELLO_LEN: usize = 517;
+                let prefix_len = 2 /*version*/ + 32 /*random*/ + 1 /*sid len*/
+                    + session_id.len() + 2 /*cs len*/ + cipher_suites.len()
+                    + compression.len() + 2 /*ext len field*/;
+                let unpadded_total = prefix_len + ext_body.len();
+                if unpadded_total < TARGET_HELLO_LEN {
+                    let pad_needed = TARGET_HELLO_LEN - unpadded_total - 4; // minus padding ext header
+                    ext_body.extend_from_slice(&[0x00, 0x15]);
+                    ext_body.extend_from_slice(&(pad_needed as u16).to_be_bytes());
+                    ext_body.extend(std::iter::repeat_n(0u8, pad_needed));
+                }
+
                 let mut extensions = Vec::new();
-                extensions.extend_from_slice(&(ext_body_len as u16).to_be_bytes());
-                extensions.extend_from_slice(&sni_ext);
-                extensions.extend_from_slice(sup_ver);
-                extensions.extend_from_slice(sup_grp);
-                extensions.extend_from_slice(sess_tick);
+                extensions.extend_from_slice(&(ext_body.len() as u16).to_be_bytes());
+                extensions.extend_from_slice(&ext_body);
 
                 let mut hello_body = Vec::new();
                 hello_body.extend_from_slice(&[0x03, 0x03]);
-                hello_body.extend_from_slice(&[0u8; 32]); // random placeholder
+                hello_body.extend_from_slice(&[0u8; 32]); // random placeholder, filled below
                 hello_body.push(session_id.len() as u8);
                 hello_body.extend_from_slice(&session_id);
-                hello_body.extend_from_slice(cipher_suites);
+                hello_body.extend_from_slice(&(cipher_suites.len() as u16).to_be_bytes());
+                hello_body.extend_from_slice(&cipher_suites);
                 hello_body.extend_from_slice(compression);
                 hello_body.extend_from_slice(&extensions);
 
@@ -226,17 +339,101 @@ impl Connection {
                 record.extend_from_slice(&rec_len.to_be_bytes());
                 record.extend_from_slice(&handshake);
 
-                // Derive HMAC and obfuscation cipher via ferogram-crypto.
-                // build_fake_tls_keys returns (hmac_result, cipher):
-                //   hmac_result → written into ClientHello random field at offset 11
-                //   cipher      → AES-CTR pair for all subsequent I/O on this connection
-                let random_offset = 5 + 4 + 2; // TLS-rec(5) + HS-hdr(4) + version(2)
-                let (hmac_result, cipher) = ferogram_crypto::build_fake_tls_keys(secret, &record);
-                record[random_offset..random_offset + 32].copy_from_slice(&hmac_result);
+                // random field lives at: TLS-rec(5) + HS-hdr(4) + version(2) = offset 11
+                const CLIENT_RANDOM_OFFSET: usize = 5 + 4 + 2;
+                // Digest is HMAC-SHA256(secret, record-with-random-zeroed); the
+                // random field is still all-zero at this point.
+                let client_digest = ferogram_crypto::fake_tls_client_digest(secret, &record);
+                record[CLIENT_RANDOM_OFFSET..CLIENT_RANDOM_OFFSET + 32]
+                    .copy_from_slice(&client_digest);
                 stream.write_all(&record).await?;
 
+                // Real MTProxy FakeTLS servers reply with exactly three TLS
+                // records: Handshake (ServerHello), ChangeCipherSpec, and one
+                // Application Data record (padding to round out the
+                // digest-covered blob). All three are concatenated (headers
+                // included) to verify the server's digest.
+                let hello_rec = crate::tls_record::read_one_record(&mut stream)
+                    .await
+                    .map_err(ConnectError::Io)?;
+                if hello_rec.rec_type != crate::tls_record::RECORD_HANDSHAKE {
+                    return Err(ConnectError::Other(format!(
+                        "FakeTLS: expected ServerHello (Handshake) record, got type 0x{:02x}",
+                        hello_rec.rec_type
+                    )));
+                }
+                let ccs_rec = crate::tls_record::read_one_record(&mut stream)
+                    .await
+                    .map_err(ConnectError::Io)?;
+                if ccs_rec.rec_type != crate::tls_record::RECORD_CHANGE_CIPHER_SPEC {
+                    return Err(ConnectError::Other(format!(
+                        "FakeTLS: expected ChangeCipherSpec record, got type 0x{:02x}",
+                        ccs_rec.rec_type
+                    )));
+                }
+                let app_rec = crate::tls_record::read_one_record(&mut stream)
+                    .await
+                    .map_err(ConnectError::Io)?;
+                if app_rec.rec_type != crate::tls_record::RECORD_APPLICATION_DATA {
+                    return Err(ConnectError::Other(format!(
+                        "FakeTLS: expected Application Data record, got type 0x{:02x}",
+                        app_rec.rec_type
+                    )));
+                }
+
+                let mut packet = Vec::with_capacity(
+                    hello_rec.bytes.len() + ccs_rec.bytes.len() + app_rec.bytes.len(),
+                );
+                packet.extend_from_slice(&hello_rec.bytes);
+                packet.extend_from_slice(&ccs_rec.bytes);
+                packet.extend_from_slice(&app_rec.bytes);
+
+                // server random/digest lives at the same offset as the client's:
+                // TLS-rec(5) + HS-hdr(4) + version(2) = 11, within the ServerHello record.
+                const SERVER_DIGEST_OFFSET: usize = 11;
+                if packet.len() < SERVER_DIGEST_OFFSET + 32 {
+                    return Err(ConnectError::Other("FakeTLS: ServerHello too short".into()));
+                }
+                let mut server_digest = [0u8; 32];
+                server_digest
+                    .copy_from_slice(&packet[SERVER_DIGEST_OFFSET..SERVER_DIGEST_OFFSET + 32]);
+                packet[SERVER_DIGEST_OFFSET..SERVER_DIGEST_OFFSET + 32].fill(0);
+
+                if !ferogram_crypto::fake_tls_verify_server_digest(
+                    secret,
+                    &client_digest,
+                    &packet,
+                    &server_digest,
+                ) {
+                    return Err(ConnectError::Other(
+                        "FakeTLS: server digest verification failed (wrong secret, wrong \
+                         domain, or the proxy does not speak FakeTLS)"
+                            .into(),
+                    ));
+                }
+
+                // Decoy handshake verified. Now do the *real* handshake: a
+                // fresh Obfuscated2/PaddedIntermediate nonce, sent through the
+                // TLS record wrapper exactly like the plain `dd` connection
+                // start, prefixed once by the leading ChangeCipherSpec decoy
+                // record several proxies require.
+                let (nonce, cipher) =
+                    ferogram_crypto::build_obfuscated_init(0xdd, dc_id, Some(secret.as_ref()));
+
+                let mut first_write = Vec::new();
+                first_write.extend_from_slice(&crate::tls_record::change_cipher_spec_record());
+                crate::tls_record::wrap_application_data(&nonce, &mut first_write);
+                stream.write_all(&first_write).await?;
+
                 let cipher_arc = std::sync::Arc::new(tokio::sync::Mutex::new(cipher));
-                Ok((stream, FrameKind::FakeTls { cipher: cipher_arc }))
+                Ok((
+                    stream,
+                    FrameKind::FakeTls {
+                        cipher: cipher_arc,
+                        tls_raw_pending: std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new())),
+                        decoded_pending: std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new())),
+                    },
+                ))
             }
             TransportKind::Http => {
                 // HTTP transport is handled in dc_pool - fall back to Abridged framing.

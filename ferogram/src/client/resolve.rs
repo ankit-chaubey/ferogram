@@ -285,20 +285,41 @@ impl Client {
         }
     }
 
-    /// Join a chat by invite link and return its `InputPeer`.
+    /// Join a chat by invite link, returning its `InputPeer`.
     ///
-    /// Calls `messages.importChatInvite`, caches all returned entities, and
-    /// returns the `InputPeer` of the joined chat.
-    /// Join a chat or channel via an invite link.
-    pub async fn join_link(&self, link: &str) -> Result<tl::enums::InputPeer, InvocationError> {
-        let hash = PeerRef::parse_invite_hash(link)
+    /// Returns `Ok(None)` if Telegram answers with the `WebView` invite
+    /// result (e.g. paid channels) - that flow isn't implemented yet.
+    pub async fn join_link(
+        &self,
+        link: &str,
+    ) -> Result<Option<tl::enums::InputPeer>, InvocationError> {
+        let hash = InviteHash::from_link(link)
             .ok_or_else(|| InvocationError::Deserialize(format!("invalid invite link: {link}")))?;
+        self.join_invite_hash(&hash).await
+    }
+
+    /// Same as [`Client::join_link`], but for a hash you already have
+    /// instead of a full link.
+    pub async fn join_invite_hash(
+        &self,
+        hash: &InviteHash,
+    ) -> Result<Option<tl::enums::InputPeer>, InvocationError> {
         let req = tl::functions::messages::ImportChatInvite {
-            hash: hash.to_string(),
+            hash: hash.as_str().to_string(),
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
-        let updates = tl::enums::Updates::deserialize(&mut cur)?;
+        let result = tl::enums::messages::ChatInviteJoinResult::deserialize(&mut cur)?;
+
+        let updates = match result {
+            tl::enums::messages::ChatInviteJoinResult::Ok(ok) => ok.updates,
+            tl::enums::messages::ChatInviteJoinResult::WebView(wv) => {
+                // No chat was actually joined yet; just cache whatever
+                // users Telegram handed us (e.g. the bot) and bail out.
+                self.cache_users_slice(&wv.users).await;
+                return Ok(None);
+            }
+        };
 
         // Extract users and chats embedded in the Updates object
         let (users, chats) = updates_entities(&updates);
@@ -310,26 +331,30 @@ impl Client {
             match chat {
                 tl::enums::Chat::Channel(c) if !c.min => {
                     if let Some(&(hash, _)) = cache.channels.get(&c.id) {
-                        return Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
-                            channel_id: c.id,
-                            access_hash: hash,
-                        }));
+                        return Ok(Some(tl::enums::InputPeer::Channel(
+                            tl::types::InputPeerChannel {
+                                channel_id: c.id,
+                                access_hash: hash,
+                            },
+                        )));
                     }
                 }
                 // A community joined by invite link is addressed like a channel
                 // on the wire, just tracked in its own cache bucket.
                 tl::enums::Chat::Community(c) if !c.min => {
                     if let Some(&hash) = cache.communities.get(&c.id) {
-                        return Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
-                            channel_id: c.id,
-                            access_hash: hash,
-                        }));
+                        return Ok(Some(tl::enums::InputPeer::Channel(
+                            tl::types::InputPeerChannel {
+                                channel_id: c.id,
+                                access_hash: hash,
+                            },
+                        )));
                     }
                 }
                 tl::enums::Chat::Chat(c) => {
-                    return Ok(tl::enums::InputPeer::Chat(tl::types::InputPeerChat {
+                    return Ok(Some(tl::enums::InputPeer::Chat(tl::types::InputPeerChat {
                         chat_id: c.id,
-                    }));
+                    })));
                 }
                 _ => {}
             }
@@ -344,10 +369,19 @@ impl Client {
     ///
     /// Returns the title and participant count of the chat the link points to.
     pub async fn check_invite(&self, link: &str) -> Result<tl::enums::ChatInvite, InvocationError> {
-        let hash = PeerRef::parse_invite_hash(link)
+        let hash = InviteHash::from_link(link)
             .ok_or_else(|| InvocationError::Deserialize(format!("invalid invite link: {link}")))?;
+        self.check_invite_hash(&hash).await
+    }
+
+    /// Same as [`Client::check_invite`], but for a hash you already have
+    /// instead of a full link.
+    pub async fn check_invite_hash(
+        &self,
+        hash: &InviteHash,
+    ) -> Result<tl::enums::ChatInvite, InvocationError> {
         let req = tl::functions::messages::CheckChatInvite {
-            hash: hash.to_string(),
+            hash: hash.as_str().to_string(),
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);

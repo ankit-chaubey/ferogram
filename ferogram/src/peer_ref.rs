@@ -10,6 +10,8 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
+use std::borrow::Cow;
+
 use crate::PeerCache;
 
 use ferogram_tl_types as tl;
@@ -37,6 +39,12 @@ pub enum PeerRef {
     Peer(tl::enums::Peer),
     Input(tl::enums::InputPeer),
     InviteHash(String),
+    /// E.164 phone number, e.g. `"+12025551234"`.
+    ///
+    /// Resolving a phone that isn't already cached calls
+    /// `contacts.importContacts`, which adds it to the account's contact
+    /// list as a side effect - unlike username/ID resolution, this is not
+    /// a read-only lookup.
     Phone(String),
 }
 
@@ -216,6 +224,40 @@ fn input_peer_to_peer(ip: tl::enums::InputPeer) -> Result<tl::enums::Peer, crate
     }
 }
 
+/// The token portion of an invite link, e.g. the `HASH` in `t.me/+HASH`.
+///
+/// `Client::join_link` and `Client::check_invite` take a full link and
+/// extract this internally. If you already have the bare hash (for
+/// example, stored from a previous call), use [`InviteHash::new`] instead
+/// of rebuilding a fake link just to have it parsed back out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InviteHash(String);
+
+impl InviteHash {
+    /// Wrap a hash you already have.
+    pub fn new(hash: impl Into<String>) -> Self {
+        Self(hash.into())
+    }
+
+    /// Extract the hash from a full invite link.
+    ///
+    /// Accepts `t.me/+HASH`, `t.me/joinchat/HASH`, and `tg://join?invite=HASH`.
+    /// Returns `None` if `link` doesn't match any of those patterns.
+    pub fn from_link(link: &str) -> Option<Self> {
+        PeerRef::parse_invite_hash(link).map(|h| Self(h.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for InviteHash {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 // From impls
 
 impl From<&str> for PeerRef {
@@ -265,8 +307,10 @@ fn normalize_str(s: &str) -> PeerRef {
         return PeerRef::Username(uname.to_owned());
     }
 
-    if s.starts_with('+') && s.len() > 5 && s[1..].chars().all(|c| c.is_ascii_digit()) {
-        return PeerRef::Phone(s.to_owned());
+    if s.starts_with('+')
+        && let Some(phone) = crate::util::normalize_phone(s)
+    {
+        return PeerRef::Phone(phone);
     }
 
     if let Ok(id) = s.parse::<i64>() {
@@ -284,7 +328,12 @@ fn parse_tme_username(s: &str) -> Option<&str> {
         .strip_prefix("https://t.me/")
         .or_else(|| s.strip_prefix("http://t.me/"))
         .or_else(|| s.strip_prefix("https://telegram.me/"))
-        .or_else(|| s.strip_prefix("http://telegram.me/"))?;
+        .or_else(|| s.strip_prefix("http://telegram.me/"))
+        .or_else(|| s.strip_prefix("https://telegram.dog/"))
+        .or_else(|| s.strip_prefix("http://telegram.dog/"))
+        .or_else(|| s.strip_prefix("t.me/"))
+        .or_else(|| s.strip_prefix("telegram.me/"))
+        .or_else(|| s.strip_prefix("telegram.dog/"))?;
 
     if path.starts_with('+') || path.starts_with("joinchat/") {
         return None;
@@ -296,4 +345,63 @@ fn parse_tme_username(s: &str) -> Option<&str> {
     }
 
     path.split('/').next().filter(|u| !u.is_empty())
+}
+
+impl std::str::FromStr for PeerRef {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(normalize_str(s))
+    }
+}
+
+impl<'a> From<Cow<'a, str>> for PeerRef {
+    fn from(cow: Cow<'a, str>) -> Self {
+        match cow {
+            Cow::Borrowed(s) => normalize_str(s),
+            Cow::Owned(s) => normalize_owned(s),
+        }
+    }
+}
+
+/// Same rules as `normalize_str`, but reuses the `String` we already own
+/// instead of allocating a new one, for the two branches where that's
+/// possible (a clean phone number, or a clean plain username).
+///
+/// The invite hash and t.me-username branches always need a substring of
+/// `s`, so there's nothing to save there, they fall back to `normalize_str`.
+fn normalize_owned(mut s: String) -> PeerRef {
+    let trimmed = s.trim();
+    if trimmed.len() != s.len() {
+        // Whitespace to strip: no cheap path, drop into the borrowed logic.
+        return normalize_str(trimmed);
+    }
+
+    if PeerRef::parse_invite_hash(&s).is_some() || parse_tme_username(&s).is_some() {
+        return normalize_str(&s);
+    }
+
+    if s.starts_with('+') && s.len() > 5 && s[1..].chars().all(|c| c.is_ascii_digit()) {
+        return PeerRef::Phone(s);
+    }
+
+    if s.starts_with('+') {
+        // Possibly a phone number with spaces/hyphens/parens: no cheap path
+        // that reuses `s`, so dispatch through the shared normalizer.
+        return normalize_str(&s);
+    }
+
+    if s.parse::<i64>().is_ok() {
+        // Parsing doesn't allocate, so there's no benefit to reusing s here.
+        return normalize_str(&s);
+    }
+
+    // trim_start_matches('@') strips every leading '@', not just one, match
+    // that exactly so this path never disagrees with normalize_str.
+    let leading_ats = s.bytes().take_while(|&b| b == b'@').count();
+    if leading_ats > 0 {
+        s.drain(..leading_ats);
+    }
+
+    PeerRef::Username(s)
 }

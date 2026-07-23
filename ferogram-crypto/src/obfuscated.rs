@@ -141,36 +141,55 @@ pub fn build_obfuscated_init(
     (nonce, cipher)
 }
 
-/// Derive the MTProxy FakeTls obfuscation cipher and the HMAC to embed in the
-/// ClientHello random field.
+/// Compute the FakeTLS ClientHello random-field value.
 ///
-/// `secret`: the 16-byte MTProxy secret.
-/// `tls_record`: the fully assembled TLS ClientHello record bytes (before the
-///   random field is filled in; the caller fills it after this returns).
+/// `secret` is the 16-byte MTProxy key. `record` must be the fully assembled
+/// ClientHello TLS record with the 32-byte random field zeroed.
 ///
-/// Returns `(hmac_result, cipher)`:
-/// - `hmac_result` is the 32-byte `HMAC-SHA256(secret, tls_record)` value that
-///   the caller writes into the ClientHello random field at offset 11.
-/// - `cipher` is the `ObfuscatedCipher` keyed from `SHA256(secret || hmac_result)`,
-///   used for all subsequent encrypted I/O on the connection.
-pub fn build_fake_tls_keys(secret: &[u8; 16], tls_record: &[u8]) -> ([u8; 32], ObfuscatedCipher) {
+/// Returns `HMAC-SHA256(secret, record)` with its last 4 bytes XORed with the
+/// current unix timestamp (little-endian) -- the anti-replay scheme real
+/// MTProxy FakeTLS servers check for. The caller writes this value into the
+/// record's random field, then sends the record as-is.
+pub fn fake_tls_client_digest(secret: &[u8; 16], record: &[u8]) -> [u8; 32] {
     use hmac::{Hmac, Mac};
-    use sha2::Digest;
     type HmacSha256 = Hmac<sha2::Sha256>;
 
-    // HMAC-SHA256(secret, tls_record) → random field value
     let mut mac =
         HmacSha256::new_from_slice(secret).expect("HMAC key error: secret must be non-empty");
-    mac.update(tls_record);
-    let hmac_result: [u8; 32] = mac.finalize().into_bytes().into();
+    mac.update(record);
+    let mut digest: [u8; 32] = mac.finalize().into_bytes().into();
 
-    // SHA256(secret || hmac_result) → obfuscation key
-    let mut h = sha2::Sha256::new();
-    h.update(secret.as_ref());
-    h.update(hmac_result);
-    let derived: [u8; 32] = h.finalize().into();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as u32)
+        .unwrap_or(0);
+    let last4 = u32::from_le_bytes(digest[28..32].try_into().expect("4-byte slice")) ^ now;
+    digest[28..32].copy_from_slice(&last4.to_le_bytes());
+    digest
+}
 
-    let iv = [0u8; 16];
-    let cipher = ObfuscatedCipher::from_keys(&derived, &iv, &derived, &iv);
-    (hmac_result, cipher)
+/// Verify a FakeTLS ServerHello digest.
+///
+/// `packet_with_digest_zeroed` must be the concatenated ServerHello +
+/// ChangeCipherSpec + first Application-Data ("cert") record bytes, exactly
+/// as read off the wire, with the server's own 32-byte digest field zeroed
+/// in place. `client_digest` is the raw value this client sent on the wire
+/// in its own ClientHello. `expected_digest` is what the server actually
+/// sent (extracted before zeroing). Returns `true` if the server proves
+/// knowledge of the secret.
+pub fn fake_tls_verify_server_digest(
+    secret: &[u8; 16],
+    client_digest: &[u8; 32],
+    packet_with_digest_zeroed: &[u8],
+    expected_digest: &[u8; 32],
+) -> bool {
+    use hmac::{Hmac, Mac};
+    type HmacSha256 = Hmac<sha2::Sha256>;
+
+    let mut mac =
+        HmacSha256::new_from_slice(secret).expect("HMAC key error: secret must be non-empty");
+    mac.update(client_digest);
+    mac.update(packet_with_digest_zeroed);
+    let computed: [u8; 32] = mac.finalize().into_bytes().into();
+    computed == *expected_digest
 }

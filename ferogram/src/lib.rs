@@ -262,7 +262,7 @@ pub use mini_app::{MiniApp, MiniAppSession};
 pub use participants::{Participant, ParticipantStatus, ProfilePhotoIter};
 pub use peer_cache::{ExperimentalFeatures, PeerCache, PeerCacheStats, PeerType};
 pub use peer_ext::{OptionPeerExt, PeerExt};
-pub use peer_ref::PeerRef;
+pub use peer_ref::{InviteHash, PeerRef};
 pub use poll::PollBuilder;
 pub use proxy::{MtProxyConfig, parse_proxy_link};
 pub use quick_connect::QuickConnectError;

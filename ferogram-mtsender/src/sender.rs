@@ -979,21 +979,28 @@ impl DcConnection {
                 cipher.lock().await.encrypt(&mut frame);
                 stream.write_all(&frame).await?;
             }
-            FrameKind::FakeTls { cipher } => {
-                const TLS_APP_DATA: u8 = 0x17;
-                const TLS_VER: [u8; 2] = [0x03, 0x03];
-                const CHUNK: usize = 2878;
-                let mut locked = cipher.lock().await;
-                for chunk in data.chunks(CHUNK) {
-                    let chunk_len = chunk.len() as u16;
-                    let mut record = Vec::with_capacity(5 + chunk.len());
-                    record.push(TLS_APP_DATA);
-                    record.extend_from_slice(&TLS_VER);
-                    record.extend_from_slice(&chunk_len.to_be_bytes());
-                    record.extend_from_slice(chunk);
-                    locked.encrypt(&mut record[5..]);
-                    stream.write_all(&record).await?;
-                }
+            FrameKind::FakeTls { cipher, .. } => {
+                // Same PaddedIntermediate framing as `dd`, then wrapped in
+                // TLS Application Data records (see ferogram-connect's
+                // frame.rs / mtp_sender.rs for the matching read side and
+                // the handshake that establishes `cipher`). The leading
+                // ChangeCipherSpec decoy is sent once, during the
+                // handshake, not here.
+                let mut pad_len_buf = [0u8; 1];
+                ferogram_crypto::fill_random(&mut pad_len_buf);
+                let pad_len = (pad_len_buf[0] & 0x0f) as usize;
+                let total_payload = data.len() + pad_len;
+                let mut frame = Vec::with_capacity(4 + total_payload);
+                frame.extend_from_slice(&(total_payload as u32).to_le_bytes());
+                frame.extend_from_slice(data);
+                let mut pad = vec![0u8; pad_len];
+                ferogram_crypto::fill_random(&mut pad);
+                frame.extend_from_slice(&pad);
+                cipher.lock().await.encrypt(&mut frame);
+
+                let mut wire = Vec::new();
+                ferogram_connect::tls_record::wrap_application_data(&frame, &mut wire);
+                stream.write_all(&wire).await?;
             }
         }
         Ok(())
@@ -1160,19 +1167,51 @@ impl DcConnection {
                 }
                 Ok(buf)
             }
-            FrameKind::FakeTls { cipher } => {
-                let mut hdr = [0u8; 5];
-                tread!(&mut hdr);
-                if hdr[0] != 0x17 {
-                    return Err(InvocationError::Deserialize(format!(
-                        "FakeTLS: unexpected record type 0x{:02x}",
-                        hdr[0]
-                    )));
+            FrameKind::FakeTls {
+                cipher,
+                decoded_pending,
+                ..
+            } => {
+                async fn timed(
+                    fut: impl std::future::Future<Output = Result<(), ferogram_connect::ConnectError>>,
+                ) -> Result<(), InvocationError> {
+                    timeout(RECV_TIMEOUT, fut)
+                        .await
+                        .map_err(|_| {
+                            InvocationError::Io(std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "transfer recv: timeout (60 s)",
+                            ))
+                        })?
+                        .map_err(InvocationError::from)
                 }
-                let payload_len = u16::from_be_bytes([hdr[3], hdr[4]]) as usize;
-                let mut buf = vec![0u8; payload_len];
-                tread!(&mut buf);
-                cipher.lock().await.decrypt(&mut buf);
+
+                let mut len_buf = [0u8; 4];
+                timed(ferogram_connect::faketls_read_exact(
+                    stream,
+                    cipher,
+                    decoded_pending,
+                    &mut len_buf,
+                ))
+                .await?;
+                let total_len = i32::from_le_bytes(len_buf);
+                if total_len < 0 {
+                    return Err(InvocationError::Rpc(
+                        crate::errors::RpcError::from_telegram(total_len, "transport error"),
+                    ));
+                }
+                let mut buf = vec![0u8; total_len as usize];
+                timed(ferogram_connect::faketls_read_exact(
+                    stream,
+                    cipher,
+                    decoded_pending,
+                    &mut buf,
+                ))
+                .await?;
+                if buf.len() >= 24 {
+                    let pad = (buf.len() - 24) % 16;
+                    buf.truncate(buf.len() - pad);
+                }
                 Ok(buf)
             }
         }

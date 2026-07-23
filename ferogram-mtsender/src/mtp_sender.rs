@@ -35,6 +35,7 @@ use crate::pool::build_msgs_ack_ping_body;
 const PING_DELAY: Duration = Duration::from_secs(60);
 const READ_TIMEOUT: Duration = Duration::from_secs(90);
 const READ_BUF_CAP: usize = (1024 * 1024) + (8 * 1024);
+const READ_SCRATCH_CAP: usize = 64 * 1024;
 
 #[derive(Debug)]
 enum MsgState {
@@ -53,7 +54,7 @@ struct Request {
 }
 
 enum StepOutcome {
-    Frames,
+    Read(usize),
     Wrote(usize),
     Ping,
 }
@@ -73,8 +74,17 @@ pub struct MtpSender {
     resend_queue: Vec<Vec<u8>>,
 
     /// Read buffer.  We append into `[..tail]` and peel frames from the front.
+    /// Always holds *decoded* bytes: for the plain transports this is raw
+    /// TCP bytes; for Obfuscated/PaddedIntermediate/FakeTls it is bytes
+    /// already run through [`Self::ingest_read`] (TLS-record-unwrapped, if
+    /// applicable, then AES-256-CTR decrypted) so `peel_one` never has to
+    /// know about the active transport's encryption.
     read_buf: Box<[u8]>,
     read_tail: usize,
+
+    /// Scratch buffer the raw `TcpStream::read` lands in before
+    /// [`Self::ingest_read`] decodes it into `read_buf`.
+    read_scratch: Box<[u8]>,
 
     /// Write buffer + cursor (bytes before `write_head` have been sent).
     write_buf: Vec<u8>,
@@ -95,6 +105,8 @@ impl MtpSender {
         frame_kind: FrameKind,
         perm_auth_key: Option<[u8; 256]>,
     ) -> Self {
+        let mut read_buf = vec![0u8; READ_BUF_CAP].into_boxed_slice();
+        let read_tail = Self::drain_faketls_handoff(&frame_kind, &mut read_buf);
         Self {
             stream,
             enc,
@@ -103,14 +115,39 @@ impl MtpSender {
             requests: VecDeque::new(),
             pending_ack: Vec::new(),
             resend_queue: Vec::new(),
-            read_buf: vec![0u8; READ_BUF_CAP].into_boxed_slice(),
-            read_tail: 0,
+            read_buf,
+            read_tail,
+            read_scratch: vec![0u8; READ_SCRATCH_CAP].into_boxed_slice(),
             write_buf: Vec::with_capacity(64 * 1024),
             write_head: 0,
             next_ping: Instant::now() + PING_DELAY,
             salts: Vec::new(),
             start_salt_time: None,
         }
+    }
+
+    /// If `frame_kind` is FakeTLS and the pre-auth DH handshake left
+    /// already-decrypted bytes sitting in its shared `decoded_pending`
+    /// buffer (very likely: TLS records are up to 16KB but DH frames are
+    /// small, so a single record read during the handshake commonly decodes
+    /// past the frame boundary), drain them into `read_buf` so nothing is
+    /// lost across the handshake -> `MtpSender` handoff. Returns the
+    /// resulting `read_tail`.
+    fn drain_faketls_handoff(frame_kind: &FrameKind, read_buf: &mut [u8]) -> usize {
+        if let FrameKind::FakeTls {
+            decoded_pending, ..
+        } = frame_kind
+        {
+            if let Ok(mut leftover) = decoded_pending.try_lock() {
+                if !leftover.is_empty() {
+                    let n = leftover.len().min(read_buf.len());
+                    read_buf[..n].copy_from_slice(&leftover[..n]);
+                    leftover.drain(..n);
+                    return n;
+                }
+            }
+        }
+        0
     }
 
     /// The permanent auth key, for persisting to the session. Under PFS this
@@ -161,9 +198,9 @@ impl MtpSender {
     ) {
         self.stream = stream;
         self.enc = enc;
-        self.frame_kind = frame_kind;
         self.perm_auth_key = perm_auth_key;
-        self.read_tail = 0;
+        self.read_tail = Self::drain_faketls_handoff(&frame_kind, &mut self.read_buf);
+        self.frame_kind = frame_kind;
         self.write_buf.clear();
         self.write_head = 0;
         self.pending_ack.clear();
@@ -207,7 +244,7 @@ impl MtpSender {
         let result = tokio::select! {
             biased;
 
-            result = tokio::time::timeout(READ_TIMEOUT, rh.read(&mut self.read_buf[self.read_tail..])) => {
+            result = tokio::time::timeout(READ_TIMEOUT, rh.read(&mut self.read_scratch[..])) => {
                 match result {
                     Err(_) => {
                         return Err(InvocationError::Io(std::io::Error::new(
@@ -223,8 +260,7 @@ impl MtpSender {
                         )));
                     }
                     Ok(Ok(n)) => {
-                        self.read_tail += n;
-                        Ok::<_, InvocationError>(StepOutcome::Frames)
+                        Ok::<_, InvocationError>(StepOutcome::Read(n))
                     }
                 }
             }
@@ -243,7 +279,10 @@ impl MtpSender {
 
         // rh/wh borrows end here; self is fully accessible again.
         match result {
-            StepOutcome::Frames => self.drain_frames(),
+            StepOutcome::Read(n) => {
+                self.ingest_read(n)?;
+                self.drain_frames()
+            }
             StepOutcome::Wrote(n) => {
                 self.write_head += n;
                 if self.write_head >= self.write_buf.len() {
@@ -385,6 +424,133 @@ impl MtpSender {
             self.read_buf.copy_within(consumed..self.read_tail, 0);
             self.read_tail -= consumed;
         }
+    }
+
+    /// Decode `self.read_scratch[..n]` (freshly read raw TCP bytes) per the
+    /// active transport and append the result -- always *plaintext*, ready
+    /// for `peel_one` -- to `read_buf`.
+    ///
+    /// `Obfuscated` / `PaddedIntermediate`: the raw bytes are ciphertext
+    /// 1:1; decrypt in place. AES-256-CTR is a keystream cipher, so
+    /// decrypting each newly-arrived chunk exactly once, in stream order,
+    /// is correct regardless of where transport frame boundaries fall
+    /// relative to TCP read boundaries.
+    ///
+    /// `FakeTls`: the raw bytes are TLS-record-wrapped ciphertext, not
+    /// ciphertext directly. Unwrap complete TLS records first (buffering
+    /// any partial trailing record in the shared `tls_raw_pending` for the
+    /// next read), decrypt exactly the ciphertext bytes that were
+    /// extracted, then append.
+    fn ingest_read(&mut self, n: usize) -> Result<(), InvocationError> {
+        // Clone the Arc handles we need out of `self.frame_kind` first (cheap:
+        // just a refcount bump) so that borrow ends here, before any of the
+        // `&mut self` calls below -- avoids borrowing `self.frame_kind` and
+        // `self` mutably at the same time.
+        enum Decoder {
+            Plain,
+            Ctr(std::sync::Arc<tokio::sync::Mutex<ferogram_crypto::ObfuscatedCipher>>),
+            FakeTls {
+                cipher: std::sync::Arc<tokio::sync::Mutex<ferogram_crypto::ObfuscatedCipher>>,
+                tls_raw_pending: std::sync::Arc<tokio::sync::Mutex<Vec<u8>>>,
+            },
+        }
+        let decoder = match &self.frame_kind {
+            FrameKind::Obfuscated { cipher } | FrameKind::PaddedIntermediate { cipher } => {
+                Decoder::Ctr(cipher.clone())
+            }
+            FrameKind::FakeTls {
+                cipher,
+                tls_raw_pending,
+                ..
+            } => Decoder::FakeTls {
+                cipher: cipher.clone(),
+                tls_raw_pending: tls_raw_pending.clone(),
+            },
+            _ => Decoder::Plain,
+        };
+
+        match decoder {
+            Decoder::Plain => self.push_decoded_scratch(n),
+            Decoder::Ctr(cipher) => {
+                // AES-CTR is a keystream cipher: skipping a chunk here
+                // (silently, on lock contention) does NOT just lose that
+                // chunk -- it permanently desyncs the keystream position for
+                // every byte read afterwards, since the counter only
+                // advances on an actual decrypt() call. A failed try_lock
+                // must abort this read, never fall through undecrypted.
+                let Ok(mut c) = cipher.try_lock() else {
+                    return Err(io_err(
+                        "Obfuscated/PaddedIntermediate: cipher lock contention on the \
+                         single owning task"
+                            .into(),
+                    ));
+                };
+                c.decrypt(&mut self.read_scratch[..n]);
+                drop(c);
+                self.push_decoded_scratch(n)
+            }
+            Decoder::FakeTls {
+                cipher,
+                tls_raw_pending,
+            } => {
+                let Ok(mut raw) = tls_raw_pending.try_lock() else {
+                    // Only this task ever touches tls_raw_pending after the
+                    // handshake hands the connection off, so a failed
+                    // try_lock here means something is badly wrong.
+                    return Err(io_err(
+                        "FakeTLS: tls_raw_pending lock contention on the single owning task".into(),
+                    ));
+                };
+                raw.extend_from_slice(&self.read_scratch[..n]);
+                let unwrapped =
+                    ferogram_connect::tls_record::unwrap_records(&raw).map_err(io_err)?;
+                raw.drain(..unwrapped.consumed);
+                drop(raw);
+
+                let mut ciphertext = unwrapped.ciphertext;
+                // Same CTR-desync hazard as Decoder::Ctr above: this used to
+                // silently skip decrypt() on lock contention and push raw
+                // ciphertext into read_buf as if it were plaintext, which is
+                // exactly what produces the "frame too short or not
+                // block-aligned" / Crypto(InvalidBuffer) errors a few frames
+                // later, once peel_intermediate starts reading garbage
+                // length prefixes out of undecrypted bytes.
+                let Ok(mut c) = cipher.try_lock() else {
+                    return Err(io_err(
+                        "FakeTLS: data cipher lock contention on the single owning task".into(),
+                    ));
+                };
+                c.decrypt(&mut ciphertext);
+                drop(c);
+                self.push_decoded(&ciphertext)
+            }
+        }
+    }
+
+    /// Append `read_scratch[..n]` to `read_buf`.
+    fn push_decoded_scratch(&mut self, n: usize) -> Result<(), InvocationError> {
+        let end = self.read_tail + n;
+        if end > self.read_buf.len() {
+            return Err(io_err(
+                "read buffer overflow: server outpaced frame draining".into(),
+            ));
+        }
+        self.read_buf[self.read_tail..end].copy_from_slice(&self.read_scratch[..n]);
+        self.read_tail = end;
+        Ok(())
+    }
+
+    /// Append arbitrary decoded bytes to `read_buf`.
+    fn push_decoded(&mut self, bytes: &[u8]) -> Result<(), InvocationError> {
+        let end = self.read_tail + bytes.len();
+        if end > self.read_buf.len() {
+            return Err(io_err(
+                "read buffer overflow: server outpaced frame draining".into(),
+            ));
+        }
+        self.read_buf[self.read_tail..end].copy_from_slice(bytes);
+        self.read_tail = end;
+        Ok(())
     }
 
     /// Decrypt one complete payload and dispatch its body.
@@ -670,22 +836,26 @@ impl MtpSender {
                 }
                 f
             }
-            FrameKind::FakeTls { cipher } => {
-                const TLS_APP_DATA: u8 = 0x17;
-                const CHUNK: usize = 2878;
-                let mut out = Vec::new();
+            FrameKind::FakeTls { cipher, .. } => {
+                // Same PaddedIntermediate framing as `dd`, then wrapped in
+                // TLS Application Data records. The leading ChangeCipherSpec
+                // decoy was already sent once as part of the handshake, so
+                // every frame here is a plain Application Data write.
+                let mut pad_buf = [0u8; 1];
+                ferogram_crypto::fill_random(&mut pad_buf);
+                let pad_len = (pad_buf[0] & 0x0f) as usize;
+                let total = data.len() + pad_len;
+                let mut f = Vec::with_capacity(4 + total);
+                f.extend_from_slice(&(total as u32).to_le_bytes());
+                f.extend_from_slice(data);
+                let mut pad = vec![0u8; pad_len];
+                ferogram_crypto::fill_random(&mut pad);
+                f.extend_from_slice(&pad);
                 if let Ok(mut c) = cipher.try_lock() {
-                    for chunk in data.chunks(CHUNK) {
-                        let len = chunk.len() as u16;
-                        let mut rec = Vec::with_capacity(5 + chunk.len());
-                        rec.push(TLS_APP_DATA);
-                        rec.extend_from_slice(&[0x03, 0x03]);
-                        rec.extend_from_slice(&len.to_be_bytes());
-                        rec.extend_from_slice(chunk);
-                        c.encrypt(&mut rec[5..]);
-                        out.extend_from_slice(&rec);
-                    }
+                    c.encrypt(&mut f);
                 }
+                let mut out = Vec::new();
+                ferogram_connect::tls_record::wrap_application_data(&f, &mut out);
                 out
             }
         }

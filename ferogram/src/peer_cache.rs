@@ -268,8 +268,10 @@ impl PeerCache {
                 self.username_to_peer
                     .insert(uname.to_lowercase(), (u.id, PeerType::User));
             }
-            if let Some(ref phone) = u.phone {
-                self.phone_to_user.insert(phone.clone(), u.id);
+            if let Some(ref phone) = u.phone
+                && let Some(normalized) = crate::util::normalize_phone(phone)
+            {
+                self.phone_to_user.insert(normalized, u.id);
             }
         }
     }
@@ -303,8 +305,10 @@ impl PeerCache {
                 self.username_to_peer
                     .insert(uname.to_lowercase(), (u.id, PeerType::User));
             }
-            if let Some(ref phone) = u.phone {
-                self.phone_to_user.insert(phone.clone(), u.id);
+            if let Some(ref phone) = u.phone
+                && let Some(normalized) = crate::util::normalize_phone(phone)
+            {
+                self.phone_to_user.insert(normalized, u.id);
             }
         }
     }
