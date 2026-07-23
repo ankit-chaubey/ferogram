@@ -44,6 +44,7 @@ pub struct ClientBuilder {
     lang_pack: String,
     lang_code: String,
     probe_transport: bool,
+    transport_race: Option<Vec<ferogram_connect::RaceLeg>>,
     resilient_connect: bool,
     experimental_features: ExperimentalFeatures,
     use_pfs: bool,
@@ -74,6 +75,7 @@ impl Default for ClientBuilder {
             lang_pack: String::new(),
             lang_code: "en".to_string(),
             probe_transport: false,
+            transport_race: None,
             resilient_connect: false,
             experimental_features: ExperimentalFeatures::default(),
             use_pfs: false,
@@ -410,12 +412,30 @@ impl ClientBuilder {
         self
     }
 
-    /// Race Obfuscated / Abridged / HTTP transports in parallel and pick the
-    /// fastest.  Ideal when you don't know which transport your network allows.
+    /// Race transports in parallel and pick the fastest to connect.  Ideal
+    /// when you don't know which transport your network allows.
     /// Incompatible with MTProxy (proxy enforces a specific transport).
     /// Default: `false`.
     pub fn probe_transport(mut self, enabled: bool) -> Self {
         self.probe_transport = enabled;
+        self
+    }
+
+    /// Override the default `Full` vs `Obfuscated` race. No effect unless
+    /// `probe_transport(true)` is also set.
+    ///
+    /// ```
+    /// use ferogram::{ClientBuilder, RaceLeg, TransportKind};
+    ///
+    /// let builder = ClientBuilder::default()
+    ///     .probe_transport(true)
+    ///     .probe_transport_race(vec![
+    ///         RaceLeg::new(TransportKind::Full, 0),
+    ///         RaceLeg::new(TransportKind::Obfuscated { secret: None }, 100),
+    ///     ]);
+    /// ```
+    pub fn probe_transport_race(mut self, race: Vec<ferogram_connect::RaceLeg>) -> Self {
+        self.transport_race = Some(race);
         self
     }
 
@@ -712,6 +732,7 @@ impl ClientBuilder {
             lang_pack: self.lang_pack,
             lang_code: self.lang_code,
             probe_transport: self.probe_transport,
+            transport_race: self.transport_race,
             resilient_connect: self.resilient_connect,
             experimental_features: self.experimental_features,
             use_pfs: self.use_pfs,

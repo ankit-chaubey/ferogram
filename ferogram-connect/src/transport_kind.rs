@@ -47,6 +47,7 @@ pub enum TransportKind {
     ///
     /// Wraps all MTProto data in fake TLS 1.3 records.
     FakeTls { secret: [u8; 16], domain: String },
-    /// HTTP transport fallback: sends raw MTProto frames as HTTP POST to port 80.
+    /// Not real HTTP - falls back to `Abridged` framing on the same port.
+    /// Use `Abridged` directly instead.
     Http,
 }

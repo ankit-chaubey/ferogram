@@ -250,6 +250,7 @@ pub use errors::{
 };
 pub use ferogram_connect::TransportKind;
 pub use ferogram_connect::random_i64 as random_i64_pub;
+pub use ferogram_connect::{RaceLeg, default_transport_race};
 pub use file_info::{FileInfo, detect_mime, file_info, file_info_from_path};
 pub use guest_chat::GuestChatQuery;
 pub use input_message::{CopyOptions, ForwardOptions, InputMessage, InvoiceOptions, LinkKind};

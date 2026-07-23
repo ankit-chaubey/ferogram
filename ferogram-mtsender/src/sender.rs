@@ -47,68 +47,50 @@ pub struct DcConnection {
 }
 
 impl DcConnection {
-    /// Race Obfuscated / Abridged / Http transports and return the first to succeed.
+    /// Races the default transport set (see `default_transport_race`).
+    /// Use `connect_fastest_with` to pass a custom race.
     #[tracing::instrument(skip(socks5), fields(addr = %addr, dc_id = dc_id))]
     pub async fn connect_fastest(
         addr: &str,
         socks5: Option<&ferogram_connect::Socks5Config>,
         dc_id: i16,
-    ) -> Result<(Self, &'static str), InvocationError> {
+    ) -> Result<(Self, String), InvocationError> {
+        let race = ferogram_connect::default_transport_race();
+        Self::connect_fastest_with(addr, socks5, dc_id, &race).await
+    }
+
+    /// Races the given transports in parallel, each after its stagger
+    /// delay, and returns whichever finishes DH first. Others are cancelled.
+    #[tracing::instrument(skip(socks5, race), fields(addr = %addr, dc_id = dc_id))]
+    pub async fn connect_fastest_with(
+        addr: &str,
+        socks5: Option<&ferogram_connect::Socks5Config>,
+        dc_id: i16,
+        race: &[ferogram_connect::RaceLeg],
+    ) -> Result<(Self, String), InvocationError> {
         use tokio::task::JoinSet;
         let addr = addr.to_owned();
         let socks5 = socks5.cloned();
         tracing::debug!(
-            "[ferogram::sender] probing {addr} with Full, Obfuscated, and Abridged transports in parallel"
+            "[ferogram::sender] probing {addr} with {} transports in parallel: {:?}",
+            race.len(),
+            race.iter().map(|l| &l.transport).collect::<Vec<_>>()
         );
-        let mut set: JoinSet<Result<(DcConnection, &'static str), InvocationError>> =
-            JoinSet::new();
+        let mut set: JoinSet<Result<(DcConnection, String), InvocationError>> = JoinSet::new();
 
-        {
+        for leg in race {
             let a = addr.clone();
             let s = socks5.clone();
+            let transport = leg.transport.clone();
+            let stagger = leg.stagger;
+            let label = format!("{transport:?}");
             set.spawn(async move {
+                if !stagger.is_zero() {
+                    tokio::time::sleep(stagger).await;
+                }
                 Ok((
-                    DcConnection::connect_raw(&a, s.as_ref(), &TransportKind::Full, dc_id).await?,
-                    "Full",
-                ))
-            });
-        }
-        {
-            let a = addr.clone();
-            let s = socks5.clone();
-            set.spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                Ok((
-                    DcConnection::connect_raw(
-                        &a,
-                        s.as_ref(),
-                        &TransportKind::Obfuscated { secret: None },
-                        dc_id,
-                    )
-                    .await?,
-                    "Obfuscated",
-                ))
-            });
-        }
-        {
-            let a = addr.clone();
-            let s = socks5.clone();
-            set.spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                Ok((
-                    DcConnection::connect_raw(&a, s.as_ref(), &TransportKind::Abridged, dc_id)
-                        .await?,
-                    "Abridged",
-                ))
-            });
-        }
-        {
-            let a = addr.clone();
-            set.spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                Ok((
-                    DcConnection::connect_raw(&a, None, &TransportKind::Http, dc_id).await?,
-                    "Http",
+                    DcConnection::connect_raw(&a, s.as_ref(), None, &transport, dc_id).await?,
+                    label,
                 ))
             });
         }
@@ -130,17 +112,18 @@ impl DcConnection {
         Err(last_err)
     }
 
-    /// Connect and perform full DH handshake.
-    #[tracing::instrument(skip(socks5, transport), fields(addr = %addr, dc_id = dc_id))]
+    /// Connect and perform full DH handshake, optionally via `mtproxy`.
+    #[tracing::instrument(skip(socks5, mtproxy, transport), fields(addr = %addr, dc_id = dc_id))]
     pub async fn connect_raw(
         addr: &str,
         socks5: Option<&ferogram_connect::Socks5Config>,
+        mtproxy: Option<&ferogram_connect::MtProxyConfig>,
         transport: &TransportKind,
         dc_id: i16,
     ) -> Result<Self, InvocationError> {
         tracing::debug!("[ferogram::sender] connecting to {addr} with known auth key");
         let (stream, frame_kind, enc) =
-            ferogram_connect::connect_to_dc(addr, dc_id, transport, socks5, None).await?;
+            ferogram_connect::connect_to_dc(addr, dc_id, transport, socks5, mtproxy).await?;
 
         tracing::debug!("[ferogram::sender] DH complete, auth key established for {addr}");
         let seen = new_seen_msg_ids();

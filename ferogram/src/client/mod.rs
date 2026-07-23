@@ -126,6 +126,10 @@ pub struct Config {
     /// Race Obfuscated / Abridged / HTTP transports in parallel on fresh connect
     /// and pick the fastest.  Incompatible with MTProxy.  Default: `false`.
     pub probe_transport: bool,
+    /// Which transports `probe_transport` races, and their stagger delays.
+    /// `None` uses [`ferogram_connect::default_transport_race`] (`Full` vs
+    /// `Obfuscated`). Ignored unless `probe_transport` is `true`.
+    pub transport_race: Option<Vec<ferogram_connect::RaceLeg>>,
     /// If direct TCP fails, retry via DNS-over-HTTPS (Mozilla + Google),
     /// then fall back to Firebase / Google special-config.  Default: `false`.
     pub resilient_connect: bool,
@@ -302,6 +306,7 @@ impl Default for Config {
             lang_pack: String::new(),
             lang_code: "en".to_string(),
             probe_transport: false,
+            transport_race: None,
             resilient_connect: false,
             use_pfs: false,
             experimental_features: ExperimentalFeatures::default(),
@@ -670,6 +675,10 @@ impl Client {
             config.transport.clone()
         };
         let probe_transport = config.probe_transport;
+        let transport_race = config
+            .transport_race
+            .clone()
+            .unwrap_or_else(ferogram_connect::default_transport_race);
         let resilient_connect = config.resilient_connect;
 
         let (conn, home_dc_id, dc_opts, media_dc_opts, loaded_session) = match config
@@ -759,6 +768,7 @@ impl Client {
                             mtproxy.as_ref(),
                             &transport,
                             probe_transport,
+                            &transport_race,
                             resilient_connect,
                             config.dc_addr.as_deref(),
                             config.dc_id_override,
@@ -776,6 +786,7 @@ impl Client {
                         mtproxy.as_ref(),
                         &transport,
                         probe_transport,
+                        &transport_race,
                         resilient_connect,
                         config.dc_addr.as_deref(),
                         config.dc_id_override,
@@ -791,6 +802,7 @@ impl Client {
                     mtproxy.as_ref(),
                     &transport,
                     probe_transport,
+                    &transport_race,
                     resilient_connect,
                     config.dc_addr.as_deref(),
                     config.dc_id_override,
@@ -1308,99 +1320,44 @@ impl Client {
         Ok((client, shutdown_token))
     }
 
-    /// Race Obfuscated / Abridged / Http transports using `Connection::connect_raw`.
-    /// The winner is returned directly - no second DH handshake.
-    /// Logs per-transport start, result, and elapsed time in ms.
+    /// Races `race` and returns whichever completes DH first; the winning
+    /// connection is reused directly, no second handshake.
     async fn probe_transports_race(
         addr: &str,
         socks5: Option<&crate::socks5::Socks5Config>,
-
         dc_id: i16,
+        race: &[ferogram_connect::RaceLeg],
     ) -> Result<Connection, InvocationError> {
         use tokio::task::JoinSet;
-        let mut set: JoinSet<Result<(Connection, &'static str, u64), InvocationError>> =
-            JoinSet::new();
+        let mut set: JoinSet<Result<(Connection, String, u64), InvocationError>> = JoinSet::new();
 
-        // Obfuscated - starts immediately (best for DPI-heavy networks)
-        {
+        for leg in race {
             let a = addr.to_owned();
             let s = socks5.cloned();
+            let transport = leg.transport.clone();
+            let stagger = leg.stagger;
+            let label = format!("{transport:?}");
             set.spawn(async move {
-                tracing::debug!("[ferogram::connect] probing transport: Obfuscated (t=0ms)");
-                let t0 = tokio::time::Instant::now();
-                match Connection::connect_raw(
-                    &a,
-                    s.as_ref(),
-                    None,
-                    &TransportKind::Obfuscated { secret: None },
-                    dc_id,
-                )
-                .await
-                {
-                    Ok(c) => {
-                        let ms = t0.elapsed().as_millis() as u64;
-                        tracing::debug!(
-                            "[ferogram::connect] Obfuscated transport DH complete in {ms}ms"
-                        );
-                        Ok((c, "Obfuscated", ms))
-                    }
-                    Err(e) => {
-                        let ms = t0.elapsed().as_millis() as u64;
-                        tracing::debug!(
-                            "[ferogram::connect] Obfuscated transport failed after {ms}ms: {e}"
-                        );
-                        Err(InvocationError::from(e))
-                    }
+                tracing::debug!(
+                    "[ferogram::connect] probing transport: {label} (t={}ms)",
+                    stagger.as_millis()
+                );
+                if !stagger.is_zero() {
+                    tokio::time::sleep(stagger).await;
                 }
-            });
-        }
-
-        // Abridged - 200 ms stagger
-        {
-            let a = addr.to_owned();
-            let s = socks5.cloned();
-            set.spawn(async move {
-                tracing::debug!("[ferogram::connect] probing transport: Abridged (t=200ms)");
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 let t0 = tokio::time::Instant::now();
-                match Connection::connect_raw(&a, s.as_ref(), None, &TransportKind::Abridged, dc_id)
-                    .await
-                {
+                match Connection::connect_raw(&a, s.as_ref(), None, &transport, dc_id).await {
                     Ok(c) => {
                         let ms = t0.elapsed().as_millis() as u64;
                         tracing::debug!(
-                            "[ferogram::connect] Abridged transport DH complete in {ms}ms"
+                            "[ferogram::connect] {label} transport DH complete in {ms}ms"
                         );
-                        Ok((c, "Abridged", ms))
+                        Ok((c, label, ms))
                     }
                     Err(e) => {
                         let ms = t0.elapsed().as_millis() as u64;
                         tracing::debug!(
-                            "[ferogram::connect] Abridged transport failed after {ms}ms: {e}"
-                        );
-                        Err(InvocationError::from(e))
-                    }
-                }
-            });
-        }
-
-        // Http - 800 ms stagger (last resort, no socks5)
-        {
-            let a = addr.to_owned();
-            set.spawn(async move {
-                tracing::debug!("[ferogram::connect] probing transport: HTTP (t=800ms)");
-                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                let t0 = tokio::time::Instant::now();
-                match Connection::connect_raw(&a, None, None, &TransportKind::Http, dc_id).await {
-                    Ok(c) => {
-                        let ms = t0.elapsed().as_millis() as u64;
-                        tracing::debug!("[ferogram::connect] HTTP transport DH complete in {ms}ms");
-                        Ok((c, "Http", ms))
-                    }
-                    Err(e) => {
-                        let ms = t0.elapsed().as_millis() as u64;
-                        tracing::debug!(
-                            "[ferogram::connect] HTTP transport failed after {ms}ms: {e}"
+                            "[ferogram::connect] {label} transport failed after {ms}ms: {e}"
                         );
                         Err(InvocationError::from(e))
                     }
@@ -1440,12 +1397,14 @@ impl Client {
     }
 
     /// Fresh connect with optional transport probing and resilient fallback.
+    #[allow(clippy::too_many_arguments)]
     async fn fresh_connect_resilient(
         socks5: Option<&crate::socks5::Socks5Config>,
         mtproxy: Option<&crate::proxy::MtProxyConfig>,
 
         transport: &TransportKind,
         probe_transport: bool,
+        transport_race: &[ferogram_connect::RaceLeg],
 
         resilient_connect: bool,
         dc_addr_override: Option<&str>,
@@ -1478,9 +1437,10 @@ impl Client {
         // Transport probing: race transports; winner becomes the final connection.
         if probe_transport && mtproxy.is_none() {
             tracing::info!(
-                "[ferogram::connect] probing DC{dc_id}: racing Obfuscated, Abridged, and HTTP transports in parallel"
+                "[ferogram::connect] probing DC{dc_id}: racing {} transports in parallel",
+                transport_race.len()
             );
-            match Self::probe_transports_race(&default_addr, socks5, dc_id).await {
+            match Self::probe_transports_race(&default_addr, socks5, dc_id, transport_race).await {
                 Ok(conn) => return Ok((conn, dc_id as i32, build_opts())),
                 Err(e) => {
                     tracing::warn!(
@@ -3705,6 +3665,7 @@ impl Client {
                     dc_pool::DcConnection::connect_raw(
                         &addr,
                         socks5.as_ref(),
+                        mtproxy.as_ref(),
                         &TransportKind::Abridged,
                         target_dc as i16,
                     )
@@ -3782,6 +3743,7 @@ impl Client {
                     let conn = dc_pool::DcConnection::connect_raw(
                         &addr,
                         socks5.as_ref(),
+                        mtproxy.as_ref(),
                         &TransportKind::Abridged,
                         target_dc as i16,
                     )
@@ -4024,6 +3986,7 @@ impl Client {
                 dc_pool::DcConnection::connect_raw(
                     &addr,
                     socks5.as_ref(),
+                    mtproxy.as_ref(),
                     &TransportKind::Abridged,
                     target_dc as i16,
                 )
@@ -4148,6 +4111,7 @@ impl Client {
                 let mut conn = dc_pool::DcConnection::connect_raw(
                     &addr,
                     socks5.as_ref(),
+                    mtproxy.as_ref(),
                     &TransportKind::Abridged,
                     target_dc as i16,
                 )
@@ -4395,6 +4359,7 @@ impl Client {
                         dc_pool::DcConnection::connect_raw(
                             &addr,
                             socks5.as_ref(),
+                            mtproxy.as_ref(),
                             &transport,
                             dc_id as i16,
                         )
@@ -4499,6 +4464,7 @@ impl Client {
                         let mut conn = dc_pool::DcConnection::connect_raw(
                             &addr,
                             socks5.as_ref(),
+                            mtproxy.as_ref(),
                             &transport,
                             dc_id as i16,
                         )

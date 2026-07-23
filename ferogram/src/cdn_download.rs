@@ -81,6 +81,7 @@ impl CdnDownloader {
         let conn = DcConnection::connect_raw(
             cdn_dc_addr,
             socks5,
+            None,
             &TransportKind::Obfuscated { secret: None },
             cdn_dc_id,
         )

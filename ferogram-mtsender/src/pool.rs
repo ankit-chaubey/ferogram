@@ -196,6 +196,7 @@ impl DcPool {
                 DcConnection::connect_raw(
                     &addr,
                     self.socks5.as_ref(),
+                    None,
                     &self.transport,
                     dc_id as i16,
                 )
@@ -249,6 +250,7 @@ impl DcPool {
                 DcConnection::connect_raw(
                     &addr,
                     self.socks5.as_ref(),
+                    None,
                     &self.transport,
                     dc_id as i16,
                 )

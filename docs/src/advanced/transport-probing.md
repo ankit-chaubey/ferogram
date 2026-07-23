@@ -21,19 +21,54 @@ let (client, _shutdown) = Client::builder()
     .await?;
 ```
 
-### Race schedule
+### Race schedule (default)
 
 | Transport | Start delay | Notes |
 |---|---|---|
-| `Obfuscated` | 0 ms | Runs first. Best for DPI-heavy networks. |
-| `Abridged` | 200 ms | Staggered so Obfuscated has a head start. |
-| `Http` | 800 ms | Last resort. SOCKS5 is not used for HTTP probes. |
+| `Full` | 0 ms | Well-tested default, CRC32 integrity check. Wins on unrestricted networks. |
+| `Obfuscated` | 200 ms | Staggered behind `Full`. Best for DPI-heavy networks. |
+
+`Abridged`/`Intermediate` are intentionally not raced alongside `Full`: they
+differ only in wire framing over the *same* TCP connection to the *same*
+IP:port, so a network that blocks or allows `Full` will almost always block
+or allow them identically - racing them adds connection load without a
+different success path. `Http` was removed from the race entirely: despite
+the name it never sent real HTTP frames, it silently fell back to `Abridged`
+framing on the same port, so it was a duplicate `Abridged` attempt under a
+misleading label.
 
 The winner's connection is reused directly. No second DH exchange is
 performed, so there is no extra round trip cost.
 
-If all three transports fail, the connection attempt returns the last
-`InvocationError` from the race.
+If every transport in the race fails, the connection attempt returns the
+last `InvocationError` from the race.
+
+### Customizing the race
+
+Override the default two-leg race with `.probe_transport_race()`:
+
+```rust
+use ferogram::{Client, RaceLeg, TransportKind};
+
+let (client, _shutdown) = Client::builder()
+    .api_id(12345)
+    .api_hash("your_hash")
+    .session("bot.session")
+    .probe_transport(true)
+    .probe_transport_race(vec![
+        RaceLeg::new(TransportKind::Full, 0),
+        RaceLeg::new(TransportKind::Obfuscated { secret: None }, 100),
+        RaceLeg::new(
+            TransportKind::FakeTls { secret: [0u8; 16], domain: "www.bing.com".into() },
+            300,
+        ),
+    ])
+    .connect()
+    .await?;
+```
+
+`probe_transport_race` has no effect unless `probe_transport(true)` is also
+set.
 
 ### When to use
 

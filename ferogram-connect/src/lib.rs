@@ -70,6 +70,7 @@ pub mod error;
 pub mod frame;
 pub mod pfs;
 pub mod proxy;
+pub mod race;
 pub mod socks5;
 pub mod tls_record;
 pub mod transport;
@@ -83,6 +84,7 @@ pub use error::ConnectError;
 pub use frame::{faketls_read_exact, send_frame};
 pub use pfs::{decode_bind_response, decode_bind_single};
 pub use proxy::MtProxyConfig;
+pub use race::{RaceLeg, default_transport_race};
 pub use socks5::Socks5Config;
 pub use transport_intermediate::{
     FullTransport, IntermediateTransport, PaddedIntermediateTransport,
