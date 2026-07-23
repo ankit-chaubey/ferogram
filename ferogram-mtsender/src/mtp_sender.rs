@@ -732,7 +732,10 @@ impl MtpSender {
         match &self.frame_kind {
             FrameKind::Full { recv_seqno, .. } => peel_full(buf, offset, recv_seqno),
             FrameKind::Abridged | FrameKind::Obfuscated { .. } => peel_abridged(buf, offset),
-            _ => peel_intermediate(buf, offset),
+            FrameKind::FakeTls { cipher } => peel_faketls(buf, offset, cipher),
+            FrameKind::Intermediate | FrameKind::PaddedIntermediate { .. } => {
+                peel_intermediate(buf, offset)
+            }
         }
     }
 }
@@ -808,6 +811,39 @@ fn peel_intermediate(buf: &[u8], base: usize) -> Peel {
     Peel::Complete {
         payload: buf[4..4 + len].to_vec(),
         end: base + 4 + len,
+    }
+}
+
+/// Peel one FakeTLS Application Data record and CTR-decrypt its payload.
+///
+/// The 5-byte TLS header stays plaintext; only the payload is encrypted.
+fn peel_faketls(
+    buf: &[u8],
+    base: usize,
+    cipher: &std::sync::Arc<tokio::sync::Mutex<ferogram_crypto::ObfuscatedCipher>>,
+) -> Peel {
+    if buf.len() < 5 {
+        return Peel::Incomplete;
+    }
+    if buf[0] != 0x17 {
+        return Peel::Err(InvocationError::Deserialize(format!(
+            "FakeTLS: unexpected record type 0x{:02x}",
+            buf[0]
+        )));
+    }
+    let payload_len = u16::from_be_bytes([buf[3], buf[4]]) as usize;
+    if buf.len() < 5 + payload_len {
+        return Peel::Incomplete;
+    }
+    let mut payload = buf[5..5 + payload_len].to_vec();
+    let mut c = match cipher.try_lock() {
+        Ok(c) => c,
+        Err(_) => return Peel::Err(io_err("obfuscated cipher lock contended".into())),
+    };
+    c.decrypt(&mut payload);
+    Peel::Complete {
+        payload,
+        end: base + 5 + payload_len,
     }
 }
 
@@ -951,5 +987,57 @@ mod tests {
             }
             other => panic!("expected Complete, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn peel_faketls_after_decrypt_roundtrip() {
+        let tx_key = [0x55u8; 32];
+        let tx_iv = [0x66u8; 16];
+        let mut sender = ObfuscatedCipher::from_keys(&tx_key, &tx_iv, &[0u8; 32], &[0u8; 16]);
+        let receiver = peer_rx_cipher(&tx_key, &tx_iv);
+        let cipher = std::sync::Arc::new(tokio::sync::Mutex::new(receiver));
+
+        let body = vec![0x77u8; 40];
+        let len = body.len() as u16;
+        let mut frame = Vec::with_capacity(5 + body.len());
+        frame.push(0x17);
+        frame.extend_from_slice(&[0x03, 0x03]);
+        frame.extend_from_slice(&len.to_be_bytes());
+        frame.extend_from_slice(&body);
+        sender.encrypt(&mut frame[5..]);
+
+        match peel_faketls(&frame, 0, &cipher) {
+            Peel::Complete { payload, end } => {
+                assert_eq!(end, frame.len());
+                assert_eq!(payload, body);
+            }
+            other => panic!("expected Complete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peel_faketls_rejects_bad_record_type() {
+        let cipher = std::sync::Arc::new(tokio::sync::Mutex::new(peer_rx_cipher(
+            &[0u8; 32], &[0u8; 16],
+        )));
+        let frame = [0x16u8, 0x03, 0x03, 0x00, 0x01, 0x00];
+        match peel_faketls(&frame, 0, &cipher) {
+            Peel::Err(InvocationError::Deserialize(msg)) => {
+                assert!(
+                    msg.contains("unexpected record type"),
+                    "unexpected error message: {msg}"
+                );
+            }
+            other => panic!("expected Deserialize Err, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peel_faketls_incomplete_header() {
+        let cipher = std::sync::Arc::new(tokio::sync::Mutex::new(peer_rx_cipher(
+            &[0u8; 32], &[0u8; 16],
+        )));
+        let frame = [0x17u8, 0x03, 0x03];
+        assert!(matches!(peel_faketls(&frame, 0, &cipher), Peel::Incomplete));
     }
 }

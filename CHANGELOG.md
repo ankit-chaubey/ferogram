@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this, the first server frames were treated as plaintext length prefixes and
   failed with random `transport code -<n>` errors after a successful proxy
   handshake.
+- `ferogram-mtsender`: `MtpSender` FakeTLS (`ee` MTProxy) receive now peels
+  TLS Application Data records and CTR-decrypts only the payload, matching the
+  encode path. Previously records were mis-parsed as Intermediate frames,
+  causing `transport code`, hangs, or unpack failures after a successful proxy
+  handshake.
 
 ### Added
 
