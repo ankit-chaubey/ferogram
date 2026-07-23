@@ -91,26 +91,28 @@ pub async fn send_frame(
             stream.write_all(&frame).await?;
             Ok(())
         }
-        FrameKind::FakeTls { cipher } => {
-            // Wrap each MTProto message as a TLS Application Data record (type 0x17).
-            // Telegram's FakeTLS sends one MTProto frame per TLS record, encrypted
-            // with the Obfuscated2 cipher (no real TLS encryption).
-            const TLS_APP_DATA: u8 = 0x17;
-            const TLS_VER: [u8; 2] = [0x03, 0x03];
-            // Split into 2878-byte chunks per TLS record framing.
-            const CHUNK: usize = 2878;
-            let mut locked = cipher.lock().await;
-            for chunk in data.chunks(CHUNK) {
-                let chunk_len = chunk.len() as u16;
-                let mut record = Vec::with_capacity(5 + chunk.len());
-                record.push(TLS_APP_DATA);
-                record.extend_from_slice(&TLS_VER);
-                record.extend_from_slice(&chunk_len.to_be_bytes());
-                record.extend_from_slice(chunk);
-                // Encrypt only the payload portion (after the 5-byte header).
-                locked.encrypt(&mut record[5..]);
-                stream.write_all(&record).await?;
-            }
+        FrameKind::FakeTls { cipher, .. } => {
+            // Real ee framing: PaddedIntermediate frame (len + payload + 0-15
+            // random pad bytes), AES-256-CTR encrypted, then wrapped in TLS
+            // Application Data records. The leading ChangeCipherSpec decoy
+            // record was already sent once as part of the handshake
+            // (alongside the connection-start nonce), so every send_frame
+            // call after that is a plain Application Data write.
+            let mut pad_len_buf = [0u8; 1];
+            ferogram_crypto::fill_random(&mut pad_len_buf);
+            let pad_len = (pad_len_buf[0] & 0x0f) as usize;
+            let total_payload = data.len() + pad_len;
+            let mut frame = Vec::with_capacity(4 + total_payload);
+            frame.extend_from_slice(&(total_payload as u32).to_le_bytes());
+            frame.extend_from_slice(data);
+            let mut pad = vec![0u8; pad_len];
+            ferogram_crypto::fill_random(&mut pad);
+            frame.extend_from_slice(&pad);
+            cipher.lock().await.encrypt(&mut frame);
+
+            let mut wire = Vec::new();
+            crate::tls_record::wrap_application_data(&frame, &mut wire);
+            stream.write_all(&wire).await?;
             Ok(())
         }
     }
@@ -228,19 +230,21 @@ pub async fn recv_frame_plain<T: Deserializable>(
             cipher.lock().await.decrypt(&mut buf);
             buf
         }
-        FrameKind::FakeTls { cipher } => {
-            let mut hdr = [0u8; 5];
-            stream.read_exact(&mut hdr).await?;
-            if hdr[0] != 0x17 {
+        FrameKind::FakeTls {
+            cipher,
+            decoded_pending,
+            ..
+        } => {
+            let mut len_buf = [0u8; 4];
+            faketls_read_exact(stream, cipher, decoded_pending, &mut len_buf).await?;
+            let len = u32::from_le_bytes(len_buf) as usize;
+            if len == 0 || len > 1 << 24 {
                 return Err(ConnectError::other(format!(
-                    "FakeTLS plaintext: unexpected record type 0x{:02x}",
-                    hdr[0]
+                    "FakeTLS plaintext: implausible length {len}"
                 )));
             }
-            let payload_len = u16::from_be_bytes([hdr[3], hdr[4]]) as usize;
-            let mut buf = vec![0u8; payload_len];
-            stream.read_exact(&mut buf).await?;
-            cipher.lock().await.decrypt(&mut buf);
+            let mut buf = vec![0u8; len];
+            faketls_read_exact(stream, cipher, decoded_pending, &mut buf).await?;
             buf
         }
     };
@@ -258,4 +262,54 @@ pub async fn recv_frame_plain<T: Deserializable>(
     }
     let mut cur = Cursor::from_slice(&raw[20..20 + body_len]);
     T::deserialize(&mut cur).map_err(Into::into)
+}
+
+/// Pull `out.len()` decrypted PaddedIntermediate-stream bytes for the FakeTLS
+/// transport, reading and unwrapping whole TLS records from `stream` one at
+/// a time as needed. Used only pre-auth (DH handshake): a handful of
+/// round-trips, so one-record-at-a-time blocking reads are simplest and
+/// avoid any partial-record bookkeeping here (that bookkeeping lives in
+/// `MtpSender`'s bulk read path instead, sharing `decoded_pending` with this
+/// function across the handshake -> post-auth handoff).
+/// Pull `out.len()` decrypted PaddedIntermediate-stream bytes for the FakeTLS
+/// transport, reading and unwrapping whole TLS records from `stream` one at
+/// a time as needed. Shares `decoded_pending` with whatever else uses this
+/// `FrameKind::FakeTls` (e.g. across the pre-auth handshake -> `MtpSender`
+/// handoff, or `DcConnection`'s own recv loop), so partial reads never lose
+/// bytes across callers.
+pub async fn faketls_read_exact(
+    stream: &mut TcpStream,
+    cipher: &std::sync::Arc<tokio::sync::Mutex<ferogram_crypto::ObfuscatedCipher>>,
+    decoded_pending: &std::sync::Arc<tokio::sync::Mutex<Vec<u8>>>,
+    out: &mut [u8],
+) -> Result<(), ConnectError> {
+    loop {
+        {
+            let decoded = decoded_pending.lock().await;
+            if decoded.len() >= out.len() {
+                break;
+            }
+        }
+        let rec = crate::tls_record::read_one_record(stream)
+            .await
+            .map_err(ConnectError::Io)?;
+        match rec.rec_type {
+            crate::tls_record::RECORD_APPLICATION_DATA
+            | crate::tls_record::RECORD_CHANGE_CIPHER_SPEC => {
+                let mut payload = rec.bytes[crate::tls_record::RECORD_HEADER_LEN..].to_vec();
+                cipher.lock().await.decrypt(&mut payload);
+                decoded_pending.lock().await.extend_from_slice(&payload);
+            }
+            other => {
+                return Err(ConnectError::other(format!(
+                    "FakeTLS: unexpected TLS record type 0x{other:02x} in data stream"
+                )));
+            }
+        }
+    }
+
+    let mut decoded = decoded_pending.lock().await;
+    out.copy_from_slice(&decoded[..out.len()]);
+    decoded.drain(..out.len());
+    Ok(())
 }

@@ -71,6 +71,7 @@ pub mod frame;
 pub mod pfs;
 pub mod proxy;
 pub mod socks5;
+pub mod tls_record;
 pub mod transport;
 pub mod transport_intermediate;
 pub mod transport_kind;
@@ -79,7 +80,7 @@ pub mod util;
 
 pub use connection::{Connection, FrameKind, FutureSalt, connect_to_dc};
 pub use error::ConnectError;
-pub use frame::send_frame;
+pub use frame::{faketls_read_exact, send_frame};
 pub use pfs::{decode_bind_response, decode_bind_single};
 pub use proxy::MtProxyConfig;
 pub use socks5::Socks5Config;
