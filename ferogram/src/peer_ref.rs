@@ -39,6 +39,12 @@ pub enum PeerRef {
     Peer(tl::enums::Peer),
     Input(tl::enums::InputPeer),
     InviteHash(String),
+    /// E.164 phone number, e.g. `"+12025551234"`.
+    ///
+    /// Resolving a phone that isn't already cached calls
+    /// `contacts.importContacts`, which adds it to the account's contact
+    /// list as a side effect - unlike username/ID resolution, this is not
+    /// a read-only lookup.
     Phone(String),
 }
 
@@ -301,8 +307,10 @@ fn normalize_str(s: &str) -> PeerRef {
         return PeerRef::Username(uname.to_owned());
     }
 
-    if s.starts_with('+') && s.len() > 5 && s[1..].chars().all(|c| c.is_ascii_digit()) {
-        return PeerRef::Phone(s.to_owned());
+    if s.starts_with('+')
+        && let Some(phone) = crate::util::normalize_phone(s)
+    {
+        return PeerRef::Phone(phone);
     }
 
     if let Ok(id) = s.parse::<i64>() {
@@ -320,7 +328,12 @@ fn parse_tme_username(s: &str) -> Option<&str> {
         .strip_prefix("https://t.me/")
         .or_else(|| s.strip_prefix("http://t.me/"))
         .or_else(|| s.strip_prefix("https://telegram.me/"))
-        .or_else(|| s.strip_prefix("http://telegram.me/"))?;
+        .or_else(|| s.strip_prefix("http://telegram.me/"))
+        .or_else(|| s.strip_prefix("https://telegram.dog/"))
+        .or_else(|| s.strip_prefix("http://telegram.dog/"))
+        .or_else(|| s.strip_prefix("t.me/"))
+        .or_else(|| s.strip_prefix("telegram.me/"))
+        .or_else(|| s.strip_prefix("telegram.dog/"))?;
 
     if path.starts_with('+') || path.starts_with("joinchat/") {
         return None;
@@ -370,6 +383,12 @@ fn normalize_owned(mut s: String) -> PeerRef {
 
     if s.starts_with('+') && s.len() > 5 && s[1..].chars().all(|c| c.is_ascii_digit()) {
         return PeerRef::Phone(s);
+    }
+
+    if s.starts_with('+') {
+        // Possibly a phone number with spaces/hyphens/parens: no cheap path
+        // that reuses `s`, so dispatch through the shared normalizer.
+        return normalize_str(&s);
     }
 
     if s.parse::<i64>().is_ok() {
