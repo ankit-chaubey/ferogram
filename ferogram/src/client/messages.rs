@@ -684,8 +684,19 @@ impl Client {
     /// multiple messages in one call - pass a one-element slice to copy just
     /// one.
     ///
-    /// This is `forward_messages` with `drop_author` forced to `true`, which
-    /// is exactly what Telegram's own "copy" feature does under the hood.
+    /// With `opts.caption` and `opts.reply_markup` both left `None`, this is
+    /// `forward_messages` with `drop_author` forced to `true` - exactly what
+    /// Telegram's own "copy" feature does under the hood, and cheap: one
+    /// `messages.forwardMessages` call for the whole batch.
+    ///
+    /// Setting either one requests a per-message override, which
+    /// `forwardMessages` has no field for - so instead each ID is copied
+    /// individually through [`Client::copy_message`]'s fetch-and-resend
+    /// path (same caption/reply_markup applied to every message; see that
+    /// method's docs for what it supports and its limitations). This costs
+    /// one fetch + one send per message rather than a single batched call,
+    /// so prefer leaving the override fields `None` when you don't need
+    /// them.
     pub async fn copy_messages(
         &self,
         destination: impl Into<PeerRef>,
@@ -695,8 +706,161 @@ impl Client {
 
         opts: CopyOptions,
     ) -> Result<Vec<update::IncomingMessage>, InvocationError> {
-        self.forward_messages(destination, message_ids, source, opts.into())
-            .await
+        if opts.caption.is_none() && opts.reply_markup.is_none() {
+            return self
+                .forward_messages(destination, message_ids, source, opts.into())
+                .await;
+        }
+
+        let destination = destination.into();
+        let source = source.into();
+        let mut out = Vec::with_capacity(message_ids.len());
+        for &id in message_ids {
+            out.push(
+                self.copy_message(destination.clone(), id, source.clone(), opts.clone())
+                    .await?,
+            );
+        }
+        Ok(out)
+    }
+
+    /// Copy a single message, optionally overriding its caption and/or
+    /// attaching a reply markup - matching Telegram Bot API's
+    /// [`copyMessage`](https://core.telegram.org/bots/api#copymessage).
+    ///
+    /// With `opts.caption` and `opts.reply_markup` both left `None`, this
+    /// is just `copy_messages` for one message: cheap, goes straight
+    /// through `messages.forwardMessages`.
+    ///
+    /// Setting either one switches to a fetch-and-resend path, since raw
+    /// MTProto's `forwardMessages` has no field to override text/caption
+    /// or attach a new keyboard - only `drop_media_captions`, which keeps
+    /// or strips the original caption, nothing else. Instead this fetches
+    /// the source message, copies its media (by reference - the file
+    /// isn't re-downloaded/re-uploaded) into a new message with your
+    /// overrides, and sends that as a fresh message. This is the same
+    /// approach Telegram's own Bot API server uses under the hood.
+    ///
+    /// Photo and document media (this covers video, audio, voice, GIFs,
+    /// stickers, and general files) are supported on the override path.
+    /// Other media kinds (polls, contacts, geo/venue, dice, invoices, ...)
+    /// don't have a generic "re-attach by reference" builder yet - copying
+    /// one of those with a caption/reply_markup override returns
+    /// `InvocationError::Deserialize`. Copy it without an override instead
+    /// (via this method or `copy_messages`), which handles every media
+    /// kind fine since it stays on the forward path.
+    ///
+    /// Formatting (bold, italic, links, code, spoilers, ...) is preserved
+    /// automatically: when `opts.caption` is left `None`, the source
+    /// message's own entities travel with its text. Give a new caption its
+    /// own formatting via [`CopyOptions::caption_entities`]. Set
+    /// `opts.drop_captions` instead to strip the caption/entities entirely
+    /// without supplying a replacement.
+    ///
+    /// `opts.topic_id` is honored on both paths: on the cheap forward path
+    /// it's passed straight to `forwardMessages`; on the override path it's
+    /// set via [`InputMessage::topic_id`], which lands the copy in that
+    /// forum topic (replying to the topic's root message if `opts.reply_to`
+    /// is left unset).
+    pub async fn copy_message(
+        &self,
+        destination: impl Into<PeerRef>,
+
+        message_id: i32,
+        source: impl Into<PeerRef>,
+
+        opts: CopyOptions,
+    ) -> Result<update::IncomingMessage, InvocationError> {
+        let source = source.into();
+
+        if opts.caption.is_none() && opts.reply_markup.is_none() {
+            return self
+                .copy_messages(destination, &[message_id], source, opts)
+                .await?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    InvocationError::Deserialize(
+                        "copy_message: source message not found or inaccessible".into(),
+                    )
+                });
+        }
+
+        let src_msg = self
+            .get_messages(source, &[message_id])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                InvocationError::Deserialize(
+                    "copy_message: source message not found or inaccessible".into(),
+                )
+            })?;
+
+        let media: Option<tl::enums::InputMedia> = if let Some(photo) = src_msg.photo() {
+            Some(photo.to_input_media().into())
+        } else if let Some(doc) = src_msg.document() {
+            let mut m = doc.to_input_media();
+            if let Some(ts) = opts.video_timestamp {
+                m = m.video_timestamp(ts);
+            }
+            Some(m.into())
+        } else if src_msg.media().is_some() {
+            return Err(InvocationError::Deserialize(
+                "copy_message: caption/reply_markup override isn't supported for this \
+                 message's media kind yet; copy it without an override instead"
+                    .into(),
+            ));
+        } else {
+            None
+        };
+
+        // drop_captions only has an effect when we're not already replacing
+        // the caption outright - an explicit `caption` always wins.
+        let text = match &opts.caption {
+            Some(caption) => caption.clone(),
+            None if opts.drop_captions => String::new(),
+            None => src_msg.text().unwrap_or("").to_string(),
+        };
+
+        // Keep the source's own formatting when the caption isn't being
+        // overridden or dropped; a new caption gets its own entities (or
+        // none) instead of ones that were measured against different text.
+        let entities = match &opts.caption {
+            Some(_) => opts.caption_entities.clone(),
+            None if opts.drop_captions => None,
+            None => src_msg.entities().cloned(),
+        };
+
+        let mut input = InputMessage::text(text)
+            .silent(opts.silent)
+            .background(opts.background)
+            .noforwards(opts.noforwards)
+            .allow_paid_floodskip(opts.allow_paid_floodskip)
+            .reply_to(opts.reply_to)
+            .topic_id(opts.topic_id)
+            .schedule_date(opts.schedule_date)
+            .schedule_repeat_period(opts.schedule_repeat_period)
+            .effect(opts.effect)
+            .allow_paid_stars(opts.allow_paid_stars);
+
+        if let Some(ents) = entities {
+            input = input.entities(ents);
+        }
+        if let Some(rm) = opts.reply_markup.clone() {
+            input = input.reply_markup(rm);
+        }
+        if let Some(post) = opts.suggested_post.clone() {
+            input = input.suggested_post(post);
+        }
+        if let Some(send_as) = opts.send_as.clone() {
+            input = input.send_as(send_as);
+        }
+        if let Some(media) = media {
+            input = input.copy_media(media);
+        }
+
+        self.send_message(destination, input).await
     }
 
     #[allow(dead_code)]

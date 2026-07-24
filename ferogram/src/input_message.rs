@@ -35,6 +35,15 @@ use ferogram_tl_types as tl;
 pub struct InputMessage {
     pub text: String,
     pub reply_to: Option<i32>,
+    /// Land this message in a specific forum topic thread (the `top_msg_id`
+    /// of the topic, see [`crate::Client::get_forum_topics`]). Set via
+    /// [`InputMessage::topic_id`].
+    ///
+    /// `messages.sendMessage`/`sendMedia` have no dedicated topic field -
+    /// topic routing rides on `reply_to`, so setting this alone (without
+    /// `reply_to`) makes the message reply to the topic's root message,
+    /// which is how official clients post into a topic "bare".
+    pub top_msg_id: Option<i32>,
     pub silent: bool,
     pub background: bool,
     pub clear_draft: bool,
@@ -138,7 +147,10 @@ pub struct CopyOptions {
     pub silent: bool,
     /// Send as a background message (doesn't bump the chat to the top).
     pub background: bool,
-    /// Remove captions from copied media.
+    /// Remove captions from copied media. Honored on both the cheap forward
+    /// path (via `drop_media_captions`) and the fetch-and-resend override
+    /// path - the latter only when `caption` is left `None`; an explicit
+    /// `caption` always wins over this flag.
     pub drop_captions: bool,
     /// Prevent recipients from forwarding the message further.
     pub noforwards: bool,
@@ -167,6 +179,38 @@ pub struct CopyOptions {
     pub quick_reply_shortcut: Option<tl::enums::InputQuickReplyShortcut>,
     /// Send as a channel "suggested post" instead of posting directly.
     pub suggested_post: Option<tl::enums::SuggestedPost>,
+    /// Replace the copy's text/caption instead of keeping the original.
+    ///
+    /// Setting this (or [`CopyOptions::reply_markup`]) routes the copy
+    /// through [`crate::Client::copy_message`]'s fetch-and-resend path
+    /// instead of the cheap `forward_messages` path: raw MTProto's
+    /// `messages.forwardMessages` has no field to override text or
+    /// caption, only `drop_media_captions` (keep or strip, nothing else),
+    /// so an override can only be done by fetching the source message and
+    /// sending its media as a brand-new message - the same way Telegram's
+    /// own Bot API implements `copyMessage` under the hood.
+    ///
+    /// When left `None`, the source message's own text/caption is kept -
+    /// *and* its formatting entities (bold, italic, links, code, spoilers,
+    /// ...) are carried over with it. Set [`CopyOptions::caption_entities`]
+    /// alongside this field to give a new caption its own formatting.
+    pub caption: Option<String>,
+    /// Formatting entities for [`CopyOptions::caption`]. Ignored unless
+    /// `caption` is also set - when `caption` is `None`, the source
+    /// message's own entities are used instead, so there's nothing to
+    /// override here.
+    pub caption_entities: Option<Vec<tl::enums::MessageEntity>>,
+    /// Attach a reply markup to the copy instead of sending it bare.
+    ///
+    /// Unlike Telegram's Bot API, this never falls back to the source
+    /// message's own reply markup when left `None` - buttons are commonly
+    /// tied to the original bot's callback handlers, so silently carrying
+    /// them over to a copy sent by a different client would produce dead
+    /// buttons. Pass the source's markup explicitly if you want to keep it.
+    ///
+    /// Also routes through the fetch-and-resend path; see
+    /// [`CopyOptions::caption`].
+    pub reply_markup: Option<tl::enums::ReplyMarkup>,
 }
 
 impl From<CopyOptions> for ForwardOptions {
@@ -265,6 +309,19 @@ impl InputMessage {
     /// Reply to a specific message ID.
     pub fn reply_to(mut self, id: Option<i32>) -> Self {
         self.reply_to = id;
+        self
+    }
+
+    /// Land this message in a specific forum topic thread (the `top_msg_id`
+    /// of the topic, see [`crate::Client::get_forum_topics`]).
+    ///
+    /// Combine with [`InputMessage::reply_to`] to reply to a particular
+    /// message inside the topic; set alone, the message replies to the
+    /// topic's root message instead, landing it in the topic "bare" - the
+    /// same thing official clients do when you post into a topic without
+    /// quoting anything.
+    pub fn topic_id(mut self, id: Option<i32>) -> Self {
+        self.top_msg_id = id;
         self
     }
 
@@ -438,10 +495,15 @@ impl InputMessage {
     }
 
     pub(crate) fn reply_header(&self) -> Option<tl::enums::InputReplyTo> {
-        self.reply_to.map(|id| {
-            tl::enums::InputReplyTo::Message(tl::types::InputReplyToMessage {
-                reply_to_msg_id: id,
-                top_msg_id: None,
+        // reply_to_msg_id is required by the TL schema even when we're only
+        // routing into a topic with nothing specific to reply to - fall
+        // back to the topic's own root message ID in that case, same as
+        // official clients do when posting into a topic "bare".
+        let reply_to_msg_id = self.reply_to.or(self.top_msg_id)?;
+        Some(tl::enums::InputReplyTo::Message(
+            tl::types::InputReplyToMessage {
+                reply_to_msg_id,
+                top_msg_id: self.top_msg_id,
                 reply_to_peer_id: None,
                 quote_text: None,
                 quote_entities: None,
@@ -449,8 +511,8 @@ impl InputMessage {
                 monoforum_peer_id: None,
                 todo_item_id: None,
                 poll_option: None,
-            })
-        })
+            },
+        ))
     }
 
     pub(crate) fn quick_reply_shortcut(&self) -> Option<tl::enums::InputQuickReplyShortcut> {
