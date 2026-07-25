@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use ferogram_tl_types as tl;
 use ferogram_tl_types::{Cursor, Deserializable};
 
+use crate::message_box;
 use crate::peer_cache::PeerMap;
 use crate::{Client, InputMessage, InvocationError as Error};
 
@@ -710,32 +711,41 @@ impl IncomingMessage {
                     .cloned()
                     .ok_or_else(|| Error::Deserialize("delete_with: no peer".into()))?;
                 let input_peer = client.resolve_to_input_peer(&peer).await?;
-                let channel = match input_peer {
-                    tl::enums::InputPeer::Channel(ic) => {
+                let (channel, channel_id) = match input_peer {
+                    tl::enums::InputPeer::Channel(ic) => (
                         tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
                             channel_id: ic.channel_id,
                             access_hash: ic.access_hash,
-                        })
-                    }
+                        }),
+                        ic.channel_id,
+                    ),
                     _ => {
                         return Err(Error::Deserialize(
                             "delete_with: failed to resolve channel input".into(),
                         ));
                     }
                 };
-                // TODO: response has channel-scoped pts but client.invoke() auto-feeds
-                // it as global pts (feed_own_updates can't tell which RPC this was).
-                // Harmless for now (getDifference will catch the drift), but the fix is
-                // a rpc_call_raw sibling that skips auto-feed, then feed
-                // AffectedChannelMessages{ affected, channel_id } here manually.
+                // channels.deleteMessages returns a channel-scoped AffectedMessages,
+                // but the normal auto-feed path (feed_own_updates) can't tell which
+                // RPC this was and would misfeed it as global pts. Skip auto-feed
+                // here and feed the channel-scoped variant ourselves.
                 let req = tl::functions::channels::DeleteMessages {
                     channel,
                     id: vec![self.id()],
                 };
-                client
-                    .invoke(&req)
-                    .await
-                    .map(|_: tl::enums::messages::AffectedMessages| ())
+                let body = client.rpc_call_raw_ex(&req, false).await?;
+                let tl::enums::messages::AffectedMessages::AffectedMessages(affected) =
+                    <tl::enums::messages::AffectedMessages as Deserializable>::from_bytes_exact(
+                        &body,
+                    )
+                    .map_err(Error::from)?;
+                let _ = client.inner.message_box.lock().await.process_updates(
+                    message_box::UpdatesLike::AffectedChannelMessages {
+                        affected,
+                        channel_id,
+                    },
+                );
+                Ok(())
             }
             _ => {
                 let _p = self

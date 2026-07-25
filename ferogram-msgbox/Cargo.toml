@@ -1,0 +1,20 @@
+[package]
+name        = "ferogram-msgbox"
+description = "Update-gap tracking state machine (pts/qts/seq) for ferogram"
+readme      = "README.md"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+documentation = "https://docs.rs/ferogram-msgbox"
+keywords      = ["telegram", "mtproto", "updates", "pts", "gap"]
+categories    = ["api-bindings"]
+
+[dependencies]
+ferogram-tl-types = { workspace = true, features = ["tl-api", "tl-mtproto", "deserializable-functions"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["time"] }

@@ -233,7 +233,7 @@ pub struct UpdatesStateSnap {
 
 // Pair type
 
-pub(super) type UpdateAndPeers = (
+pub type UpdateAndPeers = (
     Vec<tl::enums::Update>,
     Vec<tl::enums::User>,
     Vec<tl::enums::Chat>,

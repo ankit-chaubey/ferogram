@@ -45,6 +45,59 @@ use defs::{
 };
 use ferogram_tl_types as tl;
 
+// Own-response classification
+
+/// Parse the raw body of one of our own RPC responses into an [`UpdatesLike`],
+/// so self-sent actions (sending/editing/deleting a message, etc.) can be fed
+/// back through [`MessageBoxes::process_updates`] the same way a pushed update
+/// would be. Otherwise the next real update looks like a gap and triggers a
+/// spurious getDifference.
+///
+/// This is pure parsing - no `Client` or lock access. The caller is
+/// responsible for locking its `MessageBoxes` and calling `process_updates()`
+/// with the result.
+///
+/// Safe to call on any response: every TL type is prefixed with a 4-byte
+/// constructor ID, and `Updates::deserialize` checks it before matching a
+/// variant. A response that's neither `Updates`, a joined-chat invite result,
+/// nor `messages.AffectedMessages` just fails to match and this returns `None`.
+pub fn classify_own_response(body: &[u8]) -> Option<UpdatesLike> {
+    use tl::{Deserializable, Identifiable};
+
+    if body.len() < 4 {
+        return None;
+    }
+
+    // Most write RPCs return `Updates` (sendMessage, editMessage, forwardMessages, leaveChannel, ...).
+    let mut cur = tl::Cursor::from_slice(body);
+    if let Ok(updates) = tl::enums::Updates::deserialize(&mut cur) {
+        return Some(UpdatesLike::Updates(Box::new(updates)));
+    }
+
+    // importChatInvite/joinChannel return ChatInviteJoinResult now, not a
+    // bare Updates, so the check above misses them. Ok still wraps a
+    // real Updates (pts/seq) - unwrap and feed it. WebView has no
+    // updates to feed.
+    let mut cur = tl::Cursor::from_slice(body);
+    if let Ok(tl::enums::messages::ChatInviteJoinResult::Ok(ok)) =
+        tl::enums::messages::ChatInviteJoinResult::deserialize(&mut cur)
+    {
+        return Some(UpdatesLike::Updates(Box::new(ok.updates)));
+    }
+
+    // A few (deleteMessages, readHistory, ...) return bare messages.AffectedMessages
+    // instead. It's not an enum, so deserialize() won't check the ctor id for us.
+    let id = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+    if id == <tl::types::messages::AffectedMessages as Identifiable>::CONSTRUCTOR_ID {
+        let mut cur = tl::Cursor::from_slice(&body[4..]);
+        if let Ok(affected) = tl::types::messages::AffectedMessages::deserialize(&mut cur) {
+            return Some(UpdatesLike::AffectedMessages(affected));
+        }
+    }
+
+    None
+}
+
 // Helpers
 
 fn next_updates_deadline() -> Instant {

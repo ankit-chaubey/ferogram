@@ -2967,12 +2967,33 @@ impl Client {
         &self,
         req: &R,
     ) -> Result<Vec<u8>, InvocationError> {
+        self.rpc_call_raw_ex(req, true).await
+    }
+
+    /// Like [`Self::rpc_call_raw`], but lets the caller opt out of the
+    /// auto-feed into `MessageBoxes`.
+    ///
+    /// Needed for RPCs whose response carries pts that's scoped to something
+    /// the auto-feed path can't see - e.g. `channels.deleteMessages` returns a
+    /// channel-scoped `AffectedMessages`, but only the call site knows the
+    /// `channel_id`. Pass `auto_feed: false` and feed the correctly-scoped
+    /// variant manually afterwards.
+    ///
+    /// This is the same retry/migrate-DC loop as `rpc_call_raw` (not a forked
+    /// copy), parameterized on the one thing that differs.
+    pub(crate) async fn rpc_call_raw_ex<R: RemoteCall>(
+        &self,
+        req: &R,
+        auto_feed: bool,
+    ) -> Result<Vec<u8>, InvocationError> {
         let mut rl = RetryLoop::new(Arc::clone(&self.inner.retry_policy));
         loop {
             match self.do_rpc_call(req).await {
                 Ok(body) => {
                     metrics::counter!("ferogram.rpc_calls_total", "result" => "ok").increment(1);
-                    self.feed_own_updates(&body).await;
+                    if auto_feed {
+                        self.feed_own_updates(&body).await;
+                    }
                     return Ok(body);
                 }
                 Err(e) if e.migrate_dc_id().is_some() => {
@@ -3102,59 +3123,11 @@ impl Client {
     /// advance local pts the same way a pushed update would. Otherwise the
     /// next real update looks like a gap and triggers a spurious getDifference.
     ///
-    /// Safe to call on any response: every TL type is prefixed with a
-    /// 4-byte constructor ID, and `Updates::deserialize` checks it before
-    /// matching a variant. A response that's neither `Updates` nor
-    /// `messages.AffectedMessages` just fails to match and this is a no-op.
+    /// Parsing lives in `ferogram_msgbox::classify_own_response` (no
+    /// `Client`/lock access there); this just holds the lock and feeds it in.
     async fn feed_own_updates(&self, body: &[u8]) {
-        use ferogram_tl_types::Identifiable;
-
-        if body.len() < 4 {
-            return;
-        }
-
-        // Most write RPCs return `Updates` (sendMessage, editMessage, forwardMessages, leaveChannel, ...).
-        let mut cur = Cursor::from_slice(body);
-        if let Ok(updates) = tl::enums::Updates::deserialize(&mut cur) {
-            let _ = self
-                .inner
-                .message_box
-                .lock()
-                .await
-                .process_updates(message_box::UpdatesLike::Updates(Box::new(updates)));
-            return;
-        }
-
-        // importChatInvite/joinChannel return ChatInviteJoinResult now, not a
-        // bare Updates, so the check above misses them. Ok still wraps a
-        // real Updates (pts/seq) - unwrap and feed it. WebView has no
-        // updates to feed.
-        let mut cur = Cursor::from_slice(body);
-        if let Ok(tl::enums::messages::ChatInviteJoinResult::Ok(ok)) =
-            tl::enums::messages::ChatInviteJoinResult::deserialize(&mut cur)
-        {
-            let _ = self
-                .inner
-                .message_box
-                .lock()
-                .await
-                .process_updates(message_box::UpdatesLike::Updates(Box::new(ok.updates)));
-            return;
-        }
-
-        // A few (deleteMessages, readHistory, ...) return bare messages.AffectedMessages
-        // instead. It's not an enum, so deserialize() won't check the ctor id for us.
-        let id = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
-        if id == <tl::types::messages::AffectedMessages as Identifiable>::CONSTRUCTOR_ID {
-            let mut cur = Cursor::from_slice(&body[4..]);
-            if let Ok(affected) = tl::types::messages::AffectedMessages::deserialize(&mut cur) {
-                let _ = self
-                    .inner
-                    .message_box
-                    .lock()
-                    .await
-                    .process_updates(message_box::UpdatesLike::AffectedMessages(affected));
-            }
+        if let Some(parsed) = message_box::classify_own_response(body) {
+            let _ = self.inner.message_box.lock().await.process_updates(parsed);
         }
     }
 

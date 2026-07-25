@@ -159,8 +159,8 @@ mod envelope;
 mod errors;
 mod input_message;
 pub mod media;
+pub use ferogram_msgbox as message_box;
 pub use media::DownloadIter;
-pub mod message_box;
 mod mini_app;
 #[cfg(feature = "parsers")]
 pub mod parsers;

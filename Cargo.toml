@@ -14,6 +14,7 @@ members = [
     "ferogram-connect",
     "ferogram-fsm",
     "ferogram-mtsender",
+    "ferogram-msgbox",
 ]
 
 [workspace.package]
@@ -31,6 +32,7 @@ ferogram-connect    = { path = "ferogram-connect",    version = "0.6.4" }
 ferogram-derive   = { path = "ferogram-derive",    version = "0.6.4" }
 ferogram-fsm        = { path = "ferogram-fsm",         version = "0.6.4" }
 ferogram-mtsender   = { path = "ferogram-mtsender",    version = "0.6.4" }
+ferogram-msgbox = { path = "ferogram-msgbox", version = "0.6.4" }
 ferogram-tl-parser  = { path = "ferogram-tl-parser",  version = "0.6.4" }
 ferogram-tl-gen     = { path = "ferogram-tl-gen",     version = "0.6.4" }
 ferogram-tl-types   = { path = "ferogram-tl-types",   version = "0.6.4" }
