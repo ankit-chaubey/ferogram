@@ -17,8 +17,6 @@ ferogram-tl-types = { workspace = true, features = ["tl-mtproto"] }
 ferogram-crypto   = { workspace = true }
 num-bigint = "0.5.1"
 tracing    = { version = "0.1", features = ["log"] }
-sha1       = "0.11.0"
-sha2       = "0.11.0"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]

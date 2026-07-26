@@ -14,7 +14,6 @@ categories    = ["api-bindings", "text-processing"]
 
 [dependencies]
 ferogram-tl-types = { workspace = true, features = ["tl-api"] }
-pulldown-cmark    = "0.13.0"
 html5ever        = { version = "0.39.0", optional = true }
 
 [features]

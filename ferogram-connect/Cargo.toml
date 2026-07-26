@@ -16,8 +16,7 @@ tokio       = { version = "1.23.1", features = ["net", "io-util", "sync", "time"
 tokio-socks = "0.5"
 flate2      = "1"
 tracing     = { version = "0.1", features = ["log"] }
-log         = "0.4"
-socket2     = { version = "0.6.0", features = ["all"] }
+socket2     = "0.6.0"
 
 [[bin]]
 name = "connect"
