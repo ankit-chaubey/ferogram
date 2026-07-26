@@ -266,7 +266,7 @@ async fn demo_download_progress(client: &Client) -> Result<(), Box<dyn std::erro
     let handle = TransferHandle::new();
     let mut buf = Vec::new();
 
-    let bytes = client.download(&media, &mut buf, Some(&handle)).await?;
+    let bytes = client.download(media, &mut buf, Some(&handle)).await?;
 
     println!("  downloaded {bytes} bytes  ok");
     Ok(())
