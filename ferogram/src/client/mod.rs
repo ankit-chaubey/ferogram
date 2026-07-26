@@ -916,16 +916,26 @@ impl Client {
             _update_rx: Arc::new(Mutex::new(update_rx)),
         };
 
-        // Spawn the frame dispatch loop.
-        // Receives FrameEvent from the sender task and routes updates / errors.
-        // This replaces run_reader_task + reader_loop.
-        {
-            let client_d = client.clone();
-            let shutdown_d = shutdown_token.clone();
-            tokio::spawn(async move {
-                client_d.run_frame_dispatch(frame_rx, shutdown_d).await;
-            });
-        }
+        // NOTE: the frame dispatch loop is intentionally NOT spawned here.
+        // It's the only task that calls `message_box.process_updates()` on
+        // unsolicited server events (Connected/Update), so spawning it this
+        // early raced against state seeding below: on a reconnect with an
+        // already-authorized session, the sender task emits `Connected`
+        // almost immediately (sender_loop sends it before anything else),
+        // and the dispatch loop's handling of that event touches
+        // `message_box` before `MessageBoxes::load`/`sync_pts_state` had a
+        // chance to seed it, occasionally leaving `set_state`'s
+        // `debug_assert!(self.is_empty())` looking at a box some other path
+        // had already populated.
+        //
+        // `frame_rx` is an mpsc::Receiver: frames simply queue in the
+        // channel (capacity 256) until something starts calling `.recv()`.
+        // RPC responses (including the `updates.getState` call in
+        // `sync_pts_state`/the catch-up load below) are delivered directly
+        // via per-request oneshot channels inside the sender task, not
+        // through `frame_rx`, so seeding can safely complete first. The
+        // loop is spawned further down, once `message_box` has its initial
+        // state, so there is no window left for it to race against.
 
         // Spawn the single persistent diff task: one sequential loop, woken
         // by diff_notify, instead of a new task per deadline tick.
@@ -1315,6 +1325,21 @@ impl Client {
                 //     deep deserialization of Dialog/PollResults/DraftMessage/Story
                 //     which are high-churn objects that break on every Telegram beta.
             }
+        }
+
+        // Spawn the frame dispatch loop now that message_box has its initial
+        // state (either loaded from the session snapshot above, or seeded by
+        // sync_pts_state, or - for a brand-new session - still legitimately
+        // empty because no auth key exists yet for the server to push
+        // updates against). Frames received on the wire since `connect()`
+        // started have been queuing harmlessly in `frame_rx`; this is the
+        // first point anything drains them.
+        {
+            let client_d = client.clone();
+            let shutdown_d = shutdown_token.clone();
+            tokio::spawn(async move {
+                client_d.run_frame_dispatch(frame_rx, shutdown_d).await;
+            });
         }
 
         Ok((client, shutdown_token))

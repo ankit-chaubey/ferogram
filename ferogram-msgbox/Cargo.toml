@@ -17,4 +17,4 @@ ferogram-tl-types = { workspace = true, features = ["tl-api", "tl-mtproto", "des
 tracing = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1.23.1", features = ["time"] }
