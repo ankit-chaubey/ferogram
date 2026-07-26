@@ -205,7 +205,7 @@ impl Client {
             .map_err(InvocationError::Io)?;
 
         // Restore already-downloaded bytes and determine resume offset.
-        let resume_offset: i64 = if let Some(cp) = store.load_download(&key).await {
+        let resume_offset: i64 = if let Some(_cp) = store.load_download(&key).await {
             let partial_path = store.partial_path(&key);
             match tokio::fs::read(&partial_path).await {
                 Ok(bytes) if !bytes.is_empty() => {
@@ -1267,14 +1267,12 @@ impl Client {
             .unwrap_or_else(|| {
                 crate::media::upload_worker_count(size, crate::media::MAX_WORKERS_PER_FILE)
             })
-            .max(1)
-            .min(crate::media::MAX_GLOBAL_SENDERS); // exp: up to 12, not the normal 4 ceiling
+            .clamp(1, crate::media::MAX_GLOBAL_SENDERS); // exp: up to 12, not the normal 4 ceiling
 
         let chunk_size = config
             .chunk_size
             .unwrap_or_else(|| crate::media::upload_part_size(size).0)
-            .max(128 * 1024)
-            .min(crate::media::MAX_PART_SIZE);
+            .clamp(128 * 1024, crate::media::MAX_PART_SIZE);
         // Round down to nearest 1 KB boundary.
         let chunk_size = (chunk_size / 1024) * 1024;
 
@@ -1355,15 +1353,13 @@ impl Client {
             .unwrap_or_else(|| {
                 crate::media::download_worker_count(size, crate::media::MAX_WORKERS_PER_FILE)
             })
-            .max(1)
-            .min(crate::media::MAX_GLOBAL_SENDERS); // exp: up to 12, not the normal 4 ceiling
+            .clamp(1, crate::media::MAX_GLOBAL_SENDERS); // exp: up to 12, not the normal 4 ceiling
 
         // Telegram's GetFile hard ceiling is 512 KB per request.
         let chunk_size = config
             .chunk_size
             .unwrap_or_else(|| crate::media::download_chunk_size(size) as usize)
-            .max(128 * 1024)
-            .min(512 * 1024);
+            .clamp(128 * 1024, 512 * 1024);
         let chunk_size = (chunk_size / 1024) * 1024;
 
         if let Some(h) = handle {
@@ -1371,7 +1367,17 @@ impl Client {
             h.reset_start();
         }
 
-        self.download_concurrent_exp(loc, dc, size, dest, workers, chunk_size as i32, handle)
-            .await
+        self.download_concurrent_exp(
+            crate::media::ConcurrentDownloadSpec {
+                location: loc,
+                dc_id: dc,
+                size,
+                n_workers: workers,
+                chunk_size: chunk_size as i32,
+            },
+            dest,
+            handle,
+        )
+        .await
     }
 }

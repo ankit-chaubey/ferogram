@@ -4594,10 +4594,12 @@ pub use ferogram_mtproto as mtproto;
 /// Re-export of [`ferogram_crypto`]: AES-IGE, SHA, RSA, factorize, AuthKey.
 pub use ferogram_crypto as crypto;
 
+#[allow(unused_imports)]
 /// Re-export of [`ferogram_tl_parser`] (requires `feature = "parser"`).
 #[cfg(feature = "parser")]
 pub use ferogram_tl_parser as parser;
 
+#[allow(unused_imports)]
 /// Re-export of [`ferogram_tl_gen`] (requires `feature = "codegen"`).
 #[cfg(feature = "codegen")]
 pub use ferogram_tl_gen as codegen;

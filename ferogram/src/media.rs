@@ -4761,14 +4761,17 @@ impl Client {
     #[cfg(feature = "experimental")]
     pub(crate) async fn download_concurrent_exp(
         &self,
-        location: tl::enums::InputFileLocation,
-        dc_id: i32,
-        size: usize,
+        job: ConcurrentDownloadSpec,
         dest: &mut Vec<u8>,
-        n_workers: usize,
-        chunk_size: i32,
         handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<u64, InvocationError> {
+        let ConcurrentDownloadSpec {
+            location,
+            dc_id,
+            size,
+            n_workers,
+            chunk_size,
+        } = job;
         let n_parts = size.div_ceil(chunk_size as usize);
 
         // Pre-allocate destination buffer.
@@ -4868,6 +4871,16 @@ impl Client {
         );
         Ok(n)
     }
+}
+
+/// Parameters for [`Client::download_concurrent_exp`].
+#[cfg(feature = "experimental")]
+pub(crate) struct ConcurrentDownloadSpec {
+    pub location: tl::enums::InputFileLocation,
+    pub dc_id: i32,
+    pub size: usize,
+    pub n_workers: usize,
+    pub chunk_size: i32,
 }
 
 /// Resolve a [`tl::enums::MessageMedia`] to its download location + DC.

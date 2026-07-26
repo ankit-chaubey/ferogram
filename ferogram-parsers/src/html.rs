@@ -10,9 +10,9 @@
 // Feel free to use, modify, and share this code.
 // Please keep this notice when redistributing.
 
-use crate::rich_common::{
-    decode_html_entities, parse_tag, parse_tg_time_format, tg_time_flags_to_format,
-};
+#[cfg(not(feature = "html5ever"))]
+use crate::rich_common::{decode_html_entities, parse_tag};
+use crate::rich_common::{parse_tg_time_format, tg_time_flags_to_format};
 use ferogram_tl_types as tl;
 
 #[cfg(not(feature = "html5ever"))]
@@ -477,8 +477,7 @@ pub fn parse_html(html: &str) -> (String, Vec<tl::enums::MessageEntity>) {
                             ));
                         }
                         "code" => {
-                            let in_pre = entities.last().map_or(
-                                false,
+                            let in_pre = entities.last().is_some_and(
                                 |e| matches!(e, tl::enums::MessageEntity::Pre(p) if p.length == 0),
                             );
                             if in_pre {
@@ -521,8 +520,8 @@ pub fn parse_html(html: &str) -> (String, Vec<tl::enums::MessageEntity>) {
                                 })
                                 .unwrap_or_default();
                             const MENTION_PFX: &str = "tg://user?id=";
-                            if href.starts_with(MENTION_PFX) {
-                                if let Ok(uid) = href[MENTION_PFX.len()..].parse::<i64>() {
+                            if let Some(id_str) = href.strip_prefix(MENTION_PFX) {
+                                if let Ok(uid) = id_str.parse::<i64>() {
                                     entities.push(tl::enums::MessageEntity::MentionName(
                                         tl::types::MessageEntityMentionName {
                                             offset,
@@ -578,8 +577,7 @@ pub fn parse_html(html: &str) -> (String, Vec<tl::enums::MessageEntity>) {
                     "blockquote" => close_ent!(Blockquote),
                     "tg-time" => close_ent!(FormattedDate),
                     "code" => {
-                        let in_pre = entities.last().map_or(
-                            false,
+                        let in_pre = entities.last().is_some_and(
                             |e| matches!(e, tl::enums::MessageEntity::Pre(p) if p.length == 0),
                         );
                         if !in_pre {
@@ -609,7 +607,7 @@ pub fn parse_html(html: &str) -> (String, Vec<tl::enums::MessageEntity>) {
         }
     }
 
-    let mut input = BufferQueue::default();
+    let input = BufferQueue::default();
     input.push_back(StrTendril::from_slice(html).try_reinterpret().unwrap());
     let tok = Tokenizer::new(
         Sink {
@@ -619,7 +617,7 @@ pub fn parse_html(html: &str) -> (String, Vec<tl::enums::MessageEntity>) {
         },
         Default::default(),
     );
-    let _ = tok.feed(&mut input);
+    let _ = tok.feed(&input);
     tok.end();
     let Sink { text, entities, .. } = tok.sink;
     (text.take(), entities.take())
