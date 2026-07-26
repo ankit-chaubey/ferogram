@@ -532,7 +532,7 @@ impl DialogsStream {
 ///
 /// A folder's chats can live in either the main list or Archive, so this
 /// pages through the main list first, then Archive (skipped entirely for
-/// filters that can't include it - see [`scan_archive_for`]), yielding only
+/// filters that can't include it - see `scan_archive_for`), yielding only
 /// dialogs [`Dialog::matches_filter`] accepts.
 pub struct DialogFilterIter {
     pub(crate) filter_id: i32,

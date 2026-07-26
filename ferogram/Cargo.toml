@@ -45,7 +45,7 @@ regex          = "1.5.5"
 futures        = "0.3"
 
 [features]
-default = ["parsers", "html"]
+default = []
 derive          = ["dep:ferogram-derive"]
 sqlite-session  = ["ferogram-session/sqlite-session"]
 experimental    = ["dep:mp4"]
