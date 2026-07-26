@@ -128,6 +128,10 @@ name              = "progress_transfer"
 required-features = ["parsers"]
 
 [[example]]
+name              = "transfer_showcase"
+required-features = ["parsers"]
+
+[[example]]
 name = "typed_errors"
 
 # session utilities
