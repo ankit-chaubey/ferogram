@@ -2365,6 +2365,7 @@ impl LibSqlBackend {
     }
 
     /// Connect to a remote Turso database.
+    #[cfg(feature = "libsql-remote-session")]
     pub fn open_remote(url: impl Into<String>, auth_token: impl Into<String>) -> io::Result<Self> {
         let url = url.into();
         let label = url.clone();
@@ -2379,6 +2380,7 @@ impl LibSqlBackend {
     }
 
     /// Open an embedded replica (local file + Turso remote sync).
+    #[cfg(feature = "libsql-remote-session")]
     pub fn open_replica(
         path: impl Into<PathBuf>,
         url: impl Into<String>,

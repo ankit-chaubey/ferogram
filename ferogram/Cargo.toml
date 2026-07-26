@@ -21,7 +21,7 @@ ferogram-tl-types  = { workspace = true, features = ["tl-api", "tl-mtproto", "de
 ferogram-mtproto   = { workspace = true }
 ferogram-crypto    = { workspace = true }
 ferogram-session   = { workspace = true }
-ferogram-parsers   = { workspace = true }
+ferogram-parsers   = { workspace = true, optional = true }
 ferogram-derive    = { workspace = true, optional = true }
 ferogram-tl-parser = { workspace = true, optional = true }
 ferogram-tl-gen    = { workspace = true, optional = true }
@@ -50,6 +50,7 @@ derive          = ["dep:ferogram-derive"]
 sqlite-session  = ["ferogram-session/sqlite-session"]
 experimental    = ["dep:mp4"]
 libsql-session  = ["ferogram-session/libsql-session"]
+libsql-remote-session = ["ferogram-session/libsql-remote-session"]
 serde           = ["ferogram-session/serde"]
 fsm             = ["dep:ferogram-fsm"]
 parsers         = ["ferogram-parsers/html"]
@@ -128,8 +129,7 @@ name              = "progress_transfer"
 required-features = ["parsers"]
 
 [[example]]
-name              = "transfer_showcase"
-required-features = ["parsers"]
+name = "transfer_showcase"
 
 [[example]]
 name = "typed_errors"

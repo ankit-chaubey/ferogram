@@ -29,7 +29,9 @@
 
 use std::time::Duration;
 
-use ferogram::{Client, ErrorKind, InvocationErrorExt, TransferError, TransferHandle};
+use ferogram::{
+    Client, ErrorKind, ExperimentalFeatures, InvocationErrorExt, TransferError, TransferHandle,
+};
 
 const API_ID: i32 = 0; // from https://my.telegram.org
 const API_HASH: &str = ""; // from https://my.telegram.org
