@@ -94,7 +94,7 @@ pub use obfuscated::{
 ///
 /// Panics if the OS RNG is unavailable (this should never happen in practice).
 pub fn fill_random(buf: &mut [u8]) {
-    getrandom::getrandom(buf).expect("OS RNG unavailable");
+    getrandom::fill(buf).expect("OS RNG unavailable");
 }
 
 /// Errors from [`decrypt_data_v2`].
@@ -163,7 +163,7 @@ fn padding_len(len: usize) -> usize {
 /// After this call `buffer` contains `key_id || msg_key || ciphertext`.
 pub fn encrypt_data_v2(buffer: &mut DequeBuffer, auth_key: &AuthKey) {
     let mut rnd = [0u8; 32];
-    getrandom::getrandom(&mut rnd).expect("getrandom failed");
+    getrandom::fill(&mut rnd).expect("getrandom failed");
     do_encrypt_data_v2(buffer, auth_key, &rnd);
 }
 

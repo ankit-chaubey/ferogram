@@ -14,15 +14,15 @@ categories    = ["cryptography", "api-bindings"]
 
 [dependencies]
 tracing    = { version = "0.1", features = ["log"] }
-aes        = "0.8.4"
-ctr        = "0.9"
-getrandom  = "0.2"
-hmac       = "0.12"
-num-bigint = "0.4.6"
+aes        = "0.9.1"
+ctr        = "0.10.0"
+getrandom  = "0.4.0"
+hmac       = "0.13.0"
+num-bigint = "0.5.1"
 num-traits = "0.2.19"
-pbkdf2     = "0.12"
-sha1       = "0.10.6"
-sha2       = "0.10.9"
+pbkdf2     = "0.13.0"
+sha1       = "0.11.0"
+sha2       = "0.11.0"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]

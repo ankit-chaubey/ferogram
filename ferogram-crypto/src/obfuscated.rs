@@ -11,7 +11,7 @@
 // Please keep this notice when redistributing.
 
 #[allow(deprecated)]
-use aes::cipher::{KeyIvInit, StreamCipher, generic_array::GenericArray};
+use aes::cipher::{Array, KeyIvInit, StreamCipher};
 
 /// AES-256-CTR stream cipher pair for MTProto obfuscated transport.
 pub struct ObfuscatedCipher {
@@ -26,15 +26,13 @@ impl ObfuscatedCipher {
     #[allow(deprecated)]
     pub fn new(init: &[u8; 64]) -> Self {
         let rev: Vec<u8> = init.iter().copied().rev().collect();
+        let rx_key: [u8; 32] = rev[8..40].try_into().expect("32-byte slice");
+        let rx_iv: [u8; 16] = rev[40..56].try_into().expect("16-byte slice");
+        let tx_key: [u8; 32] = init[8..40].try_into().expect("32-byte slice");
+        let tx_iv: [u8; 16] = init[40..56].try_into().expect("16-byte slice");
         Self {
-            rx: ctr::Ctr128BE::<aes::Aes256>::new(
-                GenericArray::from_slice(&rev[8..40]),
-                GenericArray::from_slice(&rev[40..56]),
-            ),
-            tx: ctr::Ctr128BE::<aes::Aes256>::new(
-                GenericArray::from_slice(&init[8..40]),
-                GenericArray::from_slice(&init[40..56]),
-            ),
+            rx: ctr::Ctr128BE::<aes::Aes256>::new(&Array::from(rx_key), &Array::from(rx_iv)),
+            tx: ctr::Ctr128BE::<aes::Aes256>::new(&Array::from(tx_key), &Array::from(tx_iv)),
         }
     }
 
@@ -48,14 +46,8 @@ impl ObfuscatedCipher {
         rx_iv: &[u8; 16],
     ) -> Self {
         Self {
-            tx: ctr::Ctr128BE::<aes::Aes256>::new(
-                GenericArray::from_slice(tx_key),
-                GenericArray::from_slice(tx_iv),
-            ),
-            rx: ctr::Ctr128BE::<aes::Aes256>::new(
-                GenericArray::from_slice(rx_key),
-                GenericArray::from_slice(rx_iv),
-            ),
+            tx: ctr::Ctr128BE::<aes::Aes256>::new(&Array::from(*tx_key), &Array::from(*tx_iv)),
+            rx: ctr::Ctr128BE::<aes::Aes256>::new(&Array::from(*rx_key), &Array::from(*rx_iv)),
         }
     }
 
@@ -151,7 +143,7 @@ pub fn build_obfuscated_init(
 /// MTProxy FakeTLS servers check for. The caller writes this value into the
 /// record's random field, then sends the record as-is.
 pub fn fake_tls_client_digest(secret: &[u8; 16], record: &[u8]) -> [u8; 32] {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     type HmacSha256 = Hmac<sha2::Sha256>;
 
     let mut mac =
@@ -183,7 +175,7 @@ pub fn fake_tls_verify_server_digest(
     packet_with_digest_zeroed: &[u8],
     expected_digest: &[u8; 32],
 ) -> bool {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     type HmacSha256 = Hmac<sha2::Sha256>;
 
     let mut mac =

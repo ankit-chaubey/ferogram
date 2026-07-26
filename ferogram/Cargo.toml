@@ -29,20 +29,20 @@ tokio          = { version = "1.23.1", features = ["net", "io-util", "sync", "ti
 tokio-util     = "0.7"
 parking_lot    = "0.12"
 dashmap        = "6"
-md5            = "0.7"
+md5            = "0.8.0"
 metrics        = "0.24"
 tracing        = { version = "0.1", features = ["log"] }
 log            = "0.4"
 serde          = { version = "1", features = ["derive"] }
 mime_guess     = "2"
-base64         = "0.22"
+base64         = "0.23.0"
 chrono         = { version = "0.4.20", features = ["clock"] }
-reqwest        = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest        = { version = "0.13.1", default-features = false, features = ["rustls", "json"] }
 serde_json     = "1"
-infer          = { version = "0.19", default-features = false }
+infer          = { version = "0.22.0", default-features = false }
 mp4            = { version = "0.14", optional = true }
-sha1           = "0.10.6"
-sha2           = "0.10.9"
+sha1           = "0.11.0"
+sha2           = "0.11.0"
 regex          = "1.5.5"
 futures        = "0.3"
 
@@ -63,7 +63,7 @@ parser          = ["dep:ferogram-tl-parser"]
 codegen         = ["dep:ferogram-tl-gen"]
 
 [dev-dependencies]
-rand                = "0.8"
+rand                = "0.10.0"
 anyhow              = "1"
 tracing-subscriber  = { version = "0.3.20", features = ["env-filter"] }
 

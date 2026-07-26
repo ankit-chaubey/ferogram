@@ -13,14 +13,13 @@
 #![allow(deprecated)]
 
 use aes::Aes256;
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
+use aes::cipher::{Array, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 
 /// Encrypt `buffer` in-place with AES-256-IGE.
 /// `buffer.len()` must be a multiple of 16.
 pub fn ige_encrypt(buffer: &mut [u8], key: &[u8; 32], iv: &[u8; 32]) {
     assert_eq!(buffer.len() % 16, 0);
-    let cipher = Aes256::new(GenericArray::from_slice(key));
+    let cipher = Aes256::new(&Array::from(*key));
 
     let mut iv1: [u8; 16] = iv[..16].try_into().unwrap();
     let mut iv2: [u8; 16] = iv[16..].try_into().unwrap();
@@ -31,7 +30,11 @@ pub fn ige_encrypt(buffer: &mut [u8], key: &[u8; 32], iv: &[u8; 32]) {
         for i in 0..16 {
             block[i] ^= iv1[i];
         }
-        cipher.encrypt_block(GenericArray::from_mut_slice(block));
+        let mut b = Array::from(<[u8; 16]>::try_from(&*block).unwrap());
+        cipher.encrypt_block(&mut b);
+        for i in 0..16 {
+            block[i] = b[i];
+        }
         for i in 0..16 {
             block[i] ^= iv2[i];
         }
@@ -44,9 +47,8 @@ pub fn ige_encrypt(buffer: &mut [u8], key: &[u8; 32], iv: &[u8; 32]) {
 /// `key` = 32 bytes, `iv` = 16 bytes (full block = counter starting value).
 pub fn ctr_crypt(buffer: &mut [u8], key: &[u8; 32], iv: &[u8; 16]) {
     use ctr::Ctr128BE;
-    use ctr::cipher::{KeyIvInit, StreamCipher};
-    let mut cipher =
-        Ctr128BE::<Aes256>::new(GenericArray::from_slice(key), GenericArray::from_slice(iv));
+    use ctr::cipher::{Array, KeyIvInit, StreamCipher};
+    let mut cipher = Ctr128BE::<Aes256>::new(&Array::from(*key), &Array::from(*iv));
     cipher.apply_keystream(buffer);
 }
 
@@ -62,7 +64,7 @@ pub fn ctr_iv_at_offset(base_iv: &[u8; 16], byte_offset: u64) -> [u8; 16] {
 /// `buffer.len()` must be a multiple of 16.
 pub fn ige_decrypt(buffer: &mut [u8], key: &[u8; 32], iv: &[u8; 32]) {
     assert_eq!(buffer.len() % 16, 0);
-    let cipher = Aes256::new(GenericArray::from_slice(key));
+    let cipher = Aes256::new(&Array::from(*key));
 
     let mut iv1: [u8; 16] = iv[..16].try_into().unwrap();
     let mut iv2: [u8; 16] = iv[16..].try_into().unwrap();
@@ -73,7 +75,11 @@ pub fn ige_decrypt(buffer: &mut [u8], key: &[u8; 32], iv: &[u8; 32]) {
         for i in 0..16 {
             block[i] ^= iv2[i];
         }
-        cipher.decrypt_block(GenericArray::from_mut_slice(block));
+        let mut b = Array::from(<[u8; 16]>::try_from(&*block).unwrap());
+        cipher.decrypt_block(&mut b);
+        for i in 0..16 {
+            block[i] = b[i];
+        }
         for i in 0..16 {
             block[i] ^= iv1[i];
         }

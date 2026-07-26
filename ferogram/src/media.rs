@@ -4594,7 +4594,7 @@ fn make_input_file(
         // Compute MD5 over the full file data for server-side integrity.
         // verification.  An empty checksum bypasses the check on DC1/DC4/DC5 and
         // can cause random MEDIA_EMPTY / FILE_PART_0_MISSING on sendMedia.
-        // md5 = "0.7" API: md5::compute(data) returns md5::Digest, formatted with {:x}.
+        // md5 = "0.8" API: md5::compute(data) returns md5::Digest, formatted with {:x}.
         let md5_checksum = format!("{:x}", md5::compute(data));
         tl::enums::InputFile::InputFile(tl::types::InputFile {
             id: file_id,

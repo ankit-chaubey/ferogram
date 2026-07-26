@@ -14,6 +14,9 @@ categories    = ["api-bindings", "encoding"]
 
 build = "build.rs"
 
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+
 [build-dependencies]
 ferogram-tl-parser = { workspace = true }
 ferogram-tl-gen    = { workspace = true }
@@ -27,7 +30,7 @@ deserializable-functions = []
 name-for-id              = []
 tl-api                   = []
 tl-mtproto               = []
-impl-serde               = []
+impl-serde               = ["dep:serde"]
 field-accessors          = []
 
 [package.metadata.docs.rs]
