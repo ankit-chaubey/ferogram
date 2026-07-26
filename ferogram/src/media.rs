@@ -4769,13 +4769,10 @@ impl Client {
         chunk_size: i32,
         handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<u64, InvocationError> {
-        use tokio::io::AsyncWriteExt;
-
         let n_parts = size.div_ceil(chunk_size as usize);
 
         // Pre-allocate destination buffer.
         dest.resize(size, 0u8);
-        let dest_arc = Arc::new(tokio::sync::Mutex::new(dest));
 
         let _global_guard = self
             .inner
@@ -4786,6 +4783,7 @@ impl Client {
 
         let next_part = Arc::new(Mutex::new(0usize));
         let shared_handle: Option<crate::transfer::TransferHandle> = handle.cloned();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(usize, Vec<u8>)>(n_workers * 2);
         let mut tasks: tokio::task::JoinSet<Result<(), InvocationError>> =
             tokio::task::JoinSet::new();
 
@@ -4793,8 +4791,8 @@ impl Client {
             let client = self.clone();
             let location = location.clone();
             let next_part = Arc::clone(&next_part);
-            let dest_arc = Arc::clone(&dest_arc);
             let worker_handle = shared_handle.clone();
+            let tx = tx.clone();
 
             tasks.spawn(async move {
                 let mut conn = client.open_worker_conn(dc_id).await?;
@@ -4833,19 +4831,23 @@ impl Client {
                         }
                     };
 
-                    let start = part_num * chunk_size as usize;
-                    let end = (start + bytes.len()).min(size);
-                    {
-                        let mut d = dest_arc.lock().await;
-                        d[start..end].copy_from_slice(&bytes[..end - start]);
-                    }
-
                     if let Some(ref h) = worker_handle {
                         h.add_bytes(bytes.len() as u64);
+                    }
+
+                    if tx.send((part_num, bytes)).await.is_err() {
+                        break;
                     }
                 }
                 Ok(())
             });
+        }
+        drop(tx);
+
+        while let Some((part_num, bytes)) = rx.recv().await {
+            let start = part_num * chunk_size as usize;
+            let end = (start + bytes.len()).min(size);
+            dest[start..end].copy_from_slice(&bytes[..end - start]);
         }
 
         while let Some(res) = tasks.join_next().await {
