@@ -30,6 +30,7 @@
 
 use std::path::{Path, PathBuf};
 
+use ferogram_tl_types as tl;
 use serde::{Deserialize, Serialize};
 
 /// Checkpoint data for a download in progress.

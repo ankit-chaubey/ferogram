@@ -4603,7 +4603,9 @@ fn make_input_file(
             md5_checksum,
         })
     }
+}
 
+impl Client {
     /// Like `upload_file_concurrent_streaming` but with caller-supplied worker count
     /// and chunk size. Used by `upload_exp`.
     #[cfg(feature = "experimental")]

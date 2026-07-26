@@ -612,7 +612,7 @@ mod auth;
 mod bots;
 mod chats;
 mod dialogs;
-mod files;
+pub(crate) mod files;
 mod forum;
 mod invites;
 mod messages;

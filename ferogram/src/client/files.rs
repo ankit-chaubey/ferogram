@@ -1153,20 +1153,20 @@ impl Client {
         data: &[u8],
     ) -> Result<bool, InvocationError> {
         if big {
-            self.rpc_call(tl::functions::upload::SaveBigFilePart {
+            let req = tl::functions::upload::SaveBigFilePart {
                 file_id,
                 file_part: part,
                 file_total_parts: total_parts,
                 bytes: data.to_vec(),
-            })
-            .await
+            };
+            self.invoke(&req).await
         } else {
-            self.rpc_call(tl::functions::upload::SaveFilePart {
+            let req = tl::functions::upload::SaveFilePart {
                 file_id,
                 file_part: part,
                 bytes: data.to_vec(),
-            })
-            .await
+            };
+            self.invoke(&req).await
         }
     }
 }
