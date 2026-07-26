@@ -244,7 +244,7 @@ impl Client {
     /// For channels and supergroups, it's a shortcut for [`restrict`] with
     /// [`BannedRightsBuilder::full_ban`] followed immediately by [`restrict`]
     /// with the default (all-`false`) builder, i.e. ban then unban -
-    /// `revoke_history` has no effect there, use [`Client::delete_history`]
+    /// `revoke_history` has no effect there, use [`Client::delete_chat_history`]
     /// instead.
     ///
     /// [`restrict`]: Client::restrict

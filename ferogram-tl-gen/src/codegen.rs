@@ -36,7 +36,7 @@ pub struct Config {
     /// Derive `serde::{Serialize, Deserialize}` on all types.
     pub impl_serde: bool,
     /// Emit `.field()` accessors on enums whose variants share a field name
-    /// and type (see [`write_enum_accessors`]).
+    /// and type (see `write_enum_accessors`).
     pub gen_field_accessors: bool,
 }
 

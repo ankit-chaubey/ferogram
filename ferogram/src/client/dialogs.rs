@@ -401,8 +401,8 @@ impl Client {
     }
 
     /// Resume [`Client::iter_dialogs_in_filter`] from a
-    /// [`DialogFilterCursor`](crate::dialog::DialogFilterCursor) saved earlier
-    /// with [`DialogFilterIter::cursor`](crate::dialog::DialogFilterIter::cursor).
+    /// [`DialogFilterCursor`](crate::DialogFilterCursor) saved earlier
+    /// with [`DialogFilterIter::cursor`](crate::DialogFilterIter::cursor).
     pub async fn iter_dialogs_in_filter_from(
         &self,
         cursor: crate::dialog::DialogFilterCursor,

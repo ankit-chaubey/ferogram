@@ -241,9 +241,12 @@ pub use ferogram_derive::FsmState;
 pub use builder::{BuilderError, ClientBuilder};
 pub use client::Client;
 #[cfg(feature = "experimental")]
-pub use client::files::TransferConfig;
+pub use client::files::{DownloadFile, TransferConfig, Upload, UploadFile};
 pub use client::{Config, ShutdownToken, UpdateStream};
-pub use dialog::{Dialog, DialogCursor, DialogIter, DialogsStream, GetDialogsOptions, MessageIter};
+pub use dialog::{
+    Dialog, DialogCursor, DialogFilterCursor, DialogFilterIter, DialogIter, DialogsStream,
+    FlattenedDialogFilter, GetDialogsOptions, MessageIter,
+};
 pub use errors::{
     ErrorKind, InvocationError, InvocationErrorExt, LoginToken, PasswordToken, RpcError,
     SendCodeOptions, SendCodeOutcome, SignInError,

@@ -614,7 +614,7 @@ impl IncomingMessage {
     /// Returns the sent message so you can chain further operations on it.
     /// Reply to this message.
     ///
-    /// Accepts a plain `&str`/`String` or a full [`InputMessage`](crate::InputMessage)
+    /// Accepts a plain `&str`/`String` or a full [`InputMessage`]
     /// (with keyboard, formatting, media, etc.).  The reply-to header is set automatically.
     ///
     /// ```rust,no_run
@@ -653,7 +653,7 @@ impl IncomingMessage {
     }
     /// Send to the same chat without quoting.
     ///
-    /// Accepts a plain `&str`/`String` or a full [`InputMessage`](crate::InputMessage).
+    /// Accepts a plain `&str`/`String` or a full [`InputMessage`].
     pub async fn respond(
         &self,
         msg: impl Into<crate::InputMessage>,
@@ -676,7 +676,7 @@ impl IncomingMessage {
 
     /// Edit this message.
     ///
-    /// Accepts a plain `&str`/`String` or a full [`InputMessage`](crate::InputMessage)
+    /// Accepts a plain `&str`/`String` or a full [`InputMessage`]
     /// (for HTML/Markdown formatting, keyboard changes, etc.).
     ///
     /// ```rust,no_run

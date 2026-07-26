@@ -3399,7 +3399,7 @@ impl Client {
     /// does - instead of losing access hashes and having to re-resolve
     /// peers yourself, or making an extra `users.getUsers`/`getChats` call.
     ///
-    /// Equivalent to [`ClientInternal::cache_users_and_chats`] - same
+    /// Equivalent to `ClientInternal::cache_users_and_chats` - same
     /// underlying cache, different entry point. Both call the same
     /// implementation, so there's no drift between them.
     ///
