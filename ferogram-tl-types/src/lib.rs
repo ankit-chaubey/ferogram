@@ -81,12 +81,16 @@ pub use serialize::Serializable;
 /// Used in rare cases where Telegram sends a length-prefixed list without
 /// the usual `0x1cb5c415` constructor ID header.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "impl-serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "impl-serde", serde(transparent))]
 pub struct RawVec<T>(pub Vec<T>);
 
 /// Opaque blob of bytes that should be passed through without interpretation.
 ///
 /// Returned by functions whose response type is generic (e.g. `X`).
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "impl-serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "impl-serde", serde(transparent))]
 pub struct Blob(pub Vec<u8>);
 
 impl From<Vec<u8>> for Blob {
