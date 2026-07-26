@@ -105,6 +105,10 @@ name              = "inline_keyboard"
 required-features = ["parsers"]
 
 [[example]]
+name              = "rich_message"
+required-features = ["parsers"]
+
+[[example]]
 name = "inline_query_bot"
 
 [[example]]

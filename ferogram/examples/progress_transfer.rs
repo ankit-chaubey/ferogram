@@ -216,7 +216,7 @@ async fn handle_media(
             let _ = tx.send(p);
         }
     });
-    let dl = client.download(&media, &mut buf, Some(&dl_handle)).await;
+    let dl = client.download(media, &mut buf, Some(&dl_handle)).await;
 
     chat_task.abort();
     println!("Downloading {fname}: {} 100% | done", progress_bar(100.0));

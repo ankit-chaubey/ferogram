@@ -42,11 +42,14 @@
 //! [`Serializable`]. Every enum in [`enums`] implements [`Deserializable`].
 //!
 //! ```rust,no_run
+//! # #[cfg(feature = "tl-api")]
+//! # {
 //! use ferogram_tl_types::{functions, Serializable};
 //!
 //! let req = functions::help::GetConfig {};
 //! let bytes = req.to_bytes();
 //! // bytes is the TL-serialized wire form, ready to send over MTProto.
+//! # }
 //! ```
 //!
 //! # Feature flags
