@@ -15,6 +15,8 @@ use ferogram_tl_types as tl;
 /// Builder for composing outgoing messages.
 ///
 /// ```rust,no_run
+/// # #[cfg(feature = "parsers")]
+/// # {
 /// use ferogram::InputMessage;
 ///
 /// // plain text
@@ -30,6 +32,7 @@ use ferogram_tl_types as tl;
 /// let msg = InputMessage::markdown("**Hello**")
 ///     .silent(true)
 ///     .reply_to(Some(42));
+/// # }
 /// ```
 #[derive(Clone, Default)]
 pub struct InputMessage {
@@ -476,9 +479,12 @@ impl InputMessage {
     /// [`crate::parsers::parse_rich_html`].
     ///
     /// ```rust,no_run
-    /// # use ferogram::{InputMessage, parsers::parse_rich_markdown};
+    /// # #[cfg(feature = "parsers")]
+    /// # {
+    /// use ferogram::{InputMessage, parsers::parse_rich_markdown};
     /// let blocks = parse_rich_markdown("# Hello\n\nWorld");
     /// let msg = InputMessage::text("").rich_text(blocks);
+    /// # }
     /// ```
     pub fn rich_text(mut self, blocks: Vec<tl::enums::PageBlock>) -> Self {
         self.rich_message = Some(tl::enums::InputRichMessage::InputRichMessage(

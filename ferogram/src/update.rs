@@ -618,6 +618,8 @@ impl IncomingMessage {
     /// (with keyboard, formatting, media, etc.).  The reply-to header is set automatically.
     ///
     /// ```rust,no_run
+    /// # #[cfg(feature = "parsers")]
+    /// # {
     /// # use ferogram::{InputMessage, update::IncomingMessage};
     /// # async fn example(msg: IncomingMessage, kb: ferogram::tl::enums::ReplyMarkup) -> Result<(), ferogram::InvocationError> {
     /// // plain text
@@ -629,6 +631,7 @@ impl IncomingMessage {
     /// // with keyboard
     /// msg.reply(InputMessage::text("Choose:").reply_markup(kb)).await?;
     /// # Ok(()) }
+    /// # }
     /// ```
     pub async fn reply(
         &self,
@@ -680,11 +683,14 @@ impl IncomingMessage {
     /// (for HTML/Markdown formatting, keyboard changes, etc.).
     ///
     /// ```rust,no_run
+    /// # #[cfg(feature = "parsers")]
+    /// # {
     /// # use ferogram::{InputMessage, update::IncomingMessage};
     /// # async fn example(msg: IncomingMessage) -> Result<(), ferogram::InvocationError> {
     /// msg.edit("Updated text").await?;
     /// msg.edit(InputMessage::html("<b>Updated</b>")).await?;
     /// # Ok(()) }
+    /// # }
     /// ```
     pub async fn edit(&self, msg: impl Into<crate::InputMessage>) -> Result<(), Error> {
         let client = self.require_client("edit")?.clone();

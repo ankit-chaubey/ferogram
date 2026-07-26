@@ -286,7 +286,7 @@ impl Client {
     ///
     /// # Example
     /// ```rust,no_run
-    /// # use ferogram::dialog::DialogCursor;
+    /// # use ferogram::DialogCursor;
     /// # async fn f(client: ferogram::Client, saved: DialogCursor) -> Result<(), Box<dyn std::error::Error>> {
     /// let mut iter = client.iter_dialogs_from(saved)?;
     /// while let Some(dialog) = iter.next(&client).await? {

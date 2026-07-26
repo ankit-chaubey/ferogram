@@ -3076,6 +3076,8 @@ impl Client {
     /// and optional `reply_to` message ID.
     ///
     /// ```rust,no_run
+    /// # #[cfg(feature = "parsers")]
+    /// # {
     /// use ferogram::media::AlbumItem;
     /// # use ferogram::Client;
     /// # async fn example(client: Client, peer: ferogram::PeerRef, photo_media: ferogram::tl::enums::InputMedia, video_media: ferogram::tl::enums::InputMedia, photo_media2: ferogram::tl::enums::InputMedia) -> Result<(), ferogram::InvocationError> {
@@ -3090,6 +3092,7 @@ impl Client {
     ///     (photo_media2, "caption".to_string()).into(),
     /// ]).await?;
     /// # Ok(()) }
+    /// # }
     /// ```
     pub async fn send_album(
         &self,

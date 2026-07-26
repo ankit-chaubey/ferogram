@@ -18,7 +18,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use chrono::Utc;
-use rand::{Rng, thread_rng};
+use rand::{RngExt, rng};
 use sha2::{Digest, Sha256};
 
 use ferogram::tl;
@@ -229,7 +229,7 @@ async fn dispatch(upd: Update, client: Arc<Client>, me: Arc<tl::types::User>, bo
                         &client,
                         peer,
                         msg_id,
-                        if thread_rng().gen_bool(0.5) {
+                        if rng().random_bool(0.5) {
                             "🪙 <b>Heads!</b>"
                         } else {
                             "🟡 <b>Tails!</b>"
@@ -362,12 +362,12 @@ async fn dispatch(upd: Update, client: Arc<Client>, me: Arc<tl::types::User>, bo
                     ia(
                         "3",
                         "🎲 Random 1-100",
-                        &thread_rng().gen_range(1..=100u32).to_string(),
+                        &rng().random_range(1..=100u32).to_string(),
                     ),
                     ia(
                         "4",
                         "🪙 Coin flip",
-                        if thread_rng().gen_bool(0.5) {
+                        if rng().random_bool(0.5) {
                             "Heads 🪙"
                         } else {
                             "Tails 🟡"
@@ -748,7 +748,7 @@ async fn h_calc(client: &Client, peer: tl::enums::Peer, reply_to: i32, arg: &str
 
 async fn h_roll(client: &Client, peer: tl::enums::Peer, reply_to: i32, arg: &str) {
     let sides: u32 = arg.trim().parse().unwrap_or(6).clamp(2, 1_000_000);
-    let roll = thread_rng().gen_range(1..=sides);
+    let roll = rng().random_range(1..=sides);
     rh(
         client,
         peer,
@@ -768,7 +768,7 @@ async fn h_random(client: &Client, peer: tl::enums::Peer, reply_to: i32, arg: &s
         [a] => (1, *a),
         _ => (1, 100),
     };
-    let n = thread_rng().gen_range(lo..=hi);
+    let n = rng().random_range(lo..=hi);
     rh(
         client,
         peer,
@@ -783,7 +783,7 @@ async fn h_password(client: &Client, peer: tl::enums::Peer, reply_to: i32, arg: 
     const CS: &[u8] =
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*-_=+?";
     let pwd: String = (0..len)
-        .map(|_| CS[thread_rng().gen_range(0..CS.len())] as char)
+        .map(|_| CS[rng().random_range(0..CS.len())] as char)
         .collect();
     rh(
         client,
@@ -1139,7 +1139,7 @@ fn uptime() -> String {
 }
 fn random_uuid() -> String {
     let mut b = [0u8; 16];
-    thread_rng().fill(&mut b);
+    rng().fill(&mut b);
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     let node: u64 = (b[10] as u64) << 40
@@ -1285,7 +1285,7 @@ fn random_fact() -> &'static str {
         "Cleopatra lived closer to the Moon landing than to the pyramids' construction.",
         "There are more possible chess games than atoms in the observable universe.",
     ];
-    F[thread_rng().gen_range(0..F.len())]
+    F[rng().random_range(0..F.len())]
 }
 fn random_joke() -> &'static str {
     const J: &[&str] = &[
@@ -1299,5 +1299,5 @@ fn random_joke() -> &'static str {
         "Why did the Rust developer cross the road? To avoid garbage collection.",
         "A byte walks into a bar looking rough. Bartender: 'What's wrong?' Byte: 'Bit error.'",
     ];
-    J[thread_rng().gen_range(0..J.len())]
+    J[rng().random_range(0..J.len())]
 }
