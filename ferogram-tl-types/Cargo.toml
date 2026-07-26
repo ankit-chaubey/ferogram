@@ -36,3 +36,6 @@ field-accessors          = []
 [package.metadata.docs.rs]
 features     = ["impl-debug", "impl-from-type", "impl-from-enum", "tl-api", "tl-mtproto", "deserializable-functions", "name-for-id", "field-accessors"]
 rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.cargo-machete]
+ignored = ["ferogram-tl-parser", "ferogram-tl-gen"] # build-dependencies used only from build.rs

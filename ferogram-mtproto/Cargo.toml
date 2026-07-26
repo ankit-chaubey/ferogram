@@ -16,7 +16,11 @@ categories    = ["network-programming", "api-bindings"]
 ferogram-tl-types = { workspace = true, features = ["tl-mtproto"] }
 ferogram-crypto   = { workspace = true }
 num-bigint = "0.5.1"
+sha1       = "0.11.0"
 tracing    = { version = "0.1", features = ["log"] }
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.cargo-machete]
+ignored = ["sha1"] # used only inside the ferogram_crypto::sha1! macro expansion
