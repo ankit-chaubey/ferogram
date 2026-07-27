@@ -26,9 +26,16 @@ tokio = { version = "1.23.1", features = ["rt", "macros"] }
 
 [features]
 default         = []
+## Derive Serialize/Deserialize on session types, for custom storage backends.
 serde           = ["dep:serde"]
+## Persist sessions to a local SQLite database via rusqlite (bundled sqlite3
+## C source; adds a native build step).
 sqlite-session  = ["rusqlite"]
+## Persist sessions via libSQL (local file or embedded replica).
 libsql-session  = ["dep:libsql", "dep:tokio"]
+## Persist sessions via a remote libSQL/Turso server, with replication.
+## Note: enabling this together with sqlite-session links two separate
+## sqlite3 C sources and will fail at link time; pick one session backend.
 libsql-remote-session = ["libsql-session", "libsql/replication", "libsql/remote"]
 
 [package.metadata.docs.rs]

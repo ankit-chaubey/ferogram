@@ -22,9 +22,6 @@ use tokio::net::TcpStream;
 use crate::errors::InvocationError;
 use crate::pool::{build_msgs_ack_body, build_msgs_ack_ping_body};
 use ferogram_connect::TransportKind;
-// metrics and tracing
-#[allow(unused_imports)]
-use metrics::{counter, histogram};
 
 /// A single encrypted connection to one Telegram DC.
 /// Un-acked server msg_ids to accumulate before eagerly flushing a `msgs_ack` frame.
@@ -519,8 +516,9 @@ impl DcConnection {
                 Self::send_abridged(&mut self.stream, &wire, &mut self.frame_kind).await?;
             }
             if let Some(result) = scan_result {
-                metrics::counter!("ferogram.rpc_calls_total", "result" => "ok").increment(1);
-                metrics::histogram!("ferogram.rpc_latency_ms")
+                crate::metrics_shim::counter!("ferogram.rpc_calls_total", "result" => "ok")
+                    .increment(1);
+                crate::metrics_shim::histogram!("ferogram.rpc_latency_ms")
                     .record(_t0.elapsed().as_millis() as f64);
                 return Ok(result);
             }

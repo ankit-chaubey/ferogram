@@ -11,6 +11,7 @@
 // Please keep this notice when redistributing.
 
 use tokio::net::TcpStream;
+#[cfg(feature = "socks5")]
 use tokio_socks::tcp::Socks5Stream;
 
 use crate::error::ConnectError;
@@ -46,6 +47,7 @@ impl Socks5Config {
     }
 
     /// Establish a TCP connection through this SOCKS5 proxy.
+    #[cfg(feature = "socks5")]
     pub async fn connect(&self, target: &str) -> Result<TcpStream, ConnectError> {
         tracing::debug!(
             "[ferogram::connect] SOCKS5: relaying through {} to {target}",
@@ -65,5 +67,17 @@ impl Socks5Config {
             .map_err(|e| ConnectError::Io(std::io::Error::other(e)))?,
         };
         Ok(stream.into_inner())
+    }
+
+    /// Establish a TCP connection through this SOCKS5 proxy.
+    ///
+    /// Returns an error: the "socks5" feature is disabled, so no SOCKS5
+    /// client is compiled in.
+    #[cfg(not(feature = "socks5"))]
+    pub async fn connect(&self, _target: &str) -> Result<TcpStream, ConnectError> {
+        Err(ConnectError::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "SOCKS5 proxy requested but ferogram-connect was built without the \"socks5\" feature",
+        )))
     }
 }

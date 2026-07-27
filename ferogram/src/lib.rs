@@ -133,7 +133,41 @@
 //! let (client, _) = Client::builder().session_string(s).connect().await?;
 //! ```
 //!
-//! # Features
+//! # Cargo feature flags
+//!
+//! Everything below is off by default; the default build is just login,
+//! raw RPC (`client.invoke()`), and updates.
+//!
+//! | Feature | Adds | Pulls in |
+//! |---|---|---|
+//! | `derive` | `#[derive(FsmState)]` and other proc-macros | `ferogram-derive` |
+//! | `sqlite-session` | SQLite-backed session storage | `rusqlite` (bundled sqlite3, native build) |
+//! | `libsql-session` | libSQL-backed session storage (local/embedded replica) | `libsql` |
+//! | `libsql-remote-session` | Remote libSQL/Turso session storage with replication | `libsql-session` + replication |
+//! | `serde` | Serialize/Deserialize on session types | `ferogram-session/serde` |
+//! | `fsm` | FSM dispatcher helper (`dp.on_message_fsm`) | `ferogram-fsm` |
+//! | `parsers` / `html` | HTML/Markdown message parsing for rich text | `ferogram-parsers` |
+//! | `html5ever` | Stricter, spec-compliant HTML parsing | `html5ever` |
+//! | `experimental` | Experimental transfer APIs (resumable transfers) | `mp4` |
+//! | `resilient-connect` | DNS-over-HTTPS + Firebase/Google config fallback for censored networks | `reqwest` (transitively `rustls`/`aws-lc-rs`) |
+//! | `socks5` | SOCKS5 proxy support for outgoing connections | `tokio-socks` |
+//! | `metrics` | RPC/connection counters, histograms, gauges | `metrics` |
+//! | `parser` | Re-export the TL parser for custom tooling | `ferogram-tl-parser` |
+//! | `codegen` | Re-export the TL code generator for custom tooling | `ferogram-tl-gen` |
+//!
+//! ```toml
+//! # Minimal: login, raw RPC, updates only
+//! ferogram = { version = "0.6", default-features = false }
+//!
+//! # A typical bot: rich text + FSM + SQLite sessions
+//! ferogram = { version = "0.6", features = ["parsers", "fsm", "sqlite-session"] }
+//! ```
+//!
+//! Note: `sqlite-session` and `libsql-session`/`libsql-remote-session` are
+//! mutually exclusive, both bundle a `sqlite3` C source, and enabling both
+//! at once fails at link time with duplicate-symbol errors. Pick one.
+//!
+//! # What's covered
 //!
 //! Most common use cases are already covered. Full list in
 //! [FEATURES.md](https://github.com/ankit-chaubey/ferogram/blob/main/FEATURES.md).
@@ -159,6 +193,7 @@ mod envelope;
 mod errors;
 mod input_message;
 pub mod media;
+mod metrics_shim;
 pub use ferogram_msgbox as message_box;
 pub use media::DownloadIter;
 mod mini_app;
@@ -177,6 +212,7 @@ pub mod update;
 pub mod cdn_download;
 pub mod conversation;
 pub mod dc_pool;
+#[cfg(feature = "resilient-connect")]
 pub mod dns_resolver;
 pub mod filters;
 pub mod inline_iter;
@@ -184,6 +220,7 @@ pub mod keyboard;
 pub mod search;
 pub mod session_backend;
 pub mod socks5;
+#[cfg(feature = "resilient-connect")]
 pub mod special_config;
 pub use ferogram_connect::{
     FullTransport, IntermediateTransport, ObfuscatedFraming, ObfuscatedStream,

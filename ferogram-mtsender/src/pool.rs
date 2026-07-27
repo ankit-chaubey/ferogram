@@ -160,7 +160,7 @@ impl DcPool {
         let slot = Self::spawn_slot(conn);
         self.conns.entry(dc_id).or_default().push(slot);
         let total: usize = self.conns.values().map(|v| v.len()).sum();
-        metrics::gauge!("ferogram.connections_active").set(total as f64);
+        crate::metrics_shim::gauge!("ferogram.connections_active").set(total as f64);
     }
 
     /// Returns the least-loaded slot for `dc_id`, creating one if needed.
@@ -206,7 +206,7 @@ impl DcPool {
             self.conns.entry(dc_id).or_default().push(slot);
             self.init_done.remove(&dc_id);
             let total: usize = self.conns.values().map(|v| v.len()).sum();
-            metrics::gauge!("ferogram.connections_active").set(total as f64);
+            crate::metrics_shim::gauge!("ferogram.connections_active").set(total as f64);
         }
 
         let slots = self
@@ -263,7 +263,7 @@ impl DcPool {
                 .expect("dc_id must be registered")
                 .push(new_slot);
             let total: usize = self.conns.values().map(|v| v.len()).sum();
-            metrics::gauge!("ferogram.connections_active").set(total as f64);
+            crate::metrics_shim::gauge!("ferogram.connections_active").set(total as f64);
             return Ok(arc);
         }
 
@@ -276,7 +276,7 @@ impl DcPool {
         self.conns.remove(&dc_id);
         self.init_done.remove(&dc_id);
         let total: usize = self.conns.values().map(|v| v.len()).sum();
-        metrics::gauge!("ferogram.connections_active").set(total as f64);
+        crate::metrics_shim::gauge!("ferogram.connections_active").set(total as f64);
         tracing::debug!("[ferogram::pool] evicted all connections for DC{dc_id}");
     }
 
@@ -326,12 +326,13 @@ impl DcPool {
         let result = Self::send_via_slot(&slot, body.clone()).await;
 
         if let Err(ref e) = result {
-            let kind = match e {
+            let _kind = match e {
                 InvocationError::Rpc(_) => "rpc",
                 InvocationError::Io(_) => "io",
                 _ => "other",
             };
-            metrics::counter!("ferogram.rpc_errors_total", "kind" => kind).increment(1);
+            crate::metrics_shim::counter!("ferogram.rpc_errors_total", "kind" => _kind)
+                .increment(1);
         }
 
         if let Err(InvocationError::Rpc(ref e)) = result

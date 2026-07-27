@@ -71,6 +71,7 @@
 #![deny(unsafe_code)]
 
 mod errors;
+mod metrics_shim;
 pub mod mtp_sender;
 mod pool;
 mod retry;

@@ -30,13 +30,13 @@ tokio-util     = "0.7"
 parking_lot    = "0.12"
 dashmap        = "6"
 md5            = "0.8.0"
-metrics        = "0.24"
+metrics        = { version = "0.24", optional = true }
 tracing        = { version = "0.1", features = ["log"] }
 serde          = { version = "1", features = ["derive"] }
 mime_guess     = "2"
 base64         = "0.23.0"
 chrono         = { version = "0.4.20", features = ["clock"] }
-reqwest        = { version = "0.13.1", default-features = false, features = ["rustls", "json"] }
+reqwest        = { version = "0.13.1", default-features = false, features = ["rustls", "json"], optional = true }
 serde_json     = "1"
 infer          = { version = "0.22.0", default-features = false }
 mp4            = { version = "0.14", optional = true }
@@ -46,18 +46,38 @@ futures        = "0.3"
 
 [features]
 default = []
+## Enable the `#[derive(FsmState)]` and related proc-macros from ferogram-derive.
 derive          = ["dep:ferogram-derive"]
+## Persist sessions to a local SQLite database (via rusqlite, bundled sqlite3).
 sqlite-session  = ["ferogram-session/sqlite-session"]
+## Enable experimental transfer APIs (e.g. resumable transfers). Pulls in mp4.
 experimental    = ["dep:mp4"]
+## Persist sessions via libSQL (local file or embedded replica).
 libsql-session  = ["ferogram-session/libsql-session"]
+## Persist sessions via a remote libSQL/Turso server, with replication.
 libsql-remote-session = ["ferogram-session/libsql-remote-session"]
+## Derive Serialize/Deserialize on session types, for custom storage backends.
 serde           = ["ferogram-session/serde"]
+## Enable the finite-state-machine dispatcher helper (`dp.on_message_fsm`, `FsmState`).
 fsm             = ["dep:ferogram-fsm"]
+## Enable HTML/Markdown message parsing for rich text (`ParseMode`, entity building).
 parsers         = ["ferogram-parsers/html"]
+## Alias of `parsers`; kept for backwards compatibility.
 html            = ["ferogram-parsers/html"]
+## Use html5ever for stricter, more spec-compliant HTML parsing.
 html5ever       = ["ferogram-parsers/html5ever"]
 ## Re-export the TL parser for custom tooling.
 parser          = ["dep:ferogram-tl-parser"]
+## DNS-over-HTTPS and Firebase/Google special-config fallback for censored
+## networks. Pulls in reqwest (and transitively rustls/aws-lc-rs). Off by
+## default; not needed for the core login/RPC/updates path.
+resilient-connect = ["dep:reqwest"]
+## SOCKS5 proxy support. Pulls in tokio-socks. Off by default; not needed
+## for direct connections to Telegram datacenters.
+socks5 = ["ferogram-connect/socks5"]
+## RPC/connection instrumentation via the metrics crate (counters,
+## histograms, gauges). Off by default; a no-op shim is used otherwise.
+metrics = ["dep:metrics", "ferogram-mtsender/metrics"]
 ## Re-export the code generator for custom tooling.
 codegen         = ["dep:ferogram-tl-gen"]
 

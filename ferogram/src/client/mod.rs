@@ -1497,64 +1497,78 @@ impl Client {
             return Err(direct_err.into());
         }
 
-        // DNS-over-HTTPS fallback.
-        tracing::warn!(
-            "[ferogram::connect] direct connect failed ({direct_err}); trying DoH fallback"
-        );
-        let resolver = crate::dns_resolver::DnsResolver::new();
-        let doh_ips = resolver.resolve("venus.web.telegram.org").await;
-        let port = default_addr.split(':').next_back().unwrap_or("443");
-        for ip in &doh_ips {
-            let addr = format!("{ip}:{port}");
-            tracing::info!(
-                "[ferogram::connect] DoH resolved DC{dc_id} to {addr}; attempting connection"
+        #[cfg(not(feature = "resilient-connect"))]
+        {
+            tracing::warn!(
+                "[ferogram::connect] resilient_connect requested but the \
+                 \"resilient-connect\" feature is disabled; skipping DoH/Firebase fallback"
             );
-            match Connection::connect_raw(&addr, socks5, mtproxy, transport, dc_id).await {
-                Ok(conn) => {
-                    tracing::info!(
-                        "[ferogram::connect] DoH fallback: connected to DC{dc_id} via {addr}"
-                    );
-                    return Ok((conn, dc_id as i32, build_opts()));
-                }
-                Err(e) => tracing::debug!("[ferogram::connect] DoH address {addr} failed: {e}"),
-            }
+            Err(direct_err.into())
         }
 
-        // Firebase / Google special-config fallback.
-        tracing::warn!(
-            "[ferogram::connect] DoH fallback exhausted ({} candidates); trying Firebase",
-            doh_ips.len()
-        );
-        let special = crate::special_config::SpecialConfig::new();
-        match special.fetch().await {
-            Some(dc_options) => {
-                for opt in dc_options.iter().filter(|o| o.dc_id == dc_id as i32) {
-                    let addr = format!("{}:{}", opt.ip, opt.port);
-                    tracing::info!(
-                        "[ferogram::connect] Firebase fallback: trying DC{} address {addr}",
-                        opt.dc_id
-                    );
-                    match Connection::connect_raw(&addr, socks5, mtproxy, transport, dc_id).await {
-                        Ok(conn) => {
-                            tracing::info!(
-                                "[ferogram::connect] Firebase fallback: connected to DC{dc_id} via {addr}"
-                            );
-                            return Ok((conn, dc_id as i32, build_opts()));
-                        }
-                        Err(e) => tracing::debug!(
-                            "[ferogram::connect] Firebase address {addr} failed: {e}"
-                        ),
+        #[cfg(feature = "resilient-connect")]
+        {
+            // DNS-over-HTTPS fallback.
+            tracing::warn!(
+                "[ferogram::connect] direct connect failed ({direct_err}); trying DoH fallback"
+            );
+            let resolver = crate::dns_resolver::DnsResolver::new();
+            let doh_ips = resolver.resolve("venus.web.telegram.org").await;
+            let port = default_addr.split(':').next_back().unwrap_or("443");
+            for ip in &doh_ips {
+                let addr = format!("{ip}:{port}");
+                tracing::info!(
+                    "[ferogram::connect] DoH resolved DC{dc_id} to {addr}; attempting connection"
+                );
+                match Connection::connect_raw(&addr, socks5, mtproxy, transport, dc_id).await {
+                    Ok(conn) => {
+                        tracing::info!(
+                            "[ferogram::connect] DoH fallback: connected to DC{dc_id} via {addr}"
+                        );
+                        return Ok((conn, dc_id as i32, build_opts()));
                     }
+                    Err(e) => tracing::debug!("[ferogram::connect] DoH address {addr} failed: {e}"),
                 }
-                Err(InvocationError::Io(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionRefused,
-                    "all resilient connect strategies exhausted",
-                )))
             }
-            None => Err(InvocationError::Io(std::io::Error::new(
-                std::io::ErrorKind::ConnectionRefused,
-                "all resilient connect strategies exhausted (Firebase unavailable)",
-            ))),
+
+            // Firebase / Google special-config fallback.
+            tracing::warn!(
+                "[ferogram::connect] DoH fallback exhausted ({} candidates); trying Firebase",
+                doh_ips.len()
+            );
+            let special = crate::special_config::SpecialConfig::new();
+            match special.fetch().await {
+                Some(dc_options) => {
+                    for opt in dc_options.iter().filter(|o| o.dc_id == dc_id as i32) {
+                        let addr = format!("{}:{}", opt.ip, opt.port);
+                        tracing::info!(
+                            "[ferogram::connect] Firebase fallback: trying DC{} address {addr}",
+                            opt.dc_id
+                        );
+                        match Connection::connect_raw(&addr, socks5, mtproxy, transport, dc_id)
+                            .await
+                        {
+                            Ok(conn) => {
+                                tracing::info!(
+                                    "[ferogram::connect] Firebase fallback: connected to DC{dc_id} via {addr}"
+                                );
+                                return Ok((conn, dc_id as i32, build_opts()));
+                            }
+                            Err(e) => tracing::debug!(
+                                "[ferogram::connect] Firebase address {addr} failed: {e}"
+                            ),
+                        }
+                    }
+                    Err(InvocationError::Io(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionRefused,
+                        "all resilient connect strategies exhausted",
+                    )))
+                }
+                None => Err(InvocationError::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "all resilient connect strategies exhausted (Firebase unavailable)",
+                ))),
+            }
         }
     }
 
@@ -1934,7 +1948,7 @@ impl Client {
                                 ring.pop_front();
                             }
 
-                            metrics::counter!("ferogram.updates_dropped").increment(1);
+                            crate::metrics_shim::counter!("ferogram.updates_dropped").increment(1);
                             tracing::debug!(
                                 "[ferogram::client] update queue full (capacity {}): dropping update (consumer is falling behind)",
                                 capacity
@@ -1958,7 +1972,7 @@ impl Client {
                                 "[ferogram::client] update dropped: consumer too slow (queue depth >= {})",
                                 capacity
                             );
-                            metrics::counter!("ferogram.updates_dropped").increment(1);
+                            crate::metrics_shim::counter!("ferogram.updates_dropped").increment(1);
                         }
                     }
                 }
@@ -2244,7 +2258,7 @@ impl Client {
         if body.len() < 4 {
             return;
         }
-        metrics::counter!("ferogram.updates_received").increment(1);
+        crate::metrics_shim::counter!("ferogram.updates_received").increment(1);
         let cid = u32::from_le_bytes(body[..4].try_into().unwrap());
 
         // updatesTooLong: signal message_box of gap and run getDifference.
@@ -2582,7 +2596,8 @@ impl Client {
                                 tracing::warn!(
                                     "[ferogram::client] update channel is full; dropping update (backpressure)"
                                 );
-                                metrics::counter!("ferogram.updates_dropped").increment(1);
+                                crate::metrics_shim::counter!("ferogram.updates_dropped")
+                                    .increment(1);
                             }
                         }
                     }
@@ -2976,7 +2991,7 @@ impl Client {
                     tracing::warn!(
                         "[ferogram::client] update channel is full; dropping update (backpressure)"
                     );
-                    metrics::counter!("ferogram.updates_dropped").increment(1);
+                    crate::metrics_shim::counter!("ferogram.updates_dropped").increment(1);
                 }
             }
         }
@@ -3015,7 +3030,8 @@ impl Client {
         loop {
             match self.do_rpc_call(req).await {
                 Ok(body) => {
-                    metrics::counter!("ferogram.rpc_calls_total", "result" => "ok").increment(1);
+                    crate::metrics_shim::counter!("ferogram.rpc_calls_total", "result" => "ok")
+                        .increment(1);
                     if auto_feed {
                         self.feed_own_updates(&body).await;
                     }
@@ -3034,7 +3050,8 @@ impl Client {
                 // as an I/O error, preventing callers like is_authorized() from ever
                 // seeing the real 401 and returning Ok(false).
                 Err(InvocationError::Rpc(ref r)) if r.code == 401 => {
-                    metrics::counter!("ferogram.rpc_calls_total", "result" => "error").increment(1);
+                    crate::metrics_shim::counter!("ferogram.rpc_calls_total", "result" => "error")
+                        .increment(1);
                     return Err(InvocationError::Rpc(r.clone()));
                 }
                 // Stale access hash: evict the bad entry from cache and surface
@@ -3049,7 +3066,7 @@ impl Client {
                             | "INPUT_USER_DEACTIVATED"
                     ) =>
                 {
-                    metrics::counter!("ferogram.rpc_calls_total", "result" => "stale_hash")
+                    crate::metrics_shim::counter!("ferogram.rpc_calls_total", "result" => "stale_hash")
                         .increment(1);
                     tracing::debug!(
                         "[ferogram::client] rpc_call_raw: {} triggered FILE_MIGRATE or PEER_INVALID; evicting stale peer from cache",
@@ -3058,7 +3075,8 @@ impl Client {
                     return Err(InvocationError::StaleHash);
                 }
                 Err(e) => {
-                    metrics::counter!("ferogram.rpc_calls_total", "result" => "error").increment(1);
+                    crate::metrics_shim::counter!("ferogram.rpc_calls_total", "result" => "error")
+                        .increment(1);
                     rl.advance(e).await?;
                 }
             }

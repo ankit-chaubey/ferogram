@@ -23,14 +23,23 @@ ferogram-tl-gen    = { workspace = true }
 
 [features]
 default = ["impl-debug", "impl-from-type", "impl-from-enum", "tl-api", "field-accessors"]
+## Derive Debug on generated TL types.
 impl-debug               = []
+## Generate From<T> impls from concrete types into their enclosing enums.
 impl-from-type           = []
+## Generate From<Enum> conversions between related TL enums.
 impl-from-enum           = []
+## Generate Deserialize impls for TL function (request) types, not just results.
 deserializable-functions = []
+## Generate a name-for-id lookup table for TL constructors.
 name-for-id              = []
+## Generate the Bot/Client API (`functions`/`types`/`enums`) surface.
 tl-api                   = []
+## Generate the low-level MTProto (session/auth) surface.
 tl-mtproto               = []
+## Derive Serialize/Deserialize (serde) on generated TL types.
 impl-serde               = ["dep:serde"]
+## Generate per-field accessor methods on generated TL types.
 field-accessors          = []
 
 [package.metadata.docs.rs]
