@@ -1,48 +1,35 @@
 <div align="center">
 
-# ferogram
+# Ferogram
 
-Async Rust library for Telegram's MTProto protocol.
+A Native & Elegant MTProto Framework for Rust
 
-[![Crates.io](https://img.shields.io/crates/v/ferogram?style=flat-square&color=fc8d62)](https://crates.io/crates/ferogram)
-[![docs.rs](https://img.shields.io/badge/docs.rs-ferogram-5865F2?style=flat-square)](https://docs.rs/ferogram)
-[![License](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue?style=flat-square)](LICENSE-MIT)
-[![TL Layer](https://img.shields.io/badge/TL%20Layer-228-8b5cf6?style=flat-square)](https://core.telegram.org/schema)
-[![Telegram Channel](https://img.shields.io/badge/channel-%40Ferogram-2CA5E0?style=flat-square&logo=telegram)](https://t.me/Ferogram)
-[![Telegram Chat](https://img.shields.io/badge/chat-%40FerogramChat-2CA5E0?style=flat-square&logo=telegram)](https://t.me/FerogramChat)
+[![Crates.io](https://img.shields.io/crates/v/ferogram?style=flat-square&logo=rust&logoColor=white&color=F97316)](https://crates.io/crates/ferogram)
+[![docs.rs](https://img.shields.io/badge/docs.rs-ferogram-5865F2?style=flat-square&logo=docs.rs&logoColor=white)](https://docs.rs/ferogram)
+[![Dependencies](https://img.shields.io/badge/Dependencies-Up%20to%20date-14B8A6?style=flat-square)](https://deps.rs/repo/github/ankit-chaubey/ferogram)
+[![License](https://img.shields.io/badge/License-MIT%20%7C%20Apache--2.0-64748B?style=flat-square)](LICENSE-MIT)
+[![Telegram](https://img.shields.io/badge/Telegram-FerogramChat-06B6D4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/FerogramChat)
 
 Built by **[Ankit Chaubey](https://github.com/ankit-chaubey)**
 
 </div>
 
-## Why ferogram?
-I built ferogram because I kept hitting walls with other MTProto libraries. Things that should have been straightforward weren't, and I kept needing the library to behave slightly differently than it would let me. So I wrote my own.
+## Overview 
+**Modern APIs. Native MTProto.** Ferogram helps you build fast, powerful Telegram applications for both bots and user accounts without compromising on flexibility.
 
+From messaging and media to transfers, calls, MTProxy, and much more, Ferogram brings everything together in one elegant framework.
 
-It talks to Telegram directly over MTProto, no Bot API proxy in between. It works for both bots and user accounts from the same API and the same client builder. 
+> Let's build something amazing. High-level APIs where you want them, raw invoke() where you need complete control.
 
-The major use cases are covered: messaging, media, inline keyboards, CDN downloads, FSM for multi-step conversations, FakeTLS and MTProxy for censored networks, and a raw `invoke()` escape hatch for anything the high-level API doesn't wrap yet.
-
-## Bot API
-If you want the Bot API instead, take a look at [ferobot](https://github.com/ankit-chaubey/ferobot).
-
-## Python support
-Ferogram is also available for Python as [ferogram-py](https://github.com/ankit-chaubey/ferogram-py) on PyPI, [pre-built wheels](https://pypi.org/project/ferogram), no Rust toolchain needed.
-
-> [!NOTE]
-> ferogram is still in active development. It covers major use cases and runs in production, but the API may still shift.
 
 ---
 
 ## Getting started
-
+All it takes is a single line in your `Cargo.toml`.
 ```toml
 [dependencies]
 ferogram = "0.6.4"
-tokio    = { version = "1", features = ["full"] }
 ```
-
----
 
 Development on GitHub moves faster than crates.io. Releases are pushed to [crates.io](https://crates.io/crates/ferogram) when there's a patch or a proper release, so there may be fixes and features on `main` or `dev` that aren't published yet. If you need something from `main`, you can point directly to a specific commit:
 
@@ -54,8 +41,27 @@ Otherwise, stable from crates.io is the safe default.
 
 ---
 
-### Quick start: bot
+### Quick start
 
+```rust
+use ferogram::Client;
+
+const API_ID: i32 = 0;
+const API_HASH: &str = "";
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let (client, _) = Client::quick_connect("my.session", API_ID, API_HASH).await?;
+
+    client.send_message("me", "Hello from ferogram!").await?;
+    Ok(())
+}
+```
+<details>
+<summary>Starting as bot</summary>
+
+### Quick start: bot
+Building a bot is just as simple as building a user client. All you need is a bot token from [@BotFather](https://t.me/BotFather), and you're ready to go.
 ```rust
 use ferogram::{Client, update::Update};
 
@@ -78,58 +84,14 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-### Quick start: user account
-
-```rust
-use ferogram::Client;
-
-const API_ID: i32 = 0;
-const API_HASH: &str = "";
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let (client, _) = Client::quick_connect("my.session", API_ID, API_HASH).await?;
-
-    client.send_message("me", "Hello from ferogram!").await?;
-    Ok(())
-}
-```
+</details>
 
 ---
 
-## Cargo feature flags
+## Python support
+Love Python as much as we do? Ferogram is also available for Python with a clean, user-friendly API while keeping the heavy lifting in Rust.
 
-Everything below is off by default. The default build is just login, raw RPC
-(`client.invoke()`), and updates.
-
-| Feature | Adds | Pulls in |
-|---|---|---|
-| `derive` | `#[derive(FsmState)]` and other proc-macros | `ferogram-derive` |
-| `sqlite-session` | SQLite-backed session storage | `rusqlite` (bundled sqlite3, native build) |
-| `libsql-session` | libSQL-backed session storage (local/embedded replica) | `libsql` |
-| `libsql-remote-session` | Remote libSQL/Turso session storage with replication | `libsql-session` + replication |
-| `serde` | Serialize/Deserialize on session types | `ferogram-session/serde` |
-| `fsm` | FSM dispatcher helper (`dp.on_message_fsm`) | `ferogram-fsm` |
-| `parsers` / `html` | HTML/Markdown message parsing for rich text | `ferogram-parsers` |
-| `html5ever` | Stricter, spec-compliant HTML parsing | `html5ever` |
-| `experimental` | Experimental transfer APIs (resumable transfers) | `mp4` |
-| `resilient-connect` | DNS-over-HTTPS + Firebase/Google config fallback for censored networks | `reqwest` (transitively `rustls`/`aws-lc-rs`) |
-| `socks5` | SOCKS5 proxy support for outgoing connections | `tokio-socks` |
-| `metrics` | RPC/connection counters, histograms, gauges | `metrics` |
-| `parser` | Re-export the TL parser for custom tooling | `ferogram-tl-parser` |
-| `codegen` | Re-export the TL code generator for custom tooling | `ferogram-tl-gen` |
-
-```toml
-# Minimal: login, raw RPC, updates only
-ferogram = { version = "0.6", default-features = false }
-
-# A typical bot: rich text + FSM + SQLite sessions
-ferogram = { version = "0.6", features = ["parsers", "fsm", "sqlite-session"] }
-```
-
-> **Note:** `sqlite-session` and `libsql-session`/`libsql-remote-session` are
-> mutually exclusive, both bundle a `sqlite3` C source, and enabling both at
-> once fails at link time with duplicate-symbol errors. Pick one.
+Powered by a high-performance Rust core, it takes care of networking, encryption, TL parsing, and session management. [ferogram-py](https://github.com/ankit-chaubey/ferogram-py), Also [pre-built wheels](https://pypi.org/project/ferogram) on PyPI, no Rust toolchain needed.
 
 ---
 
