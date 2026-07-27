@@ -31,7 +31,7 @@ All it takes is a single line in your `Cargo.toml`.
 ferogram = "0.6.4"
 ```
 
-Development on GitHub moves faster than crates.io. Releases are pushed to [crates.io](https://crates.io/crates/ferogram) when there's a patch or a proper release, so there may be fixes and features on `main` or `dev` that aren't published yet. If you need something from `main`, you can point directly to a specific commit:
+Development on GitHub moves faster than crates.io. Releases are pushed to [crates.io](https://crates.io/crates/ferogram) when there's a patch or a proper release, so there may be fixes and features on `main` that aren't published yet. If you need something from `main`, you can point directly to a specific commit:
 
 ```toml
 ferogram = { git = "https://github.com/ankit-chaubey/ferogram", rev = "COMMIT_SHA" }
@@ -62,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
 
 ### Quick start: bot
 Building a bot is just as simple as building a user client. All you need is a bot token from [@BotFather](https://t.me/BotFather), and you're ready to go.
+
 ```rust
 use ferogram::{Client, update::Update};
 
@@ -91,20 +92,30 @@ async fn main() -> anyhow::Result<()> {
 ## Python support
 Love Python as much as we do? Ferogram is also available for Python with a clean, user-friendly API while keeping the heavy lifting in Rust.
 
-Powered by a high-performance Rust core, it takes care of networking, encryption, TL parsing, and session management. [ferogram-py](https://github.com/ankit-chaubey/ferogram-py), Also [pre-built wheels](https://pypi.org/project/ferogram) on PyPI, no Rust toolchain needed.
+Powered by a high-performance Rust core, it takes care of networking, encryption, TL parsing, and session management. Explore the [ferogram-py](https://github.com/ankit-chaubey/ferogram-py) source, learn about the [architecture](https://github.com/ankit-chaubey/ferogram-py/blob/main/assets/architecture.svg), or install the [pre-built wheels](https://pypi.org/project/ferogram) from PyPI, no Rust toolchain needed.
 
 ---
 
 ## Core features
 
-### Dispatcher and filters
-Ferogram includes a powerful dispatcher with composable filters (&, |, !), a flexible FSM with pluggable state storage, session backends, media transfer utilities, and much more.
+### TgCalls
+TgCalls brings voice and video calling to Telegram clients written in Rust. It bridges Telegram's calling stack with a clean Rust API, making it easy to stream media, join voice chats, and integrate voice and video calling into your Telegram clients.
 
-For detailed usage examples and API documentation, check the README files and documentation of the dedicated crates in this workspace.
+Whether you're building a music bot, a voice assistant, or any application that needs to participate in Telegram calls, [TgCalls](https://crates.io/crates/tgcalls) gets you there with a simple and ergonomic API.
+
+### Dispatcher and filters
+Ferogram includes a powerful dispatcher with composable filters (&, |, !).
+
+### FSM
+
+[ferogram-fsm](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram-fsm) provides a flexible finite state machine for building multi-step bot conversations, with pluggable storage, configurable state strategies, and type-safe states.
 
 ### Raw API
 
 When the high-level API doesn't cover something, `client.invoke()` takes any TL function directly:
+
+<details>
+<summary>Raw API Example</summary>
 
 ```rust
 use ferogram::tl;
@@ -121,37 +132,41 @@ client.invoke(&req).await?;
 client.invoke_on_dc(2, &req).await?;
 ```
 
+</details>
+
 ### Session backends
 
-By default the session is a binary file on disk. Switch to SQLite, LibSQL (Turso), or a base64 string for serverless setups. You can also bring your own by implementing `SessionBackend`.
+By default the session is a binary file on disk. Switch to SQLite, LibSQL (Turso), or a base64 string for serverless setups. You can also bring your own by implementing [`SessionBackend`](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram-session#custom-backends).
+
+### MTProxy
+
+Built-in support for Telegram MTProxy, including Classic, DD, and FakeTLS transport
+
+And much more. Explore the dedicated crate documentation for a complete overview of all supported features.
 
 ---
 
 ## What's covered
 
-See **[This](FEATURES.md)** for the quick list with method signatures. Runnable examples are in [`ferogram/examples/`](ferogram/examples/).
+See **[Quick Introduction](FEATURES.md)** for the quick list for features and APIs. To try the examples: [`ferogram/examples/`](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram/examples)
 
-If something is missing, open a feature request or drop by [t.me/FerogramChat](https://t.me/FerogramChat). If the high-level API isn't enough, the raw API is always there.
-
----
-
-### **Secret chats** 
-Secret Chats (end-to-end encrypted) are fully implemented but not published to crates.io yet. The plan is to release once there is enough community demand for it.
-
-### **Voice and video calls**
-Group audio, video and P2P calling are now fully implemented. To get started, check out the [tgcalls](https://crates.io/crates/tgcalls) crate and its examples in [tgcalls](https://github.com/ankit-chaubey/tgcalls) repository. It provides seamless integration between Ferogram and the official [ntgcalls](https://crates.io/crates/ntgcalls) Rust bindings for building Telegram voice and video calling applications.
+If something is missing, open a feature request or write your suggestion in [t.me/FerogramChat](https://t.me/FerogramChat)
 
 ---
 
 ## Community and links
 
-- **Channel** (releases, announcements): [t.me/Ferogram](https://t.me/Ferogram)
-- **Chat** (questions, discussion): [t.me/FerogramChat](https://t.me/FerogramChat)
+Join the ferogram community! Questions, discussions, bugs report and feedback are always welcome.
+
+ - Channel (releases & announcements):  [@Ferogram](https://t.me/Ferogram)
+
+ - (questions & discussion): [@FerogramChat](https://t.me/FerogramChat)
+
 - **API docs**: [docs.rs/ferogram](https://docs.rs/ferogram)
 
 ## Contributing
 
-Read [contribution guide](CONTRIBUTING.md) before opening a PR and as well Security issues: see [security.md](SECURITY.md).
+Please read the [Contributing Guide](https://github.com/ankit-chaubey/ferogram/blob/main/CONTRIBUTING.md) before opening a pull request.
 
 ## Acknowledgments
 
@@ -161,6 +176,15 @@ Protocol behavior references from [Telegram Desktop](https://github.com/telegram
 
 ## License
 
-MIT OR Apache-2.0. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
+This project is dual-licensed under:
+
+- MIT License
+- Apache License 2.0
+
+You may choose either license.
+
+You are free to use, modify, and distribute this software, including for commercial use, provided the original license and copyright notice are included.
+
+See [`LICENSE-MIT`](https://github.com/ankit-chaubey/ferogram-l/blob/main/LICENSE-MIT) and [`LICENSE-APACHE`](https://github.com/ankit-chaubey/ferogram/blob/main/LICENSE-APACHE) for full details.
 
 Usage must comply with [Telegram's API Terms of Service](https://core.telegram.org/api/terms).
