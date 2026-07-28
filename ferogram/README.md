@@ -320,6 +320,8 @@ cargo test --workspace --all-features
 
 ## License
 
-MIT OR Apache-2.0. See [LICENSE-MIT](../LICENSE-MIT) and [LICENSE-APACHE](../LICENSE-APACHE).
+This project is licensed under either the MIT License or Apache License 2.0, at your option. See [`LICENSE-MIT`](https://github.com/ankit-chaubey/ferogram/blob/main/LICENSE-MIT) and [`LICENSE-APACHE`](https://github.com/ankit-chaubey/ferogram/blob/main/LICENSE-APACHE) for details.
+
+**Author:** Ankit Chaubey ([@ankit-chaubey](https://github.com/ankit-chaubey))
 
 Usage must comply with [Telegram's API Terms of Service](https://core.telegram.org/api/terms).

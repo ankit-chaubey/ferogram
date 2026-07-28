@@ -89,6 +89,6 @@ ferogram-tl-types  (consumes generated code)
 
 ## License
 
-MIT or Apache-2.0, at your option. See [LICENSE-MIT](../LICENSE-MIT) and [LICENSE-APACHE](../LICENSE-APACHE).
+This project is licensed under either the MIT License or Apache License 2.0, at your option. See [`LICENSE-MIT`](https://github.com/ankit-chaubey/ferogram/blob/main/LICENSE-MIT) and [`LICENSE-APACHE`](https://github.com/ankit-chaubey/ferogram/blob/main/LICENSE-APACHE) for details.
 
-**Ankit Chaubey** - [github.com/ankit-chaubey](https://github.com/ankit-chaubey)
+**Author:** Ankit Chaubey ([@ankit-chaubey](https://github.com/ankit-chaubey))
