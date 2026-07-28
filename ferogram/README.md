@@ -4,12 +4,12 @@
 
 Async Rust client for the Telegram MTProto API.
 
-[![Crates.io](https://img.shields.io/crates/v/ferogram?style=flat-square&color=fc8d62)](https://crates.io/crates/ferogram)
-[![docs.rs](https://img.shields.io/badge/docs.rs-ferogram-5865F2?style=flat-square)](https://docs.rs/ferogram)
-[![License](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue?style=flat-square)](../LICENSE-MIT)
-[![TL Layer](https://img.shields.io/badge/TL%20Layer-228-8b5cf6?style=flat-square)](https://core.telegram.org/schema)
-[![Telegram Channel](https://img.shields.io/badge/channel-%40Ferogram-2CA5E0?style=flat-square&logo=telegram)](https://t.me/Ferogram)
-[![Telegram Chat](https://img.shields.io/badge/chat-%40FerogramChat-2CA5E0?style=flat-square&logo=telegram)](https://t.me/FerogramChat)
+[![Crates.io](https://img.shields.io/crates/v/ferogram?style=flat-square&logo=rust&logoColor=white&color=F97316)](https://crates.io/crates/ferogram)
+[![docs.rs](https://img.shields.io/badge/docs.rs-ferogram-5865F2?style=flat-square&logo=docs.rs&logoColor=white)](https://docs.rs/ferogram)
+[![License](https://img.shields.io/badge/License-MIT%20%7C%20Apache--2.0-64748B?style=flat-square)](../LICENSE-MIT)
+[![TL Layer](https://img.shields.io/badge/TL%20Layer-228-8B5CF6?style=flat-square)](https://core.telegram.org/schema)
+[![Telegram Channel](https://img.shields.io/badge/Channel-Ferogram-06B6D4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/Ferogram)
+[![Telegram Chat](https://img.shields.io/badge/Chat-FerogramChat-06B6D4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/FerogramChat)
 
 Built by **[Ankit Chaubey](https://github.com/ankit-chaubey)**
 
@@ -36,12 +36,13 @@ Optional feature flags:
 
 ```toml
 ferogram = { version = "0.6.4", features = [
-    "sqlite-session",  # SqliteBackend via rusqlite
-    "libsql-session",  # LibSqlBackend via libsql-client (Turso)
-    "html",            # parse_html / generate_html (built-in parser)
-    "html5ever",       # parse_html via spec-compliant html5ever
-    "derive",          # #[derive(FsmState)]
-    "serde",           # serde support on session types
+    "sqlite-session",         # SqliteBackend via rusqlite
+    "libsql-session",         # LibSqlBackend, local file or in-memory, via libsql
+    "libsql-remote-session",  # LibSqlBackend remote Turso + embedded replicas
+    "html",                   # parse_html / generate_html (built-in parser)
+    "html5ever",              # parse_html via spec-compliant html5ever
+    "derive",                 # #[derive(FsmState)]
+    "serde",                  # serde support on session types
 ] }
 ```
 
@@ -172,14 +173,16 @@ dp.on_message_fsm(text(), Form::Name, |msg, state| async move {
 ## Session backends
 
 ```rust
-Client::builder().session("bot.session")                                              // binary file (default)
-Client::builder().in_memory()                                                         // no persistence
-Client::builder().session_string(env::var("SESSION")?)                               // base64 string
-Client::builder().session_backend(Arc::new(SqliteBackend::open("s.db")?))            // sqlite
-Client::builder().session_backend(Arc::new(LibSqlBackend::remote(url, token).await?)) // turso
+Client::builder().session("bot.session")                                    // binary file (default)
+Client::builder().in_memory()                                               // no persistence
+Client::builder().session_string(env::var("SESSION")?)                     // base64 string
+Client::builder().session_backend(Arc::new(SqliteBackend::open("s.db")?))  // sqlite
+Client::builder().session_backend(Arc::new(LibSqlBackend::open_local("s.db")?))          // libsql, local file
+Client::builder().session_backend(Arc::new(LibSqlBackend::open_remote(url, token)?))     // turso, remote only
+Client::builder().session_backend(Arc::new(LibSqlBackend::open_replica("s.db", url, token)?)) // turso, local + synced
 ```
 
-The base64 string backend is useful for serverless or containers where writing to disk isn't an option. To bring your own, implement `SessionBackend` from [`ferogram-session`](../ferogram-session/).
+The base64 string backend is useful for serverless or containers where writing to disk isn't an option. `open_remote` and `open_replica` need the `libsql-remote-session` feature on top of `libsql-session`, and can't be combined with `sqlite-session` (both link a sqlite3 C source). To bring your own backend, implement `SessionBackend` from [`ferogram-session`](../ferogram-session/).
 
 ## Transport and proxy
 

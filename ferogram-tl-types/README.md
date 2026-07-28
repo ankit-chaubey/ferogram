@@ -2,10 +2,10 @@
 
 Auto-generated Rust types for all Telegram API constructors, functions, and enums.
 
-[![Crates.io](https://img.shields.io/crates/v/ferogram-tl-types?color=fc8d62)](https://crates.io/crates/ferogram-tl-types)
-[![Telegram](https://img.shields.io/badge/community-%40FerogramChat-2CA5E0?logo=telegram)](https://t.me/FerogramChat) [![Channel](https://img.shields.io/badge/channel-%40Ferogram-2CA5E0?logo=telegram)](https://t.me/Ferogram)
-[![docs.rs](https://img.shields.io/badge/docs.rs-ferogram--tl--types-5865F2)](https://docs.rs/ferogram-tl-types)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Crates.io](https://img.shields.io/crates/v/ferogram-tl-types?style=flat-square&logo=rust&logoColor=white&color=F97316)](https://crates.io/crates/ferogram-tl-types)
+[![Telegram Channel](https://img.shields.io/badge/Channel-Ferogram-06B6D4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/Ferogram) [![Telegram Chat](https://img.shields.io/badge/Chat-FerogramChat-06B6D4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/FerogramChat)
+[![docs.rs](https://img.shields.io/badge/docs.rs-ferogram--tl--types-5865F2?style=flat-square&logo=docs.rs&logoColor=white)](https://docs.rs/ferogram-tl-types)
+[![License](https://img.shields.io/badge/License-MIT%20%7C%20Apache--2.0-64748B?style=flat-square)](#license)
 
 2,329 TL definitions generated at build time from the current TL Layer. All constructors, functions, and abstract types are represented as Rust structs and enums with binary TL serialization and deserialization.
 
@@ -57,6 +57,7 @@ pub mod functions {
 | `impl-debug` | yes | `#[derive(Debug)]` on all types |
 | `impl-from-type` | yes | `From<types::T> for enums::E` |
 | `impl-from-enum` | yes | `TryFrom<enums::E> for types::T` |
+| `field-accessors` | yes | Generated getter methods for struct fields |
 | `deserializable-functions` | no | `Deserializable` on function types |
 | `name-for-id` | no | `name_for_id(u32) -> Option<&'static str>` |
 | `impl-serde` | no | `serde::Serialize` / `Deserialize` |
