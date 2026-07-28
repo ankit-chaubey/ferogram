@@ -54,11 +54,17 @@
 //!
 //! # Feature flags
 //!
-//! | Flag | Effect |
-//! |---|---|
-//! | `tl-api` | Current-layer API schema types (default in `ferogram`) |
-//! | `tl-mtproto` | MTProto internal types (DH, transport, etc.) |
-//! | `name-for-id` | `name_for_id(u32) -> &'static str` for debug printing |
+//! | Flag | Default | Effect |
+//! |---|---|---|
+//! | `tl-api` | yes | Current-layer API schema types (`api.tl`) |
+//! | `tl-mtproto` | no | MTProto internal schema types (`mtproto.tl`, DH, transport, etc.) |
+//! | `impl-debug` | yes | `#[derive(Debug)]` on all generated types |
+//! | `impl-from-type` | yes | `From<types::T> for enums::E` |
+//! | `impl-from-enum` | yes | `TryFrom<enums::E> for types::T` |
+//! | `field-accessors` | yes | Generated getter methods for struct fields |
+//! | `deserializable-functions` | no | [`Deserializable`] on function types too |
+//! | `name-for-id` | no | `name_for_id(u32) -> Option<&'static str>` for debug printing |
+//! | `impl-serde` | no | `serde::Serialize` / `Deserialize` on generated types |
 //!
 //! # Updating to a new TL layer
 //!

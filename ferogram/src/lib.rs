@@ -131,6 +131,16 @@
 //! // Portable string session, useful for serverless or env-var setups
 //! let s = client.export_session_string().await?;
 //! let (client, _) = Client::builder().session_string(s).connect().await?;
+//!
+//! // SQLite (feature: sqlite-session)
+//! Client::builder().session_backend(Arc::new(SqliteBackend::open("s.db")?));
+//!
+//! // libSQL, local file or in-memory (feature: libsql-session)
+//! Client::builder().session_backend(Arc::new(LibSqlBackend::open_local("s.db")?));
+//!
+//! // Remote Turso, or a local file kept synced with one (feature: libsql-remote-session)
+//! Client::builder().session_backend(Arc::new(LibSqlBackend::open_remote(url, token)?));
+//! Client::builder().session_backend(Arc::new(LibSqlBackend::open_replica("s.db", url, token)?));
 //! ```
 //!
 //! # Cargo feature flags

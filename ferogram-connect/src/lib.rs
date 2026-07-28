@@ -41,6 +41,8 @@
 //!   deserialisation helpers for the various transport shapes.
 //! - **SOCKS5 / MTProxy**: [`Socks5Config`] and [`MtProxyConfig`] let you
 //!   route connections through a proxy before the MTProto handshake.
+//!   `Socks5Config::connect` needs the `socks5` feature; the config struct
+//!   itself is always available.
 //! - **PFS helpers**: [`decode_bind_response`] / [`decode_bind_single`]
 //!   decode the `auth.bindTempAuthKey` response without pulling in the full
 //!   TL schema crate.
@@ -62,6 +64,12 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Feature flags
+//!
+//! | Flag | What it enables |
+//! |---|---|
+//! | `socks5` | `Socks5Config::connect`, actually dialing out through a SOCKS5 proxy (pulls in `tokio-socks`) |
 
 #![deny(unsafe_code)]
 

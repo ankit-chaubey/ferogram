@@ -67,6 +67,12 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Feature flags
+//!
+//! | Flag | What it enables |
+//! |---|---|
+//! | `metrics` | RPC/connection instrumentation (counters, histograms, gauges) via the [`metrics`](https://docs.rs/metrics) crate. Off by default; a zero-cost no-op shim is used otherwise. |
 
 #![deny(unsafe_code)]
 

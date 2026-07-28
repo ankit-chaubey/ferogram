@@ -25,27 +25,58 @@
 //! automatically when you call `Client::builder().session(...)` or
 //! `.session_string(...)`.
 //!
+//! # What it stores
+//!
+//! - DC address table with per-DC auth keys, salts, and capability flags
+//!   ([`DcFlags`]: IPv6, media-only, TCP-obfuscated-only, CDN, static). Both
+//!   IPv4 and IPv6 entries can be kept for the same DC; [`PersistedSession::dc_for`]
+//!   picks the right one for a given `prefer_ipv6`.
+//! - MTProto update counters: pts, qts, seq, date, and per-channel pts.
+//! - Peer access-hash cache for users, channels, groups, and Communities.
+//!   Communities are tracked separately via `is_community` so they are never
+//!   mistaken for a supergroup on reload.
+//! - Min-user message contexts for `InputPeerUserFromMessage`.
+//!
+//! Call [`PersistedSession::stats`] for a [`SessionStats`] breakdown, peer
+//! counts by kind, DCs with a negotiated auth key, approximate serialized
+//! size, useful for spotting a bloated `min_peers` cache before it needs
+//! pruning.
+//!
 //! # What's in here
 //!
-//! - [`PersistedSession`]: the serializable session struct. Holds the DC table
-//!   (one `AuthKey` + salt + time offset per DC), update sequence counters
-//!   (PTS, QTS, date, seq), and the peer access-hash cache.
-//! - [`SessionBackend`]: the trait all backends implement. A single method:
-//!   `save(&PersistedSession)` and `load() -> Option<PersistedSession>`.
+//! - [`PersistedSession`]: the serializable session struct. Holds the DC table,
+//!   update sequence counters, and the peer access-hash cache.
+//! - [`SessionBackend`]: the trait all backends implement: `save`, `load`,
+//!   `delete`, `name`.
 //! - [`BinaryFileBackend`]: stores the session as a binary file on disk.
-//!   Good for bots and scripts. No extra dependencies.
+//!   Default backend. Saves are atomic, written to a `.tmp` file then renamed.
 //! - [`InMemoryBackend`]: keeps everything in memory. Nothing survives process
 //!   exit. Used for tests and ephemeral tasks.
 //! - [`StringSessionBackend`]: serializes the session to a base64 string.
 //!   Useful for serverless environments where you store state in an env var or
 //!   database column. Load it with `Client::builder().session_string(s)`.
-//! - `SqliteBackend`: SQLite-backed storage via rusqlite. Behind the
-//!   `sqlite-session` feature flag. Good for local multi-account tooling.
-//! - `LibSqlBackend`: libSQL / Turso backend. Behind `libsql-session`.
-//!   For distributed or edge-hosted session storage.
+//! - `SqliteBackend`: SQLite-backed storage via rusqlite, behind the
+//!   `sqlite-session` feature. `open` for a file, `in_memory` for tests.
+//! - `LibSqlBackend`: libSQL storage, behind `libsql-session`. `open_local` and
+//!   `in_memory` work with no remote server. `open_remote` (a live Turso
+//!   connection) and `open_replica` (a local file kept synced with Turso) need
+//!   `libsql-remote-session` on top, and can't be combined with
+//!   `sqlite-session`, both link a sqlite3 C source and the build fails at
+//!   link time.
 //!
 //! You can also implement `SessionBackend` yourself for Redis, PostgreSQL, or
 //! anything else.
+//!
+//! # String sessions
+//!
+//! Two formats, both accepted by `Client::builder().session_string("...")`,
+//! which auto-detects which one it got.
+//!
+//! - **Compact** (`export_session_string()`): dc_id, ip, port, user_id, and
+//!   auth key only. Good for serverless or portable deployments.
+//! - **Native** (`export_native_session_string()`): full DC table, update
+//!   counters, and peer cache. Use it when you need to resume update
+//!   processing from exactly where you left off.
 //!
 //! # Binary format
 //!
