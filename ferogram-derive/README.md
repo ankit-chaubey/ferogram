@@ -17,7 +17,7 @@ For installation instructions see the [ferogram README](https://github.com/ankit
 
 Implements the `ferogram::fsm::FsmState` trait for an enum. Only unit variants are supported; tuple or struct variants produce a compile error.
 
-What gets generated: `as_key(&self) -> String` and `from_key(key: &str) -> Option<Self>`, both using the variant name as written in source.
+What gets generated: `as_key(&self) -> String` and `from_key(key: &str) -> Option<Self>`. Keys are namespaced as `"module::path::EnumName::Variant"` (using `module_path!()`, the enum name, and the variant name), so identically-named variants on different state enums -- or even identically-named enums in different modules -- don't collide in storage. Generic enums are rejected at compile time, since the key can't disambiguate different type parameter instantiations.
 
 ```rust
 use ferogram::FsmState;
@@ -31,7 +31,7 @@ enum RegistrationState {
 }
 ```
 
-Keys are the variant names as written. Renaming a variant changes its key and breaks any stored state.
+Renaming a variant, enum, or moving the enum to a different module changes its key and breaks any stored state. `from_key` falls back to matching the trailing `"::"`-segment against a variant name, so state written by pre-namespacing versions of this macro still deserializes on a best-effort basis after an upgrade.
 
 ---
 
