@@ -13,7 +13,7 @@
  */
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-mtsender/0.6.4")]
+#![doc(html_root_url = "https://docs.rs/ferogram-mtsender/0.6.5")]
 //! MTProto sender pool and retry policy for ferogram.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust

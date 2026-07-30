@@ -14,7 +14,7 @@
 
 #![deny(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-tl-gen/0.6.4")]
+#![doc(html_root_url = "https://docs.rs/ferogram-tl-gen/0.6.5")]
 //! Build-time code generator from a parsed TL schema to Rust source files.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust

@@ -13,7 +13,7 @@
  */
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-msgbox/0.6.4")]
+#![doc(html_root_url = "https://docs.rs/ferogram-msgbox/0.6.5")]
 //! Update-gap tracking state machine for ferogram: pts/qts/seq bookkeeping,
 //! per-channel state, and gap detection for Telegram's `Updates` stream.
 //!

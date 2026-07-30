@@ -13,7 +13,7 @@
  */
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-mtproto/0.6.4")]
+#![doc(html_root_url = "https://docs.rs/ferogram-mtproto/0.6.5")]
 //! MTProto 2.0 session management, message framing, DH key exchange, and transport abstractions.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
