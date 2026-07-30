@@ -7,10 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.6.5] - 2026-07-30
+
+Transport-race probing (`Full` vs `Obfuscated`, customizable via
+`probe_transport_race`), an optional `metrics` feature with a zero-cost
+no-op shim when disabled, `message_box` extracted into its own
+`ferogram-msgbox` crate, Telegram Community session persistence, richer
+dialog iteration, and a set of FakeTLS/crypto correctness fixes.
 
 ### Added
 
+- `ClientBuilder::probe_transport_race` / `Client::transport_race`: the
+  transport probe race is now configurable as an ordered list of
+  `RaceLeg { transport, stagger }` entries instead of a fixed schedule.
+  `ferogram_connect::default_transport_race()` is used when unset.
+- `metrics` feature (`ferogram`, `ferogram-mtsender`): optional
+  instrumentation via the `metrics` crate (counters for RPC/connection
+  events) gated behind `dep:metrics`. Off by default; a `metrics_shim`
+  module provides a zero-cost no-op `counter!` in its place so call sites
+  don't need per-site `#[cfg(feature = "metrics")]`.
 - `ferogram-session`: binary session format bumped to v8, adding a per-peer
   `is_community` flag (`CachedPeer::is_community`) so Telegram Community
   entities survive a session restore instead of collapsing into a plain
@@ -35,6 +50,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `message_box` moved out of `ferogram` and into a new standalone
+  `ferogram-msgbox` crate (pts/qts/seq bookkeeping and gap detection for
+  the `Updates` stream). `ferogram` re-exports it unchanged as
+  `ferogram::message_box`, so existing code keeps compiling with no
+  changes required.
+- Default transport probe race narrowed from three legs
+  (`Obfuscated` / `Abridged` / `Http`) to two (`Full` at 0 ms, `Obfuscated`
+  staggered 200 ms behind). `Abridged`/`Intermediate` share `Full`'s TCP
+  path and framing fingerprint, so racing them added connection load
+  without a different success path against DPI. `Http` never actually sent
+  HTTP frames, it silently fell back to `Abridged` framing on the same
+  port, so it was a duplicate `Abridged` attempt under a misleading label
+  and has been removed from the race entirely.
 - `TransferLimits::download_pipeline_depth` / `upload_pipeline_depth`:
   default changed from `4` to `1`. Y (connection count) still scales with
   file size out of the box as before; X (in-flight requests per
@@ -45,6 +73,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ferogram-msgbox`: `channelDifferenceTooLong` handling `panic!`'d /
+  `.expect()`'d when a channel dialog carried no `pts`, or when the server
+  returned an unexpected folder dialog in the difference. Both cases now
+  log a warning and return `Err(Gap)` so the normal retry path (a fresh
+  `getDifference`) recovers instead of crashing the client.
 - `ferogram-connect`: FakeTLS (`ee` secret) ClientHello was a bare 4-extension
   hello with no `key_share`, no `signature_algorithms`, no GREASE, and no
   padding - not a valid TLS 1.3 ClientHello, so DPI-aware proxies dropped the
