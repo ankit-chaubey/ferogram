@@ -4284,103 +4284,174 @@ impl Client {
         <R::Return as tl::Deserializable>::from_bytes_exact(&body).map_err(Into::into)
     }
 
-    /// Raw RPC call routed to `dc_id`, exporting auth if needed.
+    /// Ensure `dc_id` has a connection in the pool that has completed
+    /// `invokeWithLayer(initConnection(...))` -- and, for foreign DCs,
+    /// `auth.importAuthorization` -- for the *current* session.
     ///
-    /// Mirrors the setup sequence used by `open_worker_conn` / `rpc_transfer_on_dc`:
-    /// - reads the *live* salt/time_offset (not 0,0) when reconnecting with a cached key,
-    ///   since starting a connection with the wrong salt forces an extra bad_server_salt
-    ///   round-trip on the very first request.
-    /// - always wraps the connection's first request in `invokeWithLayer(initConnection(...))`,
-    ///   including on the cached-key path, where the previous implementation skipped this
-    ///   entirely. Without it the new session is never bound to the account on that DC and
-    ///   never told which API layer to use, which is what caused inconsistent/failed
-    ///   foreign-DC behavior while the home DC (already initialized) worked fine.
-    /// - re-imports authorization on cached-key reconnects too (a cached auth *key* only
-    ///   skips the DH handshake; the new session still needs `auth.importAuthorization`
-    ///   to be usable for account requests on that DC). The old code never did this on
-    ///   the cached-key branch, so a second call to a foreign DC could still misbehave.
-    async fn rpc_on_dc_raw<R: RemoteCall>(
-        &self,
-        dc_id: i32,
-
-        req: &R,
-    ) -> Result<Vec<u8>, InvocationError> {
-        // Check if we need to open a new connection for this DC
+    /// Checks both `has_connection` and `is_init_done`, not just the former:
+    /// `DcPool::invoke_on_dc` evicts a slot on death or `-404` without
+    /// reconnecting itself (it has no `api_id`/device info to build
+    /// `InitConnection`), so after an eviction there may genuinely be no
+    /// slot at all, but a stale connection could also have been evicted and
+    /// is_init_done cleared while has_connection briefly races -- checking
+    /// both keeps this from skipping setup on a not-yet-initialized slot.
+    async fn ensure_dc_ready(&self, dc_id: i32) -> Result<(), InvocationError> {
         let needs_new = {
             let pool = self.inner.dc_pool.lock().await;
-            !pool.has_connection(dc_id)
+            !pool.has_connection(dc_id) || !pool.is_init_done(dc_id)
         };
 
-        if needs_new {
-            // Serialise setup per DC: concurrent callers racing to open the first
-            // connection for the same DC must not both run DH/export/import.
-            let gate: std::sync::Arc<tokio::sync::Mutex<()>> = {
-                let mut gates = self.inner.auth_import_gates.lock();
-                gates
-                    .entry(dc_id)
-                    .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
-                    .clone()
+        if !needs_new {
+            return Ok(());
+        }
+
+        // Serialise setup per DC: concurrent callers racing to open the first
+        // connection for the same DC must not both run DH/export/import.
+        let gate: std::sync::Arc<tokio::sync::Mutex<()>> = {
+            let mut gates = self.inner.auth_import_gates.lock();
+            gates
+                .entry(dc_id)
+                .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _gate_guard = gate.lock().await;
+
+        // Double-check: another task may have finished setup while we waited.
+        let still_needs_new = {
+            let pool = self.inner.dc_pool.lock().await;
+            !pool.has_connection(dc_id) || !pool.is_init_done(dc_id)
+        };
+
+        if !still_needs_new {
+            return Ok(());
+        }
+
+        let addr = {
+            let opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> =
+                self.inner.dc_options.lock().await;
+            opts.get(&dc_id)
+                .map(|e| e.addr.clone())
+                .unwrap_or_else(|| fallback_dc_addr(dc_id).to_string())
+        };
+
+        let socks5 = self.inner.socks5.clone();
+        let mtproxy = self.inner.mtproxy.clone();
+        let transport = self.inner.transport.clone();
+        let home_dc_id = *self.inner.home_dc_id.lock().await;
+
+        use tl::functions::{InitConnection, InvokeWithLayer};
+
+        let dc_conn = if dc_id == home_dc_id {
+            // Home DC: reuse the existing auth key (if any) with the live
+            // salt/time_offset, then just register the layer via GetConfig.
+            let key = {
+                let opts = self.inner.dc_options.lock().await;
+                opts.get(&dc_id).and_then(|e| e.auth_key)
             };
-            let _gate_guard = gate.lock().await;
-
-            // Double-check: another task may have finished setup while we waited.
-            let still_needs_new = {
-                let pool = self.inner.dc_pool.lock().await;
-                !pool.has_connection(dc_id)
+            let (salt, time_offset) = {
+                let opts = self.inner.dc_options.lock().await;
+                opts.get(&dc_id)
+                    .map(|e| (e.first_salt, e.time_offset))
+                    .unwrap_or((0, 0))
+            };
+            let mut conn = if let Some(key) = key {
+                dc_pool::DcConnection::connect_with_key(
+                    &addr,
+                    key,
+                    salt,
+                    time_offset,
+                    socks5.as_ref(),
+                    mtproxy.as_ref(),
+                    &transport,
+                    dc_id as i16,
+                    self.inner.pfs_enabled,
+                )
+                .await?
+            } else {
+                dc_pool::DcConnection::connect_raw(
+                    &addr,
+                    socks5.as_ref(),
+                    mtproxy.as_ref(),
+                    &transport,
+                    dc_id as i16,
+                )
+                .await?
+            };
+            conn.rpc_call_serializable(&InvokeWithLayer {
+                layer: tl::LAYER,
+                query: InitConnection {
+                    api_id: self.inner.api_id,
+                    device_model: self.inner.device_model.clone(),
+                    system_version: self.inner.system_version.clone(),
+                    app_version: self.inner.app_version.clone(),
+                    system_lang_code: self.inner.system_lang_code.clone(),
+                    lang_pack: self.inner.lang_pack.clone(),
+                    lang_code: self.inner.lang_code.clone(),
+                    proxy: None,
+                    params: None,
+                    query: tl::functions::help::GetConfig {},
+                },
+            })
+            .await?;
+            conn
+        } else {
+            // Foreign DC: cached key skips DH but importAuthorization is
+            // still required to bind this NEW session to the account.
+            let saved = {
+                let opts = self.inner.dc_options.lock().await;
+                opts.get(&dc_id)
+                    .and_then(|e| e.auth_key.map(|k| (k, e.first_salt, e.time_offset)))
             };
 
-            if still_needs_new {
-                let addr = {
-                    let opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> =
-                        self.inner.dc_options.lock().await;
-                    opts.get(&dc_id)
-                        .map(|e| e.addr.clone())
-                        .unwrap_or_else(|| fallback_dc_addr(dc_id).to_string())
-                };
+            if let Some((key, salt, time_offset)) = saved {
+                let mut conn = dc_pool::DcConnection::connect_with_key(
+                    &addr,
+                    key,
+                    salt,
+                    time_offset,
+                    socks5.as_ref(),
+                    mtproxy.as_ref(),
+                    &transport,
+                    dc_id as i16,
+                    self.inner.pfs_enabled,
+                )
+                .await?;
 
-                let socks5 = self.inner.socks5.clone();
-                let mtproxy = self.inner.mtproxy.clone();
-                let transport = self.inner.transport.clone();
-                let home_dc_id = *self.inner.home_dc_id.lock().await;
+                // A cached auth key only skips the DH handshake -- this
+                // connection still needs InitConnection every time. Only
+                // the account import can be skipped once done per DC.
+                let already_imported = self.inner.auth_imported.lock().contains(&dc_id);
 
-                use tl::functions::{InitConnection, InvokeWithLayer};
-
-                let dc_conn = if dc_id == home_dc_id {
-                    // Home DC: reuse the existing auth key (if any) with the live
-                    // salt/time_offset, then just register the layer via GetConfig.
-                    let key = {
-                        let opts = self.inner.dc_options.lock().await;
-                        opts.get(&dc_id).and_then(|e| e.auth_key)
-                    };
-                    let (salt, time_offset) = {
-                        let opts = self.inner.dc_options.lock().await;
-                        opts.get(&dc_id)
-                            .map(|e| (e.first_salt, e.time_offset))
-                            .unwrap_or((0, 0))
-                    };
-                    let mut conn = if let Some(key) = key {
-                        dc_pool::DcConnection::connect_with_key(
-                            &addr,
-                            key,
-                            salt,
-                            time_offset,
-                            socks5.as_ref(),
-                            mtproxy.as_ref(),
-                            &transport,
-                            dc_id as i16,
-                            self.inner.pfs_enabled,
-                        )
-                        .await?
-                    } else {
-                        dc_pool::DcConnection::connect_raw(
-                            &addr,
-                            socks5.as_ref(),
-                            mtproxy.as_ref(),
-                            &transport,
-                            dc_id as i16,
-                        )
-                        .await?
-                    };
+                if !already_imported {
+                    let export_req = tl::functions::auth::ExportAuthorization { dc_id };
+                    let body: Vec<u8> = self.rpc_call_raw(&export_req).await?;
+                    let mut cur = Cursor::from_slice(&body);
+                    let tl::enums::auth::ExportedAuthorization::ExportedAuthorization(exported) =
+                        tl::enums::auth::ExportedAuthorization::deserialize(&mut cur)?;
+                    conn.rpc_call_serializable(&InvokeWithLayer {
+                        layer: tl::LAYER,
+                        query: InitConnection {
+                            api_id: self.inner.api_id,
+                            device_model: self.inner.device_model.clone(),
+                            system_version: self.inner.system_version.clone(),
+                            app_version: self.inner.app_version.clone(),
+                            system_lang_code: self.inner.system_lang_code.clone(),
+                            lang_pack: self.inner.lang_pack.clone(),
+                            lang_code: self.inner.lang_code.clone(),
+                            proxy: None,
+                            params: None,
+                            query: tl::functions::auth::ImportAuthorization {
+                                id: exported.id,
+                                bytes: exported.bytes,
+                            },
+                        },
+                    })
+                    .await?;
+                    self.inner.auth_imported.lock().insert(dc_id);
+                    tracing::debug!(
+                        "[ferogram::client] ensure_dc_ready: DC{dc_id} ready (cached key, auth re-imported)"
+                    );
+                } else {
                     conn.rpc_call_serializable(&InvokeWithLayer {
                         layer: tl::LAYER,
                         query: InitConnection {
@@ -4397,154 +4468,97 @@ impl Client {
                         },
                     })
                     .await?;
-                    conn
-                } else {
-                    // Foreign DC: cached key skips DH but importAuthorization is
-                    // still required to bind this NEW session to the account.
-                    let saved = {
-                        let opts = self.inner.dc_options.lock().await;
-                        opts.get(&dc_id)
-                            .and_then(|e| e.auth_key.map(|k| (k, e.first_salt, e.time_offset)))
-                    };
-
-                    if let Some((key, salt, time_offset)) = saved {
-                        let mut conn = dc_pool::DcConnection::connect_with_key(
-                            &addr,
-                            key,
-                            salt,
-                            time_offset,
-                            socks5.as_ref(),
-                            mtproxy.as_ref(),
-                            &transport,
-                            dc_id as i16,
-                            self.inner.pfs_enabled,
-                        )
-                        .await?;
-
-                        let already_imported = self.inner.auth_imported.lock().contains(&dc_id);
-
-                        if !already_imported {
-                            let export_req = tl::functions::auth::ExportAuthorization { dc_id };
-                            let body: Vec<u8> = self.rpc_call_raw(&export_req).await?;
-                            let mut cur = Cursor::from_slice(&body);
-                            let tl::enums::auth::ExportedAuthorization::ExportedAuthorization(
-                                exported,
-                            ) = tl::enums::auth::ExportedAuthorization::deserialize(&mut cur)?;
-                            conn.rpc_call_serializable(&InvokeWithLayer {
-                                layer: tl::LAYER,
-                                query: InitConnection {
-                                    api_id: self.inner.api_id,
-                                    device_model: self.inner.device_model.clone(),
-                                    system_version: self.inner.system_version.clone(),
-                                    app_version: self.inner.app_version.clone(),
-                                    system_lang_code: self.inner.system_lang_code.clone(),
-                                    lang_pack: self.inner.lang_pack.clone(),
-                                    lang_code: self.inner.lang_code.clone(),
-                                    proxy: None,
-                                    params: None,
-                                    query: tl::functions::auth::ImportAuthorization {
-                                        id: exported.id,
-                                        bytes: exported.bytes,
-                                    },
-                                },
-                            })
-                            .await?;
-                            self.inner.auth_imported.lock().insert(dc_id);
-                            tracing::debug!(
-                                "[ferogram::client] invoke_on_dc: DC{dc_id} ready (cached key, auth re-imported)"
-                            );
-                        } else {
-                            conn.rpc_call_serializable(&InvokeWithLayer {
-                                layer: tl::LAYER,
-                                query: InitConnection {
-                                    api_id: self.inner.api_id,
-                                    device_model: self.inner.device_model.clone(),
-                                    system_version: self.inner.system_version.clone(),
-                                    app_version: self.inner.app_version.clone(),
-                                    system_lang_code: self.inner.system_lang_code.clone(),
-                                    lang_pack: self.inner.lang_pack.clone(),
-                                    lang_code: self.inner.lang_code.clone(),
-                                    proxy: None,
-                                    params: None,
-                                    query: tl::functions::help::GetConfig {},
-                                },
-                            })
-                            .await?;
-                            tracing::debug!(
-                                "[ferogram::client] invoke_on_dc: DC{dc_id} ready (cached key, auth already active)"
-                            );
-                        }
-                        conn
-                    } else {
-                        // No cached key: fresh DH + export/import, wrapped in initConnection.
-                        let mut conn = dc_pool::DcConnection::connect_raw(
-                            &addr,
-                            socks5.as_ref(),
-                            mtproxy.as_ref(),
-                            &transport,
-                            dc_id as i16,
-                        )
-                        .await?;
-                        let export_req = tl::functions::auth::ExportAuthorization { dc_id };
-                        let body: Vec<u8> = self.rpc_call_raw(&export_req).await?;
-                        let mut cur = Cursor::from_slice(&body);
-                        let tl::enums::auth::ExportedAuthorization::ExportedAuthorization(exported) =
-                            tl::enums::auth::ExportedAuthorization::deserialize(&mut cur)?;
-                        conn.rpc_call_serializable(&InvokeWithLayer {
-                            layer: tl::LAYER,
-                            query: InitConnection {
-                                api_id: self.inner.api_id,
-                                device_model: self.inner.device_model.clone(),
-                                system_version: self.inner.system_version.clone(),
-                                app_version: self.inner.app_version.clone(),
-                                system_lang_code: self.inner.system_lang_code.clone(),
-                                lang_pack: self.inner.lang_pack.clone(),
-                                lang_code: self.inner.lang_code.clone(),
-                                proxy: None,
-                                params: None,
-                                query: tl::functions::auth::ImportAuthorization {
-                                    id: exported.id,
-                                    bytes: exported.bytes,
-                                },
-                            },
-                        })
-                        .await?;
-                        self.inner.auth_imported.lock().insert(dc_id);
-                        tracing::debug!(
-                            "[ferogram::client] invoke_on_dc: DC{dc_id} ready (fresh DH, auth imported)"
-                        );
-                        conn
-                    }
-                };
-
-                // Persist the (possibly new) key + live salt/time_offset so the
-                // next reconnect to this DC can skip DH with correct values.
-                let key = dc_conn.auth_key_bytes();
-                let live_salt = dc_conn.first_salt();
-                let live_time_offset = dc_conn.time_offset();
-                {
-                    let mut opts: tokio::sync::MutexGuard<
-                        '_,
-                        std::collections::HashMap<i32, DcEntry>,
-                    > = self.inner.dc_options.lock().await;
-                    let entry = opts
-                        .entry(dc_id)
-                        .or_insert_with(|| crate::session::DcEntry {
-                            dc_id,
-                            addr: addr.clone(),
-                            auth_key: None,
-                            first_salt: 0,
-                            time_offset: 0,
-                            flags: crate::session::DcFlags::NONE,
-                        });
-                    entry.auth_key = Some(key);
-                    entry.first_salt = live_salt;
-                    entry.time_offset = live_time_offset;
+                    tracing::debug!(
+                        "[ferogram::client] ensure_dc_ready: DC{dc_id} ready (cached key, auth already active)"
+                    );
                 }
-                self.inner.dc_pool.lock().await.insert(dc_id, dc_conn);
-                self.inner.dc_pool.lock().await.mark_init_done(dc_id);
+                conn
+            } else {
+                // No cached key: fresh DH + export/import, wrapped in initConnection.
+                let mut conn = dc_pool::DcConnection::connect_raw(
+                    &addr,
+                    socks5.as_ref(),
+                    mtproxy.as_ref(),
+                    &transport,
+                    dc_id as i16,
+                )
+                .await?;
+                let export_req = tl::functions::auth::ExportAuthorization { dc_id };
+                let body: Vec<u8> = self.rpc_call_raw(&export_req).await?;
+                let mut cur = Cursor::from_slice(&body);
+                let tl::enums::auth::ExportedAuthorization::ExportedAuthorization(exported) =
+                    tl::enums::auth::ExportedAuthorization::deserialize(&mut cur)?;
+                conn.rpc_call_serializable(&InvokeWithLayer {
+                    layer: tl::LAYER,
+                    query: InitConnection {
+                        api_id: self.inner.api_id,
+                        device_model: self.inner.device_model.clone(),
+                        system_version: self.inner.system_version.clone(),
+                        app_version: self.inner.app_version.clone(),
+                        system_lang_code: self.inner.system_lang_code.clone(),
+                        lang_pack: self.inner.lang_pack.clone(),
+                        lang_code: self.inner.lang_code.clone(),
+                        proxy: None,
+                        params: None,
+                        query: tl::functions::auth::ImportAuthorization {
+                            id: exported.id,
+                            bytes: exported.bytes,
+                        },
+                    },
+                })
+                .await?;
+                self.inner.auth_imported.lock().insert(dc_id);
+                tracing::debug!(
+                    "[ferogram::client] ensure_dc_ready: DC{dc_id} ready (fresh DH, auth imported)"
+                );
+                conn
             }
+        };
+
+        // Persist the (possibly new) key + live salt/time_offset so the
+        // next reconnect to this DC can skip DH with correct values.
+        let key = dc_conn.auth_key_bytes();
+        let live_salt = dc_conn.first_salt();
+        let live_time_offset = dc_conn.time_offset();
+        {
+            let mut opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> =
+                self.inner.dc_options.lock().await;
+            let entry = opts
+                .entry(dc_id)
+                .or_insert_with(|| crate::session::DcEntry {
+                    dc_id,
+                    addr: addr.clone(),
+                    auth_key: None,
+                    first_salt: 0,
+                    time_offset: 0,
+                    flags: crate::session::DcFlags::NONE,
+                });
+            entry.auth_key = Some(key);
+            entry.first_salt = live_salt;
+            entry.time_offset = live_time_offset;
         }
+        self.inner.dc_pool.lock().await.insert(dc_id, dc_conn);
+        self.inner.dc_pool.lock().await.mark_init_done(dc_id);
+        Ok(())
+    }
+
+    /// Raw RPC call routed to `dc_id`, exporting auth if needed.
+    ///
+    /// Ensures the DC is ready (cached auth key reused where possible,
+    /// `InitConnection` sent, and for foreign DCs `auth.importAuthorization`
+    /// re-imported) before every call, not just the first one for a DC --
+    /// a cached auth *key* only skips the DH handshake, the session itself
+    /// still needs `InitConnection` on every fresh connection. If the pool
+    /// reports the connection was evicted mid-call (dead socket or a
+    /// `-404`), setup is redone once and the request retried before the
+    /// error is surfaced.
+    async fn rpc_on_dc_raw<R: RemoteCall>(
+        &self,
+        dc_id: i32,
+
+        req: &R,
+    ) -> Result<Vec<u8>, InvocationError> {
+        self.ensure_dc_ready(dc_id).await?;
 
         let dc_entries: Vec<crate::DcEntry> = self
             .inner
@@ -4554,19 +4568,38 @@ impl Client {
             .values()
             .cloned()
             .collect();
-        // DcPool::invoke_on_dc evicts the broken slot and retries on a fresh
-        // connection internally when the worker's sender task dies, so no
-        // extra eviction is needed here. Connection failures surface as
-        // InvocationError::Deserialize from the sender task (fail_all has no
-        // way to preserve the original Io/etc. kind once it has fanned the
-        // error out to every caller waiting on that connection), not as
-        // InvocationError::Io, so don't match on the Io variant here.
-        self.inner
+
+        let result = self
+            .inner
             .dc_pool
             .lock()
             .await
             .invoke_on_dc(dc_id, &dc_entries, req)
-            .await
+            .await;
+
+        if result.is_err() {
+            let evicted = {
+                let pool = self.inner.dc_pool.lock().await;
+                !pool.has_connection(dc_id)
+            };
+            if evicted {
+                // Pool evicted the connection and didn't reconnect it
+                // itself (no api_id/device info to build InitConnection).
+                // Redo setup and retry once; a second failure propagates.
+                tracing::debug!(
+                    "[ferogram::client] rpc_on_dc_raw: DC{dc_id} was evicted, redoing setup and retrying once"
+                );
+                self.ensure_dc_ready(dc_id).await?;
+                return self
+                    .inner
+                    .dc_pool
+                    .lock()
+                    .await
+                    .invoke_on_dc(dc_id, &dc_entries, req)
+                    .await;
+            }
+        }
+        result
     }
 }
 

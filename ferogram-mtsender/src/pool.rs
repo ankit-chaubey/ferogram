@@ -315,6 +315,15 @@ impl DcPool {
 
     /// Invoke a raw RPC call on the given DC.
     /// Pool lock is released before the network round-trip begins.
+    ///
+    /// On connection death or a `-404` (auth key gone), this evicts the
+    /// dead slot and returns the error as-is -- it does not reconnect and
+    /// resend itself. `DcPool` has no `api_id`/device info to build
+    /// `invokeWithLayer(initConnection(...))`, so it can't safely redo
+    /// setup on its own. The caller sees `!pool.has_connection(dc_id)`
+    /// after this returns and is expected to redo full setup -- cached
+    /// auth key, `InitConnection`, and (for foreign DCs)
+    /// `auth.importAuthorization` -- before retrying.
     pub async fn invoke_on_dc<R: RemoteCall>(
         &mut self,
         dc_id: i32,
@@ -339,22 +348,19 @@ impl DcPool {
             && e.code == -404
         {
             // Telegram dropped the auth key (e.g. AndroidTV killed the socket during sleep).
-            // Evict and redo a full DH exchange; the login session is still valid server-side.
+            // Evict; the caller redoes DH + auth import + InitConnection and retries.
             tracing::warn!(
-                "[ferogram::pool] DC{dc_id} returned -404 (auth key gone); evicting and redoing DH"
+                "[ferogram::pool] DC{dc_id} returned -404 (auth key gone); evicting for caller to redo setup"
             );
             self.evict(dc_id);
-            let retry_slot = self.get_or_create_slot(dc_id, false, None).await?;
-            return Self::send_via_slot(&retry_slot, body).await;
+            return result;
         }
 
         if result.is_err() && !slot.alive.load(Ordering::Acquire) {
             tracing::warn!(
-                "[ferogram::pool] DC{dc_id} connection died mid-request; evicting and retrying on a fresh connection"
+                "[ferogram::pool] DC{dc_id} connection died mid-request; evicting for caller to redo setup"
             );
             self.evict(dc_id);
-            let retry_slot = self.get_or_create_slot(dc_id, false, None).await?;
-            return Self::send_via_slot(&retry_slot, body).await;
         }
         result
     }
@@ -370,6 +376,7 @@ impl DcPool {
     }
 
     /// Like `invoke_on_dc` but accepts any `Serializable` type.
+    /// Same evict-and-propagate behavior as `invoke_on_dc` -- see its doc comment.
     pub async fn invoke_on_dc_serializable<S: Serializable>(
         &mut self,
         dc_id: i32,
@@ -386,20 +393,17 @@ impl DcPool {
             && e.code == -404
         {
             tracing::warn!(
-                "[ferogram::pool] DC{dc_id} returned -404 (serializable path); evicting and redoing DH"
+                "[ferogram::pool] DC{dc_id} returned -404 (serializable path); evicting for caller to redo setup"
             );
             self.evict(dc_id);
-            let retry_slot = self.get_or_create_slot(dc_id, false, None).await?;
-            return Self::send_via_slot(&retry_slot, body).await;
+            return result;
         }
 
         if result.is_err() && !slot.alive.load(Ordering::Acquire) {
             tracing::warn!(
-                "[ferogram::pool] DC{dc_id} connection died mid-request (serializable path); evicting and retrying"
+                "[ferogram::pool] DC{dc_id} connection died mid-request (serializable path); evicting for caller to redo setup"
             );
             self.evict(dc_id);
-            let retry_slot = self.get_or_create_slot(dc_id, false, None).await?;
-            return Self::send_via_slot(&retry_slot, body).await;
         }
         result
     }
