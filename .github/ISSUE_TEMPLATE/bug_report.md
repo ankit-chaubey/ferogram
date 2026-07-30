@@ -6,11 +6,26 @@ labels: bug
 assignees: ""
 ---
 
+<!--
+Please don't use AI to generate issues, PRs, commit messages, or code. AI can
+produce something that looks correct but isn't necessarily aligned with the
+project's design or direction, and it often makes assumptions that end up
+breaking things. We've already run into that before.
+
+We're not saying you can't use AI, but please be careful. It's usually
+better to rely on it as little as possible. In the long run, it creates more
+work for everyone if we have to review AI-generated code or long AI-written
+explanations.
+
+Also, keep issues and PRs short and to the point. Clear, concise
+descriptions are much easier to review than long AI-generated paragraphs.
+-->
+
 Thanks for taking the time to report this. The details below help us track it down faster.
 
 ## Description
 
-A clear description of what's wrong.
+<!-- A clear description of what's wrong. -->
 
 ## `ferogram` version
 
@@ -18,7 +33,7 @@ A clear description of what's wrong.
 
 ## Minimal reproducer
 
-A small code snippet or repro steps, if possible.
+<!-- A small code snippet or repro steps, if possible. -->
 
 ```rust
 
@@ -26,11 +41,11 @@ A small code snippet or repro steps, if possible.
 
 ## Expected behaviour
 
-What you expected to happen.
+<!-- What you expected to happen. -->
 
 ## Actual behaviour
 
-What actually happened. Include the full error message or panic output if there is one.
+<!-- What actually happened. Include the full error message or panic output if there is one. -->
 
 ## Environment
 
@@ -39,4 +54,4 @@ What actually happened. Include the full error message or panic output if there 
 
 ## Additional context
 
-Anything else that might help: logs, related issues, workarounds you've tried.
+<!-- Anything else that might help: logs, related issues, workarounds you've tried. -->

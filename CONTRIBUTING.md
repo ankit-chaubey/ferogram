@@ -9,6 +9,7 @@ Please take a few minutes to read this guide before opening a pull request or is
 ## Table of Contents
 
 - [Code of Conduct](#code-of-conduct)
+- [A Note on AI](#a-note-on-ai)
 - [Ways to Contribute](#ways-to-contribute)
 - [Development Setup](#development-setup)
 - [Project Structure](#project-structure)
@@ -24,6 +25,16 @@ Please take a few minutes to read this guide before opening a pull request or is
 ## Code of Conduct
 
 This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you agree to uphold it. Please report unacceptable behaviour to [ankitchaubey.dev@gmail.com](mailto:ankitchaubey.dev@gmail.com).
+
+---
+
+## A Note on AI
+
+Please don't use AI to generate issues, PRs, commit messages, or code. AI can produce something that looks correct but isn't necessarily aligned with the project's design or direction, and it often makes assumptions that end up breaking things. We've already run into that before.
+
+We're not saying you can't use AI at all, but please be careful. It's usually better to rely on it as little as possible. In the long run, it creates more work for everyone if we have to review AI-generated code or long AI-written explanations.
+
+Also, keep issues and PRs short and to the point. Clear, concise descriptions are much easier to review than long AI-generated paragraphs.
 
 ---
 

@@ -6,8 +6,10 @@ Security fixes are applied to the **latest published version** on crates.io. Old
 
 | Version | Supported |
 |---|:---:|
-| 0.3.x (latest) | ✅ |
-| 0.2.x and below | ❌ |
+| 0.6.x (latest) | ✅ |
+| 0.5.x and below | ❌ |
+
+We recommend using `0.6.5` or newer.
 
 ---
 
