@@ -98,24 +98,17 @@ Powered by a high-performance Rust core, it takes care of networking, encryption
 
 ## Core features
 
-### TgCalls
-TgCalls brings voice and video calling to Telegram clients written in Rust. It bridges Telegram's calling stack with a clean Rust API, making it easy to stream media, join voice chats, and integrate voice and video calling into your Telegram clients.
-
-Whether you're building a music bot, a voice assistant, or any application that needs to participate in Telegram calls, [TgCalls](https://crates.io/crates/tgcalls) gets you there with a simple and ergonomic API.
-
-### Dispatcher and filters
-Ferogram includes a powerful dispatcher with composable filters (&, |, !).
-
-### FSM
-
-[ferogram-fsm](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram-fsm) provides a flexible finite state machine for building multi-step bot conversations, with pluggable storage, configurable state strategies, and type-safe states.
-
-### Raw API
-
-When the high-level API doesn't cover something, `client.invoke()` takes any TL function directly:
+| Feature | Description |
+|---|---|
+| **TgCalls** | Voice and video calls for Telegram clients, wrapping Telegram's calling stack in a Rust API for joining voice chats and streaming media. See [tgcalls](https://crates.io/crates/tgcalls). |
+| **Dispatcher and filters** | Composable filters (`&`, `\|`, `!`) for routing updates to handlers. |
+| **FSM** | Finite state machine for multi-step bot conversations, with pluggable storage, configurable state strategies, and type-safe states. See [ferogram-fsm](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram-fsm). |
+| **Raw API** | `client.invoke()` takes any TL function directly, for when the high-level API doesn't cover something. |
+| **Session backends** | Binary file by default. SQLite, LibSQL (Turso), and base64 string are also supported, or bring your own via [`SessionBackend`](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram-session#custom-backends). |
+| **MTProxy** | Built-in support for Classic, DD, and FakeTLS transport. |
 
 <details>
-<summary>Raw API Example</summary>
+<summary>Raw API example</summary>
 
 ```rust
 use ferogram::tl;
@@ -134,15 +127,7 @@ client.invoke_on_dc(2, &req).await?;
 
 </details>
 
-### Session backends
-
-By default the session is a binary file on disk. Switch to SQLite, LibSQL (Turso), or a base64 string for serverless setups. You can also bring your own by implementing [`SessionBackend`](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram-session#custom-backends).
-
-### MTProxy
-
-Built-in support for Telegram MTProxy, including Classic, DD, and FakeTLS transport
-
-And much more. Explore the dedicated crate documentation for a complete overview of all supported features.
+See the crate documentation for a complete overview of all supported features.
 
 ---
 
