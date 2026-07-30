@@ -566,7 +566,11 @@ impl ClientBuilder {
     /// on connect - each in-flight request holds a full chunk buffer in
     /// memory, so this bounds memory rather than protecting the server.
     ///
-    /// Default: 4.
+    /// Off by default (1): a connection sends one request at a time. Raise
+    /// this yourself if you know your link has high round-trip latency and
+    /// want to keep more requests in flight to fill the dead time.
+    ///
+    /// Default: 1.
     pub fn download_pipeline_depth(mut self, n: usize) -> Self {
         self.transfer_limits.download_pipeline_depth = n;
         self
@@ -574,7 +578,7 @@ impl ClientBuilder {
 
     /// X for uploads. See [`download_pipeline_depth`](Self::download_pipeline_depth).
     ///
-    /// Default: 4.
+    /// Default: 1.
     pub fn upload_pipeline_depth(mut self, n: usize) -> Self {
         self.transfer_limits.upload_pipeline_depth = n;
         self

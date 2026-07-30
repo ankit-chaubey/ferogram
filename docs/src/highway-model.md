@@ -89,8 +89,8 @@ Client::builder()
 | `download_tcp_connections` | Y, downloads only | 4 | 4 |
 | `upload_tcp_connections` | Y, uploads only | 4 | 4 |
 | `max_tcp_connections` | shared pool, both directions | 12 | none (min 1) |
-| `download_pipeline_depth` | X, downloads only | 4 | 8 |
-| `upload_pipeline_depth` | X, uploads only | 4 | 8 |
+| `download_pipeline_depth` | X, downloads only | 1 | 8 |
+| `upload_pipeline_depth` | X, uploads only | 1 | 8 |
 
 Download and upload each get their own Y and X because a link's upload
 and download bandwidth are frequently different, and there's no reason to
@@ -220,7 +220,7 @@ only one that respects them.
 
 ## Current status of the defaults
 
-The default values (`workers_per_file = 4`, `pipeline_depth = 4`,
+The default values (`workers_per_file = 4`, `pipeline_depth = 1`,
 `max_pipeline_depth = 8`) are initial estimates, not the result of
 extensive field testing across many devices and networks. They're
 expected to be revisited as real usage feedback comes in. If you find a

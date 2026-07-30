@@ -262,7 +262,7 @@ impl Client {
         // Download the tail (from resume_offset onward) into a scratch buffer.
         let mut tail: Vec<u8> = Vec::new();
         let result = self
-            .download_streaming_on_dc_from(loc.clone(), dc, &mut tail, Some(handle), resume_offset)
+            .download_streaming(loc.clone(), dc, &mut tail, Some(handle), resume_offset)
             .await;
         done.store(true, Ordering::Release);
 
@@ -428,7 +428,7 @@ impl Client {
         };
 
         let resolved_mime = if cp_mime.is_empty() {
-            crate::media::resolve_mime_pub(name)
+            crate::media::resolve_mime(name, "")
         } else {
             cp_mime
         };
@@ -468,7 +468,7 @@ impl Client {
 
             loop {
                 let res = self
-                    .upload_part_pub(big, file_id, i as i32, total_parts, chunk)
+                    .upload_part(big, file_id, i as i32, total_parts, chunk)
                     .await;
 
                 match res {
@@ -540,7 +540,7 @@ impl Client {
 
         done.store(true, Ordering::Release);
 
-        let inner = crate::media::make_input_file_pub(big, file_id, total_parts, name, &data);
+        let inner = crate::media::to_input_file(big, file_id, total_parts, name, &data);
         store.delete_upload(&key).await;
         tracing::info!(target: "ferogram::transfer", name, total_parts, "upload complete; checkpoint purged");
 
@@ -736,8 +736,7 @@ impl Client {
             h.set_total(total as u64);
             h.reset_start();
         }
-        self.download_streaming_on_dc(loc, dc, &mut dest, handle)
-            .await
+        self.download_streaming(loc, dc, &mut dest, handle, 0).await
     }
 
     /// Download message media and save it directly to a file at `path`.
@@ -809,14 +808,13 @@ impl Client {
             && size >= crate::media::DOWNLOAD_CONCURRENT_THRESHOLD
         {
             return self
-                .download_media_concurrent_on_dc_to_file_pipelined(loc, size, dc, path, handle)
+                .download_concurrent_to_file_pipelined(loc, size, dc, path, handle)
                 .await;
         }
         let mut file = tokio::fs::File::create(path)
             .await
             .map_err(InvocationError::Io)?;
-        self.download_streaming_on_dc(loc, dc, &mut file, handle)
-            .await
+        self.download_streaming(loc, dc, &mut file, handle, 0).await
     }
 
     /// Download `media` to `path`, choosing a specific quality variant when
@@ -854,7 +852,7 @@ impl Client {
         path: impl AsRef<std::path::Path>,
         handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<u64, InvocationError> {
-        let doc = crate::media::resolve_quality_document(media, quality).ok_or_else(|| {
+        let doc = crate::media::pick_quality(media, quality).ok_or_else(|| {
             InvocationError::Deserialize(
                 "media has no downloadable document for the requested quality".into(),
             )
@@ -957,7 +955,7 @@ impl Client {
             .await
             .map_err(InvocationError::Io)?;
         if data.len() > crate::media::BIG_FILE_THRESHOLD {
-            self.upload_file_concurrent_pipelined(std::sync::Arc::new(data), name, "", handle)
+            self.upload_concurrent_pipelined(std::sync::Arc::new(data), name, "", handle)
                 .await
         } else {
             self.upload_bytes(&data, name, "", handle).await
@@ -1025,7 +1023,7 @@ impl Client {
         let size = meta.len() as usize;
         if size >= crate::media::BIG_FILE_THRESHOLD {
             return self
-                .upload_file_concurrent_streaming_pipelined(path, name, "", handle)
+                .upload_streaming_pipelined(path, name, "", handle)
                 .await;
         }
         let mut file = tokio::fs::File::open(path)
@@ -1146,7 +1144,7 @@ impl Client {
 
     /// Upload a single part for experimental resumable upload.
     #[cfg(feature = "experimental")]
-    pub(crate) async fn upload_part_pub(
+    pub(crate) async fn upload_part(
         &self,
         big: bool,
         file_id: i64,
@@ -1278,7 +1276,7 @@ impl Client {
         // Round down to nearest 1 KB boundary.
         let chunk_size = (chunk_size / 1024) * 1024;
 
-        self.upload_file_concurrent_streaming_exp(path, workers, chunk_size, handle)
+        self.upload_streaming_exp(path, workers, chunk_size, handle)
             .await
     }
 

@@ -63,9 +63,13 @@
 //! Put together: **total trucks in flight for one transfer = Y × X**, and
 //! **total bytes in flight = Y × X × chunk size**. A transfer using 3
 //! highways at a pipeline depth of 4 can have up to 12 chunks moving
-//! simultaneously. That is the whole tuning surface - there
-//! is no third secret dial. Everything Ferogram does to make a transfer
-//! faster or slower comes down to moving one of these two numbers.
+//! simultaneously - though that pipeline depth is something you'd have to
+//! ask for: X defaults to 1 (pipelining off, one request in flight per
+//! highway) and only opens up once you raise it yourself, whereas Y still
+//! scales itself with file size out of the box. That is the whole tuning
+//! surface - there is no third secret dial. Everything Ferogram does to
+//! make a transfer faster or slower comes down to moving one of these two
+//! numbers.
 //!
 //! ## Why Y and X are not the same knob
 //!
@@ -92,11 +96,11 @@
 //!   pipelining is what fills that dead time with useful work.
 //!
 //! In practice most people never need to touch either: Ferogram already
-//! picks sensible values per file size (see the size tables in
-//! [`crate::media`]) and clamps everything to numbers Ankit has already
-//! verified are safe. These fields exist for the minority of cases where
-//! you know something about your own network or device that the size
-//! heuristic can't see.
+//! picks sensible Y values per file size (see the size tables in
+//! [`crate::media`]), leaves X off until you ask for it, and clamps
+//! everything to numbers Ankit has already verified are safe. These fields
+//! exist for the minority of cases where you know something about your
+//! own network or device that the size heuristic can't see.
 //!
 //! ## Setting it up
 //!
@@ -212,8 +216,8 @@
 ///         download_tcp_connections: 2,  // low-memory device: fewer highways per download
 ///         upload_tcp_connections: 4,    // uploads keep the default
 ///         max_tcp_connections: 6,                // fewer total sockets across the client
-///         download_pipeline_depth: 2,            // fewer trucks in flight per highway
-///         upload_pipeline_depth: 2,
+///         download_pipeline_depth: 2,            // a couple of trucks in flight per highway
+///         upload_pipeline_depth: 2,               // (default is 1: pipelining off)
 ///         bypass_tcp_allotments: false,
 ///     })
 ///     .connect().await?;
@@ -251,12 +255,18 @@ pub struct TransferLimits {
     /// high-latency links, since round-trip time - not bandwidth - is
     /// usually the bottleneck for a single connection.
     ///
-    /// Default: [`media::DEFAULT_PIPELINE_DEPTH`](crate::media::DEFAULT_PIPELINE_DEPTH) (4).
+    /// X for downloads: how many chunk requests a single connection keeps
+    /// in flight at once. Off by default - a connection sends one chunk,
+    /// waits for the reply, then sends the next. Raise this yourself if
+    /// you know your link has high round-trip latency and want to fill
+    /// the dead time with more requests in flight.
+    ///
+    /// Default: [`media::DEFAULT_PIPELINE_DEPTH`](crate::media::DEFAULT_PIPELINE_DEPTH) (1).
     pub download_pipeline_depth: usize,
 
     /// X for uploads. See [`download_pipeline_depth`](Self::download_pipeline_depth).
     ///
-    /// Default: [`media::DEFAULT_PIPELINE_DEPTH`](crate::media::DEFAULT_PIPELINE_DEPTH) (4).
+    /// Default: [`media::DEFAULT_PIPELINE_DEPTH`](crate::media::DEFAULT_PIPELINE_DEPTH) (1).
     pub upload_pipeline_depth: usize,
 
     /// Skip the size-based lookup tables for Y entirely and always use

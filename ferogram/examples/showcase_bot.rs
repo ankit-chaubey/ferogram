@@ -836,7 +836,7 @@ async fn h_fmt_html(client: &Client, peer: tl::enums::Peer, reply_to: i32) {
 /// Flow:
 ///   1. Reply "📥 Downloading…" immediately so the user knows we're working.
 ///   2. Download the file to a temp path, measuring wall-clock time.
-///   3. Re-upload with `upload_file_concurrent`, measuring wall-clock time.
+///   3. Re-upload with `upload_concurrent`, measuring wall-clock time.
 ///   4. Send the file back (as photo or document) with a caption that shows
 ///      file name, size, download speed, and upload speed.
 ///   5. Clean up the temp file regardless of success or failure.
@@ -955,7 +955,7 @@ async fn h_media_echo(
 
     let ul_start = Instant::now();
     let uploaded = match client
-        .upload_file_concurrent(Arc::new(bytes), &file_name, &mime, None)
+        .upload_concurrent(Arc::new(bytes), &file_name, &mime, None)
         .await
     {
         Ok(u) => u,

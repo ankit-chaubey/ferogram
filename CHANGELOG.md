@@ -33,6 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`DialogsStream`) for seamless integration with `StreamExt` and
   `TryStreamExt` combinators.
 
+### Changed
+
+- `TransferLimits::download_pipeline_depth` / `upload_pipeline_depth`:
+  default changed from `4` to `1`. Y (connection count) still scales with
+  file size out of the box as before; X (in-flight requests per
+  connection) is now off by default and only turns on once you raise it
+  yourself via `ClientBuilder::download_pipeline_depth` /
+  `upload_pipeline_depth` or `TransferLimits`. `DEFAULT_PIPELINE_DEPTH` in
+  `ferogram::media` changed to match.
+
 ### Fixed
 
 - `ferogram-connect`: FakeTLS (`ee` secret) ClientHello was a bare 4-extension

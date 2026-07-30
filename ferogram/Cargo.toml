@@ -63,9 +63,9 @@ fsm             = ["dep:ferogram-fsm"]
 ## Enable HTML/Markdown message parsing for rich text (`ParseMode`, entity building).
 parsers         = ["ferogram-parsers/html"]
 ## Alias of `parsers`; kept for backwards compatibility.
-html            = ["ferogram-parsers/html"]
+html            = ["parsers"]
 ## Use html5ever for stricter, more spec-compliant HTML parsing.
-html5ever       = ["ferogram-parsers/html5ever"]
+html5ever       = ["parsers", "ferogram-parsers/html5ever"]
 ## Re-export the TL parser for custom tooling.
 parser          = ["dep:ferogram-tl-parser"]
 ## DNS-over-HTTPS and Firebase/Google special-config fallback for censored

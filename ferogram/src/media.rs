@@ -24,7 +24,7 @@ use crate::{Client, InvocationError};
 
 /// One in-flight pipelined upload request: (part index, part length in
 /// bytes, response future). Used as the sliding-window element in
-/// [`Client::upload_file_concurrent_streaming_pipelined`].
+/// [`Client::upload_streaming_pipelined`].
 type PipelinedUploadSlot = (
     i32,
     u64,
@@ -33,7 +33,7 @@ type PipelinedUploadSlot = (
 
 /// One in-flight pipelined download request: (part index, response future).
 /// Used as the sliding-window element in
-/// [`Client::download_media_concurrent_on_dc_to_file_pipelined`].
+/// [`Client::download_concurrent_to_file_pipelined`].
 type PipelinedDownloadSlot = (
     usize,
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, InvocationError>> + Send>>,
@@ -134,9 +134,12 @@ pub const MAX_WORKERS_PER_FILE: usize = 4;
 pub const MAX_GLOBAL_SENDERS: usize = 12;
 
 /// Default trucks-per-highway depth (X): how many chunk requests a single
-/// pipelined transfer connection keeps in flight at once. Matches
-/// Android's upload connection pool depth.
-pub const DEFAULT_PIPELINE_DEPTH: usize = 4;
+/// transfer connection keeps in flight at once. Off by default - a single
+/// connection only ever has one request in flight until a caller raises
+/// [`TransferLimits::download_pipeline_depth`](crate::TransferLimits::download_pipeline_depth) /
+/// [`upload_pipeline_depth`](crate::TransferLimits::upload_pipeline_depth) themselves.
+/// Y (connection count) still scales with file size regardless of this value.
+pub const DEFAULT_PIPELINE_DEPTH: usize = 1;
 
 /// Hard ceiling for [`crate::TransferLimits::download_pipeline_depth`] /
 /// `upload_pipeline_depth`, regardless of what the user requests.
@@ -220,7 +223,7 @@ pub fn upload_part_size(file_size: usize) -> (usize, i32) {
 /// Prefer the file-size-aware `download_worker_count` / `upload_worker_count`
 /// for new call sites.
 #[allow(dead_code)]
-pub(crate) fn count_workers(n_parts: usize) -> usize {
+pub(crate) fn worker_count(n_parts: usize) -> usize {
     match n_parts {
         0..=5 => 1,
         6..=20 => 2,
@@ -289,18 +292,13 @@ pub const UPLOAD_CHUNK_SIZE: i32 = 128 * 1024;
 
 /// Return `mime_type` as-is if it is non-empty and not the generic fallback,
 /// otherwise infer from `name`'s extension via `mime_guess`.
-fn resolve_mime(name: &str, mime_type: &str) -> String {
+pub(crate) fn resolve_mime(name: &str, mime_type: &str) -> String {
     if !mime_type.is_empty() && mime_type != "application/octet-stream" {
         return mime_type.to_string();
     }
     mime_guess::from_path(name)
         .first_or_octet_stream()
         .to_string()
-}
-
-/// Public wrapper for `resolve_mime` used by `client/files.rs` experimental code.
-pub fn resolve_mime_pub(name: &str) -> String {
-    resolve_mime(name, "")
 }
 
 /// Detect MIME from bytes first (magic bytes), fall back to extension.
@@ -1351,7 +1349,7 @@ pub fn available_qualities(media: &tl::enums::MessageMedia) -> Vec<VideoQualityI
 /// Falls back to the primary document whenever the requested quality
 /// doesn't actually exist for this media (no alternates present, the
 /// media isn't a document at all, or `Original` was requested outright).
-pub(crate) fn resolve_quality_document(
+pub(crate) fn pick_quality(
     media: &tl::enums::MessageMedia,
     quality: MediaQuality,
 ) -> Option<Document> {
@@ -1500,7 +1498,7 @@ impl Client {
     ///   < 1 MB → 128 KB, 1-50 MB → 256 KB, > 50 MB → 512 KB.
     /// - `upload.saveBigFilePart` used for files > 30 MB (`kUseBigFilesFrom`).
     ///
-    /// For files that benefit from parallelism use [`upload_file_concurrent`].
+    /// For files that benefit from parallelism use [`upload_concurrent`].
     pub(crate) async fn upload_bytes(
         &self,
         data: &[u8],
@@ -1564,7 +1562,7 @@ impl Client {
             }
         }
 
-        let inner = make_input_file(big, file_id, total_parts, name, data);
+        let inner = to_input_file(big, file_id, total_parts, name, data);
         tracing::info!(
             "[ferogram::transfer] upload complete: '{}' ({} bytes, {}B parts x {}, mime={})",
             name,
@@ -1587,7 +1585,7 @@ impl Client {
     ///
     /// - Files < 10 MB  -> `upload.saveFilePart`    (small-file API)
     /// - Files >= 10 MB -> `upload.saveBigFilePart`  (big-file API)
-    pub async fn upload_file_concurrent(
+    pub async fn upload_concurrent(
         &self,
         data: Arc<Vec<u8>>,
         name: &str,
@@ -1861,7 +1859,7 @@ impl Client {
         }
 
         let file_id = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
-        let inner = make_input_file(big, file_id, total_parts, name, &data);
+        let inner = to_input_file(big, file_id, total_parts, name, &data);
         tracing::info!(
             "[ferogram::transfer] upload complete: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, took {:.2}s)",
             name,
@@ -1880,14 +1878,14 @@ impl Client {
         })
     }
 
-    /// Like [`upload_file_concurrent`](Self::upload_file_concurrent) but uses
+    /// Like [`upload_concurrent`](Self::upload_concurrent) but uses
     /// [`PipelinedSender`](crate::client::PipelinedSender) connections instead
     /// of blocking [`DcConnection`](crate::dc_pool::DcConnection)s.
     ///
     /// Each worker keeps up to `transfer_limits.upload_pipeline_depth` (X)
     /// `SaveFilePart`/`SaveBigFilePart` requests in flight on its single
     /// connection at once, instead of awaiting each part's ack before sending
-    /// the next (X=1, what `upload_file_concurrent` does). Combined with
+    /// the next (X=1, what `upload_concurrent` does). Combined with
     /// `n_workers` separate connections (Y), total in-flight chunks for an
     /// upload is `n_workers * upload_pipeline_depth` instead of just
     /// `n_workers`. See [`TransferLimits`](crate::TransferLimits) for the
@@ -1899,7 +1897,7 @@ impl Client {
     ///
     /// Falls back to the existing non-pipelined path if pipelined connections
     /// fail to open, same reliability guarantees either way.
-    pub async fn upload_file_concurrent_pipelined(
+    pub async fn upload_concurrent_pipelined(
         &self,
         data: Arc<Vec<u8>>,
         name: &str,
@@ -1984,9 +1982,7 @@ impl Client {
                 "[ferogram::transfer] no pipelined worker connections available; falling back to non-pipelined concurrent upload"
             );
             drop(_global_guard);
-            return self
-                .upload_file_concurrent(data, name, mime_type, handle)
-                .await;
+            return self.upload_concurrent(data, name, mime_type, handle).await;
         }
         let actual_workers = senders.len();
 
@@ -2251,7 +2247,7 @@ impl Client {
         }
 
         let file_id = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
-        let inner = make_input_file(big, file_id, total_parts, name, &data);
+        let inner = to_input_file(big, file_id, total_parts, name, &data);
         tracing::info!(
             "[ferogram::transfer] pipelined upload complete: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, X={} in-flight, took {:.2}s)",
             name,
@@ -2276,7 +2272,7 @@ impl Client {
     /// Each worker opens its own independent file handle, seeks to its part offset,
     /// reads exactly `part_size` bytes, and sends. Peak RAM usage is
     /// `n_workers * part_size` (at most 4 x 512 KB = 2 MB) regardless of file size.
-    pub(crate) async fn upload_file_concurrent_streaming(
+    pub(crate) async fn upload_streaming(
         &self,
         path: &std::path::Path,
         name: &str,
@@ -2584,14 +2580,14 @@ impl Client {
         })
     }
 
-    /// Like [`upload_file_concurrent_streaming`](Self::upload_file_concurrent_streaming)
+    /// Like [`upload_streaming`](Self::upload_streaming)
     /// but uses [`PipelinedSender`](crate::client::PipelinedSender) connections
     /// instead of blocking [`DcConnection`](crate::dc_pool::DcConnection)s.
     ///
     /// Each worker keeps up to `transfer_limits.upload_pipeline_depth` (X)
     /// `SaveFilePart`/`SaveBigFilePart` requests in flight on its single
     /// connection at once, instead of awaiting each part's ack before reading
-    /// and sending the next (X=1, what `upload_file_concurrent_streaming`
+    /// and sending the next (X=1, what `upload_streaming`
     /// does). Combined with `n_workers` separate connections (Y), total
     /// in-flight chunks for an upload is `n_workers * upload_pipeline_depth`
     /// instead of just `n_workers`. See [`TransferLimits`](crate::TransferLimits)
@@ -2599,7 +2595,7 @@ impl Client {
     ///
     /// Falls back to the existing non-pipelined path if pipelined connections
     /// fail to open, same reliability guarantees either way.
-    pub(crate) async fn upload_file_concurrent_streaming_pipelined(
+    pub(crate) async fn upload_streaming_pipelined(
         &self,
         path: &std::path::Path,
         name: &str,
@@ -2697,9 +2693,7 @@ impl Client {
                 "[ferogram::transfer] no pipelined worker connections available; falling back to non-pipelined concurrent upload"
             );
             drop(_global_guard);
-            return self
-                .upload_file_concurrent_streaming(path, name, mime_type, handle)
-                .await;
+            return self.upload_streaming(path, name, mime_type, handle).await;
         }
         let actual_workers = senders.len();
 
@@ -3207,13 +3201,7 @@ impl Client {
     /// `dc_id` must be the DC that stores the file (`Document::dc_id()` /
     /// `Photo::dc_id()`). Pass `0` to use the home DC (bots only).
     #[allow(dead_code)]
-    pub(crate) fn iter_download_raw(&self, location: tl::enums::InputFileLocation) -> DownloadIter {
-        self.iter_download_on_dc(location, 0)
-    }
-
-    /// Like [`iter_download_raw`] but routes to a specific DC.
-    #[allow(dead_code)]
-    pub(crate) fn iter_download_on_dc(
+    pub(crate) fn iter_download_internal(
         &self,
         location: tl::enums::InputFileLocation,
         dc_id: i32,
@@ -3237,16 +3225,8 @@ impl Client {
         }
     }
 
-    /// Download all bytes of a media attachment at once (sequential).
-    #[allow(dead_code)]
-    pub(crate) async fn download_media_bytes(
-        &self,
-        location: tl::enums::InputFileLocation,
-    ) -> Result<Vec<u8>, InvocationError> {
-        self.download_media_on_dc(location, 0).await
-    }
-
-    /// Like [`download_media_bytes`] but routes `GetFile` to `dc_id`.
+    /// Download all bytes of a media attachment at once (sequential). Pass
+    /// `dc_id=0` to use the home DC.
     ///
     /// Opens a **dedicated** `DcConnection` for this download so it never
     /// shares the idle transfer-pool connection (which the server silently
@@ -3255,7 +3235,7 @@ impl Client {
     /// Full AUTH_KEY_UNREGISTERED + FILE_MIGRATE recovery,
     /// the resilience of the concurrent worker path.
     #[allow(dead_code)]
-    pub(crate) async fn download_media_on_dc(
+    pub(crate) async fn download_sequential(
         &self,
         location: tl::enums::InputFileLocation,
         dc_id: i32,
@@ -3352,23 +3332,11 @@ impl Client {
     /// Stream-download sequential path: writes chunks directly to `writer` without
     /// buffering the whole file. Returns total bytes written.
     ///
-    /// All retry / DC-migration logic mirrors [`download_media_on_dc`].
-    pub(crate) async fn download_streaming_on_dc<W: tokio::io::AsyncWrite + Unpin>(
-        &self,
-        location: tl::enums::InputFileLocation,
-        dc_id: i32,
-        writer: &mut W,
-        handle: Option<&crate::transfer::TransferHandle>,
-    ) -> Result<u64, InvocationError> {
-        self.download_streaming_on_dc_from(location, dc_id, writer, handle, 0)
-            .await
-    }
-
-    /// Like [`download_streaming_on_dc`] but starts at `start_offset` bytes.
-    ///
+    /// All retry / DC-migration logic mirrors [`download_sequential`].
+    /// `start_offset` starts the download partway through, aligned down to the
+    /// nearest 1 MB boundary as Telegram requires. Pass `0` to start from the beginning.
     /// Used by resumable downloads to skip already-received bytes.
-    /// `start_offset` is aligned down to the nearest 1 MB boundary as Telegram requires.
-    pub(crate) async fn download_streaming_on_dc_from<W: tokio::io::AsyncWrite + Unpin>(
+    pub(crate) async fn download_streaming<W: tokio::io::AsyncWrite + Unpin>(
         &self,
         location: tl::enums::InputFileLocation,
         dc_id: i32,
@@ -3457,26 +3425,12 @@ impl Client {
         Ok(total_written)
     }
 
-    /// Download a file using parallel sessions.
+    /// Download a file using parallel sessions. Pass `dc_id=0` to use the home DC.
     ///
-    /// `size` must be the exact byte size of the file.
-    ///
-    /// Returns the full file bytes in order.
+    /// `size` must be the exact byte size of the file. Returns the full file
+    /// bytes in order. Worker count scales with file size.
     #[allow(dead_code)]
-    pub(crate) async fn download_media_concurrent(
-        &self,
-        location: tl::enums::InputFileLocation,
-        size: usize,
-    ) -> Result<Vec<u8>, InvocationError> {
-        self.download_media_concurrent_on_dc(location, size, 0)
-            .await
-    }
-
-    /// Like [`download_media_concurrent`] but routes `GetFile` to `dc_id`.
-    ///
-    /// Parallel download using per-worker connections. Worker count scales with file size.
-    #[allow(dead_code)]
-    pub(crate) async fn download_media_concurrent_on_dc(
+    pub(crate) async fn download_concurrent(
         &self,
         location: tl::enums::InputFileLocation,
         size: usize,
@@ -3508,7 +3462,7 @@ impl Client {
         };
         let effective_dc = if dc_id == 0 { home } else { dc_id };
         if n_workers == 1 && effective_dc == home {
-            return self.download_media_on_dc(location, dc_id).await;
+            return self.download_sequential(location, dc_id).await;
         }
 
         // Open all worker connections CONCURRENTLY so they are all ready at the
@@ -3539,7 +3493,7 @@ impl Client {
             tracing::debug!(
                 "[ferogram::transfer] no worker connections available; downloading sequentially"
             );
-            return self.download_media_on_dc(location, dc_id).await;
+            return self.download_sequential(location, dc_id).await;
         }
 
         let next_part = Arc::new(Mutex::new(0usize));
@@ -3787,7 +3741,7 @@ impl Client {
     /// via seek + write_all; no in-memory assembly. Use this for large file downloads.
     ///
     /// `size` must be the exact byte size of the file (from `size_from_media`).
-    pub(crate) async fn download_media_concurrent_on_dc_to_file(
+    pub(crate) async fn download_concurrent_to_file(
         &self,
         location: tl::enums::InputFileLocation,
         size: usize,
@@ -3844,7 +3798,7 @@ impl Client {
                 .await
                 .map_err(InvocationError::Io)?;
             return self
-                .download_streaming_on_dc(location, dc_id, &mut file, handle)
+                .download_streaming(location, dc_id, &mut file, handle, 0)
                 .await;
         }
 
@@ -3887,7 +3841,7 @@ impl Client {
                 .await
                 .map_err(InvocationError::Io)?;
             return self
-                .download_streaming_on_dc(location, dc_id, &mut file, handle)
+                .download_streaming(location, dc_id, &mut file, handle, 0)
                 .await;
         }
 
@@ -4085,14 +4039,14 @@ impl Client {
         Ok(total_written)
     }
 
-    /// Like [`download_media_concurrent_on_dc_to_file`](Self::download_media_concurrent_on_dc_to_file)
+    /// Like [`download_concurrent_to_file`](Self::download_concurrent_to_file)
     /// but uses [`PipelinedSender`](crate::client::PipelinedSender) connections
     /// instead of blocking [`DcConnection`](crate::dc_pool::DcConnection)s.
     ///
     /// Each worker keeps up to `transfer_limits.download_pipeline_depth` (X)
     /// `GetFile` requests in flight on its single connection at once,
     /// instead of sending one and waiting for the response before sending
-    /// the next (X=1, what `download_media_concurrent_on_dc_to_file` does).
+    /// the next (X=1, what `download_concurrent_to_file` does).
     /// Combined with `n_workers` separate connections (Y), total in-flight
     /// chunks for a transfer is `n_workers * download_pipeline_depth` instead
     /// of just `n_workers`  - this is the "X pieces in flight, Y queues"
@@ -4103,7 +4057,7 @@ impl Client {
     /// connections fail to open (e.g. `into_parts`/`spawn_sender_task`
     /// unavailable for some reason), so callers get the same reliability
     /// guarantees either way.
-    pub(crate) async fn download_media_concurrent_on_dc_to_file_pipelined(
+    pub(crate) async fn download_concurrent_to_file_pipelined(
         &self,
         location: tl::enums::InputFileLocation,
         size: usize,
@@ -4163,7 +4117,7 @@ impl Client {
                 .await
                 .map_err(InvocationError::Io)?;
             return self
-                .download_streaming_on_dc(location, dc_id, &mut file, handle)
+                .download_streaming(location, dc_id, &mut file, handle, 0)
                 .await;
         }
 
@@ -4202,7 +4156,7 @@ impl Client {
             );
             drop(_global_guard);
             return self
-                .download_media_concurrent_on_dc_to_file(location, size, dc_id, path, handle)
+                .download_concurrent_to_file(location, size, dc_id, path, handle)
                 .await;
         }
 
@@ -4582,7 +4536,7 @@ pub fn download_location_from_media(
 
 // Helpers
 
-fn make_input_file(
+pub(crate) fn to_input_file(
     big: bool,
     file_id: i64,
     total_parts: i32,
@@ -4611,10 +4565,10 @@ fn make_input_file(
 }
 
 impl Client {
-    /// Like `upload_file_concurrent_streaming` but with caller-supplied worker count
+    /// Like `upload_streaming` but with caller-supplied worker count
     /// and chunk size. Used by `upload_exp`.
     #[cfg(feature = "experimental")]
-    pub(crate) async fn upload_file_concurrent_streaming_exp(
+    pub(crate) async fn upload_streaming_exp(
         &self,
         path: &std::path::Path,
         n_workers: usize,
@@ -4745,7 +4699,7 @@ impl Client {
             }
         }
 
-        let inner = make_input_file(big, file_id, total_parts, name, &[]);
+        let inner = to_input_file(big, file_id, total_parts, name, &[]);
         tracing::info!(
             "[ferogram::transfer] upload_exp complete: '{}' ({} bytes, {}B chunks x {}, {} workers)",
             name,
@@ -4901,19 +4855,6 @@ pub fn location_from_media(
 /// Return the known byte size of `media`, if available.
 pub fn size_from_media(media: &tl::enums::MessageMedia) -> Option<usize> {
     media.size()
-}
-
-// Helpers
-
-/// Public wrapper around `make_input_file` for use from `client/files.rs`.
-pub fn make_input_file_pub(
-    big: bool,
-    file_id: i64,
-    total_parts: i32,
-    name: &str,
-    data: &[u8],
-) -> tl::enums::InputFile {
-    make_input_file(big, file_id, total_parts, name, data)
 }
 
 /// Generate a random upload session file_id. Used by experimental resumable upload.

@@ -164,7 +164,7 @@ pub struct Config {
     /// the highway/trucks model this controls.
     ///
     /// Default: `download_tcp_connections: 4, upload_tcp_connections: 4,
-    /// max_tcp_connections: 12, download_pipeline_depth: 4, upload_pipeline_depth: 4,
+    /// max_tcp_connections: 12, download_pipeline_depth: 1, upload_pipeline_depth: 1,
     /// bypass_tcp_allotments: false`.
     pub transfer_limits: TransferLimits,
 }
