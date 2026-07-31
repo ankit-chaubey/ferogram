@@ -14,13 +14,12 @@ Built by **[Ankit Chaubey](https://github.com/ankit-chaubey)**
 
 </div>
 
-## Overview 
-**Modern APIs. Native MTProto.** Ferogram helps you build fast, powerful Telegram applications for both bots and user accounts without compromising on flexibility.
+## Overview
+**Modern APIs.** **Native MTProto.** Ferogram helps you build **fast**, **powerful** Telegram applications for both bots and user accounts without compromising on flexibility.
 
 From messaging and media to transfers, calls, MTProxy, and much more, Ferogram brings everything together in one elegant framework.
 
 > Let's build something amazing. High-level APIs where you want them, raw invoke() where you need complete control.
-
 
 ---
 
@@ -31,7 +30,7 @@ All it takes is a single line in your `Cargo.toml`.
 ferogram = "0.6.5"
 ```
 
-Development on GitHub moves faster than crates.io. Releases are pushed to [crates.io](https://crates.io/crates/ferogram) when there's a patch or a proper release, so there may be fixes and features on `main` that aren't published yet. If you need something from `main`, you can point directly to a specific commit:
+Development on GitHub moves faster than crates.io. If you need something from `main`, you can point directly to a specific commit:
 
 ```toml
 ferogram = { git = "https://github.com/ankit-chaubey/ferogram", rev = "COMMIT_SHA" }
@@ -57,42 +56,20 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
-<details>
-<summary>Starting as bot</summary>
 
-### Quick start: bot
-Building a bot is just as simple as building a user client. All you need is a bot token from [@BotFather](https://t.me/BotFather), and you're ready to go.
-
-```rust
-use ferogram::{Client, update::Update};
-
-const API_ID: i32 = 0;
-const API_HASH: &str = "";
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let (client, _) = Client::quick_connect("bot.session", API_ID, API_HASH).await?;
-
-    let mut stream = client.stream_updates();
-    while let Some(upd) = stream.next().await {
-        if let Update::NewMessage(msg) = upd {
-            if !msg.outgoing() {
-                msg.reply(msg.text().unwrap_or_default()).await.ok();
-            }
-        }
-    }
-    Ok(())
-}
-```
-
-</details>
+Building a bot instead? Same API, just a bot token from [@BotFather](https://t.me/BotFather). Full bot example lives in the [ferogram/examples](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram/examples).
 
 ---
 
 ## Python support
 Love Python as much as we do? Ferogram is also available for Python with a clean, user-friendly API while keeping the heavy lifting in Rust.
 
-Powered by a high-performance Rust core, it takes care of networking, encryption, TL parsing, and session management. Explore the [ferogram-py](https://github.com/ankit-chaubey/ferogram-py) source, learn about the [architecture](https://github.com/ankit-chaubey/ferogram-py/blob/main/assets/architecture.svg), or install the [pre-built wheels](https://pypi.org/project/ferogram) from PyPI, no Rust toolchain needed.
+Powered by same high-performance Rust core, it takes care of networking, encryption, TL parsing, and session management. Explore the [ferogram python](https://github.com/ankit-chaubey/ferogram-py) source, learn about its [architecture](https://github.com/ankit-chaubey/ferogram-py/blob/main/assets/architecture.svg), or install the pre-built wheels for you platform from [PyPI](https://pypi.org/project/ferogram), no Rust toolchain needed.
+
+All you need is:
+```bash
+pip install ferogram
+```
 
 ---
 
@@ -133,9 +110,9 @@ See the crate documentation for a complete overview of all supported features.
 
 ## What's covered
 
-See **[Quick Introduction](FEATURES.md)** for the quick list for features and APIs. To try the examples: [`ferogram/examples/`](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram/examples)
+See **[FEATURES.md](FEATURES.md)** for the full feature list, or try the [runnable examples](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram/examples).
 
-If something is missing, open a feature request or write your suggestion in [t.me/FerogramChat](https://t.me/FerogramChat)
+If something is missing, open a feature request or drop a suggestion in [t.me/FerogramChat](https://t.me/FerogramChat).
 
 ---
 
@@ -143,11 +120,9 @@ If something is missing, open a feature request or write your suggestion in [t.m
 
 Join the ferogram community! Questions, discussions, bugs report and feedback are always welcome.
 
- - Channel (releases & announcements):  [@Ferogram](https://t.me/Ferogram)
-
- - (questions & discussion): [@FerogramChat](https://t.me/FerogramChat)
-
-- **API docs**: [docs.rs/ferogram](https://docs.rs/ferogram)
+- **Channel** (releases & announcements): [@Ferogram](https://t.me/Ferogram)
+- **Chat** (questions & discussion): [@FerogramChat](https://t.me/FerogramChat)
+- **Docs**: [docs.ferogram.dev](https://docs.ferogram.dev)
 
 ## Contributing
 
@@ -170,6 +145,6 @@ You may choose either license.
 
 You are free to use, modify, and distribute this software, including for commercial use, provided the original license and copyright notice are included.
 
-See [`LICENSE-MIT`](https://github.com/ankit-chaubey/ferogram-l/blob/main/LICENSE-MIT) and [`LICENSE-APACHE`](https://github.com/ankit-chaubey/ferogram/blob/main/LICENSE-APACHE) for full details.
+See [`LICENSE-MIT`](https://github.com/ankit-chaubey/ferogram/blob/main/LICENSE-MIT) and [`LICENSE-APACHE`](https://github.com/ankit-chaubey/ferogram/blob/main/LICENSE-APACHE) for full details.
 
 Usage must comply with [Telegram's API Terms of Service](https://core.telegram.org/api/terms).
