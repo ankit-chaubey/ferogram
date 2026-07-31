@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-04b1db19.js";
+            window.path_to_searchindex_js = "searchindex-b479768a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5d15c526.js"></script>
@@ -191,7 +191,7 @@
 <p>If something’s missing for you, drop by <a href="https://t.me/FerogramChat">t.me/FerogramChat</a>. I genuinely like hearing what people are building with it.</p>
 <h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.6.4"
+ferogram = "0.6.5"
 tokio    = { version = "1", features = ["full"] }
 </code></pre>
 <p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
@@ -807,7 +807,7 @@ See <a href="#peer-cache-helpers">Raw API Access</a> for usage details.</p>
 <h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
 <h2 id="add-to-cargotoml"><a class="header" href="#add-to-cargotoml">Add to Cargo.toml</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.6.4"
+ferogram = "0.6.5"
 tokio        = { version = "1", features = ["full"] }
 </code></pre>
 <p><code>ferogram</code> re-exports everything you need for both user clients and bots.</p>
@@ -848,11 +848,11 @@ let api_hash = "deadbeef..."; // ← never do this in a public repo
 <hr>
 <h2 id="optional-features"><a class="header" href="#optional-features">Optional features</a></h2>
 <h3 id="sqlite-session-storage"><a class="header" href="#sqlite-session-storage">SQLite session storage</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.6.4", features = ["sqlite-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.5", features = ["sqlite-session"] }
 </code></pre>
 <p>Stores session data in a SQLite database instead of a binary file. Better choice for long-running servers where crash-corruption of the binary file is a concern.</p>
 <h3 id="libsql--turso-session-storage-new-in-v020"><a class="header" href="#libsql--turso-session-storage-new-in-v020">LibSQL / Turso session storage: New in v0.2.0</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.6.4", features = ["libsql-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.5", features = ["libsql-session"] }
 </code></pre>
 <p>Backed by <a href="https://github.com/tursodatabase/libsql">libsql</a>: supports local embedded databases and remote Turso cloud databases. Ideal for serverless or distributed deployments.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -886,10 +886,10 @@ let (client, _shutdown) = Client::builder()
 <p>See <a href="#session-backends-1">Session Backends</a> for the full guide.</p>
 <h3 id="html-entity-parsing"><a class="header" href="#html-entity-parsing">HTML entity parsing</a></h3>
 <pre><code class="language-toml"># Built-in hand-rolled HTML parser (no extra deps)
-ferogram = { version = "0.6.4", features = ["html"] }
+ferogram = { version = "0.6.5", features = ["html"] }
 
 # OR: spec-compliant html5ever tokenizer (overrides built-in)
-ferogram = { version = "0.6.4", features = ["html5ever"] }
+ferogram = { version = "0.6.5", features = ["html5ever"] }
 </code></pre>
 <div class="table-wrapper">
 <table>
@@ -904,7 +904,7 @@ ferogram = { version = "0.6.4", features = ["html5ever"] }
 </div>
 <h3 id="raw-type-system-features-ferogram-tl-types"><a class="header" href="#raw-type-system-features-ferogram-tl-types">Raw type system features (<code>ferogram-tl-types</code>)</a></h3>
 <p>If you use <code>ferogram-tl-types</code> directly for raw API access:</p>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.4", features = [
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.5", features = [
     "tl-api",          # Telegram API types (required)
     "tl-mtproto",      # Low-level MTProto types
     "impl-debug",      # Debug trait on all types (default ON)
@@ -11606,23 +11606,54 @@ immediately so no extra bandwidth is used after a winner is picked.</p>
     .connect()
     .await?;
 <span class="boring">}</span></code></pre>
-<h3 id="race-schedule"><a class="header" href="#race-schedule">Race schedule</a></h3>
+<h3 id="race-schedule-default"><a class="header" href="#race-schedule-default">Race schedule (default)</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Transport</th><th>Start delay</th><th>Notes</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Obfuscated</code></td><td>0 ms</td><td>Runs first. Best for DPI-heavy networks.</td></tr>
-<tr><td><code>Abridged</code></td><td>200 ms</td><td>Staggered so Obfuscated has a head start.</td></tr>
-<tr><td><code>Http</code></td><td>800 ms</td><td>Last resort. SOCKS5 is not used for HTTP probes.</td></tr>
+<tr><td><code>Full</code></td><td>0 ms</td><td>Well-tested default, CRC32 integrity check. Wins on unrestricted networks.</td></tr>
+<tr><td><code>Obfuscated</code></td><td>200 ms</td><td>Staggered behind <code>Full</code>. Best for DPI-heavy networks.</td></tr>
 </tbody>
 </table>
 </div>
+<p><code>Abridged</code>/<code>Intermediate</code> are intentionally not raced alongside <code>Full</code>: they
+differ only in wire framing over the <em>same</em> TCP connection to the <em>same</em>
+IP:port, so a network that blocks or allows <code>Full</code> will almost always block
+or allow them identically - racing them adds connection load without a
+different success path. <code>Http</code> was removed from the race entirely: despite
+the name it never sent real HTTP frames, it silently fell back to <code>Abridged</code>
+framing on the same port, so it was a duplicate <code>Abridged</code> attempt under a
+misleading label.</p>
 <p>The winner’s connection is reused directly. No second DH exchange is
 performed, so there is no extra round trip cost.</p>
-<p>If all three transports fail, the connection attempt returns the last
-<code>InvocationError</code> from the race.</p>
+<p>If every transport in the race fails, the connection attempt returns the
+last <code>InvocationError</code> from the race.</p>
+<h3 id="customizing-the-race"><a class="header" href="#customizing-the-race">Customizing the race</a></h3>
+<p>Override the default two-leg race with <code>.probe_transport_race()</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::{Client, RaceLeg, TransportKind};
+
+let (client, _shutdown) = Client::builder()
+    .api_id(12345)
+    .api_hash("your_hash")
+    .session("bot.session")
+    .probe_transport(true)
+    .probe_transport_race(vec![
+        RaceLeg::new(TransportKind::Full, 0),
+        RaceLeg::new(TransportKind::Obfuscated { secret: None }, 100),
+        RaceLeg::new(
+            TransportKind::FakeTls { secret: [0u8; 16], domain: "www.bing.com".into() },
+            300,
+        ),
+    ])
+    .connect()
+    .await?;
+<span class="boring">}</span></code></pre>
+<p><code>probe_transport_race</code> has no effect unless <code>probe_transport(true)</code> is also
+set.</p>
 <h3 id="when-to-use-1"><a class="header" href="#when-to-use-1">When to use</a></h3>
 <p>Use <code>probe_transport</code> when:</p>
 <ul>
@@ -12828,19 +12859,19 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <li><code>ClientBuilder</code>: fluent connection builder</li>
 </ul>
 <pre><code class="language-toml"># SQLite session only
-ferogram = { version = "0.6.4", features = ["sqlite-session"] }
+ferogram = { version = "0.6.5", features = ["sqlite-session"] }
 
 # LibSQL / Turso session (new in 0.2.0)
-ferogram = { version = "0.6.4", features = ["libsql-session"] }
+ferogram = { version = "0.6.5", features = ["libsql-session"] }
 
 # HTML parsing (minimal, no extra deps)
-ferogram = { version = "0.6.4", features = ["html"] }
+ferogram = { version = "0.6.5", features = ["html"] }
 
 # HTML parsing (spec-compliant, adds html5ever dep)
-ferogram = { version = "0.6.4", features = ["html5ever"] }
+ferogram = { version = "0.6.5", features = ["html5ever"] }
 
 # Multiple features at once
-ferogram = { version = "0.6.4", features = ["sqlite-session", "html"] }
+ferogram = { version = "0.6.5", features = ["sqlite-session", "html"] }
 </code></pre>
 <hr>
 <h2 id="ferogram-tl-types-1"><a class="header" href="#ferogram-tl-types-1">ferogram-tl-types</a></h2>
@@ -12862,14 +12893,14 @@ ferogram = { version = "0.6.4", features = ["sqlite-session", "html"] }
 </table>
 </div>
 <h3 id="example-enable-serde"><a class="header" href="#example-enable-serde">Example: enable serde</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.4", features = ["tl-api", "impl-serde"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.5", features = ["tl-api", "impl-serde"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let json = serde_json::to_string(&amp;some_tl_type)?;
 <span class="boring">}</span></code></pre>
 <h3 id="example-name_for_id-debugging"><a class="header" href="#example-name_for_id-debugging">Example: name_for_id (debugging)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.4", features = ["tl-api", "name-for-id"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.5", features = ["tl-api", "name-for-id"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -12880,13 +12911,13 @@ if let Some(name) = name_for_id(0x74ae4240) {
 }
 <span class="boring">}</span></code></pre>
 <h3 id="example-minimal-no-debug-no-conversions"><a class="header" href="#example-minimal-no-debug-no-conversions">Example: minimal (no Debug, no conversions)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.4", default-features = false, features = ["tl-api"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.5", default-features = false, features = ["tl-api"] }
 </code></pre>
 <p>Reduces compile time when you don’t need convenience traits.</p>
 <hr>
 <h2 id="string-session-no-feature-flag-needed"><a class="header" href="#string-session-no-feature-flag-needed">String session: no feature flag needed</a></h2>
 <p><code>StringSessionBackend</code> and <code>export_session_string()</code> are available in the default build: no feature flag required:</p>
-<pre><code class="language-toml">ferogram = "0.6.4"   # already includes StringSessionBackend
+<pre><code class="language-toml">ferogram = "0.6.5"   # already includes StringSessionBackend
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {

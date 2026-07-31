@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-04b1db19.js";
+            window.path_to_searchindex_js = "../searchindex-b479768a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-5d15c526.js"></script>
@@ -199,23 +199,54 @@ immediately so no extra bandwidth is used after a winner is picked.</p>
     .connect()
     .await?;
 <span class="boring">}</span></code></pre>
-<h3 id="race-schedule"><a class="header" href="#race-schedule">Race schedule</a></h3>
+<h3 id="race-schedule-default"><a class="header" href="#race-schedule-default">Race schedule (default)</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Transport</th><th>Start delay</th><th>Notes</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Obfuscated</code></td><td>0 ms</td><td>Runs first. Best for DPI-heavy networks.</td></tr>
-<tr><td><code>Abridged</code></td><td>200 ms</td><td>Staggered so Obfuscated has a head start.</td></tr>
-<tr><td><code>Http</code></td><td>800 ms</td><td>Last resort. SOCKS5 is not used for HTTP probes.</td></tr>
+<tr><td><code>Full</code></td><td>0 ms</td><td>Well-tested default, CRC32 integrity check. Wins on unrestricted networks.</td></tr>
+<tr><td><code>Obfuscated</code></td><td>200 ms</td><td>Staggered behind <code>Full</code>. Best for DPI-heavy networks.</td></tr>
 </tbody>
 </table>
 </div>
+<p><code>Abridged</code>/<code>Intermediate</code> are intentionally not raced alongside <code>Full</code>: they
+differ only in wire framing over the <em>same</em> TCP connection to the <em>same</em>
+IP:port, so a network that blocks or allows <code>Full</code> will almost always block
+or allow them identically - racing them adds connection load without a
+different success path. <code>Http</code> was removed from the race entirely: despite
+the name it never sent real HTTP frames, it silently fell back to <code>Abridged</code>
+framing on the same port, so it was a duplicate <code>Abridged</code> attempt under a
+misleading label.</p>
 <p>The winner’s connection is reused directly. No second DH exchange is
 performed, so there is no extra round trip cost.</p>
-<p>If all three transports fail, the connection attempt returns the last
-<code>InvocationError</code> from the race.</p>
+<p>If every transport in the race fails, the connection attempt returns the
+last <code>InvocationError</code> from the race.</p>
+<h3 id="customizing-the-race"><a class="header" href="#customizing-the-race">Customizing the race</a></h3>
+<p>Override the default two-leg race with <code>.probe_transport_race()</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::{Client, RaceLeg, TransportKind};
+
+let (client, _shutdown) = Client::builder()
+    .api_id(12345)
+    .api_hash("your_hash")
+    .session("bot.session")
+    .probe_transport(true)
+    .probe_transport_race(vec![
+        RaceLeg::new(TransportKind::Full, 0),
+        RaceLeg::new(TransportKind::Obfuscated { secret: None }, 100),
+        RaceLeg::new(
+            TransportKind::FakeTls { secret: [0u8; 16], domain: "www.bing.com".into() },
+            300,
+        ),
+    ])
+    .connect()
+    .await?;
+<span class="boring">}</span></code></pre>
+<p><code>probe_transport_race</code> has no effect unless <code>probe_transport(true)</code> is also
+set.</p>
 <h3 id="when-to-use"><a class="header" href="#when-to-use">When to use</a></h3>
 <p>Use <code>probe_transport</code> when:</p>
 <ul>
