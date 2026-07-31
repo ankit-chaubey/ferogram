@@ -2,7 +2,7 @@
 
 # ferogram
 
-Async Rust client for the Telegram MTProto API.
+A Native & Elegant MTProto Framework for Rust
 
 [![Crates.io](https://img.shields.io/crates/v/ferogram?style=flat-square&logo=rust&logoColor=white&color=F97316)](https://crates.io/crates/ferogram)
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram-5865F2?style=flat-square&logo=docs.rs&logoColor=white)](https://docs.rs/ferogram)
@@ -15,35 +15,37 @@ Built by **[Ankit Chaubey](https://github.com/ankit-chaubey)**
 
 </div>
 
-This is the main client crate. It talks to Telegram directly over MTProto, no Bot API proxy in between, and handles auth for both bots and user accounts from the same client builder. You get a dispatcher with composable filters, FSM for multi-step conversations, CDN downloads, middleware, and a raw `invoke()` escape hatch for anything not wrapped yet.
+This is the main client crate. It talks to Telegram directly over MTProto and handles auth for both bots and user accounts from the same client builder. You get a dispatcher with composable filters, FSM for multi-step conversations, CDN downloads, middleware, MTProxy support and a raw `invoke()` escape hatch for anything not wrapped yet.
 
-If you're starting fresh, this is the only crate you need. Everything else in the workspace exists to support it and can be pulled in separately if you need a specific layer on its own. Want the Bot API instead? Take a look at [ferobot](https://github.com/ankit-chaubey/ferobot).
+If you're starting fresh, this is the only crate you need. Everything else in the workspace exists to support it and can be pulled in separately if you need a specific layer on its own.
 
-> [!NOTE]
-> ferogram is still in active development. It covers major use cases and runs in production, but the API may still shift.
+<details>
+<summary><b>Contents</b></summary>
+
+- [Installation](#installation)
+- [Quick start: bot](#quick-start-bot)
+- [Quick start: user account](#quick-start-user-account)
+- [Examples](#examples)
+- [Connecting](#connecting)
+- [Session backends](#session-backends)
+- [Transport and proxy](#transport-and-proxy)
+- [Raw API](#raw-api)
+- [Error handling](#error-handling)
+- [Shutdown](#shutdown)
+- [What's covered](#whats-covered)
+- [Voice and video calls](#voice-and-video-calls)
+- [Crates](#crates)
+- [Community](#community)
+- [License](#license)
+
+</details>
 
 ## Installation
 
 ```toml
 [dependencies]
 ferogram = "0.6.5"
-tokio    = { version = "1", features = ["full"] }
-```
-
-Get `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org).
-
-Optional feature flags:
-
-```toml
-ferogram = { version = "0.6.5", features = [
-    "sqlite-session",         # SqliteBackend via rusqlite
-    "libsql-session",         # LibSqlBackend, local file or in-memory, via libsql
-    "libsql-remote-session",  # LibSqlBackend remote Turso + embedded replicas
-    "html",                   # parse_html / generate_html (built-in parser)
-    "html5ever",              # parse_html via spec-compliant html5ever
-    "derive",                 # #[derive(FsmState)]
-    "serde",                  # serde support on session types
-] }
+tokio    = { version = "1.53", features = ["full"] }
 ```
 
 ## Quick start: bot
@@ -89,9 +91,9 @@ async fn main() -> anyhow::Result<()> {
 
 ## Examples
 
-19 runnable examples covering everything from sending a message to your Saved Messages to a full FSM order bot.
+19 runnable examples covering everything from sending a message to a full FSM order bot.
 
-See **[examples/README.md](examples/README.md)** for the full list with descriptions and notes on when to use `quick_connect` vs `Client::builder()`.
+See **[examples](examples/README.md)** for the full list with descriptions and notes on when to use `quick_connect` vs `Client::builder()`.
 
 ## Connecting
 
@@ -109,66 +111,7 @@ let (client, _shutdown) = Client::builder()
     .await?;
 ```
 
-`.catch_up(true)` replays missed updates after a reconnect, and `.retry_policy(...)` / `.restart_policy(...)` let you customize retry and reconnect behavior. Session storage, transport, and proxy options each have their own section below. Full docs at [docs.rs/ferogram](https://docs.rs/ferogram).
-
-## Dispatcher and filters
-
-```rust
-use ferogram::filters::{Dispatcher, command, private, text_contains, group, media};
-
-let mut dp = Dispatcher::new();
-
-dp.on_message(command("start"), |msg| async move {
-    msg.reply("Hello!").await.ok();
-});
-
-dp.on_message(private() & text_contains("help"), |msg| async move {
-    msg.reply("Type /start to begin.").await.ok();
-});
-
-dp.on_message(group() & media(), |msg| async move {
-    // handle media in groups
-});
-
-while let Some(upd) = stream.next().await {
-    dp.dispatch(upd).await;
-}
-```
-
-Filters compose with `&`, `|`, `!`. Built-ins cover `command`, `private`, `group`, `channel`, `text`, `text_contains`, `media`, `photo`, `document`, `forwarded`, `reply`, `from_user`, `album`, `custom`, and more. Callback queries and inline queries route through the same dispatcher via `on_callback_query` / `on_inline_query` / `on_inline_send`.
-
-## Middleware
-
-```rust
-dp.middleware(|upd, next| async move {
-    tracing::info!("incoming update");
-    let result = next.run(upd).await;
-    tracing::info!("handler done");
-    result
-});
-```
-
-Runs in registration order. Call `next.run(upd)` to pass control forward, or return early to stop the chain.
-
-## FSM
-
-```rust
-use ferogram::{FsmState, fsm::MemoryStorage};
-use std::sync::Arc;
-
-#[derive(FsmState, Clone, Debug, PartialEq)]
-enum Form { Name, Age }
-
-dp.with_state_storage(Arc::new(MemoryStorage::new()));
-
-dp.on_message_fsm(text(), Form::Name, |msg, state| async move {
-    state.set_data("name", msg.text().unwrap()).await.ok();
-    state.transition(Form::Age).await.ok();
-    msg.reply("How old are you?").await.ok();
-});
-```
-
-`MemoryStorage` is built in. To persist state across restarts, implement `StateStorage` for Redis, a database, or anything else. State keys scope per-user, per-chat, or per-user-in-chat via `StateKeyStrategy`. See [`ferogram-fsm`](../ferogram-fsm/) for details.
+`.catch_up(true)` replays missed updates after a reconnect, and `.retry_policy(...)` / `.restart_policy(...)` let you customize retry and reconnect behavior.
 
 ## Session backends
 
@@ -262,66 +205,49 @@ client.disconnect(); // immediate
 
 ## What's covered
 
-See **[FEATURES.md](../FEATURES.md)** for the full list with method signatures. If something is missing, open a feature request or drop by [t.me/FerogramChat](https://t.me/FerogramChat). the raw API is always there in the meantime.
+- **Rich Messaging**: text, media, albums, polls, dice, games, reactions, scheduled messages
+- **HTML & Markdown**: full parse and generate support for both formats
+- **Inline & Reply Keyboards**: buttons, callbacks, inline mode
+- **CDN**: transparent CDN download handling, no extra calls needed
+- **Proxy Support**: SOCKS5 with optional auth
+- **MTProxy**: Classic, DD, and FakeTLS transports, via link or manual config
+- **Transport Probing**: races transports, connects via whichever is fastest
+- **Concurrent Transfers**: parallel uploads/downloads with pause, resume, cancel, and progress tracking
+- **Resumable Transfers**: checkpointed uploads/downloads that survive crashes
+- **Session Backends**: file, in-memory, string, SQLite, LibSQL
+- **Router & Dispatcher**: composable filters (`&`, `|`, `!`) for expressive handlers
+- **FSM**: type-safe finite state machine for multi-step conversations
+- **Middleware**: rate limiting, tracing, panic recovery
+- **TgCalls**: group calls, P2P calls, conference calls, screen share/presentation, audio and video
+- **Raw API**: full TL coverage via `client.invoke()`
+- **Python Bindings**: native performance with a clean Python API
+
+...and more features like this throughout the codebase!
+
+See **[features docs](../FEATURES.md)** for the full list with method signatures. If something is missing, open a feature request or suggest in [@FerogramChat](https://t.me/FerogramChat).
 
 **Secret chats** (end-to-end encrypted) are fully implemented but not published to crates.io yet. The plan is to release once there is enough community demand for it.
 
 ## Voice and video calls
 
-Group audio, video, and P2P calling are now fully implemented. To get started, check out the [tgcalls](https://crates.io/crates/tgcalls) crate and its examples in the [tgcalls](https://github.com/ankit-chaubey/tgcalls) repository. It provides seamless integration between ferogram and the official [ntgcalls](https://crates.io/crates/ntgcalls) Rust bindings for building Telegram voice and video calling applications.
+Group audio, video, and P2P calling are now fully implemented. To get started, check out the [tgcalls](https://crates.io/crates/tgcalls) crate and its examples in the [tgcalls repository](https://github.com/ankit-chaubey/tgcalls). It provides seamless integration between ferogram and the official [ntgcalls](https://crates.io/crates/ntgcalls) Rust bindings for building Telegram voice and video calling applications.
 
 ## Crates
 
-Most people only need this crate. But each crate in the workspace is independently publishable if you need just one layer.
-
-| Crate | What it does |
-|---|---|
-| [`ferogram`](.) | High-level client. Auth, messaging, media, dispatcher, FSM, middleware. |
-| [`ferogram-session`](../ferogram-session/) | Session types and pluggable storage backends (file, memory, SQLite, LibSQL, base64). |
-| [`ferogram-fsm`](../ferogram-fsm/) | FSM state storage and context. `StateStorage` trait, `MemoryStorage`, `StateContext`. |
-| [`ferogram-parsers`](../ferogram-parsers/) | Telegram Markdown and HTML entity parsers. |
-| [`ferogram-derive`](../ferogram-derive/) | `#[derive(FsmState)]` proc macro. |
-| [`ferogram-mtsender`](../ferogram-mtsender/) | DC connection pool and retry policy. `AutoSleep`, `NoRetries`, `CircuitBreaker`. |
-| [`ferogram-connect`](../ferogram-connect/) | Raw TCP, MTProto framing, obfuscation, SOCKS5, MTProxy, gzip. |
-| [`ferogram-mtproto`](../ferogram-mtproto/) | MTProto 2.0 session, DH key exchange, message framing, PFS key binding. |
-| [`ferogram-crypto`](../ferogram-crypto/) | AES-IGE, RSA, SHA, Diffie-Hellman, PQ factorization, auth key derivation. |
-| [`ferogram-tl-types`](../ferogram-tl-types/) | Auto-generated TL types, functions, and enums (tracks `tl::LAYER`). |
-| [`ferogram-tl-gen`](../ferogram-tl-gen/) | Build-time code generator from TL AST to Rust source. |
-| [`ferogram-tl-parser`](../ferogram-tl-parser/) | Parses `.tl` schema text into a Definition AST. |
-
-The rough dependency chain (build-critical path only):
-
-```
-ferogram
-└ ferogram-mtsender
-  └ ferogram-connect
-    ├ ferogram-mtproto
-    │ ├ ferogram-tl-types
-    │ │ └ (build) ferogram-tl-gen
-    │ │   └ (build) ferogram-tl-parser
-    │ └ ferogram-crypto
-    └ ferogram-crypto
-```
-
-## Testing
-
-```bash
-cargo test --workspace
-cargo test --workspace --all-features
-```
+Most people only need this crate. But each crate in the workspace is independently publishable if you need just one layer - see **[ARCHITECTURE](../ARCHITECTURE.md)** for the full breakdown and dependency graph.
 
 ## Community
 
-- **Channel** (releases, announcements): [t.me/Ferogram](https://t.me/Ferogram)
-- **Chat** (questions, discussion): [t.me/FerogramChat](https://t.me/FerogramChat)
-- **API docs**: [docs.rs/ferogram](https://docs.rs/ferogram)
+- **Channel** (releases, announcements): [@Ferogram](https://t.me/Ferogram)
+- **Chat** (questions, discussion): [@FerogramChat](https://t.me/FerogramChat)
+- **Docs**: (docs & guidance):
+[docs.ferogram.dev](https://docs.ferogram.dev)
+- **Official Website**: (Projects & crates):
+[ferogram.dev](https://ferogram.dev)
 - **GitHub**: [github.com/ankit-chaubey/ferogram](https://github.com/ankit-chaubey/ferogram)
-
 
 ## License
 
 This project is licensed under either the MIT License or Apache License 2.0, at your option. See [`LICENSE-MIT`](https://github.com/ankit-chaubey/ferogram/blob/main/LICENSE-MIT) and [`LICENSE-APACHE`](https://github.com/ankit-chaubey/ferogram/blob/main/LICENSE-APACHE) for details.
 
 **Author:** Ankit Chaubey ([@ankit-chaubey](https://github.com/ankit-chaubey))
-
-Usage must comply with [Telegram's API Terms of Service](https://core.telegram.org/api/terms).
