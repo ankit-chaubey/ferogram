@@ -12,12 +12,13 @@
  * to those terms.
  */
 
-//! Async Rust client for the Telegram MTProto API.
+//! A native, elegant MTProto framework for Rust.
 //!
-//! ferogram talks to Telegram directly over MTProto with no Bot API proxy. It works
-//! for both bots and user accounts. Most things you'd want to do with Telegram
-//! are already covered. If something isn't, you can always drop down to
-//! [`client.invoke()`](Client::invoke) and call any TL function directly.
+//! ferogram talks to Telegram directly over MTProto, no Bot API proxy, and
+//! handles auth for both bots and user accounts from the same client builder.
+//! You get a dispatcher with composable filters, FSM for multi-step
+//! conversations, CDN downloads, middleware, MTProxy support, and a raw
+//! [`client.invoke()`](Client::invoke) escape hatch for anything not wrapped yet.
 //!
 //! Still in development but already covers major use cases for production.
 //! Check the [CHANGELOG] before upgrading.
@@ -181,8 +182,29 @@
 //!
 //! # What's covered
 //!
-//! Most common use cases are already covered. Full list in
-//! [FEATURES.md](https://github.com/ankit-chaubey/ferogram/blob/main/FEATURES.md).
+//! - **Rich Messaging**: text, media, albums, polls, dice, games, reactions, scheduled messages
+//! - **HTML & Markdown**: full parse and generate support for both formats
+//! - **Inline & Reply Keyboards**: buttons, callbacks, inline mode
+//! - **CDN**: transparent CDN download handling, no extra calls needed
+//! - **Proxy Support**: SOCKS5 with optional auth
+//! - **MTProxy**: Classic, DD, and FakeTLS transports, via link or manual config
+//! - **Transport Probing**: races transports, connects via whichever is fastest
+//! - **Concurrent Transfers**: parallel uploads/downloads with pause, resume, cancel, and progress tracking
+//! - **Resumable Transfers**: checkpointed uploads/downloads that survive crashes
+//! - **Session Backends**: file, in-memory, string, SQLite, LibSQL
+//! - **Router & Dispatcher**: composable filters (`&`, `|`, `!`) for expressive handlers
+//! - **FSM**: type-safe finite state machine for multi-step conversations
+//! - **Middleware**: rate limiting, tracing, panic recovery
+//! - **TgCalls**: group calls, P2P calls, conference calls, screen share/presentation, audio and video
+//! - **Raw API**: full TL coverage via `client.invoke()`
+//! - **Python Bindings**: native performance with a clean Python API
+//!
+//! ...and more features like this throughout the codebase!
+//!
+//! Full list in [FEATURES.md](https://github.com/ankit-chaubey/ferogram/blob/main/FEATURES.md).
+//! Group calls, P2P calls, and screen share are handled separately by the
+//! [tgcalls](https://crates.io/crates/tgcalls) crate, built on top of ferogram
+//! and the official [ntgcalls](https://crates.io/crates/ntgcalls) bindings.
 //!
 //! If something's missing, feel free to open a feature request or PR.
 //! Check the [contributing guidelines](https://github.com/ankit-chaubey/ferogram#contributing) first.
@@ -191,7 +213,8 @@
 //!
 //! - Channel (releases, news): [t.me/Ferogram](https://t.me/Ferogram)
 //! - Chat (questions, help): [t.me/FerogramChat](https://t.me/FerogramChat)
-//! - Guide: [ferogram.ankitchaubey.in](https://ferogram.ankitchaubey.in)
+//! - Docs: [docs.ferogram.dev](https://docs.ferogram.dev)
+//! - Website: [ferogram.dev](https://ferogram.dev)
 //! - GitHub: [ankit-chaubey/ferogram](https://github.com/ankit-chaubey/ferogram)
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
