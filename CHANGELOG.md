@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.6.5] - 2026-07-30
+## [0.6.5] - 2026-07-31
+
+**Recommend upgrading to `v0.6.5`.**
+
+> This release updates all workspace dependencies to their latest versions and
+includes optimization, safety, and performance improvements throughout the
+workspace.
 
 Transport-race probing (`Full` vs `Obfuscated`, customizable via
 `probe_transport_race`), an optional `metrics` feature with a zero-cost
