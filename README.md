@@ -57,8 +57,6 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-Building a bot instead? Same API, just a bot token from [@BotFather](https://t.me/BotFather). Full bot example lives in the [ferogram/examples](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram/examples).
-
 ---
 
 ## Python support
@@ -73,16 +71,19 @@ pip install ferogram
 
 ---
 
-## Core features
+## Features
 
-| Feature | Description |
-|---|---|
-| **TgCalls** | Voice and video calls for Telegram clients, wrapping Telegram's calling stack in a Rust API for joining voice chats and streaming media. See [tgcalls](https://crates.io/crates/tgcalls). |
-| **Dispatcher and filters** | Composable filters (`&`, `\|`, `!`) for routing updates to handlers. |
-| **FSM** | Finite state machine for multi-step bot conversations, with pluggable storage, configurable state strategies, and type-safe states. See [ferogram-fsm](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram-fsm). |
-| **Raw API** | `client.invoke()` takes any TL function directly, for when the high-level API doesn't cover something. |
-| **Session backends** | Binary file by default. SQLite, LibSQL (Turso), and base64 string are also supported, or bring your own via [`SessionBackend`](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram-session#custom-backends). |
-| **MTProxy** | Built-in support for Classic, DD, and FakeTLS transport. |
+- **TgCalls**: Voice and video calling for Telegram clients, wrapping Telegram's native calling stack in a Rust API for joining voice chats and streaming audio or video. See [tgcalls](https://crates.io/crates/tgcalls).
+
+- **Dispatcher & Filters**: A flexible update dispatcher with composable filters (`&`, `|`, `!`) for building expressive and maintainable handlers.
+
+- **FSM**: A type-safe finite state machine for multi-step conversations, featuring pluggable storage backends and configurable state strategies. See [ferogram-fsm](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram-fsm).
+
+- **Session Backends**: Binary file storage by default, with built-in support for SQLite, LibSQL (Turso), and base64 sessions. Custom storage backends can be implemented via `SessionBackend`.
+
+- **MTProxy**: Native support for Classic, DD, and FakeTLS MTProxy transports.
+
+- **Raw API**: Access the complete Telegram MTProto API by invoking any TL function directly with `client.invoke()`, giving you full control whenever the high-level API doesn't cover a use case.
 
 <details>
 <summary>Raw API example</summary>
@@ -110,9 +111,9 @@ See the crate documentation for a complete overview of all supported features.
 
 ## What's covered
 
-See **[FEATURES.md](FEATURES.md)** for the full feature list, or try the [runnable examples](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram/examples).
+Read **[FEATURES.md](FEATURES.md)** for the quick feature list, or try the [runnable examples](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram/examples) to see it in action.
 
-If something is missing, open a feature request or drop a suggestion in [t.me/FerogramChat](https://t.me/FerogramChat).
+If something is missing, feel free to open a feature request or share your ideas in [@FerogramChat](https://t.me/FerogramChat).
 
 ---
 
@@ -120,19 +121,14 @@ If something is missing, open a feature request or drop a suggestion in [t.me/Fe
 
 Join the ferogram community! Questions, discussions, bugs report and feedback are always welcome.
 
-- **Channel** (releases & announcements): [@Ferogram](https://t.me/Ferogram)
+- **Channel** (releases & announcements):
+[@Ferogram](https://t.me/Ferogram)
 - **Chat** (questions & discussion): [@FerogramChat](https://t.me/FerogramChat)
-- **Docs**: [docs.ferogram.dev](https://docs.ferogram.dev)
+- **Docs**: (docs & guidance):
+[docs.ferogram.dev](https://docs.ferogram.dev)
+- **Official Website**: (Projects & crates):
+[ferogram.dev](https://ferogram.dev)
 
-## Contributing
-
-Please read the [Contributing Guide](https://github.com/ankit-chaubey/ferogram/blob/main/CONTRIBUTING.md) before opening a pull request.
-
-## Acknowledgments
-
-Big shoutout to [Lonami](https://codeberg.org/Lonami/grammers) for grammers. It was one of the most helpful references while building ferogram initially.
-
-Protocol behavior references from [Telegram Desktop](https://github.com/telegramdesktop/tdesktop) and [TDLib](https://github.com/tdlib/td).
 
 ## License
 
