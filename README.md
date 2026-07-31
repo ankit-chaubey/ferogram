@@ -62,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
 ## Python support
 Love Python as much as we do? Ferogram is also available for Python with a clean, user-friendly API while keeping the heavy lifting in Rust.
 
-Powered by same high-performance Rust core, it takes care of networking, encryption, TL parsing, and session management. Explore the [ferogram python](https://github.com/ankit-chaubey/ferogram-py) source, learn about its [architecture](https://github.com/ankit-chaubey/ferogram-py/blob/main/assets/architecture.svg), or install the pre-built wheels for you platform from [PyPI](https://pypi.org/project/ferogram), no Rust toolchain needed.
+Powered by same high-performance Rust core, it takes care of networking, encryption, TL parsing, and session management. Explore the [ferogram python](https://github.com/ankit-chaubey/ferogram-py) source, learn about its [architecture](https://github.com/ankit-chaubey/ferogram-py/blob/main/assets/architecture.svg), or install the pre-built wheels for your platform from [PyPI](https://pypi.org/project/ferogram), no Rust toolchain needed.
 
 All you need is:
 ```bash
@@ -84,6 +84,8 @@ pip install ferogram
 - **MTProxy**: Native support for Classic, DD, and FakeTLS MTProxy transports.
 
 - **Raw API**: Access the complete Telegram MTProto API by invoking any TL function directly with `client.invoke()`, giving you full control whenever the high-level API doesn't cover a use case.
+
+...and more features like this throughout the codebase!
 
 <details>
 <summary>Raw API example</summary>
@@ -111,7 +113,7 @@ See the crate documentation for a complete overview of all supported features.
 
 ## What's covered
 
-Read **[FEATURES.md](FEATURES.md)** for the quick feature list, or try the [runnable examples](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram/examples) to see it in action.
+See **[what's covered](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram#whats-covered)** for the quick feature list, or try the [runnable examples](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram/examples) to see it in action.
 
 If something is missing, feel free to open a feature request or share your ideas in [@FerogramChat](https://t.me/FerogramChat).
 
@@ -143,4 +145,4 @@ You are free to use, modify, and distribute this software, including for commerc
 
 See [`LICENSE-MIT`](https://github.com/ankit-chaubey/ferogram/blob/main/LICENSE-MIT) and [`LICENSE-APACHE`](https://github.com/ankit-chaubey/ferogram/blob/main/LICENSE-APACHE) for full details.
 
-Usage must comply with [Telegram's API Terms of Service](https://core.telegram.org/api/terms).
+Usage must comply with Telegram's [`API's Terms`](https://core.telegram.org/api/terms).
