@@ -31,7 +31,7 @@ parking_lot    = "0.12"
 dashmap        = "6"
 md5            = "0.8.0"
 metrics        = { version = "0.24", optional = true }
-tracing        = { version = "0.1", features = ["log"] }
+tracing        = { version = "0.1" }
 serde          = { version = "1", features = ["derive"] }
 mime_guess     = "2"
 base64         = "0.23.0"

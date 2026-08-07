@@ -41,4 +41,4 @@ ferogram-mtproto    = { path = "ferogram-mtproto",     version = "0.6.5" }
 ferogram-session    = { path = "ferogram-session",     version = "0.6.5" }
 ferogram-parsers    = { path = "ferogram-parsers",     version = "0.6.5" }
 ferogram            = { path = "ferogram",             version = "0.6.5" }
-tracing            = { version = "0.1", features = ["log"] }
+tracing            = { version = "0.1" }
