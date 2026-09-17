@@ -358,6 +358,18 @@ impl DcPool {
             return result;
         }
 
+        if let Err(InvocationError::Rpc(ref e)) = result
+            && e.name == "CONNECTION_NOT_INITED"
+        {
+            // The DC's session became stale (Telegram invalidated the initConnection state).
+            // Evict so the caller redoes full InitConnection + auth import on retry.
+            tracing::warn!(
+                "[ferogram::pool] DC{dc_id} returned CONNECTION_NOT_INITED; evicting for caller to redo setup"
+            );
+            self.evict(dc_id);
+            return result;
+        }
+
         if result.is_err() && !slot.alive.load(Ordering::Acquire) {
             tracing::warn!(
                 "[ferogram::pool] DC{dc_id} connection died mid-request; evicting for caller to redo setup"
@@ -396,6 +408,16 @@ impl DcPool {
         {
             tracing::warn!(
                 "[ferogram::pool] DC{dc_id} returned -404 (serializable path); evicting for caller to redo setup"
+            );
+            self.evict(dc_id);
+            return result;
+        }
+
+        if let Err(InvocationError::Rpc(ref e)) = result
+            && e.name == "CONNECTION_NOT_INITED"
+        {
+            tracing::warn!(
+                "[ferogram::pool] DC{dc_id} returned CONNECTION_NOT_INITED (serializable path); evicting for caller to redo setup"
             );
             self.evict(dc_id);
             return result;
