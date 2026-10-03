@@ -104,6 +104,12 @@ impl Drop for SlotLease {
     }
 }
 
+/// True when Telegram reports the DC session lost its initConnection state
+/// (RPC 400 `CONNECTION_NOT_INITED`). The slot must be rebuilt, not retried.
+fn is_connection_not_inited(result: &Result<Vec<u8>, InvocationError>) -> bool {
+    matches!(result, Err(InvocationError::Rpc(e)) if e.name == "CONNECTION_NOT_INITED")
+}
+
 /// Pool of per-DC authenticated connections.
 /// Media DCs may hold up to MAX_CONNS_PER_DC slots. Callers using a shared
 /// mutex can reserve a slot and release that mutex before network I/O.
@@ -264,6 +270,7 @@ impl DcPool {
                 .increment(1);
         }
         let fatal = matches!(result, Err(InvocationError::Rpc(e)) if e.code == -404)
+            || is_connection_not_inited(result)
             || (result.is_err() && !lease.is_alive());
         if fatal
             && self
@@ -345,7 +352,7 @@ impl DcPool {
     /// Shared-pool callers should use `reserve_slot` and `SlotLease::invoke`
     /// so their mutex is released before the network round trip.
     ///
-    /// On connection death or a `-404` (auth key gone), this evicts the
+    /// On connection death, a `-404` (auth key gone) or `CONNECTION_NOT_INITED`, this evicts the
     /// dead slot and returns the error as-is -- it does not reconnect and
     /// resend itself. `DcPool` has no `api_id`/device info to build
     /// `invokeWithLayer(initConnection(...))`, so it can't safely redo
@@ -380,6 +387,16 @@ impl DcPool {
             // Evict; the caller redoes DH + auth import + InitConnection and retries.
             tracing::warn!(
                 "[ferogram::pool] DC{dc_id} returned -404 (auth key gone); evicting for caller to redo setup"
+            );
+            self.evict(dc_id);
+            return result;
+        }
+
+        if is_connection_not_inited(&result) {
+            // Telegram invalidated the initConnection state for this session.
+            // Evict so the caller redoes initConnection (and auth import) and retries.
+            tracing::warn!(
+                "[ferogram::pool] DC{dc_id} returned CONNECTION_NOT_INITED; evicting for caller to redo setup"
             );
             self.evict(dc_id);
             return result;
@@ -420,6 +437,14 @@ impl DcPool {
         {
             tracing::warn!(
                 "[ferogram::pool] DC{dc_id} returned -404 (serializable path); evicting for caller to redo setup"
+            );
+            self.evict(dc_id);
+            return result;
+        }
+
+        if is_connection_not_inited(&result) {
+            tracing::warn!(
+                "[ferogram::pool] DC{dc_id} returned CONNECTION_NOT_INITED (serializable path); evicting for caller to redo setup"
             );
             self.evict(dc_id);
             return result;
@@ -703,5 +728,47 @@ mod pool_regressions {
         setup.await.expect_err("setup cancelled");
         assert!(pool.lock().await.reserve_slot(2).is_err());
         assert!(!pool.lock().await.has_connection(2));
+    }
+
+    #[tokio::test]
+    async fn connection_not_inited_evicts_slot_and_clears_init() {
+        use crate::errors::RpcError;
+        let mut pool = DcPool::new(1, &[], None, TransportKind::Abridged);
+        let (slot, _worker) = fake_slot();
+        pool.conns.insert(5, vec![slot]);
+        pool.mark_init_done(5);
+
+        let lease = pool.reserve_slot(5).expect("ready slot");
+        let result: Result<Vec<u8>, InvocationError> = Err(InvocationError::Rpc(RpcError {
+            code: 400,
+            name: "CONNECTION_NOT_INITED".into(),
+            value: None,
+        }));
+        pool.finish_call(5, &lease, &result);
+        drop(lease);
+
+        assert!(!pool.has_connection(5));
+        assert!(!pool.is_init_done(5));
+    }
+
+    #[tokio::test]
+    async fn other_rpc_errors_keep_slot() {
+        use crate::errors::RpcError;
+        let mut pool = DcPool::new(1, &[], None, TransportKind::Abridged);
+        let (slot, _worker) = fake_slot();
+        pool.conns.insert(5, vec![slot]);
+        pool.mark_init_done(5);
+
+        let lease = pool.reserve_slot(5).expect("ready slot");
+        let result: Result<Vec<u8>, InvocationError> = Err(InvocationError::Rpc(RpcError {
+            code: 400,
+            name: "FILE_REFERENCE_EXPIRED".into(),
+            value: None,
+        }));
+        pool.finish_call(5, &lease, &result);
+        drop(lease);
+
+        assert!(pool.has_connection(5));
+        assert!(pool.is_init_done(5));
     }
 }

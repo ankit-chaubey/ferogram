@@ -192,6 +192,9 @@ pub enum ErrorKind {
     Migration(i32),
     /// Generic Telegram RPC error.
     Rpc { code: i32, name: String },
+    /// A `FILE_REFERENCE_*` error such as `FILE_REFERENCE_EXPIRED`. Fetch a
+    /// fresh reference from the owning message or object and retry.
+    FileReferenceExpired,
     /// File or media transfer error.
     Transfer,
     /// Other / unclassified.
@@ -220,6 +223,9 @@ impl InvocationErrorExt for InvocationError {
                     || e.name == "SESSION_REVOKED"
                 {
                     return ErrorKind::Auth;
+                }
+                if e.name.starts_with("FILE_REFERENCE_") {
+                    return ErrorKind::FileReferenceExpired;
                 }
                 if e.name.contains("FILE") || e.name.contains("UPLOAD") {
                     return ErrorKind::Transfer;
@@ -282,5 +288,32 @@ impl InvocationErrorExt for InvocationError {
             Self::PeerNotCached(s) => format!("Peer not cached: {s}. Try resolving it first."),
             _ => format!("{self}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod kind_tests {
+    use super::*;
+
+    fn rpc(code: i32, name: &str) -> InvocationError {
+        InvocationError::Rpc(RpcError {
+            code,
+            name: name.into(),
+            value: None,
+        })
+    }
+
+    #[test]
+    fn file_reference_expired_has_its_own_kind() {
+        assert_eq!(
+            rpc(400, "FILE_REFERENCE_EXPIRED").kind(),
+            ErrorKind::FileReferenceExpired
+        );
+    }
+
+    #[test]
+    fn other_file_and_upload_errors_stay_transfer() {
+        assert_eq!(rpc(400, "FILE_PART_INVALID").kind(), ErrorKind::Transfer);
+        assert_eq!(rpc(400, "UPLOAD_ID_INVALID").kind(), ErrorKind::Transfer);
     }
 }

@@ -3661,7 +3661,7 @@ impl Client {
         }
 
         let result = Self::invoke_ready_pool(&self.inner.transfer_pool, target_dc, req).await;
-        // Connection death and -404 eviction are handled by finish_call;
+        // Connection death, -404 and CONNECTION_NOT_INITED eviction are handled by finish_call;
         // these account authorization errors also invalidate the cached key.
         if let Err(InvocationError::Rpc(rpc)) = &result
             && matches!(
@@ -4036,7 +4036,7 @@ impl Client {
     /// `auth.importAuthorization` -- for the *current* session.
     ///
     /// Checks both `has_connection` and `is_init_done`, not just the former:
-    /// `DcPool::invoke_on_dc` evicts a slot on death or `-404` without
+    /// `DcPool::invoke_on_dc` evicts a slot on death, `-404` or `CONNECTION_NOT_INITED` without
     /// reconnecting itself (it has no `api_id`/device info to build
     /// `InitConnection`), so after an eviction there may genuinely be no
     /// slot at all, but a stale connection could also have been evicted and
@@ -4295,8 +4295,8 @@ impl Client {
     /// re-imported) before every call, not just the first one for a DC --
     /// a cached auth *key* only skips the DH handshake, the session itself
     /// still needs `InitConnection` on every fresh connection. If the pool
-    /// reports the connection was evicted mid-call (dead socket or a
-    /// `-404`), setup is redone once and the request retried before the
+    /// reports the connection was evicted mid-call (dead socket, `-404`
+    /// or `CONNECTION_NOT_INITED`), setup is redone once and the request retried before the
     /// error is surfaced.
     async fn rpc_on_dc_raw<R: RemoteCall>(
         &self,

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- `DcPool` now evicts a DC slot on `CONNECTION_NOT_INITED` (RPC 400), in
+  `finish_call`, `invoke_on_dc` and `invoke_on_dc_serializable`. The next
+  `invoke_on_dc` call redoes initConnection and recovers instead of failing
+  forever.
+- `InvocationError::kind()` returns the new `ErrorKind::FileReferenceExpired`
+  for `FILE_REFERENCE_*` errors instead of `ErrorKind::Transfer`, so callers
+  can refresh the file reference and retry.
+
+---
+
 ## [0.6.5] - 2026-07-31
 
 **Recommend upgrading to `v0.6.5`.**
