@@ -17,12 +17,13 @@ use crate::sender::DcConnection;
 use crate::sender_task::{FrameEvent, RpcEnqueue, spawn_sender_task};
 use ferogram_connect::util::maybe_gz_pack;
 use ferogram_connect::{Socks5Config, TransportKind};
-use ferogram_session::DcEntry;
+use ferogram_session::{DcEntry, DcFlags};
 use ferogram_tl_types::{RemoteCall, Serializable};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 // Max simultaneous connections per DC.
 const MAX_CONNS_PER_DC: usize = 3;
@@ -64,50 +65,89 @@ pub struct ConnSlot {
     time_offset: i32,
 }
 
+/// Counts a request until its future is completed or dropped.
+struct InFlightGuard<'a>(&'a AtomicUsize);
+
+impl<'a> InFlightGuard<'a> {
+    fn new(count: &'a AtomicUsize) -> Self {
+        count.fetch_add(1, Ordering::Relaxed);
+        Self(count)
+    }
+}
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// A selected ready slot, counted as busy from selection until the caller
+/// finishes or cancels. Keeping this lease across an RPC lets the pool mutex
+/// be released during network I/O without losing load accounting.
+pub struct SlotLease {
+    slot: Arc<ConnSlot>,
+}
+
+impl SlotLease {
+    pub async fn invoke<R: RemoteCall>(&self, req: &R) -> Result<Vec<u8>, InvocationError> {
+        DcPool::send_untracked(&self.slot, maybe_gz_pack(&req.to_bytes())).await
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.slot.alive.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for SlotLease {
+    fn drop(&mut self) {
+        self.slot.in_flight.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// Pool of per-DC authenticated connections.
-/// Each DC holds up to MAX_CONNS_PER_DC slots. The pool lock is dropped
-/// before any network I/O so concurrent callers don't serialize on it.
+/// Media DCs may hold up to MAX_CONNS_PER_DC slots. Callers using a shared
+/// mutex can reserve a slot and release that mutex before network I/O.
 pub struct DcPool {
     /// Per-DC connection slots; inner Vec holds slot Arcs.
     pub conns: HashMap<i32, Vec<Arc<ConnSlot>>>,
     addrs: HashMap<i32, String>,
-    #[allow(dead_code)]
-    home_dc_id: i32,
-    /// Proxy config forwarded to auto-reconnect.
-    socks5: Option<Socks5Config>,
-    /// Transport kind reused for secondary DC connections.
-    transport: TransportKind,
+    /// Media-only DCs may use parallel file sessions.
+    media_dcs: HashSet<i32>,
     /// DCs that have already received `invokeWithLayer(initConnection(...))`.
     init_done: std::collections::HashSet<i32>,
 }
 
 impl DcPool {
-    /// Build an empty pool for `home_dc_id`, seeded with addresses for every
-    /// DC in `dc_entries`. No connections are opened yet; slots get created
-    /// lazily on first use of each DC.
+    /// Build an empty pool seeded with DC addresses and media capability.
+    /// The client opens and initializes connections before inserting them.
     pub fn new(
-        home_dc_id: i32,
+        _home_dc_id: i32,
         dc_entries: &[DcEntry],
-        socks5: Option<Socks5Config>,
-        transport: TransportKind,
+        _socks5: Option<Socks5Config>,
+        _transport: TransportKind,
     ) -> Self {
         let addrs = dc_entries
             .iter()
             .map(|e| (e.dc_id, e.addr.clone()))
             .collect();
+        let media_dcs = dc_entries
+            .iter()
+            .filter(|e| e.flags.contains(DcFlags::MEDIA_ONLY))
+            .map(|e| e.dc_id)
+            .collect();
         Self {
             conns: HashMap::new(),
             addrs,
-            home_dc_id,
-            socks5,
-            transport,
+            media_dcs,
             init_done: std::collections::HashSet::new(),
         }
     }
 
-    /// Returns true if at least one connection slot exists for `dc_id`.
+    /// Returns true if at least one live slot exists for `dc_id`.
     pub fn has_connection(&self, dc_id: i32) -> bool {
-        self.conns.get(&dc_id).is_some_and(|v| !v.is_empty())
+        self.conns
+            .get(&dc_id)
+            .is_some_and(|v| v.iter().any(|slot| slot.alive.load(Ordering::Acquire)))
     }
 
     /// Graduate an already set-up `DcConnection` into a pipelined slot.
@@ -160,116 +200,97 @@ impl DcPool {
     /// new slot.
     pub fn insert(&mut self, dc_id: i32, conn: DcConnection) {
         let slot = Self::spawn_slot(conn);
-        self.conns.entry(dc_id).or_default().push(slot);
+        let slots = self.conns.entry(dc_id).or_default();
+        slots.retain(|old| old.alive.load(Ordering::Acquire));
+        slots.push(slot);
+        self.init_done.insert(dc_id);
         let total: usize = self.conns.values().map(|v| v.len()).sum();
         crate::metrics_shim::gauge!("ferogram.connections_active").set(total as f64);
     }
 
-    /// Returns the least-loaded slot for `dc_id`, creating one if needed.
-    /// Creates a new slot if all existing ones are busy and count < MAX_CONNS_PER_DC.
-    /// Drop the DcPool guard before locking the returned slot.
-    pub(crate) async fn get_or_create_slot(
+    /// Publish a connection only after its full client-level setup succeeds.
+    /// Dropping or failing the setup future leaves the pool unchanged.
+    pub async fn insert_after_setup<F>(
+        pool: &Mutex<Self>,
+        dc_id: i32,
+        setup: F,
+    ) -> Result<(), InvocationError>
+    where
+        F: Future<Output = Result<DcConnection, InvocationError>>,
+    {
+        let conn = setup.await?;
+        pool.lock().await.insert(dc_id, conn);
+        Ok(())
+    }
+
+    /// Select only a slot that the client has fully set up and inserted.
+    /// Opening a connection here would bypass initConnection and foreign-DC auth.
+    fn select_slot(&self, dc_id: i32) -> Result<Arc<ConnSlot>, InvocationError> {
+        self.conns
+            .get(&dc_id)
+            .and_then(|slots| {
+                slots
+                    .iter()
+                    .filter(|slot| slot.alive.load(Ordering::Acquire))
+                    .min_by_key(|slot| slot.in_flight.load(Ordering::Relaxed))
+            })
+            .cloned()
+            .ok_or_else(|| {
+                InvocationError::Deserialize(format!("no ready connection for DC{dc_id}"))
+            })
+    }
+
+    pub fn reserve_slot(&self, dc_id: i32) -> Result<SlotLease, InvocationError> {
+        let slot = self.select_slot(dc_id)?;
+        slot.in_flight.fetch_add(1, Ordering::Relaxed);
+        Ok(SlotLease { slot })
+    }
+
+    /// Apply a call's failure to the pool only when its slot still belongs to
+    /// this DC. A late result must not evict a replacement connection.
+    pub fn finish_call(
         &mut self,
         dc_id: i32,
-        pfs: bool,
-        auth_key: Option<([u8; 256], i64, i32)>,
-    ) -> Result<Arc<ConnSlot>, InvocationError> {
-        let addr = self.addrs.get(&dc_id).cloned().ok_or_else(|| {
-            InvocationError::Deserialize(format!("dc_pool: no address for DC{dc_id}"))
-        })?;
-
-        // Ensure at least one slot exists.
-        if !self.conns.contains_key(&dc_id) || self.conns[&dc_id].is_empty() {
-            tracing::debug!("[ferogram::pool] opening first connection to DC{dc_id} at {addr}");
-            let conn = if let Some((key, salt, offset)) = auth_key {
-                DcConnection::connect_with_key(
-                    &addr,
-                    key,
-                    salt,
-                    offset,
-                    self.socks5.as_ref(),
-                    None,
-                    &self.transport,
-                    dc_id as i16,
-                    pfs,
-                )
-                .await?
-            } else {
-                DcConnection::connect_raw(
-                    &addr,
-                    self.socks5.as_ref(),
-                    None,
-                    &self.transport,
-                    dc_id as i16,
-                )
-                .await?
+        lease: &SlotLease,
+        result: &Result<Vec<u8>, InvocationError>,
+    ) {
+        if let Err(e) = result {
+            let _kind = match e {
+                InvocationError::Rpc(_) => "rpc",
+                InvocationError::Io(_) => "io",
+                _ => "other",
             };
-            let slot = Self::spawn_slot(conn);
-            self.conns.entry(dc_id).or_default().push(slot);
-            self.init_done.remove(&dc_id);
-            let total: usize = self.conns.values().map(|v| v.len()).sum();
-            crate::metrics_shim::gauge!("ferogram.connections_active").set(total as f64);
+            crate::metrics_shim::counter!("ferogram.rpc_errors_total", "kind" => _kind)
+                .increment(1);
         }
-
-        let slots = self
-            .conns
-            .get(&dc_id)
-            .expect("dc_id must be registered before use");
-
-        // pick least-busy slot
-        let best = slots
-            .iter()
-            .min_by_key(|s| s.in_flight.load(Ordering::Relaxed))
-            .expect("slots vec is non-empty")
-            .clone();
-        let min_inflight = best.in_flight.load(Ordering::Relaxed);
-
-        // Spawn a new slot if: all are busy AND we have room for more.
-        //
-        // With pipelined slots this matters less than it used to (a single
-        // slot can now happily carry many in-flight requests at once), but
-        // it's still worth spreading load across a few real TCP connections
-        // for very heavy transfers.
-        if min_inflight > 0 && slots.len() < MAX_CONNS_PER_DC {
-            tracing::debug!(
-                "[ferogram::pool] DC{dc_id}: all {} slots busy (min_inflight={min_inflight}), opening extra connection",
-                slots.len()
-            );
-            let conn = if let Some((key, salt, offset)) = auth_key {
-                DcConnection::connect_with_key(
-                    &addr,
-                    key,
-                    salt,
-                    offset,
-                    self.socks5.as_ref(),
-                    None,
-                    &self.transport,
-                    dc_id as i16,
-                    pfs,
-                )
-                .await?
-            } else {
-                DcConnection::connect_raw(
-                    &addr,
-                    self.socks5.as_ref(),
-                    None,
-                    &self.transport,
-                    dc_id as i16,
-                )
-                .await?
-            };
-            let new_slot = Self::spawn_slot(conn);
-            let arc = new_slot.clone();
-            self.conns
-                .get_mut(&dc_id)
-                .expect("dc_id must be registered")
-                .push(new_slot);
-            let total: usize = self.conns.values().map(|v| v.len()).sum();
-            crate::metrics_shim::gauge!("ferogram.connections_active").set(total as f64);
-            return Ok(arc);
+        let fatal = matches!(result, Err(InvocationError::Rpc(e)) if e.code == -404)
+            || (result.is_err() && !lease.is_alive());
+        if fatal
+            && self
+                .conns
+                .get(&dc_id)
+                .is_some_and(|slots| slots.iter().any(|slot| Arc::ptr_eq(slot, &lease.slot)))
+        {
+            self.evict(dc_id);
         }
+    }
 
-        Ok(best)
+    /// Whether a ready media-only DC can benefit from another connection.
+    /// The media flag describes the endpoint, even when its DC id is home.
+    /// Main RPC sessions use non-media endpoints and stay on one connection
+    /// unless the server's tmp_sessions limit is explicitly supported.
+    pub fn should_expand(&self, dc_id: i32) -> bool {
+        if !self.media_dcs.contains(&dc_id) {
+            return false;
+        }
+        let Some(slots) = self.conns.get(&dc_id) else {
+            return false;
+        };
+        !slots.is_empty()
+            && slots.len() < MAX_CONNS_PER_DC
+            && slots.iter().all(|slot| {
+                slot.alive.load(Ordering::Acquire) && slot.in_flight.load(Ordering::Relaxed) > 0
+            })
     }
 
     /// Evict all slots for a DC (called on connection failure to force
@@ -292,10 +313,17 @@ impl DcPool {
         slot: &Arc<ConnSlot>,
         body: Vec<u8>,
     ) -> Result<Vec<u8>, InvocationError> {
-        slot.in_flight.fetch_add(1, Ordering::Relaxed);
+        let _in_flight = InFlightGuard::new(&slot.in_flight);
+        Self::send_untracked(slot, body).await
+    }
+
+    async fn send_untracked(
+        slot: &Arc<ConnSlot>,
+        body: Vec<u8>,
+    ) -> Result<Vec<u8>, InvocationError> {
         let (tx, rx) = oneshot::channel();
         let send_result = slot.rpc_tx.send(RpcEnqueue { body, tx }).await;
-        let result = if send_result.is_err() {
+        if send_result.is_err() {
             slot.alive.store(false, Ordering::Release);
             Err(InvocationError::Deserialize(
                 "worker sender task shut down".into(),
@@ -310,13 +338,12 @@ impl DcPool {
                     ))
                 }
             }
-        };
-        slot.in_flight.fetch_sub(1, Ordering::Relaxed);
-        result
+        }
     }
 
-    /// Invoke a raw RPC call on the given DC.
-    /// Pool lock is released before the network round-trip begins.
+    /// Invoke a raw RPC call on an already initialized slot of the given DC.
+    /// Shared-pool callers should use `reserve_slot` and `SlotLease::invoke`
+    /// so their mutex is released before the network round trip.
     ///
     /// On connection death or a `-404` (auth key gone), this evicts the
     /// dead slot and returns the error as-is -- it does not reconnect and
@@ -332,7 +359,7 @@ impl DcPool {
         _dc_entries: &[DcEntry],
         req: &R,
     ) -> Result<Vec<u8>, InvocationError> {
-        let slot = self.get_or_create_slot(dc_id, false, None).await?;
+        let slot = self.select_slot(dc_id)?;
         let body = maybe_gz_pack(&req.to_bytes());
         let result = Self::send_via_slot(&slot, body.clone()).await;
 
@@ -384,10 +411,7 @@ impl DcPool {
         dc_id: i32,
         req: &S,
     ) -> Result<Vec<u8>, InvocationError> {
-        let slot = self
-            .get_or_create_slot(dc_id, false, None)
-            .await
-            .map_err(|_| InvocationError::Deserialize(format!("no connection for DC{dc_id}")))?;
+        let slot = self.select_slot(dc_id)?;
         let body = maybe_gz_pack(&req.to_bytes());
         let result = Self::send_via_slot(&slot, body.clone()).await;
 
@@ -414,6 +438,11 @@ impl DcPool {
     pub fn update_addrs(&mut self, entries: &[DcEntry]) {
         for e in entries {
             self.addrs.insert(e.dc_id, e.addr.clone());
+            if e.flags.contains(DcFlags::MEDIA_ONLY) {
+                self.media_dcs.insert(e.dc_id);
+            } else {
+                self.media_dcs.remove(&e.dc_id);
+            }
         }
     }
 
@@ -458,4 +487,221 @@ pub(crate) fn build_msgs_ack_ping_body(ping_id: i64) -> Vec<u8> {
     out.extend_from_slice(&ping_id.to_le_bytes());
     out.extend_from_slice(&75_i32.to_le_bytes()); // disconnect_delay = 75 s
     out
+}
+
+#[cfg(test)]
+mod pool_regressions {
+    use super::*;
+
+    fn fake_slot() -> (Arc<ConnSlot>, mpsc::Receiver<RpcEnqueue>) {
+        let (rpc_tx, rpc_rx) = mpsc::channel(1);
+        (
+            Arc::new(ConnSlot {
+                rpc_tx,
+                in_flight: AtomicUsize::new(0),
+                alive: Arc::new(AtomicBool::new(true)),
+                auth_key: [0; 256],
+                first_salt: 0,
+                time_offset: 0,
+            }),
+            rpc_rx,
+        )
+    }
+
+    #[tokio::test]
+    async fn cancelled_rpc_releases_in_flight_slot() {
+        let (slot, mut worker) = fake_slot();
+        let caller_slot = slot.clone();
+        let call = tokio::spawn(async move { DcPool::send_via_slot(&caller_slot, vec![1]).await });
+        let _pending = worker.recv().await.expect("request enqueued");
+        assert_eq!(slot.in_flight.load(Ordering::Relaxed), 1);
+        call.abort();
+        call.await.expect_err("call aborted");
+        assert_eq!(slot.in_flight.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn completed_and_failed_rpcs_release_in_flight_slot_once() {
+        let (slot, mut worker) = fake_slot();
+        for outcome in [Ok(vec![2]), Err(InvocationError::Dropped)] {
+            let caller_slot = slot.clone();
+            let call =
+                tokio::spawn(async move { DcPool::send_via_slot(&caller_slot, vec![1]).await });
+            let pending = worker.recv().await.expect("request enqueued");
+            assert_eq!(slot.in_flight.load(Ordering::Relaxed), 1);
+            pending.tx.send(outcome).expect("caller waiting");
+            let _ = call.await.expect("task finished");
+            assert_eq!(slot.in_flight.load(Ordering::Relaxed), 0);
+        }
+        drop(worker);
+        assert!(DcPool::send_via_slot(&slot, vec![1]).await.is_err());
+        assert_eq!(slot.in_flight.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn busy_foreign_media_slot_never_routes_to_an_unprepared_connection() {
+        use ferogram_session::DcFlags;
+        use ferogram_tl_types::functions::help::GetConfig;
+
+        let entry = DcEntry {
+            dc_id: 2,
+            addr: "127.0.0.1:0".into(),
+            auth_key: None,
+            first_salt: 0,
+            time_offset: 0,
+            flags: DcFlags::MEDIA_ONLY,
+        };
+        let mut pool = DcPool::new(1, &[entry.clone()], None, TransportKind::Abridged);
+        let (ready_slot, mut worker) = fake_slot();
+        ready_slot.in_flight.store(1, Ordering::Relaxed);
+        pool.conns.insert(2, vec![ready_slot.clone()]);
+        pool.mark_init_done(2);
+
+        // The existing slot is ready, though busy. An extra connection cannot
+        // become selectable until client-level setup has succeeded.
+        {
+            let entries = [entry];
+            let call = pool.invoke_on_dc(2, &entries, &GetConfig {});
+            tokio::pin!(call);
+            let pending = tokio::select! {
+                req = worker.recv() => req.expect("ready slot receives the RPC"),
+                result = &mut call => panic!("RPC bypassed the ready slot: {result:?}"),
+            };
+            pending.tx.send(Ok(vec![42])).expect("caller waiting");
+            assert_eq!(call.await.expect("ready slot succeeds"), vec![42]);
+        }
+        assert_eq!(pool.conns[&2].len(), 1);
+    }
+
+    #[tokio::test]
+    async fn reserved_slot_cancellation_and_connection_failure_clear_pool_state() {
+        use ferogram_session::DcFlags;
+        use ferogram_tl_types::functions::help::GetConfig;
+
+        let entry = DcEntry {
+            dc_id: 2,
+            addr: "127.0.0.1:0".into(),
+            auth_key: None,
+            first_salt: 0,
+            time_offset: 0,
+            flags: DcFlags::MEDIA_ONLY,
+        };
+        let mut pool = DcPool::new(1, &[entry], None, TransportKind::Abridged);
+        let (slot, mut worker) = fake_slot();
+        pool.conns.insert(2, vec![slot.clone()]);
+        pool.mark_init_done(2);
+
+        let lease = pool.reserve_slot(2).expect("ready slot");
+        assert!(pool.should_expand(2));
+        let call = tokio::spawn(async move { lease.invoke(&GetConfig {}).await });
+        let _pending = worker.recv().await.expect("request enqueued");
+        call.abort();
+        call.await.expect_err("call cancelled");
+        assert_eq!(slot.in_flight.load(Ordering::Relaxed), 0);
+        assert!(!pool.should_expand(2));
+
+        let lease = pool.reserve_slot(2).expect("slot reusable");
+        let call = tokio::spawn(async move {
+            let result = lease.invoke(&GetConfig {}).await;
+            (lease, result)
+        });
+        let pending = worker.recv().await.expect("request enqueued");
+        slot.alive.store(false, Ordering::Release);
+        pending
+            .tx
+            .send(Err(InvocationError::Dropped))
+            .expect("caller waiting");
+        let (lease, result) = call.await.expect("call finished");
+        pool.finish_call(2, &lease, &result);
+        drop(lease);
+        assert!(!pool.has_connection(2));
+        assert_eq!(slot.in_flight.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn media_pool_can_expand_to_three_ready_slots_but_regular_pool_cannot() {
+        use ferogram_session::DcFlags;
+        let entries = [
+            DcEntry {
+                dc_id: 1,
+                addr: "home".into(),
+                auth_key: None,
+                first_salt: 0,
+                time_offset: 0,
+                flags: DcFlags::NONE,
+            },
+            DcEntry {
+                dc_id: 2,
+                addr: "media".into(),
+                auth_key: None,
+                first_salt: 0,
+                time_offset: 0,
+                flags: DcFlags::MEDIA_ONLY,
+            },
+        ];
+        let mut pool = DcPool::new(1, &entries, None, TransportKind::Abridged);
+        let (home, _home_rx) = fake_slot();
+        home.in_flight.store(1, Ordering::Relaxed);
+        pool.conns.insert(1, vec![home]);
+        assert!(!pool.should_expand(1));
+
+        let (first, _first_rx) = fake_slot();
+        first.in_flight.store(1, Ordering::Relaxed);
+        pool.conns.insert(2, vec![first]);
+        assert!(pool.should_expand(2));
+        let (second, _second_rx) = fake_slot();
+        pool.conns.get_mut(&2).unwrap().push(second.clone());
+        assert!(!pool.should_expand(2));
+        second.in_flight.store(1, Ordering::Relaxed);
+        assert!(pool.should_expand(2));
+        let (third, _third_rx) = fake_slot();
+        third.in_flight.store(1, Ordering::Relaxed);
+        pool.conns.get_mut(&2).unwrap().push(third);
+        assert!(!pool.should_expand(2));
+
+        // A media endpoint can share the home DC id without becoming a main
+        // RPC session; file sessions are still allowed to grow.
+        let mut home_media = entries[0].clone();
+        home_media.flags = DcFlags::MEDIA_ONLY;
+        pool.update_addrs(&[home_media]);
+        assert!(pool.should_expand(1));
+    }
+
+    #[tokio::test]
+    async fn failed_or_cancelled_setup_never_publishes_a_slot() {
+        use ferogram_session::DcFlags;
+        let entry = DcEntry {
+            dc_id: 2,
+            addr: "127.0.0.1:0".into(),
+            auth_key: None,
+            first_salt: 0,
+            time_offset: 0,
+            flags: DcFlags::MEDIA_ONLY,
+        };
+        let pool = Arc::new(Mutex::new(DcPool::new(
+            1,
+            &[entry],
+            None,
+            TransportKind::Abridged,
+        )));
+        let failed =
+            DcPool::insert_after_setup(&pool, 2, async { Err(InvocationError::Dropped) }).await;
+        assert!(failed.is_err());
+        assert!(pool.lock().await.reserve_slot(2).is_err());
+
+        let pending_pool = pool.clone();
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let setup = tokio::spawn(async move {
+            DcPool::insert_after_setup(&pending_pool, 2, async {
+                let _ = entered_tx.send(());
+                std::future::pending::<Result<DcConnection, InvocationError>>().await
+            })
+            .await
+        });
+        entered_rx.await.expect("setup started");
+        setup.abort();
+        setup.await.expect_err("setup cancelled");
+        assert!(pool.lock().await.reserve_slot(2).is_err());
+        assert!(!pool.lock().await.has_connection(2));
+    }
 }

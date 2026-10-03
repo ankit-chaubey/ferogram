@@ -61,9 +61,12 @@
 //! use ferogram_session::DcEntry;
 //! use ferogram_tl_types::functions::help::GetConfig;
 //!
-//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn run(ready_conn: ferogram_mtsender::DcConnection) -> Result<(), Box<dyn std::error::Error>> {
 //! let dc_entries: Vec<DcEntry> = vec![]; // populate from your session
 //! let mut pool = DcPool::new(2, &dc_entries, None, TransportKind::Full);
+//! // Complete DH/PFS, invokeWithLayer(initConnection), and any DC auth import
+//! // on ready_conn before publishing it to the pool.
+//! pool.insert(2, ready_conn);
 //! let raw = pool.invoke_on_dc(2, &dc_entries, &GetConfig {}).await?;
 //! println!("raw response bytes: {}", raw.len());
 //! # Ok(())

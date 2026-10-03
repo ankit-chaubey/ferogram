@@ -1816,6 +1816,7 @@ impl Client {
             .lock()
             .await
             .get(&dc_id)
+            .filter(|e| e.flags.contains(DcFlags::MEDIA_ONLY))
             .map(|e| e.addr.clone())
     }
 
@@ -3606,13 +3607,25 @@ impl Client {
         let home = *self.inner.home_dc_id.lock().await;
         let target_dc = if dc_id == 0 { home } else { dc_id };
 
-        // per-DC connect gate
-        // Acquire (or create) a per-DC mutex that serialises the first-use
-        // setup for each DC.  Tasks that arrive while another task is already
-        // setting up the same DC will block here, then find the connection
-        // ready in the pool (double-check below) and skip setup entirely.
-        // This prevents redundant sockets and AUTH_KEY_UNREGISTERED caused by
-        // two concurrent DH handshakes for the same DC slot.
+        let media_entry = {
+            self.inner
+                .media_dc_options
+                .lock()
+                .await
+                .get(&target_dc)
+                .filter(|e| e.flags.contains(DcFlags::MEDIA_ONLY))
+                .cloned()
+        };
+        if let Some(media_entry) = media_entry {
+            self.inner
+                .transfer_pool
+                .lock()
+                .await
+                .update_addrs(&[media_entry]);
+        }
+
+        // Serialize pool growth per DC. A connection only becomes selectable
+        // after its own layer negotiation and, when needed, auth import finish.
         let gate: std::sync::Arc<tokio::sync::Mutex<()>> = {
             let mut gates = self.inner.dc_connect_gates.lock();
             gates
@@ -3620,227 +3633,36 @@ impl Client {
                 .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
                 .clone()
         };
-        let _gate_guard = gate.lock().await;
-
-        // Double-check: another task may have set up the connection while we
-        // waited for the gate.
-        let needs_new = {
-            let pool = self.inner.transfer_pool.lock().await;
-            !pool.has_connection(target_dc)
-        };
-
-        if needs_new {
-            let addr = {
-                let opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> =
-                    self.inner.dc_options.lock().await;
-                opts.get(&target_dc)
-                    .map(|e| e.addr.clone())
-                    .unwrap_or_else(|| fallback_dc_addr(target_dc).to_string())
+        {
+            let _gate_guard = gate.lock().await;
+            let (had_connection, needs_new) = {
+                let pool = self.inner.transfer_pool.lock().await;
+                let had_connection = pool.has_connection(target_dc);
+                (
+                    had_connection,
+                    !had_connection || pool.should_expand(target_dc),
+                )
             };
-            let socks5 = self.inner.socks5.clone();
-            let mtproxy = self.inner.mtproxy.clone();
-
-            // IMPORTANT: transfer connections always use Abridged transport (0xEF init byte)
-            // regardless of the main connection transport.  Every read/write in DcConnection
-            // uses send_abridged/recv_abridged, so the server MUST receive the 0xEF marker
-            // first.  Using TransportKind::Full (no init byte) causes the server to fail
-            // parsing the DH handshake and close the socket immediately → early EOF.
-
-            if target_dc == home {
-                // HOME DC: reuse the existing auth key  - no fresh DH, no export/import.
-                tracing::debug!(
-                    "[ferogram::transfer] using home auth key for DC{target_dc} (home=DC{home})"
-                );
-                // Read salt and time_offset from the live writer (FutureSalts may have
-                // rotated since dc_options was last written).
-                let key = {
-                    let opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> =
-                        self.inner.dc_options.lock().await;
-                    let e = opts.get(&target_dc);
-                    e.and_then(|e| e.auth_key)
-                };
-                let (salt, time_offset) = {
-                    let opts = self.inner.dc_options.lock().await;
-                    let home = *self.inner.home_dc_id.lock().await;
-                    opts.get(&home)
-                        .map(|e| (e.first_salt, e.time_offset))
-                        .unwrap_or((0, 0))
-                };
-                let conn = if let Some(key) = key {
-                    dc_pool::DcConnection::connect_with_key(
-                        &addr,
-                        key,
-                        salt,
-                        time_offset,
-                        socks5.as_ref(),
-                        mtproxy.as_ref(),
-                        &TransportKind::Abridged,
-                        target_dc as i16,
-                        self.inner.pfs_enabled,
-                    )
-                    .await?
-                } else {
-                    dc_pool::DcConnection::connect_raw(
-                        &addr,
-                        socks5.as_ref(),
-                        mtproxy.as_ref(),
-                        &TransportKind::Abridged,
-                        target_dc as i16,
-                    )
-                    .await?
-                };
-                // insert THEN init; remove on failure
-                self.inner
-                    .transfer_pool
-                    .lock()
-                    .await
-                    .insert(target_dc, conn);
-                if let Err(e) = self.init_transfer_session(target_dc).await {
-                    tracing::warn!(
-                        "[ferogram::transfer] initConnection for DC{target_dc} failed: {e}; evicting connection"
-                    );
-                    self.inner
-                        .transfer_pool
-                        .lock()
-                        .await
-                        .conns
-                        .remove(&target_dc);
-                    return Err(e);
-                }
-            } else {
-                // FOREIGN DC: check for a cached auth key first.
-                // If we already have the foreign DC's auth key (from a prior
-                // export/import), skip DH + re-export and go straight to initConnection.
-                let saved = {
-                    let opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> =
-                        self.inner.dc_options.lock().await;
-                    opts.get(&target_dc)
-                        .and_then(|e| e.auth_key.map(|k| (k, e.first_salt, e.time_offset)))
-                };
-
-                if let Some((key, salt, time_offset)) = saved {
-                    tracing::debug!(
-                        "[ferogram::transfer] cached auth key for DC{target_dc}; running importAuth"
-                    );
-                    let conn = dc_pool::DcConnection::connect_with_key(
-                        &addr,
-                        key,
-                        salt,
-                        time_offset,
-                        socks5.as_ref(),
-                        mtproxy.as_ref(),
-                        &TransportKind::Abridged,
-                        target_dc as i16,
-                        self.inner.pfs_enabled,
-                    )
-                    .await?;
-                    // Cached key skips DH but importAuthorization is still required
-                    // to activate the account on this session.
-                    self.inner
-                        .transfer_pool
-                        .lock()
-                        .await
-                        .insert(target_dc, conn);
-                    if let Err(e) = self.export_import_auth_transfer(target_dc).await {
-                        tracing::warn!(
-                            "[ferogram::transfer] importAuth for DC{target_dc} failed: {e}; evicting and retrying with fresh DH"
-                        );
-                        self.inner
-                            .transfer_pool
-                            .lock()
-                            .await
-                            .conns
-                            .remove(&target_dc);
-                        return Err(e);
-                    }
-                } else {
-                    // No cached key: full DH + export/import.
-                    tracing::debug!(
-                        "[ferogram::transfer] no cached key for DC{target_dc}; running DH + importAuth"
-                    );
-                    let conn = dc_pool::DcConnection::connect_raw(
-                        &addr,
-                        socks5.as_ref(),
-                        mtproxy.as_ref(),
-                        &TransportKind::Abridged,
-                        target_dc as i16,
-                    )
-                    .await?;
-                    // insert then import; evict on failure
-                    self.inner
-                        .transfer_pool
-                        .lock()
-                        .await
-                        .insert(target_dc, conn);
-                    if let Err(e) = self.export_import_auth_transfer(target_dc).await {
-                        tracing::warn!(
-                            "[ferogram::transfer] auth export/import for DC{target_dc} failed: {e}; evicting"
-                        );
-                        self.inner
-                            .transfer_pool
-                            .lock()
-                            .await
-                            .conns
-                            .remove(&target_dc);
-                        return Err(e);
-                    }
-                    // Save the newly obtained foreign-DC auth key so the NEXT
-                    // transfer connection (and open_worker_conn) can skip DH.
-                    //
-                    // `ConnSlot` no longer owns a lockable `DcConnection` (the
-                    // pipelined sender task does); `DcPool::collect_keys` is
-                    // the pool's own sanctioned accessor for the auth key /
-                    // salt / time offset snapshot taken when the slot was
-                    // spawned, so we reuse it here for this single DC instead
-                    // of reaching into private `ConnSlot` fields.
-                    {
-                        {
-                            let pool = self.inner.transfer_pool.lock().await;
-                            if pool.has_connection(target_dc) {
-                                let mut opts: tokio::sync::MutexGuard<
-                                    '_,
-                                    std::collections::HashMap<i32, DcEntry>,
-                                > = self.inner.dc_options.lock().await;
-                                let entry = opts.entry(target_dc).or_insert_with(|| {
-                                    crate::session::DcEntry {
-                                        dc_id: target_dc,
-                                        addr: addr.clone(),
-                                        auth_key: None,
-                                        first_salt: 0,
-                                        time_offset: 0,
-                                        flags: crate::session::DcFlags::NONE,
-                                    }
-                                });
-                                let mut entries = [entry.clone()];
-                                pool.collect_keys(&mut entries);
-                                *entry = entries[0].clone();
-                            }
-                        }
-                    }
+            if needs_new {
+                match dc_pool::DcPool::insert_after_setup(
+                    &self.inner.transfer_pool,
+                    target_dc,
+                    self.open_worker_conn(target_dc),
+                )
+                .await
+                {
+                    Ok(()) => {}
+                    Err(e) if had_connection => tracing::warn!(
+                        "[ferogram::transfer] extra connection to DC{target_dc} failed setup: {e}; using an existing slot"
+                    ),
+                    Err(e) => return Err(e),
                 }
             }
         }
 
-        let dc_entries: Vec<crate::DcEntry> = self
-            .inner
-            .dc_options
-            .lock()
-            .await
-            .values()
-            .cloned()
-            .collect();
-        let result = self
-            .inner
-            .transfer_pool
-            .lock()
-            .await
-            .invoke_on_dc(target_dc, &dc_entries, req)
-            .await;
-        // Evict on fatal auth errors. Connection-death eviction (the old
-        // Io(_) branch here) is now handled inside DcPool::invoke_on_dc
-        // itself: connection failures surface as InvocationError::Deserialize
-        // from the sender task, not Io, since fail_all has already fanned
-        // the original error out to every caller waiting on that connection.
+        let result = Self::invoke_ready_pool(&self.inner.transfer_pool, target_dc, req).await;
+        // Connection death and -404 eviction are handled by finish_call;
+        // these account authorization errors also invalidate the cached key.
         if let Err(InvocationError::Rpc(rpc)) = &result
             && matches!(
                 rpc.name.as_str(),
@@ -3864,84 +3686,6 @@ impl Client {
         result
     }
 
-    /// Initialize a home-DC transfer pool session by sending
-    /// `invokeWithLayer(initConnection(..., help.getConfig))`.
-    ///
-    /// After `connect_with_key` the auth key is valid but Telegram doesn't know
-    /// the client's layer yet; it will close the TCP connection on the first
-    /// real RPC.  Sending `initConnection` here registers the session so that
-    /// subsequent `upload.getFile` calls work correctly.
-    async fn init_transfer_session(&self, dc_id: i32) -> Result<(), InvocationError> {
-        use tl::functions::{InitConnection, InvokeWithLayer};
-        let wrapped = InvokeWithLayer {
-            layer: tl::LAYER,
-            query: InitConnection {
-                api_id: self.inner.api_id,
-                device_model: self.inner.device_model.clone(),
-                system_version: self.inner.system_version.clone(),
-                app_version: self.inner.app_version.clone(),
-                system_lang_code: self.inner.system_lang_code.clone(),
-                lang_pack: self.inner.lang_pack.clone(),
-                lang_code: self.inner.lang_code.clone(),
-                proxy: None,
-                params: None,
-                query: tl::functions::help::GetConfig {},
-            },
-        };
-        self.inner
-            .transfer_pool
-            .lock()
-            .await
-            .invoke_on_dc_serializable(dc_id, &wrapped)
-            .await?;
-        tracing::debug!("[ferogram::client] transfer connection to DC{dc_id} initialized");
-        Ok(())
-    }
-
-    /// Export auth from the home DC (main connection) and import it into the
-    /// transfer pool connection for `dc_id`.
-    async fn export_import_auth_transfer(&self, dc_id: i32) -> Result<(), InvocationError> {
-        // Export from the home (main) session  - works for home DC and foreign DCs.
-        let export_req = tl::functions::auth::ExportAuthorization { dc_id };
-        let body: Vec<u8> = self.rpc_call_raw(&export_req).await?;
-        let mut cur = Cursor::from_slice(&body);
-        let tl::enums::auth::ExportedAuthorization::ExportedAuthorization(exported) =
-            tl::enums::auth::ExportedAuthorization::deserialize(&mut cur)?;
-
-        // Wrap ImportAuthorization in invokeWithLayer(initConnection(...)) so Telegram
-        // registers this as a fully-initialised session.  Without the wrapper Telegram
-        // closes the connection on the next RPC with early-EOF or InvalidBuffer.
-        use tl::functions::{InitConnection, InvokeWithLayer};
-        let wrapped = InvokeWithLayer {
-            layer: tl::LAYER,
-            query: InitConnection {
-                api_id: self.inner.api_id,
-                device_model: self.inner.device_model.clone(),
-                system_version: self.inner.system_version.clone(),
-                app_version: self.inner.app_version.clone(),
-                system_lang_code: self.inner.system_lang_code.clone(),
-                lang_pack: self.inner.lang_pack.clone(),
-                lang_code: self.inner.lang_code.clone(),
-                proxy: None,
-                params: None,
-                query: tl::functions::auth::ImportAuthorization {
-                    id: exported.id,
-                    bytes: exported.bytes,
-                },
-            },
-        };
-        self.inner
-            .transfer_pool
-            .lock()
-            .await
-            .invoke_on_dc_serializable(dc_id, &wrapped)
-            .await?;
-        tracing::debug!(
-            "[ferogram::client] transfer connection to DC{dc_id} initialized with imported auth"
-        );
-        Ok(())
-    }
-
     /// Open a fresh, fully-initialised transfer connection for a single file worker.
     ///
     /// Each upload/download worker gets its **own** `DcConnection` so workers run
@@ -3956,9 +3700,10 @@ impl Client {
         let home = *self.inner.home_dc_id.lock().await;
         let target_dc = if dc_id == 0 { home } else { dc_id };
 
-        let addr = {
-            let opts: tokio::sync::MutexGuard<'_, std::collections::HashMap<i32, DcEntry>> =
-                self.inner.dc_options.lock().await;
+        let addr = if let Some(media_addr) = self.media_dc_addr(target_dc).await {
+            media_addr
+        } else {
+            let opts = self.inner.dc_options.lock().await;
             opts.get(&target_dc)
                 .map(|e| e.addr.clone())
                 .unwrap_or_else(|| fallback_dc_addr(target_dc).to_string())
@@ -4540,7 +4285,6 @@ impl Client {
             entry.time_offset = live_time_offset;
         }
         self.inner.dc_pool.lock().await.insert(dc_id, dc_conn);
-        self.inner.dc_pool.lock().await.mark_init_done(dc_id);
         Ok(())
     }
 
@@ -4561,23 +4305,7 @@ impl Client {
         req: &R,
     ) -> Result<Vec<u8>, InvocationError> {
         self.ensure_dc_ready(dc_id).await?;
-
-        let dc_entries: Vec<crate::DcEntry> = self
-            .inner
-            .dc_options
-            .lock()
-            .await
-            .values()
-            .cloned()
-            .collect();
-
-        let result = self
-            .inner
-            .dc_pool
-            .lock()
-            .await
-            .invoke_on_dc(dc_id, &dc_entries, req)
-            .await;
+        let result = Self::invoke_ready_pool(&self.inner.dc_pool, dc_id, req).await;
 
         if result.is_err() {
             let evicted = {
@@ -4592,15 +4320,20 @@ impl Client {
                     "[ferogram::client] rpc_on_dc_raw: DC{dc_id} was evicted, redoing setup and retrying once"
                 );
                 self.ensure_dc_ready(dc_id).await?;
-                return self
-                    .inner
-                    .dc_pool
-                    .lock()
-                    .await
-                    .invoke_on_dc(dc_id, &dc_entries, req)
-                    .await;
+                return Self::invoke_ready_pool(&self.inner.dc_pool, dc_id, req).await;
             }
         }
+        result
+    }
+
+    async fn invoke_ready_pool<R: RemoteCall>(
+        pool: &tokio::sync::Mutex<dc_pool::DcPool>,
+        dc_id: i32,
+        req: &R,
+    ) -> Result<Vec<u8>, InvocationError> {
+        let lease = pool.lock().await.reserve_slot(dc_id)?;
+        let result = lease.invoke(req).await;
+        pool.lock().await.finish_call(dc_id, &lease, &result);
         result
     }
 }

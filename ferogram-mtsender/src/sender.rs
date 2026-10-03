@@ -36,6 +36,9 @@ const PING_EVERY_N_CHUNKS: u32 = 5;
 pub struct DcConnection {
     stream: TcpStream,
     enc: EncryptedSession,
+    /// The durable DC key and salt, distinct from the temporary PFS session.
+    perm_auth_key: [u8; 256],
+    perm_first_salt: i64,
     pending_acks: Vec<i64>,
     call_count: u32,
     /// Active framing kind for this connection.
@@ -126,15 +129,19 @@ impl DcConnection {
 
         tracing::debug!("[ferogram::sender] DH complete, auth key established for {addr}");
         let seen = new_seen_msg_ids();
+        let perm_auth_key = enc.auth_key_bytes();
+        let perm_first_salt = enc.salt;
         Ok(Self {
             stream,
             frame_kind,
             enc: EncryptedSession::with_seen(
-                enc.auth_key_bytes(),
+                perm_auth_key,
                 enc.salt,
                 enc.time_offset,
                 seen.clone(),
             ),
+            perm_auth_key,
+            perm_first_salt,
             pending_acks: Vec::new(),
             call_count: 0,
             seen_msg_ids: seen,
@@ -169,6 +176,8 @@ impl DcConnection {
                         stream,
                         frame_kind,
                         enc: temp_enc,
+                        perm_auth_key: auth_key,
+                        perm_first_salt: first_salt,
                         pending_acks: Vec::new(),
                         call_count: 0,
                         seen_msg_ids: new_seen_msg_ids(),
@@ -188,6 +197,8 @@ impl DcConnection {
             stream,
             frame_kind,
             enc: EncryptedSession::with_seen(auth_key, first_salt, time_offset, seen.clone()),
+            perm_auth_key: auth_key,
+            perm_first_salt: first_salt,
             pending_acks: Vec::new(),
             call_count: 0,
             seen_msg_ids: seen,
@@ -338,16 +349,14 @@ impl DcConnection {
         ))
     }
 
-    /// The auth key this connection is currently encrypted with. Unlike
-    /// [`crate::MtpSender::auth_key_bytes`], there's no separate permanent
-    /// key tracked here, so under PFS this is the temporary key, not one
-    /// safe to persist to the session.
+    /// The permanent DC auth key, safe to persist even when PFS uses a
+    /// different temporary key for this connection's active encryption.
     pub fn auth_key_bytes(&self) -> [u8; 256] {
-        self.enc.auth_key_bytes()
+        self.perm_auth_key
     }
-    /// The server salt this connection started with.
+    /// The permanent key's initial salt (not the temporary PFS key's salt).
     pub fn first_salt(&self) -> i64 {
-        self.enc.salt
+        self.perm_first_salt
     }
     /// Clock offset (seconds) between this client and the server.
     pub fn time_offset(&self) -> i32 {
