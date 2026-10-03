@@ -87,35 +87,14 @@ pip install ferogram
 
 ...and more features like this throughout the codebase!
 
-<details>
-<summary>Raw API example</summary>
-
-```rust
-use ferogram::tl;
-
-let req = tl::functions::bots::SetBotCommands {
-    scope: tl::enums::BotCommandScope::Default(tl::types::BotCommandScopeDefault {}),
-    lang_code: "en".into(),
-    commands: vec![tl::enums::BotCommand::BotCommand(tl::types::BotCommand {
-        command: "start".into(),
-        description: "Start the bot".into(),
-    })],
-};
-client.invoke(&req).await?;
-client.invoke_on_dc(2, &req).await?;
-```
-
-</details>
-
-See the crate documentation for a complete overview of all supported features.
 
 ---
 
-## What's covered
+## AI usages
 
-See **[what's covered](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram#whats-covered)** for the quick feature list, or try the [runnable examples](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram/examples) to see it in action.
+AI was used in some parts of Ferogram's development, just like any other tools, wherever it made sense and genuinely helped. The project's architecture, direction, implementation decisions, experimentation, and testing are my own work.
 
-If something is missing, feel free to open a feature request or share your ideas in [@FerogramChat](https://t.me/FerogramChat).
+Read ["Why Ferogram?"](https://github.com/ankit-chaubey/ferogram/wiki/Why-ferogram%3F#why-ferogram) to understand why I created another MTProto library.
 
 ---
 
@@ -130,6 +109,10 @@ Join the ferogram community! Questions, discussions, bugs report and feedback ar
 [docs.ferogram.dev](https://docs.ferogram.dev)
 - **Official Website**: (Projects & crates):
 [ferogram.dev](https://ferogram.dev)
+
+See **[what's covered](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram#whats-covered)** for the quick feature list, or try the [examples](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram/examples) to see it in action.
+
+If something is missing, feel free to open a feature request or share your ideas.
 
 
 ## License
