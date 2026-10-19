@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ferogram-connect` falls back between IPv4 and IPv6 on direct production-DC
+  reachability failures and remembers the successful family across connections
+  in the same process. Proxies and custom endpoints retain their routes; auth
+  keys are preserved. Unbracketed numeric IPv6 config endpoints are accepted.
 - `DcPool` now evicts a DC slot on `CONNECTION_NOT_INITED` (RPC 400), in
   `finish_call`, `invoke_on_dc` and `invoke_on_dc_serializable`. The next
   `invoke_on_dc` call redoes initConnection and recovers instead of failing
