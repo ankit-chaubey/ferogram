@@ -369,8 +369,10 @@ mod session {
     #[test]
     fn save_and_load_round_trips_home_dc() {
         let b = InMemoryBackend::new();
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 4;
+        let s = PersistedSession {
+            home_dc_id: 4,
+            ..Default::default()
+        };
         b.save(&s);
         assert_eq!(b.load().unwrap().home_dc_id, 4);
     }

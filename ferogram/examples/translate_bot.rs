@@ -27,6 +27,10 @@
 //!
 //! Fill in API_ID, API_HASH and BOT_TOKEN below (bot must be in the chat).
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use ferogram::{Client, InputMessage, update::Update};
 
 const API_ID: i32 = 0; // from https://my.telegram.org

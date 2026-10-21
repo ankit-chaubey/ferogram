@@ -25,6 +25,10 @@
 //!
 //! When prompted, enter your bot token (get one from @BotFather).
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use ferogram::poll::PollBuilder;
 use ferogram::{Client, update::Update};
 

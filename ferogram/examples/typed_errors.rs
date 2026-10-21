@@ -214,17 +214,17 @@ fn main() {
         let handle = TransferHandle::new();
         handle.pause();
         let h2 = handle.clone();
-        rt.block_on(async move {
+        let result = rt.block_on(async move {
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 h2.cancel();
             });
-            let result = handle.poll_pause_cancel().await;
-            check!(
-                "poll_pause_cancel returns Cancelled when cancel fires during pause",
-                matches!(result, Err(TransferError::Cancelled))
-            );
+            handle.poll_pause_cancel().await
         });
+        check!(
+            "poll_pause_cancel returns Cancelled when cancel fires during pause",
+            matches!(result, Err(TransferError::Cancelled))
+        );
     }
 
     println!("\n--- ? operator propagation through From impl ---");

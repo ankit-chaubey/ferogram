@@ -21,6 +21,10 @@
 //! then the login code, then 2FA password if you have one set.
 //! After that the session is saved so subsequent runs skip all of that.
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use ferogram::Client;
 
 const API_ID: i32 = 0; // fill in your api_id from https://my.telegram.org

@@ -390,7 +390,7 @@ mod tests {
             ControlFlow::Continue(d) => {
                 let secs = d.as_secs_f64();
                 assert!(
-                    secs >= 28.0 && secs <= 32.0,
+                    (28.0..=32.0).contains(&secs),
                     "expected 28-32s delay (jitter), got {secs:.3}s"
                 );
             }
@@ -422,7 +422,7 @@ mod tests {
             ControlFlow::Continue(d) => {
                 let secs = d.as_secs_f64();
                 assert!(
-                    secs >= 28.0 && secs <= 32.0,
+                    (28.0..=32.0).contains(&secs),
                     "expected 28-32s on second FLOOD_WAIT, got {secs:.3}s"
                 );
             }

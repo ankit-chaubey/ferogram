@@ -24,6 +24,10 @@
 //! Get API credentials from https://my.telegram.org
 //! Get a bot token from @BotFather on Telegram.
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use ferogram::{Client, update::Update};
 
 const API_ID: i32 = 0; // from https://my.telegram.org

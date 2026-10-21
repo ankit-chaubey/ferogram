@@ -1372,7 +1372,7 @@ mod tests {
         } else {
             panic!(
                 "expected Preformatted, got {:?}",
-                blocks.get(0).map(|_| "block")
+                blocks.first().map(|_| "block")
             );
         }
     }

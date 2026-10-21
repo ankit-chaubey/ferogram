@@ -21,6 +21,10 @@
 //! First run will prompt for your phone number, login code, and 2FA if set.
 //! Files are saved to ./downloads/ relative to where you run the command.
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use ferogram::{Client, update::Update};
 
 const API_ID: i32 = 0; // fill in your api_id from https://my.telegram.org

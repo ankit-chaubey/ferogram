@@ -23,6 +23,10 @@
 //! Then run:
 //!   SESSION_STRING="..." cargo run --example serverless_userbot
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use ferogram::Client;
 
 const API_ID: i32 = 0; // fill in from https://my.telegram.org

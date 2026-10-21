@@ -21,6 +21,10 @@
 //! When prompted, enter your bot token (get one from @BotFather).
 //! Send /start to the bot to see the keyboard.
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use ferogram::filters::{Dispatcher, command, data};
 use ferogram::tl;
 use ferogram::{Client, InputMessage};

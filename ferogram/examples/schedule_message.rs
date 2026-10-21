@@ -23,6 +23,10 @@
 //!
 //! Fill in API_ID, API_HASH, PHONE, PEER, TEXT and SEND_IN_SECONDS below.
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use chrono::Utc;
 use ferogram::{Client, InputMessage, TransportKind};
 

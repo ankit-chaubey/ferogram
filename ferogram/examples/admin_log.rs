@@ -25,6 +25,10 @@
 //! You must be an admin of the target group/channel to read the log.
 //! Fill in API_ID, API_HASH, PHONE and GROUP below.
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use chrono::{TimeZone, Utc};
 use ferogram::tl;
 use ferogram::{Client, TransportKind};

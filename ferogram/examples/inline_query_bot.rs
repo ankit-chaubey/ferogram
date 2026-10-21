@@ -25,6 +25,10 @@
 //!
 //! Once running, open any chat, type "@your_bot hello" and tap a result.
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use ferogram::Client;
 use ferogram::filters::{Dispatcher, all};
 use ferogram::tl;

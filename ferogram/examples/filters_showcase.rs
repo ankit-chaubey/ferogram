@@ -22,6 +22,10 @@
 //!
 //! When prompted, enter your bot token (get one from @BotFather).
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use ferogram::Client;
 use ferogram::filters::{
     Dispatcher, album, channel, command, forwarded, group, media, photo, private, reply,

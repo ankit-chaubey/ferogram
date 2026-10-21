@@ -1202,8 +1202,10 @@ mod tests {
     #[test]
     fn inmemory_save_then_load_round_trips() {
         let b = InMemoryBackend::new();
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 3;
+        let mut s = PersistedSession {
+            home_dc_id: 3,
+            ..Default::default()
+        };
         s.dcs.push(make_dc(3));
         b.save(&s).unwrap();
 
@@ -1215,8 +1217,10 @@ mod tests {
     #[test]
     fn inmemory_delete_clears_state() {
         let b = InMemoryBackend::new();
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 2;
+        let s = PersistedSession {
+            home_dc_id: 2,
+            ..Default::default()
+        };
         b.save(&s).unwrap();
         b.delete().unwrap();
         assert!(b.load().unwrap().is_none());
@@ -1441,8 +1445,10 @@ mod tests {
 
     #[test]
     fn binary_roundtrip_ipv4_and_ipv6() {
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 2;
+        let mut s = PersistedSession {
+            home_dc_id: 2,
+            ..Default::default()
+        };
         s.dcs.push(make_dc(2));
         s.dcs.push(make_dc_v6(2));
 
@@ -1455,8 +1461,10 @@ mod tests {
 
     #[test]
     fn v6_channel_kind_roundtrip_all_variants() {
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 1;
+        let mut s = PersistedSession {
+            home_dc_id: 1,
+            ..Default::default()
+        };
         s.peers.push(CachedPeer {
             id: 1001,
             access_hash: 0xaaaa,
@@ -1515,9 +1523,11 @@ mod tests {
 
     #[test]
     fn v7_future_auth_token_roundtrip() {
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 2;
-        s.future_auth_token = Some(vec![1, 2, 3, 4, 5]);
+        let s = PersistedSession {
+            home_dc_id: 2,
+            future_auth_token: Some(vec![1, 2, 3, 4, 5]),
+            ..Default::default()
+        };
 
         let bytes = s.to_bytes();
         assert_eq!(bytes[0], 0x08, "version byte must be 8");
@@ -1542,8 +1552,10 @@ mod tests {
     fn v6_file_without_token_loads_as_none() {
         // Simulate an old v6 file (no future_auth_token bytes at all) by
         // building one by hand and confirming it still loads cleanly.
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 3;
+        let s = PersistedSession {
+            home_dc_id: 3,
+            ..Default::default()
+        };
         let mut bytes = s.to_bytes();
         bytes[0] = 0x06; // downgrade the version byte
         bytes.truncate(bytes.len() - 1); // drop the v7 presence byte we appended
@@ -1556,8 +1568,10 @@ mod tests {
     #[test]
     fn v6_channel_kind_absent_sentinel_roundtrip() {
         // A user peer (not a channel) must survive a v6 encode/decode with kind=None.
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 1;
+        let mut s = PersistedSession {
+            home_dc_id: 1,
+            ..Default::default()
+        };
         s.peers.push(CachedPeer {
             id: 555,
             access_hash: 0x1234,
@@ -1572,8 +1586,10 @@ mod tests {
 
     #[test]
     fn v8_community_flag_roundtrip() {
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 1;
+        let mut s = PersistedSession {
+            home_dc_id: 1,
+            ..Default::default()
+        };
         s.peers.push(CachedPeer {
             id: 2001,
             access_hash: 0xeeee,
@@ -2203,9 +2219,11 @@ mod sqlite_backend_tests {
     #[test]
     fn future_auth_token_roundtrip() {
         let b = SqliteBackend::in_memory().unwrap();
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 2;
-        s.future_auth_token = Some(vec![1, 2, 3, 4, 5]);
+        let mut s = PersistedSession {
+            home_dc_id: 2,
+            future_auth_token: Some(vec![1, 2, 3, 4, 5]),
+            ..Default::default()
+        };
         b.save(&s).unwrap();
 
         let loaded = b.load().unwrap().unwrap();
@@ -2215,9 +2233,11 @@ mod sqlite_backend_tests {
     #[test]
     fn future_auth_token_cleared_on_none() {
         let b = SqliteBackend::in_memory().unwrap();
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 2;
-        s.future_auth_token = Some(vec![9, 9, 9]);
+        let mut s = PersistedSession {
+            home_dc_id: 2,
+            future_auth_token: Some(vec![9, 9, 9]),
+            ..Default::default()
+        };
         b.save(&s).unwrap();
         assert_eq!(
             b.load().unwrap().unwrap().future_auth_token,
@@ -2232,8 +2252,10 @@ mod sqlite_backend_tests {
     #[test]
     fn is_community_roundtrip() {
         let b = SqliteBackend::in_memory().unwrap();
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 2;
+        let mut s = PersistedSession {
+            home_dc_id: 2,
+            ..Default::default()
+        };
         s.peers.push(CachedPeer {
             id: 42,
             access_hash: 0x1111,
@@ -2841,9 +2863,11 @@ mod libsql_backend_tests {
     #[tokio::test]
     async fn future_auth_token_roundtrip() {
         let conn = open_in_memory().await;
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 2;
-        s.future_auth_token = Some(vec![1, 2, 3, 4, 5]);
+        let mut s = PersistedSession {
+            home_dc_id: 2,
+            future_auth_token: Some(vec![1, 2, 3, 4, 5]),
+            ..Default::default()
+        };
         LibSqlBackend::write_session_async(&conn, &s).await.unwrap();
 
         let loaded = LibSqlBackend::read_session_async(&conn).await.unwrap();
@@ -2853,9 +2877,11 @@ mod libsql_backend_tests {
     #[tokio::test]
     async fn future_auth_token_cleared_on_none() {
         let conn = open_in_memory().await;
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 2;
-        s.future_auth_token = Some(vec![9, 9, 9]);
+        let mut s = PersistedSession {
+            home_dc_id: 2,
+            future_auth_token: Some(vec![9, 9, 9]),
+            ..Default::default()
+        };
         LibSqlBackend::write_session_async(&conn, &s).await.unwrap();
         let loaded = LibSqlBackend::read_session_async(&conn).await.unwrap();
         assert_eq!(loaded.future_auth_token, Some(vec![9, 9, 9]));
@@ -2869,8 +2895,10 @@ mod libsql_backend_tests {
     #[tokio::test]
     async fn is_community_roundtrip() {
         let conn = open_in_memory().await;
-        let mut s = PersistedSession::default();
-        s.home_dc_id = 2;
+        let mut s = PersistedSession {
+            home_dc_id: 2,
+            ..Default::default()
+        };
         s.peers.push(CachedPeer {
             id: 42,
             access_hash: 0x1111,

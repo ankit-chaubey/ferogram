@@ -26,6 +26,10 @@
 //! You must be a member of the target group/channel.
 //! Fill in API_ID, API_HASH, PHONE and PEER below.
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use ferogram::{Client, ParticipantStatus, TransportKind};
 
 const API_ID: i32 = 0; // from https://my.telegram.org

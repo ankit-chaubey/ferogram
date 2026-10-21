@@ -36,14 +36,14 @@ fn roundtrip_i64() {
 fn roundtrip_bool_true() {
     let bytes = true.to_bytes();
     assert_eq!(bytes, 0x997275b5u32.to_le_bytes());
-    assert_eq!(bool::from_bytes(&bytes).unwrap(), true);
+    assert!(bool::from_bytes(&bytes).unwrap());
 }
 
 #[test]
 fn roundtrip_bool_false() {
     let bytes = false.to_bytes();
     assert_eq!(bytes, 0xbc799737u32.to_le_bytes());
-    assert_eq!(bool::from_bytes(&bytes).unwrap(), false);
+    assert!(!bool::from_bytes(&bytes).unwrap());
 }
 
 // String / bytes

@@ -12,6 +12,10 @@
  * to those terms.
  */
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use std::sync::Arc;
 use std::time::Instant;
 

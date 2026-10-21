@@ -23,6 +23,10 @@
 //!
 //! Keep the string private. It gives full access to your account.
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use ferogram::Client;
 
 const API_ID: i32 = 0; // fill in from https://my.telegram.org

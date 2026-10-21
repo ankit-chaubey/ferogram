@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_version() {
-        let bad = URL_SAFE_NO_PAD.encode(&[99u8]);
+        let bad = URL_SAFE_NO_PAD.encode([99u8]);
         assert!(matches!(
             StringSession::decode(&bad),
             Err(StringSessionError::UnsupportedVersion(99))

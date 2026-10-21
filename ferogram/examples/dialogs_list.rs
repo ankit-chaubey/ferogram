@@ -24,6 +24,10 @@
 //! Fill in API_ID, API_HASH and PHONE below, then run. Session is reused on
 //! subsequent runs.
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use ferogram::{Client, TransportKind};
 
 const API_ID: i32 = 0; // from https://my.telegram.org
@@ -94,10 +98,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         // Print total once we get it back from the first server response.
-        if n == 1 {
-            if let Some(total) = iter.total() {
-                println!("Total dialogs reported by server: {total}\n");
-            }
+        if n == 1
+            && let Some(total) = iter.total()
+        {
+            println!("Total dialogs reported by server: {total}\n");
         }
 
         println!("{n:>4}. {}{badge}", dialog.title());

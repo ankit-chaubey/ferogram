@@ -22,6 +22,10 @@
 //! Send the bot any file/photo/video and watch it download then re-upload
 //! with a live progress bar. Tap "Cancel" at any point to abort.
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

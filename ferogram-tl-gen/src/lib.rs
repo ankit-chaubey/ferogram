@@ -35,27 +35,25 @@
 //! use ferogram_tl_parser::parse_tl_file;
 //! use std::fs;
 //!
-//! fn main() {
-//!     let schema = fs::read_to_string("tl/api.tl").unwrap();
-//!     let defs: Vec<_> = parse_tl_file(&schema)
-//!         .filter_map(|r| r.ok())
-//!         .collect();
+//! let schema = fs::read_to_string("tl/api.tl").unwrap();
+//! let defs: Vec<_> = parse_tl_file(&schema)
+//!     .filter_map(|r| r.ok())
+//!     .collect();
 //!
-//!     let config = Config::default();
-//!     let mut outputs = Outputs {
-//!         common:    Vec::new(),
-//!         types:     Vec::new(),
-//!         functions: Vec::new(),
-//!         enums:     Vec::new(),
-//!     };
-//!     generate(&defs, &config, &mut outputs).unwrap();
+//! let config = Config::default();
+//! let mut outputs = Outputs {
+//!     common:    Vec::new(),
+//!     types:     Vec::new(),
+//!     functions: Vec::new(),
+//!     enums:     Vec::new(),
+//! };
+//! generate(&defs, &config, &mut outputs).unwrap();
 //!
-//!     let mut combined = outputs.common;
-//!     combined.extend(outputs.types);
-//!     combined.extend(outputs.functions);
-//!     combined.extend(outputs.enums);
-//!     fs::write("src/generated.rs", combined).unwrap();
-//! }
+//! let mut combined = outputs.common;
+//! combined.extend(outputs.types);
+//! combined.extend(outputs.functions);
+//! combined.extend(outputs.enums);
+//! fs::write("src/generated.rs", combined).unwrap();
 //! ```
 //!
 //! # What it generates

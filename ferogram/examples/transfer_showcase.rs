@@ -29,6 +29,10 @@
 //! Fill in API_ID, API_HASH, and TARGET_PEER below, then send a file to any
 //! chat; the bot will download it, re-upload it, and demonstrate every new API.
 
+// The credential constants below are placeholders you fill in, so the
+// emptiness checks on them are intentional.
+#![allow(clippy::const_is_empty)]
+
 use std::time::Duration;
 
 #[cfg(feature = "experimental")]

@@ -576,7 +576,12 @@ mod pool_regressions {
             time_offset: 0,
             flags: DcFlags::MEDIA_ONLY,
         };
-        let mut pool = DcPool::new(1, &[entry.clone()], None, TransportKind::Abridged);
+        let mut pool = DcPool::new(
+            1,
+            std::slice::from_ref(&entry),
+            None,
+            TransportKind::Abridged,
+        );
         let (ready_slot, mut worker) = fake_slot();
         ready_slot.in_flight.store(1, Ordering::Relaxed);
         pool.conns.insert(2, vec![ready_slot.clone()]);

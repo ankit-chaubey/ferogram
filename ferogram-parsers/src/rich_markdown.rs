@@ -665,9 +665,7 @@ impl<'a> RichMdParser<'a> {
             let tag_part = tag_raw.split('>').next().unwrap_or("").trim();
             parse_tag(tag_part)
         };
-        let is_open = attrs
-            .iter()
-            .any(|(k, v)| k == "open" || (k == "open" && v.is_empty()));
+        let is_open = attrs.iter().any(|(k, _)| k == "open");
         // Check attrs for bare "open"
         let is_open = is_open
             || line.to_ascii_lowercase().contains(" open")
