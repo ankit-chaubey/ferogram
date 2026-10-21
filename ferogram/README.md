@@ -7,7 +7,7 @@ A Native & Elegant MTProto Framework for Rust
 [![Crates.io](https://img.shields.io/crates/v/ferogram?style=flat-square&logo=rust&logoColor=white&color=F97316)](https://crates.io/crates/ferogram)
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram-5865F2?style=flat-square&logo=docs.rs&logoColor=white)](https://docs.rs/ferogram)
 [![License](https://img.shields.io/badge/License-MIT%20%7C%20Apache--2.0-64748B?style=flat-square)](../LICENSE-MIT)
-[![TL Layer](https://img.shields.io/badge/TL%20Layer-228-8B5CF6?style=flat-square)](https://core.telegram.org/schema)
+[![TL Layer](https://img.shields.io/badge/TL%20Layer-229-8B5CF6?style=flat-square)](https://core.telegram.org/schema)
 [![Telegram Channel](https://img.shields.io/badge/Channel-Ferogram-06B6D4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/Ferogram)
 [![Telegram Chat](https://img.shields.io/badge/Chat-FerogramChat-06B6D4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/FerogramChat)
 
@@ -44,7 +44,7 @@ If you're starting fresh, this is the only crate you need. Everything else in th
 
 ```toml
 [dependencies]
-ferogram = "0.6.5"
+ferogram = "0.6.6"
 tokio    = { version = "1.53", features = ["full"] }
 ```
 

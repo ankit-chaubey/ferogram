@@ -6,7 +6,6 @@ MTProto 2.0 session management, DH key exchange, and message framing for Rust.
 [![Telegram Channel](https://img.shields.io/badge/Channel-Ferogram-06B6D4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/Ferogram) [![Telegram Chat](https://img.shields.io/badge/Chat-FerogramChat-06B6D4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/FerogramChat)
 [![docs.rs](https://img.shields.io/badge/docs.rs-ferogram--mtproto-5865F2?style=flat-square&logo=docs.rs&logoColor=white)](https://docs.rs/ferogram-mtproto)
 [![License](https://img.shields.io/badge/License-MIT%20%7C%20Apache--2.0-64748B?style=flat-square)](#license)
-[![TL Layer](https://img.shields.io/badge/TL%20Layer-227-8B5CF6?style=flat-square)](https://core.telegram.org/mtproto)
 
 The MTProto session layer. Handles everything from raw bytes to decrypted, sequenced messages. `ferogram` sits on top of this; most users don't need to depend on it directly.
 

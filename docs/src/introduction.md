@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/ferogram?color=fc8d62&label=ferogram&style=flat-square)](https://crates.io/crates/ferogram)
 [![docs.rs](https://img.shields.io/docsrs/ferogram?style=flat-square&color=22c55e)](https://docs.rs/ferogram)
-[![TL Layer](https://img.shields.io/badge/TL%20Layer-228-8b5cf6?style=flat-square)](https://core.telegram.org/schema)
+[![TL Layer](https://img.shields.io/badge/TL%20Layer-229-8b5cf6?style=flat-square)](https://core.telegram.org/schema)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square)](#license)
 
 Hey, glad you're here.
@@ -19,7 +19,7 @@ If something's missing for you, drop by [t.me/FerogramChat](https://t.me/Ferogra
 
 ```toml
 [dependencies]
-ferogram = "0.6.5"
+ferogram = "0.6.6"
 tokio    = { version = "1", features = ["full"] }
 ```
 

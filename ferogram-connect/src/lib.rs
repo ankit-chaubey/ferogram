@@ -13,7 +13,7 @@
  */
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-connect/0.6.5")]
+#![doc(html_root_url = "https://docs.rs/ferogram-connect/0.6.6")]
 //! Raw TCP connection, MTProto framing, and transport for ferogram.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust

@@ -7,7 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.6.6] - 2026-10-21
+
+TL layer bumped to 229. Inline and reply keyboards are now separate types, QR login
+handles 2FA and DC migration, and the DC pool only uses connections that finished setup.
+
+### Added
+
+- TL layer 229 schema: `KeyboardInlineButton` / `InlineButtonType` / `ButtonType`,
+  ephemeral welcome message methods and `EphemeralBotCallbackQuery`, `has_welcome_messages`,
+  `manage_welcome_messages` admin right, `messageActionChatJoinedViaCommunity`,
+  `sendMessageStopDraftAction`, Firebase PNV login methods, and the new page blocks
+  (`pageBlockButtonRow`, `pageBlockDocument`, collapsed blockquote, compact table).
+- `ReplyButton` for reply keyboards (`text`, `request_phone`, `request_geo`,
+  `request_poll`, `request_quiz`, `mini_app_simple`), exported at the crate root.
+- `ErrorKind::FileReferenceExpired`, returned for `FILE_REFERENCE_*` errors.
+- `compact` attribute for tables in the rich HTML and Markdown parsers.
+- `ferogram-mtsender`: `SlotLease`, `DcPool::reserve_slot`, `finish_call`,
+  `insert_after_setup` and `should_expand`.
+
+### Changed
+
+- Breaking: `Button` now builds inline buttons only. `text`, `request_phone`,
+  `request_geo`, `request_poll`, `request_quiz` and `mini_app_simple` moved to
+  `ReplyButton`, and `ReplyKeyboard::row` takes `ReplyButton`. Layer 229 has no inline
+  simple webview button, so `Button::mini_app_simple` is gone.
+- Breaking: `Client::check_qr_login` returns `SignInError` instead of `InvocationError`.
+  A 2FA account gives `PasswordRequired`, an expired or invalid token gives `InvalidCode`.
+- Breaking: `InlineResult::send` takes any `PeerRef` and returns
+  `Option<IncomingMessage>` with the sent message when Telegram includes it.
+- `DcPool` no longer opens connections on its own, it picks ready slots only.
+  `get_or_create_slot` is removed.
+- `media_dc_addr` only returns entries flagged `MEDIA_ONLY`.
+- `tracing` no longer enables its `log` feature in the workspace crates.
 
 ### Fixed
 
@@ -18,6 +50,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `InvocationError::kind()` returns the new `ErrorKind::FileReferenceExpired`
   for `FILE_REFERENCE_*` errors instead of `ErrorKind::Transfer`, so callers
   can refresh the file reference and retry.
+- Cancelled or failed RPCs no longer leave a pool slot marked busy.
+- Transfer connections could be used before initConnection or the auth import finished.
+  A slot is now selectable only after its setup succeeds.
+- `DcConnection::auth_key_bytes` and `first_salt` returned the temporary PFS key and salt.
+  They now return the permanent ones that are safe to save.
+- `check_qr_login` treats `AUTH_TOKEN_ALREADY_ACCEPTED` as a successful login and
+  follows a DC migration once.
 
 ---
 

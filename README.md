@@ -27,7 +27,7 @@ From messaging and media to transfers, calls, MTProxy, and much more, Ferogram b
 All it takes is a single line in your `Cargo.toml`.
 ```toml
 [dependencies]
-ferogram = "0.6.5"
+ferogram = "0.6.6"
 ```
 
 Development on GitHub moves faster than crates.io. If you need something from `main`, you can point directly to a specific commit:
