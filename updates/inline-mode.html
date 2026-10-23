@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b479768a.js";
+            window.path_to_searchindex_js = "../searchindex-257bc0b5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-5d15c526.js"></script>
@@ -302,7 +302,7 @@ while let Some(result) = iter.next().await? {
 <tr><td><code>result.title()</code></td><td><code>Option&lt;&amp;str&gt;</code></td><td>Display title</td></tr>
 <tr><td><code>result.description()</code></td><td><code>Option&lt;&amp;str&gt;</code></td><td>Display description</td></tr>
 <tr><td><code>result.raw</code></td><td><code>tl::enums::BotInlineResult</code></td><td>Raw TL object</td></tr>
-<tr><td><code>result.send(peer)</code></td><td><code>async → ()</code></td><td>Send this result to a chat</td></tr>
+<tr><td><code>result.send(peer)</code></td><td><code>async -&gt; Option&lt;IncomingMessage&gt;</code></td><td>Send this result to a chat (<code>peer</code> accepts username/ID/<code>Peer</code>/<code>InputPeer</code>, same as <code>send_message</code>); <code>None</code> if Telegram omitted the sent message from the response</td></tr>
 </tbody>
 </table>
 </div>

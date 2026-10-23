@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b479768a.js";
+            window.path_to_searchindex_js = "../searchindex-257bc0b5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-5d15c526.js"></script>
@@ -285,19 +285,31 @@ println!("Scan: {url}");
 
 // 3. Poll until the user scans it
 loop {
-    match client.check_qr_login(token_bytes.clone()).await? {
-        Some(username) =&gt; {
+    match client.check_qr_login(token_bytes.clone()).await {
+        Ok(Some(username)) =&gt; {
             println!("Logged in as: {username}");
             client.save_session().await?;
             break;
         }
-        None =&gt; {
+        Ok(None) =&gt; {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         }
+        Err(SignInError::PasswordRequired(token)) =&gt; {
+            // Account has 2FA enabled; prompt for the password and finish
+            // the login with check_password instead of polling further.
+            let password = prompt_for_password();
+            let username = client.check_password(*token, password).await?;
+            println!("Logged in as: {username}");
+            client.save_session().await?;
+            break;
+        }
+        Err(e) =&gt; return Err(e.into()),
     }
 }
 <span class="boring">}</span></code></pre>
-<p><code>export_login_token</code> handles DC migration automatically. Returns <code>(vec![], 0)</code> if the user already scanned before you called it.</p>
+<p><code>check_qr_login</code> handles DC migration internally, retrying the check once on
+the migrated DC. <code>export_login_token</code> also handles migration automatically
+and returns <code>(vec![], 0)</code> if the user already scanned before you called it.</p>
 <hr>
 <h2 id="send-an-invoice-payments"><a class="header" href="#send-an-invoice-payments">Send an invoice (payments)</a></h2>
 <p>Send a payment invoice to a chat (bots only):</p>

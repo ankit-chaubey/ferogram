@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b479768a.js";
+            window.path_to_searchindex_js = "searchindex-257bc0b5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5d15c526.js"></script>
@@ -182,7 +182,7 @@
                         <h1 id="ferogram"><a class="header" href="#ferogram">ferogram</a></h1>
 <p><a href="https://crates.io/crates/ferogram"><img src="https://img.shields.io/crates/v/ferogram?color=fc8d62&amp;label=ferogram&amp;style=flat-square" alt="Crates.io"></a>
 <a href="https://docs.rs/ferogram"><img src="https://img.shields.io/docsrs/ferogram?style=flat-square&amp;color=22c55e" alt="docs.rs"></a>
-<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-228-8b5cf6?style=flat-square" alt="TL Layer"></a>
+<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-229-8b5cf6?style=flat-square" alt="TL Layer"></a>
 <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License"></a></p>
 <p>Hey, glad you’re here.</p>
 <p>ferogram is an async Rust library for Telegram’s MTProto protocol, built by <a href="https://github.com/ankit-chaubey">Ankit Chaubey</a>. It talks to Telegram directly, no Bot API proxy in between, and it works for both bots and user accounts from the same API.</p>
@@ -191,7 +191,7 @@
 <p>If something’s missing for you, drop by <a href="https://t.me/FerogramChat">t.me/FerogramChat</a>. I genuinely like hearing what people are building with it.</p>
 <h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.6.5"
+ferogram = "0.6.6"
 tokio    = { version = "1", features = ["full"] }
 </code></pre>
 <p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
@@ -807,7 +807,7 @@ See <a href="#peer-cache-helpers">Raw API Access</a> for usage details.</p>
 <h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
 <h2 id="add-to-cargotoml"><a class="header" href="#add-to-cargotoml">Add to Cargo.toml</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.6.5"
+ferogram = "0.6.6"
 tokio        = { version = "1", features = ["full"] }
 </code></pre>
 <p><code>ferogram</code> re-exports everything you need for both user clients and bots.</p>
@@ -848,11 +848,11 @@ let api_hash = "deadbeef..."; // ← never do this in a public repo
 <hr>
 <h2 id="optional-features"><a class="header" href="#optional-features">Optional features</a></h2>
 <h3 id="sqlite-session-storage"><a class="header" href="#sqlite-session-storage">SQLite session storage</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.6.5", features = ["sqlite-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.6", features = ["sqlite-session"] }
 </code></pre>
 <p>Stores session data in a SQLite database instead of a binary file. Better choice for long-running servers where crash-corruption of the binary file is a concern.</p>
 <h3 id="libsql--turso-session-storage-new-in-v020"><a class="header" href="#libsql--turso-session-storage-new-in-v020">LibSQL / Turso session storage: New in v0.2.0</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.6.5", features = ["libsql-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.6", features = ["libsql-session"] }
 </code></pre>
 <p>Backed by <a href="https://github.com/tursodatabase/libsql">libsql</a>: supports local embedded databases and remote Turso cloud databases. Ideal for serverless or distributed deployments.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -886,10 +886,10 @@ let (client, _shutdown) = Client::builder()
 <p>See <a href="#session-backends-1">Session Backends</a> for the full guide.</p>
 <h3 id="html-entity-parsing"><a class="header" href="#html-entity-parsing">HTML entity parsing</a></h3>
 <pre><code class="language-toml"># Built-in hand-rolled HTML parser (no extra deps)
-ferogram = { version = "0.6.5", features = ["html"] }
+ferogram = { version = "0.6.6", features = ["html"] }
 
 # OR: spec-compliant html5ever tokenizer (overrides built-in)
-ferogram = { version = "0.6.5", features = ["html5ever"] }
+ferogram = { version = "0.6.6", features = ["html5ever"] }
 </code></pre>
 <div class="table-wrapper">
 <table>
@@ -904,7 +904,7 @@ ferogram = { version = "0.6.5", features = ["html5ever"] }
 </div>
 <h3 id="raw-type-system-features-ferogram-tl-types"><a class="header" href="#raw-type-system-features-ferogram-tl-types">Raw type system features (<code>ferogram-tl-types</code>)</a></h3>
 <p>If you use <code>ferogram-tl-types</code> directly for raw API access:</p>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.5", features = [
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.6", features = [
     "tl-api",          # Telegram API types (required)
     "tl-mtproto",      # Low-level MTProto types
     "impl-debug",      # Debug trait on all types (default ON)
@@ -920,7 +920,7 @@ ferogram = { version = "0.6.5", features = ["html5ever"] }
 
 fn main() {
     println!("Using Telegram API Layer {}", LAYER);
-    // → Using Telegram API Layer 228
+    // → Using Telegram API Layer 229
 }</code></pre>
 <hr>
 <h2 id="platform-notes"><a class="header" href="#platform-notes">Platform notes</a></h2>
@@ -2022,11 +2022,17 @@ while let Some(update) = updates.next().await {
 <span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="inline-keyboards--reply-markup"><a class="header" href="#inline-keyboards--reply-markup">Inline Keyboards &amp; Reply Markup</a></h1>
-<p><code>ferogram</code> ships with two high-level keyboard builders: <code>InlineKeyboard</code> and <code>ReplyKeyboard</code>: so you never have to construct raw TL types by hand.</p>
+<p><code>ferogram</code> ships with high-level keyboard builders: <code>InlineKeyboard</code> and <code>ReplyKeyboard</code>, so you never have to construct raw TL types by hand.</p>
+<p>As of Telegram layer 229, inline-keyboard buttons and reply-keyboard buttons
+are two separate TL type trees (they used to share one <code>KeyboardButton</code>
+schema). <code>ferogram</code> mirrors that split: <code>Button</code> builds inline-keyboard
+buttons, <code>ReplyButton</code> builds reply-keyboard buttons. They are not
+interchangeable - <code>InlineKeyboard::row()</code> takes <code>Button</code>, <code>ReplyKeyboard::row()</code>
+takes <code>ReplyButton</code>.</p>
 <p>Both builders are in <code>ferogram::keyboard</code> and re-exported at the crate root:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use ferogram::keyboard::{Button, InlineKeyboard, ReplyKeyboard};
+</span>use ferogram::keyboard::{Button, InlineKeyboard, ReplyButton, ReplyKeyboard};
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="inlinekeyboard-buttons-attached-to-a-message"><a class="header" href="#inlinekeyboard-buttons-attached-to-a-message"><code>InlineKeyboard</code>: buttons attached to a message</a></h2>
@@ -2062,8 +2068,7 @@ client.send_message(peer.clone(), InputMessage::text("Do you want to proceed?").
 </div>
 <p><code>InlineKeyboard</code> implements <code>Into&lt;tl::enums::ReplyMarkup&gt;</code>, so you can also pass it directly to <code>InputMessage::reply_markup()</code>.</p>
 <hr>
-<h2 id="button-all-button-types"><a class="header" href="#button-all-button-types"><code>Button</code>: all button types</a></h2>
-<h3 id="callback-url-and-common-types"><a class="header" href="#callback-url-and-common-types">Callback, URL, and common types</a></h3>
+<h2 id="button-inline-keyboard-button-types"><a class="header" href="#button-inline-keyboard-button-types"><code>Button</code>: inline-keyboard button types</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Sends data to your bot as Update::CallbackQuery (max 64 bytes)
@@ -2085,13 +2090,7 @@ Button::switch_inline("🔍 Search here", "default query")
 Button::switch_elsewhere("📤 Share", "")
 
 // Telegram Mini App with full JS bridge
-Button::webview("🚀 Open App", "https://myapp.example.com")
-
-// Simple webview without JS bridge
-Button::simple_webview("ℹ️ Info", "https://info.example.com")
-
-// Plain text for reply keyboards
-Button::text("📸 Send photo")
+Button::mini_app("🚀 Open App", "https://myapp.example.com")
 
 // Launch a Telegram game (bots only)
 Button::game("🎮 Play")
@@ -2099,26 +2098,44 @@ Button::game("🎮 Play")
 // Payment buy button (bots only, used with invoice)
 Button::buy("💳 Pay $4.99")
 <span class="boring">}</span></code></pre>
-<h3 id="reply-keyboard-only-buttons"><a class="header" href="#reply-keyboard-only-buttons">Reply-keyboard-only buttons</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Shares user's phone number on tap
-Button::request_phone("📞 Share my number")
-
-// Shares user's location on tap
-Button::request_geo("📍 Share location")
-
-// Opens poll creation interface
-Button::request_poll("📊 Create poll")
-
-// Forces quiz mode in poll creator
-Button::request_quiz("🧠 Create quiz")
-<span class="boring">}</span></code></pre>
+<p>There is no inline “simple webview” (no-JS-bridge) button as of layer 229 -
+Telegram moved that variant to reply keyboards only. See
+<code>ReplyButton::mini_app_simple</code> below.</p>
 <h3 id="escape-hatch"><a class="header" href="#escape-hatch">Escape hatch</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Get the underlying tl::enums::KeyboardButton
+</span>// Get the underlying tl::enums::KeyboardInlineButton
 let raw = Button::callback("x", b"x").into_raw();
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="replybutton-reply-keyboard-button-types"><a class="header" href="#replybutton-reply-keyboard-button-types"><code>ReplyButton</code>: reply-keyboard button types</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::keyboard::ReplyButton;
+
+// Plain text
+ReplyButton::text("📸 Send photo")
+
+// Shares user's phone number on tap
+ReplyButton::request_phone("📞 Share my number")
+
+// Shares user's location on tap
+ReplyButton::request_geo("📍 Share location")
+
+// Opens poll creation interface
+ReplyButton::request_poll("📊 Create poll")
+
+// Forces quiz mode in poll creator
+ReplyButton::request_quiz("🧠 Create quiz")
+
+// Simple webview without JS bridge (reply-keyboard only, layer 229+)
+ReplyButton::mini_app_simple("ℹ️ Info", "https://info.example.com")
+<span class="boring">}</span></code></pre>
+<h3 id="escape-hatch-1"><a class="header" href="#escape-hatch-1">Escape hatch</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Get the underlying tl::enums::KeyboardButton
+let raw = ReplyButton::text("x").into_raw();
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="replykeyboard-replacement-keyboard"><a class="header" href="#replykeyboard-replacement-keyboard"><code>ReplyKeyboard</code>: replacement keyboard</a></h2>
@@ -2126,14 +2143,14 @@ let raw = Button::callback("x", b"x").into_raw();
 The user’s tap arrives as a plain-text <code>Update::NewMessage</code>.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use ferogram::keyboard::{Button, ReplyKeyboard};
+</span>use ferogram::keyboard::{ReplyButton, ReplyKeyboard};
 
 let kb = ReplyKeyboard::new()
     .row([
-        Button::text("📸 Photo"),
-        Button::text("📄 Document"),
+        ReplyButton::text("📸 Photo"),
+        ReplyButton::text("📄 Document"),
     ])
-    .row([Button::text("❌ Cancel")])
+    .row([ReplyButton::text("❌ Cancel")])
     .resize()      // shrink to fit content (recommended)
     .single_use(); // hide after one press
 
@@ -2190,38 +2207,43 @@ client
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="legacy-raw-tl-pattern-still-works"><a class="header" href="#legacy-raw-tl-pattern-still-works">Legacy raw TL pattern (still works)</a></h2>
-<p>If you prefer constructing TL types directly:</p>
+<p>If you prefer constructing TL types directly. Note the two-level shape as of
+layer 229: the button’s <code>text</code> lives on the outer <code>KeyboardInlineButton</code>,
+while type-specific data (like callback <code>data</code>) lives on the inner
+<code>InlineButtonType</code> variant.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>fn inline_kb(rows: Vec&lt;Vec&lt;tl::enums::KeyboardButton&gt;&gt;) -&gt; tl::enums::ReplyMarkup {
+</span>use ferogram_tl_types as tl;
 
-```rust
-use ferogram_tl_types as tl;
-
-fn inline_kb(rows: Vec&lt;Vec&lt;tl::enums::KeyboardButton&gt;&gt;) -&gt; tl::enums::ReplyMarkup {
+fn inline_kb(rows: Vec&lt;Vec&lt;tl::enums::KeyboardInlineButton&gt;&gt;) -&gt; tl::enums::ReplyMarkup {
     tl::enums::ReplyMarkup::ReplyInlineMarkup(tl::types::ReplyInlineMarkup {
+        force_reply: false,
         rows: rows.into_iter().map(|buttons|
-            tl::enums::KeyboardButtonRow::KeyboardButtonRow(
-                tl::types::KeyboardButtonRow { buttons }
+            tl::enums::KeyboardInlineButtonRow::KeyboardInlineButtonRow(
+                tl::types::KeyboardInlineButtonRow { buttons }
             )
         ).collect(),
     })
 }
 
-fn btn_cb(text: &amp;str, data: &amp;str) -&gt; tl::enums::KeyboardButton {
-    tl::enums::KeyboardButton::Callback(tl::types::KeyboardButtonCallback {
-        requires_password: false,
-        style:             None,
-        text:              text.into(),
-        data:              data.as_bytes().to_vec(),
+fn btn_cb(text: &amp;str, data: &amp;str) -&gt; tl::enums::KeyboardInlineButton {
+    tl::enums::KeyboardInlineButton::KeyboardInlineButton(tl::types::KeyboardInlineButton {
+        style: None,
+        text:  text.into(),
+        r#type: tl::enums::InlineButtonType::Callback(tl::types::InlineButtonTypeCallback {
+            requires_password: false,
+            data: data.as_bytes().to_vec(),
+        }),
     })
 }
 
-fn btn_url(text: &amp;str, url: &amp;str) -&gt; tl::enums::KeyboardButton {
-    tl::enums::KeyboardButton::Url(tl::types::KeyboardButtonUrl {
+fn btn_url(text: &amp;str, url: &amp;str) -&gt; tl::enums::KeyboardInlineButton {
+    tl::enums::KeyboardInlineButton::KeyboardInlineButton(tl::types::KeyboardInlineButton {
         style: None,
         text:  text.into(),
-        url:   url.into(),
+        r#type: tl::enums::InlineButtonType::Url(tl::types::InlineButtonTypeUrl {
+            url: url.into(),
+        }),
     })
 }
 <span class="boring">}</span></code></pre>
@@ -2240,44 +2262,66 @@ let msg = InputMessage::text(text)
 
 client.send_message(peer, msg).await?;
 <span class="boring">}</span></code></pre>
-<h2 id="all-button-types"><a class="header" href="#all-button-types">All button types</a></h2>
+<h2 id="all-button-types-raw-tl-layer-229"><a class="header" href="#all-button-types-raw-tl-layer-229">All button types (raw TL, layer 229)</a></h2>
+<h3 id="inline-keyboard-inlinebuttontype-wrapped-in-keyboardinlinebutton"><a class="header" href="#inline-keyboard-inlinebuttontype-wrapped-in-keyboardinlinebutton">Inline keyboard (<code>InlineButtonType</code>, wrapped in <code>KeyboardInlineButton</code>)</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Type</th><th>Constructor</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td>Callback</td><td><code>KeyboardButtonCallback</code></td><td>Triggers <code>CallbackQuery</code> with custom data</td></tr>
-<tr><td>URL</td><td><code>KeyboardButtonUrl</code></td><td>Opens a URL in the browser</td></tr>
-<tr><td>Web App</td><td><code>KeyboardButtonSimpleWebView</code></td><td>Opens a Telegram Web App</td></tr>
-<tr><td>Switch Inline</td><td><code>KeyboardButtonSwitchInline</code></td><td>Opens inline mode with a query</td></tr>
-<tr><td>Request Phone</td><td><code>KeyboardButtonRequestPhone</code></td><td>Requests the user’s phone number</td></tr>
-<tr><td>Request Location</td><td><code>KeyboardButtonRequestGeoLocation</code></td><td>Requests location</td></tr>
-<tr><td>Request Poll</td><td><code>KeyboardButtonRequestPoll</code></td><td>Opens poll creator</td></tr>
-<tr><td>Request Peer</td><td><code>KeyboardButtonRequestPeer</code></td><td>Requests peer selection</td></tr>
-<tr><td>Game</td><td><code>KeyboardButtonGame</code></td><td>Opens a Telegram game</td></tr>
-<tr><td>Buy</td><td><code>KeyboardButtonBuy</code></td><td>Purchase button for payments</td></tr>
-<tr><td>Copy</td><td><code>KeyboardButtonCopy</code></td><td>Copies text to clipboard</td></tr>
+<tr><td>Callback</td><td><code>InlineButtonTypeCallback</code></td><td>Triggers <code>CallbackQuery</code> with custom data</td></tr>
+<tr><td>URL</td><td><code>InlineButtonTypeUrl</code></td><td>Opens a URL in the browser</td></tr>
+<tr><td>URL Auth</td><td><code>InputInlineButtonTypeUrlAuth</code></td><td>Login-widget style authenticated URL</td></tr>
+<tr><td>WebView</td><td><code>InlineButtonTypeWebView</code></td><td>Opens a Telegram Mini App (JS bridge)</td></tr>
+<tr><td>Switch Inline</td><td><code>InlineButtonTypeSwitchInline</code></td><td>Opens inline mode with a query</td></tr>
+<tr><td>User Profile</td><td><code>InputInlineButtonTypeUserProfile</code></td><td>Opens a user’s profile</td></tr>
+<tr><td>Game</td><td><code>InlineButtonTypeGame</code></td><td>Opens a Telegram game</td></tr>
+<tr><td>Buy</td><td><code>InlineButtonTypeBuy</code></td><td>Purchase button for payments</td></tr>
+<tr><td>Copy</td><td><code>InlineButtonTypeCopy</code></td><td>Copies text to clipboard</td></tr>
+<tr><td>Disabled</td><td><code>InlineButtonTypeDisabled</code></td><td>Renders greyed out, not tappable</td></tr>
 </tbody>
 </table>
 </div>
-<h3 id="switch-inline-button"><a class="header" href="#switch-inline-button">Switch Inline button</a></h3>
+<h3 id="reply-keyboard-buttontype-wrapped-in-keyboardbutton"><a class="header" href="#reply-keyboard-buttontype-wrapped-in-keyboardbutton">Reply keyboard (<code>ButtonType</code>, wrapped in <code>KeyboardButton</code>)</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Type</th><th>Constructor</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td>Text</td><td><code>ButtonTypeDefault</code></td><td>Plain text button</td></tr>
+<tr><td>Request Phone</td><td><code>ButtonTypeRequestPhone</code></td><td>Requests the user’s phone number</td></tr>
+<tr><td>Request Location</td><td><code>ButtonTypeRequestGeoLocation</code></td><td>Requests location</td></tr>
+<tr><td>Request Poll</td><td><code>ButtonTypeRequestPoll</code></td><td>Opens poll creator</td></tr>
+<tr><td>Request Peer</td><td><code>InputButtonTypeRequestPeer</code></td><td>Requests peer selection</td></tr>
+<tr><td>Simple WebView</td><td><code>ButtonTypeSimpleWebView</code></td><td>Opens a webview without a JS bridge</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="switch-inline-button-raw"><a class="header" href="#switch-inline-button-raw">Switch Inline button (raw)</a></h3>
 <p>Opens the bot’s inline mode in the current or another chat:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>tl::enums::KeyboardButton::SwitchInline(tl::types::KeyboardButtonSwitchInline {
-    same_peer:  false, // false = let user pick any chat
-    text:       "🔍 Search with me".into(),
-    query:      "default query".into(),
-    peer_types: None,
+</span>tl::enums::KeyboardInlineButton::KeyboardInlineButton(tl::types::KeyboardInlineButton {
+    style: None,
+    text:  "🔍 Search with me".into(),
+    r#type: tl::enums::InlineButtonType::SwitchInline(tl::types::InlineButtonTypeSwitchInline {
+        same_peer:  false, // false = let user pick any chat
+        query:      "default query".into(),
+        peer_types: None,
+    }),
 })
 <span class="boring">}</span></code></pre>
-<h3 id="web-app-button"><a class="header" href="#web-app-button">Web App button</a></h3>
+<h3 id="simple-webview-button-raw-reply-keyboard-only"><a class="header" href="#simple-webview-button-raw-reply-keyboard-only">Simple WebView button (raw, reply-keyboard only)</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>tl::enums::KeyboardButton::SimpleWebView(tl::types::KeyboardButtonSimpleWebView {
-    text: "Open App".into(),
-    url:  "https://myapp.example.com".into(),
+</span>tl::enums::KeyboardButton::KeyboardButton(tl::types::KeyboardButton {
+    style: None,
+    text:  "Open App".into(),
+    r#type: tl::enums::ButtonType::SimpleWebView(tl::types::ButtonTypeSimpleWebView {
+        url: "https://myapp.example.com".into(),
+    }),
 })
 <span class="boring">}</span></code></pre>
 <h2 id="reply-keyboard-replaces-users-keyboard"><a class="header" href="#reply-keyboard-replaces-users-keyboard">Reply keyboard (replaces user’s keyboard)</a></h2>
@@ -2289,26 +2333,33 @@ client.send_message(peer, msg).await?;
         single_use:  true,       // hide after one tap
         selective:   false,      // show to everyone
         persistent:  false,      // don't keep after message
+        force_reply: false,      // layer 229; not covered elsewhere in this doc
         placeholder: Some("Choose an option…".into()),
         rows: vec![
             tl::enums::KeyboardButtonRow::KeyboardButtonRow(
                 tl::types::KeyboardButtonRow {
                     buttons: vec![
-                        tl::enums::KeyboardButton::KeyboardButton(
-                            tl::types::KeyboardButton { text: "🍕 Pizza".into() }
-                        ),
-                        tl::enums::KeyboardButton::KeyboardButton(
-                            tl::types::KeyboardButton { text: "🍔 Burger".into() }
-                        ),
+                        tl::enums::KeyboardButton::KeyboardButton(tl::types::KeyboardButton {
+                            style: None,
+                            text: "🍕 Pizza".into(),
+                            r#type: tl::enums::ButtonType::Default(tl::types::ButtonTypeDefault {}),
+                        }),
+                        tl::enums::KeyboardButton::KeyboardButton(tl::types::KeyboardButton {
+                            style: None,
+                            text: "🍔 Burger".into(),
+                            r#type: tl::enums::ButtonType::Default(tl::types::ButtonTypeDefault {}),
+                        }),
                     ]
                 }
             ),
             tl::enums::KeyboardButtonRow::KeyboardButtonRow(
                 tl::types::KeyboardButtonRow {
                     buttons: vec![
-                        tl::enums::KeyboardButton::KeyboardButton(
-                            tl::types::KeyboardButton { text: "❌ Cancel".into() }
-                        ),
+                        tl::enums::KeyboardButton::KeyboardButton(tl::types::KeyboardButton {
+                            style: None,
+                            text: "❌ Cancel".into(),
+                            r#type: tl::enums::ButtonType::Default(tl::types::ButtonTypeDefault {}),
+                        }),
                     ]
                 }
             ),
@@ -3874,7 +3925,7 @@ while let Some(result) = iter.next().await? {
 <tr><td><code>result.title()</code></td><td><code>Option&lt;&amp;str&gt;</code></td><td>Display title</td></tr>
 <tr><td><code>result.description()</code></td><td><code>Option&lt;&amp;str&gt;</code></td><td>Display description</td></tr>
 <tr><td><code>result.raw</code></td><td><code>tl::enums::BotInlineResult</code></td><td>Raw TL object</td></tr>
-<tr><td><code>result.send(peer)</code></td><td><code>async → ()</code></td><td>Send this result to a chat</td></tr>
+<tr><td><code>result.send(peer)</code></td><td><code>async -&gt; Option&lt;IncomingMessage&gt;</code></td><td>Send this result to a chat (<code>peer</code> accepts username/ID/<code>Peer</code>/<code>InputPeer</code>, same as <code>send_message</code>); <code>None</code> if Telegram omitted the sent message from the response</td></tr>
 </tbody>
 </table>
 </div>
@@ -10827,19 +10878,31 @@ println!("Scan: {url}");
 
 // 3. Poll until the user scans it
 loop {
-    match client.check_qr_login(token_bytes.clone()).await? {
-        Some(username) =&gt; {
+    match client.check_qr_login(token_bytes.clone()).await {
+        Ok(Some(username)) =&gt; {
             println!("Logged in as: {username}");
             client.save_session().await?;
             break;
         }
-        None =&gt; {
+        Ok(None) =&gt; {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         }
+        Err(SignInError::PasswordRequired(token)) =&gt; {
+            // Account has 2FA enabled; prompt for the password and finish
+            // the login with check_password instead of polling further.
+            let password = prompt_for_password();
+            let username = client.check_password(*token, password).await?;
+            println!("Logged in as: {username}");
+            client.save_session().await?;
+            break;
+        }
+        Err(e) =&gt; return Err(e.into()),
     }
 }
 <span class="boring">}</span></code></pre>
-<p><code>export_login_token</code> handles DC migration automatically. Returns <code>(vec![], 0)</code> if the user already scanned before you called it.</p>
+<p><code>check_qr_login</code> handles DC migration internally, retrying the check once on
+the migrated DC. <code>export_login_token</code> also handles migration automatically
+and returns <code>(vec![], 0)</code> if the user already scanned before you called it.</p>
 <hr>
 <h2 id="send-an-invoice-payments"><a class="header" href="#send-an-invoice-payments">Send an invoice (payments)</a></h2>
 <p>Send a payment invoice to a chat (bots only):</p>
@@ -12859,19 +12922,19 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <li><code>ClientBuilder</code>: fluent connection builder</li>
 </ul>
 <pre><code class="language-toml"># SQLite session only
-ferogram = { version = "0.6.5", features = ["sqlite-session"] }
+ferogram = { version = "0.6.6", features = ["sqlite-session"] }
 
 # LibSQL / Turso session (new in 0.2.0)
-ferogram = { version = "0.6.5", features = ["libsql-session"] }
+ferogram = { version = "0.6.6", features = ["libsql-session"] }
 
 # HTML parsing (minimal, no extra deps)
-ferogram = { version = "0.6.5", features = ["html"] }
+ferogram = { version = "0.6.6", features = ["html"] }
 
 # HTML parsing (spec-compliant, adds html5ever dep)
-ferogram = { version = "0.6.5", features = ["html5ever"] }
+ferogram = { version = "0.6.6", features = ["html5ever"] }
 
 # Multiple features at once
-ferogram = { version = "0.6.5", features = ["sqlite-session", "html"] }
+ferogram = { version = "0.6.6", features = ["sqlite-session", "html"] }
 </code></pre>
 <hr>
 <h2 id="ferogram-tl-types-1"><a class="header" href="#ferogram-tl-types-1">ferogram-tl-types</a></h2>
@@ -12893,14 +12956,14 @@ ferogram = { version = "0.6.5", features = ["sqlite-session", "html"] }
 </table>
 </div>
 <h3 id="example-enable-serde"><a class="header" href="#example-enable-serde">Example: enable serde</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.5", features = ["tl-api", "impl-serde"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.6", features = ["tl-api", "impl-serde"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let json = serde_json::to_string(&amp;some_tl_type)?;
 <span class="boring">}</span></code></pre>
 <h3 id="example-name_for_id-debugging"><a class="header" href="#example-name_for_id-debugging">Example: name_for_id (debugging)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.5", features = ["tl-api", "name-for-id"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.6", features = ["tl-api", "name-for-id"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -12911,13 +12974,13 @@ if let Some(name) = name_for_id(0x74ae4240) {
 }
 <span class="boring">}</span></code></pre>
 <h3 id="example-minimal-no-debug-no-conversions"><a class="header" href="#example-minimal-no-debug-no-conversions">Example: minimal (no Debug, no conversions)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.5", default-features = false, features = ["tl-api"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.6", default-features = false, features = ["tl-api"] }
 </code></pre>
 <p>Reduces compile time when you don’t need convenience traits.</p>
 <hr>
 <h2 id="string-session-no-feature-flag-needed"><a class="header" href="#string-session-no-feature-flag-needed">String session: no feature flag needed</a></h2>
 <p><code>StringSessionBackend</code> and <code>export_session_string()</code> are available in the default build: no feature flag required:</p>
-<pre><code class="language-toml">ferogram = "0.6.5"   # already includes StringSessionBackend
+<pre><code class="language-toml">ferogram = "0.6.6"   # already includes StringSessionBackend
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
