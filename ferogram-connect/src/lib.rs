@@ -75,6 +75,7 @@
 
 #![deny(unsafe_code)]
 
+mod address_policy;
 pub mod connection;
 pub mod error;
 pub mod frame;
