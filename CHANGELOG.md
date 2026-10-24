@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+TL layer bumped to 230.
+
+### Added
+
+- TL layer 230 schema: `wallet.*` and `toncenter.*` methods, TON Connect sessions and
+  requests, onramp methods and types, `payments.getCurrencyRates`, `bots.addUsername`,
+  `bots.removeUsername`, `auth.cancelWebTokenAuthorization`, `messageEntityTonAddress`,
+  `textTonAddress`, `messageActionGramTransfer`, `messageActionWalletTonConnectRequest`,
+  and the `updateWalletState`, `updateSentWalletTransaction`, `updateWalletGaslessInfo`,
+  `updateWalletTonConnectSession` and `updateWalletTonConnectPendingDisconnect` updates.
+  The new updates are delivered as `Update::Raw`.
+
+### Changed
+
+- Dependencies: `libsql` 0.10, `html5ever` 0.40.
+- Layer 230 schema changes: `bots.checkUsername` gains `additional`,
+  `bots.setCustomVerification` and the bot verification types use `TextWithEntities`
+  for descriptions, `auth.initFirebasePnvLogin` gains `except_ids`, and `username`
+  gains `deletable` and `expired`.
+
+### Removed
+
+- `inputPasskeyCredentialFirebasePNV` (dropped from the schema).
+
+### Fixed
+
+- `RawUpdate::constructor_id` returned stale ids for `updateMessagePoll` and
+  `updateMessagePollVote`.
+
+---
+
 ## [0.6.6] - 2026-10-21
 
 TL layer bumped to 229. Inline and reply keyboards are now separate types, QR login
