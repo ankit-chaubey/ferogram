@@ -19,8 +19,8 @@
 #![cfg(feature = "experimental")]
 
 use ferogram::resume::{
-    CheckpointStore, DownloadCheckpoint, UPLOAD_SESSION_TTL_MS, UploadCheckpoint, download_key,
-    now_ms, sha256_hex, upload_key,
+    CheckpointStore, DownloadCheckpoint, UPLOAD_SESSION_TTL_MS, UploadCheckpoint, now_ms,
+    sha256_hex, upload_key,
 };
 
 async fn tmp_store() -> (tempfile::TempDir, CheckpointStore) {
