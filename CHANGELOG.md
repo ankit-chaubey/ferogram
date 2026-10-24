@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-TL layer bumped to 230.
+TL layer bumped to 232.
 
 ### Added
 
@@ -20,6 +20,12 @@ TL layer bumped to 230.
   and the `updateWalletState`, `updateSentWalletTransaction`, `updateWalletGaslessInfo`,
   `updateWalletTonConnectSession` and `updateWalletTonConnectPendingDisconnect` updates.
   The new updates are delivered as `Update::Raw`.
+- TL layer 232 schema: share themes (`messages.setShareTheme`,
+  `messages.getShareThemeBackdrops`, `ShareTheme`), no-paid-messages tokens
+  (`contacts.exportNoPaidMessagesToken`, `contacts.importNoPaidMessagesToken`,
+  `messageActionNoPaidMessagesTokenUsed`), star gift deposit, withdraw, display and
+  delete methods, `wallet.setCardStickers` and `wallet.Card`, and
+  `walletTransactionPeerChannel` / `walletTransactionPeerTelegramGift`.
 
 ### Changed
 
@@ -28,6 +34,11 @@ TL layer bumped to 230.
   `bots.setCustomVerification` and the bot verification types use `TextWithEntities`
   for descriptions, `auth.initFirebasePnvLogin` gains `except_ids`, and `username`
   gains `deletable` and `expired`.
+- Layer 232 schema changes: `inputReplyToMessage` and `messageReplyHeader` gain
+  `quote_rich`, `channel` gains `in_news` and `pinned_msg_id`, `channelFull` and
+  `userFull` gain `share_theme` (and `wallet_card` on `userFull`),
+  `messages.acceptUrlAuth` gains `tonconnect_session`, and
+  `payments.getStarGiftWithdrawalUrl` takes `tmp_password` instead of an SRP password.
 
 ### Removed
 
@@ -35,6 +46,7 @@ TL layer bumped to 230.
 
 ### Fixed
 
+- Reply headers built from sent messages in `ferogram-msgbox` now keep `quote_rich`.
 - `RawUpdate::constructor_id` returned stale ids for `updateMessagePoll` and
   `updateMessagePollVote`.
 

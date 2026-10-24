@@ -3106,6 +3106,7 @@ impl Client {
                 reply_to_peer_id: None,
                 quote_text: None,
                 quote_entities: None,
+                quote_rich: None,
                 quote_offset: None,
                 monoforum_peer_id: None,
                 poll_option: None,
