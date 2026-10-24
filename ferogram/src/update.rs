@@ -2255,8 +2255,8 @@ fn tl_constructor_id(upd: &tl::enums::Update) -> u32 {
         LoginToken => 0x564fe691,
         MessageExtendedMedia(_) => 0xd5a41724,
         MessageId(_) => 0x4e90bfd6,
-        MessagePoll(_) => 0xaca1657b,
-        MessagePollVote(_) => 0x24f40e77,
+        MessagePoll(_) => 0xd64c522b,
+        MessagePollVote(_) => 0x7699f014,
         MessageReactions(_) => 0x1e297bfa,
         MonoForumNoPaidException(_) => 0x9f812b08,
         MoveStickerSetToTop(_) => 0x86fccf85,
@@ -2342,6 +2342,11 @@ fn tl_constructor_id(upd: &tl::enums::Update) -> u32 {
         DeleteEphemeralMessages(_) => 0x56dbfcf8,
         EditEphemeralMessage(_) => 0x4bbb8f01,
         BotStarsSubscription(_) => 0x6c0d8e23,
+        WalletState(_) => 0x6ac3f2aa,
+        SentWalletTransaction(_) => 0xb1434d4a,
+        WalletGaslessInfo(_) => 0xa8ae1cac,
+        WalletTonConnectSession(_) => 0x50a38e0e,
+        WalletTonConnectPendingDisconnect(_) => 0xd1ee8199,
     }
 }
 

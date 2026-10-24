@@ -423,7 +423,7 @@ pub fn parse_html(html: &str) -> (String, Vec<tl::enums::MessageEntity>) {
                         )),
                         "span" => {
                             let is_spoiler = attrs.iter().any(|a| {
-                                a.name.local.as_ref() == "class" && a.value.as_ref() == "tg-spoiler"
+                                &*a.name.local == "class" && a.value.as_ref() == "tg-spoiler"
                             });
                             if is_spoiler {
                                 entities.push(tl::enums::MessageEntity::Spoiler(
@@ -435,8 +435,7 @@ pub fn parse_html(html: &str) -> (String, Vec<tl::enums::MessageEntity>) {
                             }
                         }
                         "blockquote" => {
-                            let collapsed =
-                                attrs.iter().any(|a| a.name.local.as_ref() == "expandable");
+                            let collapsed = attrs.iter().any(|a| &*a.name.local == "expandable");
                             entities.push(tl::enums::MessageEntity::Blockquote(
                                 tl::types::MessageEntityBlockquote {
                                     collapsed,
@@ -448,12 +447,12 @@ pub fn parse_html(html: &str) -> (String, Vec<tl::enums::MessageEntity>) {
                         "tg-time" => {
                             let unix: i32 = attrs
                                 .iter()
-                                .find(|a| a.name.local.as_ref() == "unix")
+                                .find(|a| &*a.name.local == "unix")
                                 .and_then(|a| a.value.as_ref().parse::<i32>().ok())
                                 .unwrap_or(0);
                             let fmt = attrs
                                 .iter()
-                                .find(|a| a.name.local.as_ref() == "format")
+                                .find(|a| &*a.name.local == "format")
                                 .map(|a| a.value.as_ref().to_string())
                                 .unwrap_or_default();
                             let (
@@ -485,7 +484,7 @@ pub fn parse_html(html: &str) -> (String, Vec<tl::enums::MessageEntity>) {
                             if in_pre {
                                 let lang = attrs
                                     .iter()
-                                    .find(|a| a.name.local.as_ref() == "class")
+                                    .find(|a| &*a.name.local == "class")
                                     .and_then(|a| {
                                         let v: &str = a.value.as_ref();
                                         v.strip_prefix("language-")
@@ -515,7 +514,7 @@ pub fn parse_html(html: &str) -> (String, Vec<tl::enums::MessageEntity>) {
                         "a" => {
                             let href = attrs
                                 .iter()
-                                .find(|a| a.name.local.as_ref() == "href")
+                                .find(|a| &*a.name.local == "href")
                                 .map(|a| {
                                     let v: &str = a.value.as_ref();
                                     v.to_string()
@@ -545,7 +544,7 @@ pub fn parse_html(html: &str) -> (String, Vec<tl::enums::MessageEntity>) {
                         "tg-emoji" => {
                             let doc_id = attrs
                                 .iter()
-                                .find(|a| a.name.local.as_ref() == "emoji-id")
+                                .find(|a| &*a.name.local == "emoji-id")
                                 .and_then(|a| {
                                     let v: &str = a.value.as_ref();
                                     v.parse::<i64>().ok()
