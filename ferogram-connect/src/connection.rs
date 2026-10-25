@@ -110,10 +110,48 @@ impl Connection {
         transport: &TransportKind,
         dc_id: i16,
     ) -> Result<(TcpStream, FrameKind), ConnectError> {
+        // Proxy/custom routes are not redirected to public Telegram endpoints.
+        if socks5.is_some() || crate::address_policy::alternate(addr, dc_id).is_none() {
+            return Self::open_stream_once(addr, socks5, transport, dc_id).await;
+        }
+        crate::address_policy::connect(addr, dc_id, |candidate| async move {
+            let (mut stream, kind) =
+                Self::open_stream_once(&candidate, None, transport, dc_id).await?;
+            // Some networks accept TCP but reset the first MTProto packet.
+            // Validate a nonce-matched resPQ before handing the stream to a
+            // fresh-DH or cached-key caller. No login request is sent here.
+            let (request, _) = auth::step1().map_err(|e| ConnectError::other(e.to_string()))?;
+            let mut plain = Session::new();
+            send_frame(
+                &mut stream,
+                &plain.pack(&request).to_plaintext_bytes(),
+                &kind,
+            )
+            .await?;
+            let tl::enums::ResPq::ResPq(response) = recv_frame_plain(&mut stream, &kind).await?;
+            if response.nonce != request.nonce {
+                return Err(ConnectError::other("reachability response nonce mismatch"));
+            }
+            Ok((stream, kind))
+        })
+        .await
+    }
+
+    async fn open_stream_once(
+        addr: &str,
+        socks5: Option<&crate::socks5::Socks5Config>,
+        transport: &TransportKind,
+        dc_id: i16,
+    ) -> Result<(TcpStream, FrameKind), ConnectError> {
         let stream = match socks5 {
             Some(proxy) => proxy.connect(addr).await?,
             None => {
-                let stream = TcpStream::connect(addr).await.map_err(ConnectError::Io)?;
+                let stream = if let Some(addr) = crate::address_policy::socket_address(addr) {
+                    TcpStream::connect(addr).await
+                } else {
+                    TcpStream::connect(addr).await
+                }
+                .map_err(ConnectError::Io)?;
                 stream.set_nodelay(true).ok();
                 {
                     let sock = socket2::SockRef::from(&stream);
