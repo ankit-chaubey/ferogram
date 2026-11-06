@@ -471,12 +471,60 @@ impl PersistedSession {
     /// A fixed `.tmp` extension causes OS error 2 (ERROR_FILE_NOT_FOUND) on
     /// Windows when two concurrent persist_state calls race: thread A renames
     /// `.tmp` away while thread B's rename finds the source gone.
+    ///
+    /// The file gets the default permissions of the process (its umask). Use
+    /// [`save_owner_only`](Self::save_owner_only) to restrict it.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let tmp = path.with_extension(format!("{n}.tmp"));
         std::fs::write(&tmp, self.to_bytes())?;
+        std::fs::rename(&tmp, path).inspect_err(|_e| {
+            let _ = std::fs::remove_file(&tmp);
+        })
+    }
+
+    /// Like [`save`](Self::save), but on Unix the file is created with mode
+    /// 0600 so only the owning user can read the auth key. The temp file is
+    /// created with that mode too, so there is no moment when it is readable
+    /// by others. Other platforms use the default permissions.
+    ///
+    /// Another Unix user will not be able to read the file afterwards, for
+    /// example when a bot first ran as root and later runs as a normal user.
+    pub fn save_owner_only(&self, path: &Path) -> io::Result<()> {
+        use std::io::Write;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+
+        let bytes = self.to_bytes();
+        // create_new refuses to reuse a leftover temp file from a crashed run
+        // or another process, so move on to the next name instead of failing.
+        let mut attempts = 0;
+        let (tmp, mut file) = loop {
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let tmp = path.with_extension(format!("{n}.private.tmp"));
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            match opts.open(&tmp) {
+                Ok(f) => break (tmp, f),
+                Err(e) if e.kind() == ErrorKind::AlreadyExists && attempts < 16 => {
+                    attempts += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        };
+        if let Err(e) = file.write_all(&bytes) {
+            drop(file);
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        drop(file);
         std::fs::rename(&tmp, path).inspect_err(|_e| {
             let _ = std::fs::remove_file(&tmp);
         })
@@ -964,6 +1012,7 @@ pub struct BinaryFileBackend {
     /// unique names (belt-and-suspenders; also prevents torn reads of the
     /// session file from a concurrent load + save).
     write_lock: std::sync::Mutex<()>,
+    owner_only: bool,
 }
 
 impl BinaryFileBackend {
@@ -973,7 +1022,19 @@ impl BinaryFileBackend {
         Self {
             path: path.into(),
             write_lock: std::sync::Mutex::new(()),
+            owner_only: false,
         }
+    }
+
+    /// Restrict the session file to the owning user (mode 0600 on Unix).
+    ///
+    /// Off by default, so files are created with the process umask as before.
+    /// Turn it on if the host is shared with other users, since the file holds
+    /// the auth key. It has no effect on non-Unix platforms. See
+    /// [`PersistedSession::save_owner_only`].
+    pub fn owner_only(mut self, on: bool) -> Self {
+        self.owner_only = on;
+        self
     }
 
     /// The file path this backend reads from and writes to.
@@ -985,7 +1046,11 @@ impl BinaryFileBackend {
 impl SessionBackend for BinaryFileBackend {
     fn save(&self, session: &PersistedSession) -> io::Result<()> {
         let _guard = self.write_lock.lock().unwrap();
-        session.save(&self.path)
+        if self.owner_only {
+            session.save_owner_only(&self.path)
+        } else {
+            session.save(&self.path)
+        }
     }
 
     fn load(&self) -> io::Result<Option<PersistedSession>> {
@@ -2912,5 +2977,78 @@ mod libsql_backend_tests {
         let loaded = LibSqlBackend::read_session_async(&conn).await.unwrap();
         assert_eq!(loaded.peers.len(), 1);
         assert!(loaded.peers[0].is_community);
+    }
+}
+
+#[cfg(test)]
+mod save_permission_tests {
+    use super::*;
+
+    fn scratch_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ferogram-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_only_save_creates_0600_and_keeps_it() {
+        let dir = scratch_dir("perm");
+        let path = dir.join("s.session");
+        PersistedSession::default().save_owner_only(&path).unwrap();
+        assert_eq!(mode_of(&path), 0o600);
+        PersistedSession::default().save_owner_only(&path).unwrap();
+        assert_eq!(mode_of(&path), 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backend_is_off_by_default_and_honours_the_option() {
+        let dir = scratch_dir("backend");
+
+        let plain = dir.join("plain.session");
+        BinaryFileBackend::new(&plain)
+            .save(&PersistedSession::default())
+            .unwrap();
+        let plain_mode = mode_of(&plain);
+        // Same result as a bare PersistedSession::save, i.e. the umask decides.
+        let reference = dir.join("reference.session");
+        PersistedSession::default().save(&reference).unwrap();
+        assert_eq!(plain_mode, mode_of(&reference));
+
+        let private = dir.join("private.session");
+        BinaryFileBackend::new(&private)
+            .owner_only(true)
+            .save(&PersistedSession::default())
+            .unwrap();
+        assert_eq!(mode_of(&private), 0o600);
+        assert!(
+            BinaryFileBackend::new(&private)
+                .owner_only(true)
+                .load()
+                .unwrap()
+                .is_some()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn owner_only_save_skips_leftover_temp_files() {
+        let dir = scratch_dir("stale");
+        let path = dir.join("s.session");
+        for n in 0..8 {
+            let _ = std::fs::write(path.with_extension(format!("{n}.private.tmp")), b"stale");
+        }
+        PersistedSession::default().save_owner_only(&path).unwrap();
+        assert!(PersistedSession::load(&path).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

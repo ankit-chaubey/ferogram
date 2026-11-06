@@ -40,6 +40,28 @@ use std::sync::Arc;
 let backend = Arc::new(BinaryFileBackend::new("bot.session"));
 ```
 
+### Restricting file permissions
+
+The session file holds your auth key. By default it is created with the
+process umask (usually 0644 on Linux), so other users on the same machine can
+read it. On a shared host you can restrict it to the owning user (mode 0600):
+
+```rust
+use ferogram::session_backend::BinaryFileBackend;
+use std::sync::Arc;
+
+let (client, _shutdown) = Client::builder()
+    .api_id(12345)
+    .api_hash("your_api_hash")
+    .session_backend(Arc::new(BinaryFileBackend::new("bot.session").owner_only(true)))
+    .connect()
+    .await?;
+```
+
+This is off by default and does nothing on non-Unix platforms. Once it is on,
+a different Unix user can no longer read the file, for example when the bot
+first ran as root and later runs as a normal user.
+
 ---
 
 ## `InMemoryBackend`
