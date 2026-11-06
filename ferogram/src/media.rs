@@ -3687,14 +3687,12 @@ impl Client {
                             }
                         }
                         tl::enums::upload::File::CdnRedirect(_redir) => {
-                            // Signal error to collector task.
-                            // leaving the slot as None and producing a corrupt file with a
-                            // missing chunk.  Return an error so the caller can fall back to
-                            // sequential download which has CDN handling.
+                            // Return an error instead of leaving the slot empty, which
+                            // would produce a file with a missing chunk. This is not
+                            // expected, since every request sets cdn_supported: false.
                             abort.store(true, Ordering::Relaxed);
                             return Err(InvocationError::Deserialize(
-                                "upload.fileCdnRedirect: CDN redirect received in concurrent \
-                                 download; retry via sequential path"
+                                "upload.fileCdnRedirect: CDN redirect received in concurrent download"
                                     .into(),
                             ));
                         }
@@ -3980,7 +3978,7 @@ impl Client {
                         tl::enums::upload::File::CdnRedirect(_) => {
                             abort.store(true, Ordering::Relaxed);
                             return Err(InvocationError::Deserialize(
-                                "CDN redirect in concurrent download; retry via sequential".into(),
+                                "upload.fileCdnRedirect: CDN redirect received in concurrent download".into(),
                             ));
                         }
                     }
@@ -4380,7 +4378,7 @@ impl Client {
                         tl::enums::upload::File::CdnRedirect(_) => {
                             abort.store(true, Ordering::Relaxed);
                             return Err(InvocationError::Deserialize(
-                                "CDN redirect in pipelined download; retry via sequential".into(),
+                                "upload.fileCdnRedirect: CDN redirect received in pipelined download".into(),
                             ));
                         }
                     }

@@ -206,7 +206,7 @@ Every received message exposes:
 
 **CDN**
 
-- CDN DC downloads handled transparently; no extra API calls needed from the caller
+- `cdn_download::CdnDownloader` implements the CDN protocol (`upload.getCdnFile`, `upload.reuploadCdnFile`, AES-256-CTR). `download`, `download_file` and `download_media` do not use it: they send `cdn_supported: false` and are served from the regular DCs
 
 ---
 

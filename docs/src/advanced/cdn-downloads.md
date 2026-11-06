@@ -2,13 +2,13 @@
 
 Large files on Telegram are often served from **CDN DCs**  -  lightweight edge data-centres that don't participate in the normal MTProto auth flow. ferogram exposes the full CDN download path via `CdnDownloader` in `ferogram::cdn_download`.
 
-In normal usage you never need to interact with `CdnDownloader` directly  -  `client.download`, `client.download_file`, and `iter_download` handle CDN redirects transparently. This page is for advanced use-cases where you need explicit control.
+`client.download`, `client.download_file`, `client.download_media` and `iter_download` do not use `CdnDownloader`. They send `upload.getFile` with `cdn_supported: false`, so Telegram serves the file from the regular DCs and no redirect is expected. If you want CDN downloads you have to drive the flow yourself, as described on this page.
 
 ---
 
 ## How CDN redirects work
 
-1. You call `upload.getFile` on the home DC.
+1. You call `upload.getFile` on the file's DC with `cdn_supported: true`.
 2. If the file lives on a CDN DC, the server returns `upload.fileCdnRedirect` containing:
    - `dc_id`  -  which CDN DC to talk to
    - `file_token`  -  opaque credential for `upload.getCdnFile`

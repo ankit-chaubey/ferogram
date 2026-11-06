@@ -72,7 +72,7 @@ Upload a file to Telegram's servers and get back an `InputMedia` handle that can
 ```rust
 use ferogram::InputMessage;
 
-let uploaded = client.upload_file(&bytes, "photo.jpg", "image/jpeg").await?;
+let uploaded = client.upload_file("/tmp/photo.jpg").await?;
 let media = uploaded.as_photo_media();
 
 // Upload to Telegram's servers (no message sent)
@@ -91,7 +91,7 @@ client.send_message("@peer", msg).await?;
 use ferogram::InputMessage;
 
 // Send a file as document or photo
-let uploaded = client.upload_file(&bytes, "photo.jpg", "image/jpeg").await?;
+let uploaded = client.upload_file("/tmp/photo.jpg").await?;
 client.send_file("@peer", uploaded.as_photo_media(), &InputMessage::text("Caption")).await?;
 
 // Or attach via InputMessage
