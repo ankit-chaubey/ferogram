@@ -829,6 +829,9 @@ impl Client {
     /// any other download. Quality selection only changes *which* document
     /// gets downloaded, not how.
     ///
+    /// Photos have no quality variants: `quality` is ignored and the largest
+    /// size is downloaded.
+    ///
     /// Media with no alternates only ever has [`MediaQuality::Original`] to
     /// pick from; every other variant falls back to it automatically. Use
     /// [`crate::media::available_qualities`] to see what's actually on offer
@@ -852,12 +855,19 @@ impl Client {
         path: impl AsRef<std::path::Path>,
         handle: Option<&crate::transfer::TransferHandle>,
     ) -> Result<u64, InvocationError> {
-        let doc = crate::media::pick_quality(media, quality).ok_or_else(|| {
-            InvocationError::Deserialize(
-                "media has no downloadable document for the requested quality".into(),
-            )
-        })?;
-        self.download_file_inner(&doc, path.as_ref(), handle).await
+        if let Some(doc) = crate::media::pick_quality(media, quality) {
+            return self.download_file_inner(&doc, path.as_ref(), handle).await;
+        }
+        // Not a document. Photos have no quality ladder, so `quality` does
+        // not apply and the largest size is downloaded.
+        if let Some(photo) = crate::media::Photo::from_media(media) {
+            return self
+                .download_file_inner(&photo, path.as_ref(), handle)
+                .await;
+        }
+        Err(InvocationError::Deserialize(
+            "media has no downloadable document or photo".into(),
+        ))
     }
 
     /// Return a lazy chunk iterator for `media`.

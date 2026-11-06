@@ -156,11 +156,13 @@ if let Some(mut iter) = client.iter_download(msg.media().unwrap()) {
 |--------|------|---------|
 | `client.download(media, dest)` | any `AsyncWrite` | `u64` bytes written |
 | `client.download_file(media, path)` | file on disk | `u64` bytes written |
+| `client.download_media(media, quality, path, handle)` | file on disk | `u64` bytes written |
 | `client.iter_download(media)` | caller-driven | `Option<DownloadIter>` |
 | `msg.download(dest)` | any `AsyncWrite` | `u64` bytes written |
 | `msg.bytes()` | in-memory `Vec<u8>` | `Vec<u8>` |
 
-## `Downloadable` trait
+`download_media` picks a quality variant for documents such as videos with alternates. Photos have no quality variants, so `quality` is ignored and the largest size is downloaded, progressive JPEG included.
+
 ## `Downloadable` trait
 
 `Photo`, `Document`, and `Sticker` all implement `Downloadable`, so you can use `client.download_item(&item)` (internal) on any of them uniformly.

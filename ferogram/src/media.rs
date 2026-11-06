@@ -603,16 +603,12 @@ impl Photo {
         self.raw.has_stickers
     }
 
-    /// The largest available thumb type letter (e.g. `"s"`, `"m"`, `"x"`).
+    /// The type letter of the largest downloadable size (e.g. `"x"`, or
+    /// `"y"` when Telegram offers a progressive JPEG), falling back to
+    /// `"s"` if the photo lists no sizes.
     pub fn largest_thumb_type(&self) -> &str {
-        self.raw
-            .sizes
-            .iter()
-            .filter_map(|s| match s {
-                tl::enums::PhotoSize::PhotoSize(ps) => Some(ps.r#type.as_str()),
-                _ => None,
-            })
-            .next_back()
+        largest_photo_size(&self.raw.sizes)
+            .map(|(t, _)| t)
             .unwrap_or("s")
     }
 
@@ -647,16 +643,26 @@ impl Downloadable for Photo {
         self.raw.dc_id
     }
     fn size(&self) -> Option<usize> {
-        self.raw
-            .sizes
-            .iter()
-            .filter_map(|s| match s {
-                tl::enums::PhotoSize::PhotoSize(ps) => Some(ps.size as usize),
-                tl::enums::PhotoSize::Progressive(ps) => ps.sizes.last().map(|&s| s as usize),
-                _ => None,
-            })
-            .max()
+        largest_photo_size(&self.raw.sizes).map(|(_, size)| size)
     }
+}
+
+/// Picks the size with the most bytes among the ones that can be fetched
+/// with `upload.getFile`: plain `photoSize` and `photoSizeProgressive`
+/// (whose last entry is the full file). Inline sizes such as stripped or
+/// cached thumbnails have nothing to download and are skipped. On a tie the
+/// later entry wins. Returns the type letter and the byte count.
+fn largest_photo_size(sizes: &[tl::enums::PhotoSize]) -> Option<(&str, usize)> {
+    sizes
+        .iter()
+        .filter_map(|s| match s {
+            tl::enums::PhotoSize::PhotoSize(ps) => Some((ps.r#type.as_str(), ps.size as usize)),
+            tl::enums::PhotoSize::Progressive(ps) => {
+                ps.sizes.last().map(|&n| (ps.r#type.as_str(), n as usize))
+            }
+            _ => None,
+        })
+        .max_by_key(|&(_, size)| size)
 }
 
 /// Builder for re-sending an existing [`Photo`] as `InputMedia`. Built via
@@ -4861,4 +4867,98 @@ pub fn size_from_media(media: &tl::enums::MessageMedia) -> Option<usize> {
 /// Generate a random upload session file_id. Used by experimental resumable upload.
 pub fn random_file_id_pub() -> i64 {
     crate::random_i64_pub()
+}
+
+#[cfg(test)]
+mod photo_size_tests {
+    use super::*;
+
+    fn plain(t: &str, size: i32) -> tl::enums::PhotoSize {
+        tl::enums::PhotoSize::PhotoSize(tl::types::PhotoSize {
+            r#type: t.into(),
+            w: 0,
+            h: 0,
+            size,
+        })
+    }
+
+    fn progressive(t: &str, sizes: Vec<i32>) -> tl::enums::PhotoSize {
+        tl::enums::PhotoSize::Progressive(tl::types::PhotoSizeProgressive {
+            r#type: t.into(),
+            w: 0,
+            h: 0,
+            sizes,
+        })
+    }
+
+    #[test]
+    fn progressive_beats_classic_when_larger() {
+        // the numbers reported in issue 21
+        let sizes = vec![
+            plain("m", 16311),
+            plain("x", 53951),
+            progressive("y", vec![9000, 31000, 83158]),
+        ];
+        assert_eq!(largest_photo_size(&sizes), Some(("y", 83158)));
+    }
+
+    #[test]
+    fn classic_wins_when_progressive_is_smaller() {
+        let sizes = vec![plain("x", 90000), progressive("y", vec![1000, 40000])];
+        assert_eq!(largest_photo_size(&sizes), Some(("x", 90000)));
+    }
+
+    #[test]
+    fn order_in_the_list_does_not_matter() {
+        let sizes = vec![
+            progressive("y", vec![83158]),
+            plain("x", 53951),
+            plain("m", 16311),
+        ];
+        assert_eq!(largest_photo_size(&sizes), Some(("y", 83158)));
+    }
+
+    #[test]
+    fn inline_only_sizes_give_none() {
+        let sizes = vec![tl::enums::PhotoSize::PhotoStrippedSize(
+            tl::types::PhotoStrippedSize {
+                r#type: "i".into(),
+                bytes: vec![1, 2, 3],
+            },
+        )];
+        assert_eq!(largest_photo_size(&sizes), None);
+        assert_eq!(largest_photo_size(&[]), None);
+    }
+
+    #[test]
+    fn photo_downloads_the_progressive_size() {
+        let photo = Photo::from_raw(tl::types::Photo {
+            has_stickers: false,
+            id: 1,
+            access_hash: 2,
+            file_reference: vec![],
+            date: 0,
+            sizes: vec![
+                plain("m", 16311),
+                plain("x", 53951),
+                progressive("y", vec![20000, 83158]),
+            ],
+            video_sizes: None,
+            dc_id: 4,
+        });
+        assert_eq!(photo.largest_thumb_type(), "y");
+        assert_eq!(photo.size(), Some(83158));
+        match photo.to_input_location() {
+            Some(tl::enums::InputFileLocation::InputPhotoFileLocation(l)) => {
+                assert_eq!(l.thumb_size, "y")
+            }
+            other => panic!("unexpected location: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_progressive_list_is_skipped() {
+        let sizes = vec![plain("x", 100), progressive("y", vec![])];
+        assert_eq!(largest_photo_size(&sizes), Some(("x", 100)));
+    }
 }
