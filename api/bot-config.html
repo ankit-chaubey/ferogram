@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-257bc0b5.js";
+            window.path_to_searchindex_js = "../searchindex-cd8d88f4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-5d15c526.js"></script>
@@ -272,7 +272,7 @@ client.send_dice("@mychat", "🎰").await?;
 <p>Supported emoticons: <code>🎲</code>, <code>🎯</code>, <code>🏀</code>, <code>⚽</code>, <code>🎳</code>, <code>🎰</code>.</p>
 <hr>
 <h2 id="qr-code-login-user-accounts"><a class="header" href="#qr-code-login-user-accounts">QR-code login (user accounts)</a></h2>
-<p>Generate a login token encoded as a QR code, then poll until the user scans it.</p>
+<p>Generate a login token encoded as a QR code, then poll until the user scans it. The token is only valid until <code>expires_ts</code>; export a new one and redraw the QR code when it passes.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// 1. Generate a token
@@ -307,9 +307,11 @@ loop {
     }
 }
 <span class="boring">}</span></code></pre>
-<p><code>check_qr_login</code> handles DC migration internally, retrying the check once on
-the migrated DC. <code>export_login_token</code> also handles migration automatically
-and returns <code>(vec![], 0)</code> if the user already scanned before you called it.</p>
+<p><code>check_qr_login</code> polls by asking Telegram for the login token again, which is how a
+not yet authorized client learns that the phone confirmed. It handles DC migration
+internally. The token argument is not used and is kept for compatibility.
+<code>export_login_token</code> also handles migration automatically and returns <code>(vec![], 0)</code>
+if the user already scanned before you called it.</p>
 <hr>
 <h2 id="send-an-invoice-payments"><a class="header" href="#send-an-invoice-payments">Send an invoice (payments)</a></h2>
 <p>Send a payment invoice to a chat (bots only):</p>

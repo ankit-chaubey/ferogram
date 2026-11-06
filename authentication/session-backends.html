@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-257bc0b5.js";
+            window.path_to_searchindex_js = "../searchindex-cd8d88f4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-5d15c526.js"></script>
@@ -221,6 +221,25 @@ use std::sync::Arc;
 
 let backend = Arc::new(BinaryFileBackend::new("bot.session"));
 <span class="boring">}</span></code></pre>
+<h3 id="restricting-file-permissions"><a class="header" href="#restricting-file-permissions">Restricting file permissions</a></h3>
+<p>The session file holds your auth key. By default it is created with the
+process umask (usually 0644 on Linux), so other users on the same machine can
+read it. On a shared host you can restrict it to the owning user (mode 0600):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::session_backend::BinaryFileBackend;
+use std::sync::Arc;
+
+let (client, _shutdown) = Client::builder()
+    .api_id(12345)
+    .api_hash("your_api_hash")
+    .session_backend(Arc::new(BinaryFileBackend::new("bot.session").owner_only(true)))
+    .connect()
+    .await?;
+<span class="boring">}</span></code></pre>
+<p>This is off by default and does nothing on non-Unix platforms. Once it is on,
+a different Unix user can no longer read the file, for example when the bot
+first ran as root and later runs as a normal user.</p>
 <hr>
 <h2 id="inmemorybackend"><a class="header" href="#inmemorybackend"><code>InMemoryBackend</code></a></h2>
 <p>Non-persistent: lost on process exit. Ideal for tests.</p>

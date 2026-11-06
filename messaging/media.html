@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-257bc0b5.js";
+            window.path_to_searchindex_js = "../searchindex-cd8d88f4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-5d15c526.js"></script>
@@ -256,7 +256,7 @@ let uploaded = client.upload_file("/tmp/photo.jpg").await?;
 </span><span class="boring">fn main() {
 </span>use ferogram::InputMessage;
 
-let uploaded = client.upload_file(&amp;bytes, "photo.jpg", "image/jpeg").await?;
+let uploaded = client.upload_file("/tmp/photo.jpg").await?;
 let media = uploaded.as_photo_media();
 
 // Upload to Telegram's servers (no message sent)
@@ -273,7 +273,7 @@ client.send_message("@peer", msg).await?;
 </span>use ferogram::InputMessage;
 
 // Send a file as document or photo
-let uploaded = client.upload_file(&amp;bytes, "photo.jpg", "image/jpeg").await?;
+let uploaded = client.upload_file("/tmp/photo.jpg").await?;
 client.send_file("@peer", uploaded.as_photo_media(), &amp;InputMessage::text("Caption")).await?;
 
 // Or attach via InputMessage
@@ -344,14 +344,15 @@ if let Some(mut iter) = client.iter_download(msg.media().unwrap()) {
 <tbody>
 <tr><td><code>client.download(media, dest)</code></td><td>any <code>AsyncWrite</code></td><td><code>u64</code> bytes written</td></tr>
 <tr><td><code>client.download_file(media, path)</code></td><td>file on disk</td><td><code>u64</code> bytes written</td></tr>
+<tr><td><code>client.download_media(media, quality, path, handle)</code></td><td>file on disk</td><td><code>u64</code> bytes written</td></tr>
 <tr><td><code>client.iter_download(media)</code></td><td>caller-driven</td><td><code>Option&lt;DownloadIter&gt;</code></td></tr>
 <tr><td><code>msg.download(dest)</code></td><td>any <code>AsyncWrite</code></td><td><code>u64</code> bytes written</td></tr>
 <tr><td><code>msg.bytes()</code></td><td>in-memory <code>Vec&lt;u8&gt;</code></td><td><code>Vec&lt;u8&gt;</code></td></tr>
 </tbody>
 </table>
 </div>
+<p><code>download_media</code> picks a quality variant for documents such as videos with alternates. Photos have no quality variants, so <code>quality</code> is ignored and the largest size is downloaded, progressive JPEG included.</p>
 <h2 id="downloadable-trait"><a class="header" href="#downloadable-trait"><code>Downloadable</code> trait</a></h2>
-<h2 id="downloadable-trait-1"><a class="header" href="#downloadable-trait-1"><code>Downloadable</code> trait</a></h2>
 <p><code>Photo</code>, <code>Document</code>, and <code>Sticker</code> all implement <code>Downloadable</code>, so you can use <code>client.download_item(&amp;item)</code> (internal) on any of them uniformly.
 For the public API, pass <code>msg.media()</code> to <code>client.download</code>.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
