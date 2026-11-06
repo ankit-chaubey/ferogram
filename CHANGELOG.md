@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.6.7-b1] - 2026-11-06
+
+Beta release.
+
 TL layer bumped to 232.
 
 ### Added
@@ -26,6 +32,9 @@ TL layer bumped to 232.
   `messageActionNoPaidMessagesTokenUsed`), star gift deposit, withdraw, display and
   delete methods, `wallet.setCardStickers` and `wallet.Card`, and
   `walletTransactionPeerChannel` / `walletTransactionPeerTelegramGift`.
+- `BinaryFileBackend::owner_only(true)` and `PersistedSession::save_owner_only` keep the session
+  file (which holds the auth key) readable by the owning user only (mode 0600 on Unix). Off
+  by default, so existing behaviour is unchanged.
 
 ### Changed
 
@@ -39,10 +48,6 @@ TL layer bumped to 232.
   `userFull` gain `share_theme` (and `wallet_card` on `userFull`),
   `messages.acceptUrlAuth` gains `tonconnect_session`, and
   `payments.getStarGiftWithdrawalUrl` takes `tmp_password` instead of an SRP password.
-
-- `BinaryFileBackend::owner_only(true)` and `PersistedSession::save_owner_only` keep the session
-  file (which holds the auth key) readable by the owning user only (mode 0600 on Unix). Off
-  by default, so existing behaviour is unchanged.
 
 ### Removed
 
