@@ -437,6 +437,11 @@ pub(crate) struct ClientInner {
     /// session-scoped and must be re-established each process run.
     pub(crate) auth_imported: parking_lot::Mutex<std::collections::HashSet<i32>>,
 
+    /// DC ids whose media-only endpoint failed while the regular address for
+    /// the same DC worked. Transfers skip the media endpoint for these DCs
+    /// for the rest of the process. In-memory only.
+    pub(crate) media_dc_unreachable: parking_lot::Mutex<std::collections::HashSet<i32>>,
+
     /// Rolling count of peer-cache misses in the current window.
     /// Reset when the window expires.
     peer_cache_miss_count: std::sync::atomic::AtomicU32,
@@ -896,6 +901,7 @@ impl Client {
             dc_connect_gates: parking_lot::Mutex::new(std::collections::HashMap::new()),
             auth_import_gates: parking_lot::Mutex::new(std::collections::HashMap::new()),
             auth_imported: parking_lot::Mutex::new(std::collections::HashSet::new()),
+            media_dc_unreachable: parking_lot::Mutex::new(std::collections::HashSet::new()),
             peer_cache_miss_count: std::sync::atomic::AtomicU32::new(0),
             peer_cache_miss_window_start: parking_lot::Mutex::new(std::time::Instant::now()),
             last_bulk_hydration: parking_lot::Mutex::new(None),
@@ -3700,14 +3706,39 @@ impl Client {
         let home = *self.inner.home_dc_id.lock().await;
         let target_dc = if dc_id == 0 { home } else { dc_id };
 
-        let addr = if let Some(media_addr) = self.media_dc_addr(target_dc).await {
-            media_addr
-        } else {
+        let static_addr = {
             let opts = self.inner.dc_options.lock().await;
             opts.get(&target_dc)
                 .map(|e| e.addr.clone())
                 .unwrap_or_else(|| fallback_dc_addr(target_dc).to_string())
         };
+        let media_addr = if self.inner.media_dc_unreachable.lock().contains(&target_dc) {
+            None
+        } else {
+            self.media_dc_addr(target_dc).await
+        };
+
+        let (conn, media_bypassed) = connect_with_fallback(media_addr, static_addr, |addr| {
+            self.open_worker_conn_at(target_dc, addr)
+        })
+        .await?;
+        if media_bypassed {
+            tracing::warn!(
+                "[ferogram::transfer] media endpoint for DC{target_dc} is unreachable; \
+                 using the regular DC address for transfers"
+            );
+            self.inner.media_dc_unreachable.lock().insert(target_dc);
+        }
+        Ok(conn)
+    }
+
+    /// Opens a transfer connection to `target_dc` at exactly `addr`.
+    async fn open_worker_conn_at(
+        &self,
+        target_dc: i32,
+        addr: String,
+    ) -> Result<dc_pool::DcConnection, InvocationError> {
+        let home = *self.inner.home_dc_id.lock().await;
         let socks5 = self.inner.socks5.clone();
         let mtproxy = self.inner.mtproxy.clone();
 
@@ -4397,3 +4428,106 @@ pub use ferogram_crypto::AuthKey;
 pub use ferogram_mtproto::authentication::{self, Finished, finish, step1, step2, step3};
 #[allow(unused_imports)]
 pub use ferogram_tl_types::{Identifiable, Serializable};
+
+/// Runs `connect` against `primary` first (when there is one and it differs
+/// from `fallback`) and against `fallback` if that fails. The flag in the
+/// result is true when the primary address failed and the fallback worked,
+/// which is the only case that proves the primary address itself is the
+/// problem. If both fail, the error from `fallback` is returned.
+async fn connect_with_fallback<T, E, F, Fut>(
+    primary: Option<String>,
+    fallback: String,
+    mut connect: F,
+) -> Result<(T, bool), E>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+{
+    if let Some(primary) = primary.filter(|p| *p != fallback) {
+        return match connect(primary).await {
+            Ok(c) => Ok((c, false)),
+            Err(_) => connect(fallback).await.map(|c| (c, true)),
+        };
+    }
+    connect(fallback).await.map(|c| (c, false))
+}
+
+#[cfg(test)]
+mod connect_fallback_tests {
+    use super::connect_with_fallback;
+    use std::sync::{Arc, Mutex};
+
+    const MEDIA: &str = "149.154.166.111:443";
+    const STATIC: &str = "149.154.167.92:443";
+
+    // Records every address tried; `down` lists the ones that fail.
+    fn dialer(
+        down: &'static [&'static str],
+        log: Arc<Mutex<Vec<String>>>,
+    ) -> impl FnMut(String) -> std::future::Ready<Result<String, String>> {
+        move |addr: String| {
+            log.lock().unwrap().push(addr.clone());
+            std::future::ready(if down.contains(&addr.as_str()) {
+                Err(format!("handshake with {addr} timed out"))
+            } else {
+                Ok(addr)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn media_endpoint_works() {
+        let log = Arc::new(Mutex::new(vec![]));
+        let r = connect_with_fallback(Some(MEDIA.into()), STATIC.into(), dialer(&[], log.clone()))
+            .await;
+        assert_eq!(r, Ok((MEDIA.to_string(), false)));
+        assert_eq!(*log.lock().unwrap(), vec![MEDIA]);
+    }
+
+    #[tokio::test]
+    async fn dead_media_endpoint_falls_back_to_static() {
+        let log = Arc::new(Mutex::new(vec![]));
+        let r = connect_with_fallback(
+            Some(MEDIA.into()),
+            STATIC.into(),
+            dialer(&[MEDIA], log.clone()),
+        )
+        .await;
+        assert_eq!(r, Ok((STATIC.to_string(), true)));
+        assert_eq!(*log.lock().unwrap(), vec![MEDIA, STATIC]);
+    }
+
+    #[tokio::test]
+    async fn no_media_endpoint_goes_straight_to_static() {
+        let log = Arc::new(Mutex::new(vec![]));
+        let r = connect_with_fallback(None, STATIC.into(), dialer(&[], log.clone())).await;
+        assert_eq!(r, Ok((STATIC.to_string(), false)));
+        assert_eq!(*log.lock().unwrap(), vec![STATIC]);
+    }
+
+    #[tokio::test]
+    async fn same_address_is_not_tried_twice() {
+        let log = Arc::new(Mutex::new(vec![]));
+        let r = connect_with_fallback(
+            Some(STATIC.into()),
+            STATIC.into(),
+            dialer(&[STATIC], log.clone()),
+        )
+        .await;
+        assert!(r.is_err());
+        assert_eq!(*log.lock().unwrap(), vec![STATIC]);
+    }
+
+    #[tokio::test]
+    async fn both_down_returns_the_static_error() {
+        let log = Arc::new(Mutex::new(vec![]));
+        let r = connect_with_fallback(
+            Some(MEDIA.into()),
+            STATIC.into(),
+            dialer(&[MEDIA, STATIC], log.clone()),
+        )
+        .await;
+        assert_eq!(r, Err(format!("handshake with {STATIC} timed out")));
+        assert_eq!(*log.lock().unwrap(), vec![MEDIA, STATIC]);
+    }
+}
