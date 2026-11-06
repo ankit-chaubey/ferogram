@@ -22,8 +22,8 @@ use crate::{
 use ferogram_tl_types::{Cursor, Deserializable};
 
 /// Result of a single `auth.importLoginToken` RPC call, before the response
-/// bytes (if any) are parsed as `auth.LoginToken`. Used only by
-/// [`Client::check_qr_login`] and its helpers.
+/// bytes (if any) are parsed as `auth.LoginToken`. Used only after a DC
+/// migration during QR login.
 enum ImportOutcome {
     /// Login already fully completed; no bytes left to parse.
     Done(String),
@@ -576,9 +576,10 @@ impl Client {
     /// Returns `(token_bytes, expires_unix_ts)`. Encode `token_bytes` as a
     /// `tg://login?token=<base64url>` URL and present as a QR code.
     ///
-    /// Call `import_qr_token` once the user scans it, then poll until you
-    /// receive `Update::Raw` with `updateLoginToken` (constructor `0x564fe691`),
-    /// or call `export_login_token` again to check.
+    /// While the QR code is on screen, poll [`Client::check_qr_login`] (or
+    /// call this method again). Once the phone confirms, the call signs the
+    /// client in and returns an empty token with an expiry of `0`. A token
+    /// is only valid until `expires`; call this again for a fresh one.
     ///
     /// # Example
     /// ```rust,no_run
@@ -589,7 +590,6 @@ impl Client {
     /// # Ok(()) }
     /// ```
     pub async fn export_login_token(&self) -> Result<(Vec<u8>, i32), InvocationError> {
-        use ferogram_tl_types::{Cursor, Deserializable};
         let req = tl::functions::auth::ExportLoginToken {
             api_id: self.inner.api_id,
             api_hash: self.inner.api_hash.clone(),
@@ -597,23 +597,23 @@ impl Client {
         };
         let body: Vec<u8> = self.rpc_call_raw(&req).await?;
         let mut cur = Cursor::from_slice(&body);
-        match tl::enums::auth::LoginToken::deserialize(&mut cur)? {
+        let mut token = tl::enums::auth::LoginToken::deserialize(&mut cur)?;
+
+        if let tl::enums::auth::LoginToken::MigrateTo(m) = token {
+            // The token lives on another DC. Move there and import it; the
+            // answer is either a fresh token or, if the phone already
+            // confirmed, the final authorization.
+            self.migrate_to(m.dc_id).await?;
+            let req2 = tl::functions::auth::ImportLoginToken { token: m.token };
+            let body2 = self.rpc_call_raw(&req2).await?;
+            let mut cur2 = Cursor::from_slice(&body2);
+            token = tl::enums::auth::LoginToken::deserialize(&mut cur2)?;
+        }
+
+        match token {
             tl::enums::auth::LoginToken::LoginToken(t) => Ok((t.token, t.expires)),
-            tl::enums::auth::LoginToken::MigrateTo(m) => {
-                // Migrate and retry
-                self.migrate_to(m.dc_id).await?;
-                let req2 = tl::functions::auth::ImportLoginToken { token: m.token };
-                let body2 = self.rpc_call_raw(&req2).await?;
-                let mut cur2 = Cursor::from_slice(&body2);
-                match tl::enums::auth::LoginToken::deserialize(&mut cur2)? {
-                    tl::enums::auth::LoginToken::LoginToken(t) => Ok((t.token, t.expires)),
-                    _ => Err(InvocationError::Deserialize(
-                        "QR login: unexpected token state after migration".into(),
-                    )),
-                }
-            }
             tl::enums::auth::LoginToken::Success(s) => {
-                // Already authorised (user scanned before we called this)
+                // The phone confirmed before or while we asked.
                 if let tl::enums::auth::Authorization::Authorization(a) = s.authorization {
                     self.cache_user(&a.user).await;
                     Self::extract_user_name(&a.user);
@@ -624,26 +624,59 @@ impl Client {
                 }
                 Ok((vec![], 0))
             }
+            tl::enums::auth::LoginToken::MigrateTo(_) => Err(InvocationError::Deserialize(
+                "QR login: migrated twice for auth.importLoginToken".into(),
+            )),
         }
     }
 
-    /// Check whether a QR-code token has been scanned.
+    /// Check whether the QR code shown to the user has been scanned.
     ///
-    /// Returns `Some(username)` if the user has scanned and confirmed the QR
-    /// code, or `None` if still pending (the token has not been scanned yet,
-    /// or is a fresh [`LoginToken`] issued after a migration and needs
-    /// another poll).
+    /// Call this repeatedly (every second or two) while the QR code from
+    /// [`Client::export_login_token`] is on screen. It asks Telegram for the
+    /// current login token again, which is how a not yet authorized client
+    /// learns that the phone confirmed the login.
+    ///
+    /// Returns `Some(username)` once the login completed, or `None` while
+    /// it is still pending. Stop polling and export a fresh token when the
+    /// one you rendered passes its expiry time.
     ///
     /// Returns [`SignInError::PasswordRequired`] if the account has 2FA
     /// enabled; pass the contained token to [`Client::check_password`] to
     /// finish. Returns [`SignInError::SignUpRequired`] if Telegram reports
     /// the scanning account isn't registered (shouldn't normally happen for
-    /// QR login, but handled for completeness). Returns
-    /// [`SignInError::InvalidCode`] if the token expired or is invalid; call
-    /// [`Client::export_login_token`] again to get a fresh one.
+    /// QR login, but handled for completeness).
+    ///
+    /// The `token` argument is not needed by the protocol and is ignored.
+    /// It is kept so existing callers keep compiling.
     pub async fn check_qr_login(&self, token: Vec<u8>) -> Result<Option<String>, SignInError> {
-        let req = tl::functions::auth::ImportLoginToken { token };
-        self.import_login_token(&req).await
+        let _ = token;
+        let req = tl::functions::auth::ExportLoginToken {
+            api_id: self.inner.api_id,
+            api_hash: self.inner.api_hash.clone(),
+            except_ids: vec![],
+        };
+        let body = match self.rpc_call_raw(&req).await {
+            Ok(b) => b,
+            Err(e) if e.is("SESSION_PASSWORD_NEEDED") => {
+                tracing::info!("[ferogram::auth] 2FA password required to finish QR login");
+                let t = self.get_password_info().await?;
+                return Err(SignInError::PasswordRequired(Box::new(t)));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let mut cur = Cursor::from_slice(&body);
+        let lt =
+            tl::enums::auth::LoginToken::deserialize(&mut cur).map_err(InvocationError::from)?;
+
+        match self.interpret_login_token(lt).await? {
+            LoginTokenOutcome::Done(name) => Ok(name),
+            LoginTokenOutcome::Migrate(dc_id, token) => {
+                tracing::debug!("[ferogram::auth] QR login token belongs to DC{dc_id}; migrating");
+                self.migrate_to(dc_id).await?;
+                self.import_migrated_login_token(token).await
+            }
+        }
     }
 
     /// Makes one `auth.importLoginToken` call and maps its documented error
@@ -722,49 +755,28 @@ impl Client {
         }
     }
 
-    /// Shared `auth.importLoginToken` call/response handling for
-    /// [`Client::check_qr_login`], including 2FA, expired/invalid tokens,
-    /// already-accepted tokens, and one level of DC migration. Telegram
-    /// does not migrate twice for this call, so a second `MigrateTo` here
-    /// is treated as a protocol error.
-    async fn import_login_token(
+    /// Imports a token received in `auth.loginTokenMigrateTo` on the DC we
+    /// just migrated to. This is the one place the new client calls
+    /// `auth.importLoginToken`. Telegram does not redirect twice, so a
+    /// second `MigrateTo` is treated as a protocol error.
+    async fn import_migrated_login_token(
         &self,
-        req: &tl::functions::auth::ImportLoginToken,
+        token: Vec<u8>,
     ) -> Result<Option<String>, SignInError> {
-        use ferogram_tl_types::{Cursor, Deserializable};
-
-        let body = match self.call_import_login_token(req).await? {
+        let req = tl::functions::auth::ImportLoginToken { token };
+        let body = match self.call_import_login_token(&req).await? {
             ImportOutcome::Done(name) => return Ok(Some(name)),
             ImportOutcome::Body(b) => b,
         };
         let mut cur = Cursor::from_slice(&body);
         let lt =
             tl::enums::auth::LoginToken::deserialize(&mut cur).map_err(InvocationError::from)?;
-
         match self.interpret_login_token(lt).await? {
             LoginTokenOutcome::Done(name) => Ok(name),
-            LoginTokenOutcome::Migrate(dc_id, token) => {
-                tracing::debug!("[ferogram::auth] QR login token belongs to DC{dc_id}; migrating");
-                self.migrate_to(dc_id).await?;
-                let req2 = tl::functions::auth::ImportLoginToken { token };
-                let body2 = match self.call_import_login_token(&req2).await? {
-                    ImportOutcome::Done(name) => return Ok(Some(name)),
-                    ImportOutcome::Body(b) => b,
-                };
-                let mut cur2 = Cursor::from_slice(&body2);
-                let lt2 = tl::enums::auth::LoginToken::deserialize(&mut cur2)
-                    .map_err(InvocationError::from)?;
-                match self.interpret_login_token(lt2).await? {
-                    LoginTokenOutcome::Done(name) => Ok(name),
-                    // Telegram is expected to redirect at most once for
-                    // this call, so a second MigrateTo here is unexpected;
-                    // surface it as an error instead of looping again.
-                    LoginTokenOutcome::Migrate(..) => {
-                        Err(SignInError::Other(InvocationError::Deserialize(
-                            "QR login: migrated twice for auth.importLoginToken".into(),
-                        )))
-                    }
-                }
+            LoginTokenOutcome::Migrate(..) => {
+                Err(SignInError::Other(InvocationError::Deserialize(
+                    "QR login: migrated twice for auth.importLoginToken".into(),
+                )))
             }
         }
     }

@@ -111,7 +111,7 @@ Supported emoticons: `🎲`, `🎯`, `🏀`, `⚽`, `🎳`, `🎰`.
 
 ## QR-code login (user accounts)
 
-Generate a login token encoded as a QR code, then poll until the user scans it.
+Generate a login token encoded as a QR code, then poll until the user scans it. The token is only valid until `expires_ts`; export a new one and redraw the QR code when it passes.
 
 ```rust
 // 1. Generate a token
@@ -147,9 +147,11 @@ loop {
 }
 ```
 
-`check_qr_login` handles DC migration internally, retrying the check once on
-the migrated DC. `export_login_token` also handles migration automatically
-and returns `(vec![], 0)` if the user already scanned before you called it.
+`check_qr_login` polls by asking Telegram for the login token again, which is how a
+not yet authorized client learns that the phone confirmed. It handles DC migration
+internally. The token argument is not used and is kept for compatibility.
+`export_login_token` also handles migration automatically and returns `(vec![], 0)`
+if the user already scanned before you called it.
 
 ---
 
