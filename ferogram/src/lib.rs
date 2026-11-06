@@ -220,6 +220,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc(html_root_url = "https://docs.rs/ferogram/0.6.6")]
 #![deny(unsafe_code)]
+#![recursion_limit = "256"]
 
 pub mod builder;
 mod client;
