@@ -40,6 +40,10 @@ TL layer bumped to 232.
   `messages.acceptUrlAuth` gains `tonconnect_session`, and
   `payments.getStarGiftWithdrawalUrl` takes `tmp_password` instead of an SRP password.
 
+- `BinaryFileBackend::owner_only(true)` and `PersistedSession::save_owner_only` keep the session
+  file (which holds the auth key) readable by the owning user only (mode 0600 on Unix). Off
+  by default, so existing behaviour is unchanged.
+
 ### Removed
 
 - `inputPasskeyCredentialFirebasePNV` (dropped from the schema).
@@ -49,6 +53,16 @@ TL layer bumped to 232.
 - Reply headers built from sent messages in `ferogram-msgbox` now keep `quote_rich`.
 - `RawUpdate::constructor_id` returned stale ids for `updateMessagePoll` and
   `updateMessagePollVote`.
+- `check_qr_login` always failed with `InvalidCode` because it called
+  `auth.importLoginToken` from the new client. It now polls `auth.exportLoginToken`.
+  `export_login_token` also accepts `auth.loginTokenSuccess` after a DC migration.
+- `Photo` picked the largest classic size and ignored progressive sizes, so `download`
+  returned a smaller file than `size()` reported. The largest size by bytes is used now.
+- `download_media` falls back to the photo's largest size instead of failing on photos.
+- Transfers retry on the regular DC address when the media-only endpoint cannot be
+  reached, and skip the media endpoint for that DC afterwards.
+- Docs no longer claim that downloads follow CDN redirects. `CdnDownloader` is not
+  wired into `download`, `download_file` or `download_media`.
 
 ---
 
