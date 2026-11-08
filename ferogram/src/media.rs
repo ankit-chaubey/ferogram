@@ -510,6 +510,22 @@ impl UploadedFile {
 
         self.as_document_media()
     }
+
+    /// Wrap 'as_auto_media' with custom thumbnail for media content
+    pub fn as_auto_media_with_thumbnail(
+        &self,
+        thumbnail: Option<&UploadedFile>,
+    ) -> tl::enums::InputMedia {
+        let mut media = self.as_auto_media();
+
+        if let (Some(thumbnail), tl::enums::InputMedia::UploadedDocument(document)) =
+            (thumbnail, &mut media)
+        {
+            document.thumb = Some(thumbnail.inner.clone());
+        }
+
+        media
+    }
 }
 
 /// `UploadedFile` converts to `InputMedia` automatically using MIME detection.
