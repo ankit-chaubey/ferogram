@@ -14,6 +14,7 @@ categories    = ["api-bindings", "network-programming", "asynchronous"]
 
 [dependencies]
 ferogram-fsm       = { workspace = true, optional = true }
+ferogram-e2e       = { workspace = true, optional = true }
 ferogram-connect   = { workspace = true }
 ferogram-mtsender  = { workspace = true }
 ferogram-msgbox = { workspace = true }
@@ -60,6 +61,8 @@ libsql-remote-session = ["ferogram-session/libsql-remote-session"]
 serde           = ["ferogram-session/serde"]
 ## Enable the finite-state-machine dispatcher helper (`dp.on_message_fsm`, `FsmState`).
 fsm             = ["dep:ferogram-fsm"]
+## Telegram secret chats (end-to-end encryption). Re-exports `ferogram-e2e` as `ferogram::e2e`.
+e2e             = ["dep:ferogram-e2e"]
 ## Enable HTML/Markdown message parsing for rich text (`ParseMode`, entity building).
 parsers         = ["ferogram-parsers/html"]
 ## Alias of `parsers`; kept for backwards compatibility.
@@ -142,6 +145,10 @@ name              = "order_bot"
 required-features = ["derive", "fsm"]
 
 [[example]]
+name              = "secret_chat"
+required-features = ["e2e"]
+
+[[example]]
 name              = "showcase_bot"
 required-features = ["parsers"]
 
@@ -167,7 +174,7 @@ name              = "userbot"
 required-features = ["parsers"]
 
 [package.metadata.docs.rs]
-features     = ["sqlite-session", "serde", "fsm", "parsers", "html", "html5ever", "parser", "codegen"]
+features     = ["sqlite-session", "serde", "fsm", "e2e", "parsers", "html", "html5ever", "parser", "codegen"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [package.metadata.cargo-machete]

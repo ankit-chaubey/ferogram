@@ -554,6 +554,7 @@ Built-in: `all`, `none`, `private`, `group`, `channel`, `text`, `media`, `photo`
 | `html` | yes | HTML entity parser and generator |
 | `derive` | no | `#[derive(FsmState)]` proc-macro |
 | `fsm` | no | FSM state machine support |
+| `e2e` | no | Secret chats (end-to-end encryption), re-exports `ferogram-e2e` as `ferogram::e2e` |
 | `sqlite-session` | no | `SqliteBackend` via rusqlite |
 | `libsql-session` | no | `LibSqlBackend` via libsql (Turso) |
 | `experimental` | no | Resumable transfers, `upload_exp`, `download_exp` |

@@ -13,7 +13,7 @@
  */
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-derive/0.6.7-b1")]
+#![doc(html_root_url = "https://docs.rs/ferogram-derive/0.6.7-b2")]
 //! Procedural macros for ferogram.
 //!
 //! This crate is part of [ferogram](https://crates.io/crates/ferogram), an async Rust
