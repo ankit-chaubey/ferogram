@@ -266,6 +266,21 @@ impl IncomingMessage {
             .and_then(|ts| chrono::Utc.timestamp_opt(ts as i64, 0).single())
     }
 
+    /// ID of the message that started this message thread.
+    pub fn reply_to_top_message_id(&self) -> Option<i32> {
+        match &self.raw {
+            tl::enums::Message::Message(m) => {
+                m.reply_to.as_ref().and_then(|reply| match reply {
+                    tl::enums::MessageReplyHeader::MessageReplyHeader(header) => {
+                        header.reply_to_top_id
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// The media attached to this message, if any.
     pub fn media(&self) -> Option<&tl::enums::MessageMedia> {
         match &self.raw {
