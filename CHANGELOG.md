@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.7-b2] - 2026-11-09
+
+Beta release.
+
+### Added
+
+- `ferogram-e2e` 0.1.0-b1 (versioned separately from the workspace) and the `e2e` feature of `ferogram`: Telegram secret chats (MTProto 2.0
+  end-to-end encryption). DH key exchange, message and file encryption, encrypted media
+  upload/download, re-keying, self-destruct TTLs and service messages. Chats persist to a small
+  binary store, `<session_name>.e2e` (`E2eClient::for_session`): atomic writes, checksummed,
+  mode `0600` on Unix. `ferogram::e2e` re-exports the crate, implements `E2eTransport` for
+  `Client`, and adds `E2eClientExt::handle_client_update` for feeding `Update`s and
+  `E2eClientExt::request_secret_chat("@user")`, which resolves the access hash from the peer cache.
+  Example: `secret_chat`.
+- `ferogram-e2e` does not depend on `ferogram`; any client can drive it by implementing
+  `E2eTransport`.
+
+### Fixed
+
+- `ferogram-e2e`: decrypting a secret chat message now also rejects padding longer than 1024
+  bytes and message lengths that are not a multiple of 4.
+
+---
+
 ## [0.6.7-b1] - 2026-11-06
 
 Beta release.

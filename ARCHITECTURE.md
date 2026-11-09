@@ -23,6 +23,7 @@ specific layer.
 |---|---|
 | [`ferogram`](ferogram/) | High-level client. Auth, messaging, media, dispatcher, FSM, middleware. |
 | [`ferogram-msgbox`](ferogram-msgbox/) | Update-gap tracking. pts/qts/seq bookkeeping and gap detection for the `Updates` stream. |
+| [`ferogram-e2e`](ferogram-e2e/) | Secret chats. DH exchange, message and file encryption, re-keying, TTLs. Client-independent via `E2eTransport`; reached through the `e2e` feature of `ferogram`. |
 | [`ferogram-session`](ferogram-session/) | Session types and pluggable storage backends (file, memory, SQLite, LibSQL, base64). |
 | [`ferogram-fsm`](ferogram-fsm/) | FSM state storage and context. `StateStorage` trait, `MemoryStorage`, `StateContext`. |
 | [`ferogram-parsers`](ferogram-parsers/) | Telegram Markdown and HTML entity parsers. |
@@ -121,6 +122,7 @@ ferogram = { version = "0.6.6", features = [
     "derive",                 # #[derive(FsmState)]
     "serde",                  # serde support on session types
     "fsm",                    # dp.on_message_fsm and the FSM dispatcher helpers
+    "e2e",                    # secret chats via ferogram::e2e (re-exports ferogram-e2e)
     "resilient-connect",      # DoH + special-config fallback for censored networks
     "socks5",                 # SOCKS5 proxy support for outgoing connections
     "metrics",                # RPC/connection counters, histograms, gauges

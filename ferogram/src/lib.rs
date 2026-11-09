@@ -218,7 +218,7 @@
 //! - GitHub: [ankit-chaubey/ferogram](https://github.com/ankit-chaubey/ferogram)
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram/0.6.7-b1")]
+#![doc(html_root_url = "https://docs.rs/ferogram/0.6.7-b2")]
 #![deny(unsafe_code)]
 #![recursion_limit = "256"]
 
@@ -276,6 +276,8 @@ pub mod reactions;
 pub mod dc_migration;
 pub mod proxy;
 
+#[cfg(feature = "e2e")]
+pub mod e2e;
 pub mod file_info;
 #[cfg(feature = "fsm")]
 pub mod fsm;
