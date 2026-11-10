@@ -1,12 +1,237 @@
 # Release History
 
-ferogram started as a renamed continuation of [layer](https://github.com/ankit-chaubey/layer) v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.
+ferogram is an asynchronous Rust framework for Telegram's MTProto protocol, built to make working with Telegram easier for both bot and user accounts.
+
+Here you'll find an overview of what's new in each release, from new features and improvements to bug fixes and breaking changes. For a more detailed breakdown, check out the "CHANGELOG" (https://github.com/ankit-chaubey/ferogram/blob/main/CHANGELOG.md).
+
+---
+
+## v0.6.7
+
+Released 2026-11-10. TL layer 233, Telegram secret chats, and a round of fixes for downloads, QR login and updates.
+
+All crates except `ferogram-e2e` are released as 0.6.7. `ferogram-e2e` is versioned separately and ships as 0.1.0.
+
+### Secret chats
+
+The new `e2e` feature adds end-to-end encrypted chats as `ferogram::e2e`, backed by the new `ferogram-e2e` crate. It covers key exchange, message and file encryption, encrypted media upload and download, re-keying, self-destruct timers and service messages. Chats are stored in `<session_name>.e2e` next to the session file, with atomic, checksummed writes and mode `0600` on Unix. The crate does not depend on `ferogram`, you can drive it from any client through the `E2eTransport` trait.
+
+```rust
+use ferogram::e2e::{E2eClient, E2eClientExt, E2eEvent};
+
+let e2e = E2eClient::for_session(client.clone(), "mybot.session")?;
+let chat_id = e2e.request_secret_chat("@someone").await?;
+
+let mut stream = client.stream_updates();
+while let Some(update) = stream.next().await {
+    if let Ok(Some(E2eEvent::ChatReady { chat_id })) = e2e.handle_client_update(&update).await {
+        e2e.send_text(chat_id, "hello", 0).await?;
+    }
+}
+```
+
+See the `secret_chat` example and the Secret Chats page in the docs.
+
+### Message links
+
+`Client::get_message_by_link(link)` resolves `t.me/<username>/<id>`, `t.me/c/<channel_id>/<id>` and `t.me/c/<channel_id>/<topic_id>/<id>`. With a topic ID, the message must be the topic root or belong to that topic. `IncomingMessage::reply_to_top_message_id()` returns the topic root or thread start from the reply header.
+
+```rust
+if let Some(msg) = client.get_message_by_link("https://t.me/c/1234567890/42").await? {
+    println!("{}", msg.text().unwrap_or_default());
+}
+```
+
+### TL layer 233
+
+The layer moved from 229 to 233 over the 0.6.7 betas and the final release.
+
+- **230:** `wallet.*` and `toncenter.*` methods, TON Connect sessions, onramp methods, `payments.getCurrencyRates`, `bots.addUsername` and `bots.removeUsername`.
+- **232:** share themes, no-paid-messages tokens, star gift deposit, withdraw and display methods, `quote_rich` on reply headers, `in_news` and `pinned_msg_id` on `channel`.
+- **233:** a widget API (`inputMediaWidget`, `messageMediaWidget`, bot widget queries and the `messages.*Widget*` functions), audio file transcription (`messages.transcribeAudioFile`, `messages.getTranscriptionLangs`), and the forum sidebar flags. `channels.toggleForum` gains a `sidebar` field. `Client::toggle_forum` sends it as `false`, so topics keep their current layout.
+
+New wallet, widget and forum topic updates arrive as `Update::Raw`.
+
+### Session file permissions
+
+`BinaryFileBackend::owner_only(true)` and `PersistedSession::save_owner_only` make the session file, which holds the auth key, readable by its owner only (mode `0600` on Unix). It is off by default, so existing behavior is unchanged.
+
+### Fixes
+
+- `check_qr_login` always failed with `InvalidCode` because it called `auth.importLoginToken` from the new client. It now polls `auth.exportLoginToken`, and `export_login_token` accepts `auth.loginTokenSuccess` after a DC migration.
+- Downloads picked the largest classic photo size and ignored progressive sizes, so a download could be smaller than `size()` reported. The largest size by bytes is used now, and `download_media` falls back to it for photos.
+- Transfers retry on the regular DC address when the media-only endpoint can't be reached, and skip that endpoint afterwards.
+- `RawUpdate::constructor_id` returned stale ids for `updateMessagePoll` and `updateMessagePollVote`.
+- Reply headers built from sent messages in `ferogram-msgbox` keep `quote_rich`.
+- The docs no longer claim downloads follow CDN redirects, and many method signatures and examples that had drifted from the code were corrected.
+
+### Upgrading from 0.6.6
+
+```toml
+ferogram = "0.6.7"
+```
+
+No API changes required. Enable the `e2e` feature if you want secret chats.
+
+---
+
+## v0.6.6
+
+Released 2026-10-21. TL layer 229. Inline and reply keyboards are separate types, QR login handles 2FA and DC migration, and the DC pool only uses connections that finished setup.
+
+### Separate inline and reply buttons
+
+`Button` now builds inline buttons only. Reply keyboard buttons moved to the new `ReplyButton`, exported at the crate root, and `ReplyKeyboard::row` takes `ReplyButton`. Layer 229 has no inline simple webview button, so `Button::mini_app_simple` is gone.
+
+```rust
+use ferogram::{Button, ReplyButton, ReplyKeyboard};
+
+let inline = vec![vec![Button::callback("Yes", "yes")]];
+
+let reply = ReplyKeyboard::new()
+    .row(vec![ReplyButton::text("Menu"), ReplyButton::request_phone("Share phone")]);
+```
+
+### QR login
+
+`Client::check_qr_login` returns `SignInError` instead of `InvocationError`. A 2FA account gives `PasswordRequired`, an expired or invalid token gives `InvalidCode`. `AUTH_TOKEN_ALREADY_ACCEPTED` counts as a successful login, and one DC migration is followed automatically.
+
+### Inline results
+
+`InlineResult::send` takes any `PeerRef` and returns `Option<IncomingMessage>` with the sent message when Telegram includes it.
+
+### More reliable DC pool
+
+`DcPool` no longer opens connections by itself, it only picks slots that finished initConnection and the auth import. A slot is evicted on `CONNECTION_NOT_INITED`, so the next `invoke_on_dc` call redoes initConnection instead of failing forever. Cancelled or failed RPCs no longer leave a slot marked busy. `get_or_create_slot` is removed.
+
+### Other changes
+
+- TL layer 229: ephemeral welcome messages and `EphemeralBotCallbackQuery`, the `manage_welcome_messages` admin right, Firebase PNV login methods and new page blocks.
+- `ErrorKind::FileReferenceExpired` is returned for `FILE_REFERENCE_*` errors, so you can refresh the reference and retry. Before, these were `ErrorKind::Transfer`.
+- Rich HTML and Markdown parsers support a `compact` attribute for tables.
+- `DcConnection::auth_key_bytes` and `first_salt` returned the temporary PFS key and salt. They now return the permanent ones that are safe to save.
+- `tracing` no longer enables its `log` feature in the workspace crates.
+
+### Breaking changes
+
+- `Button::text`, `request_phone`, `request_geo`, `request_poll`, `request_quiz` and `mini_app_simple` moved to `ReplyButton`.
+- `check_qr_login` returns `SignInError`.
+- `InlineResult::send` signature changed as described above.
+
+### Upgrading from 0.6.5
+
+```toml
+ferogram = "0.6.6"
+```
+
+Move reply keyboard buttons from `Button` to `ReplyButton`, and match on `SignInError` where you call `check_qr_login`.
+
+---
+
+## v0.6.5
+
+Released 2026-07-31. Recommended upgrade. All workspace dependencies are updated, and the release includes performance and safety work across the workspace.
+
+### FakeTLS and crypto fixes
+
+Several proxy bugs were fixed together:
+
+- The FakeTLS ClientHello was a bare 4-extension hello that real proxies dropped. It now has GREASE values, `key_share` (X25519), `signature_algorithms`, ALPN and padding to about 517 bytes.
+- FakeTLS framing was treating each TLS record as one MTProto frame. It now carries a PaddedIntermediate stream inside the decoy TLS records, the way real MTProxy does.
+- `decrypt_data_v2` rejected valid frames when the server picked a non-zero pad length with `dd` or `ee` secrets, which showed up as intermittent `Crypto(InvalidBuffer)` after a good handshake.
+- `MtpSender` silently skipped chunks when `cipher.try_lock()` failed, which permanently desynced the AES-CTR keystream. It now returns an error.
+- `channelDifferenceTooLong` no longer panics when a channel dialog has no `pts`. It logs and retries with a fresh difference.
+
+### Transport race
+
+`ClientBuilder::probe_transport_race` takes an ordered list of `RaceLeg { transport, stagger }`. The default race is now two legs, `Full` immediately and `Obfuscated` 200 ms later. The old `Http` leg never sent HTTP frames, it fell back to `Abridged` on the same port, so it was removed.
+
+### Dialogs
+
+- `GetDialogsOptions` adds `exclude_pinned` and `folder_id`. `Client::get_dialogs(limit)` still works through `From<i32>`.
+- `DialogCursor` is a serializable cursor, resume with `Client::iter_dialogs_from()`.
+- `Client::stream_dialogs` returns a `futures::Stream`.
+
+### Communities and sessions
+
+Telegram Community chats are cached with their own access hashes and survive a session restore instead of turning into plain channels. The binary session format is now v8, older files load unchanged and upgrade on the next save. SQLite and libSQL add an `is_community` column automatically.
+
+### `ferogram-msgbox` and `metrics`
+
+`message_box` moved into its own `ferogram-msgbox` crate. `ferogram` re-exports it as `ferogram::message_box`, so existing code compiles unchanged. The optional `metrics` feature adds counters for RPC and connection events, and a no-op shim keeps the cost at zero when it is off.
+
+### Transfer pipelining default
+
+`download_pipeline_depth` and `upload_pipeline_depth` now default to `1` instead of `4`. Connection count still scales with file size. Raise the depth yourself through `ClientBuilder` or `TransferLimits` if you want in-flight requests per connection.
+
+### Upgrading from 0.6.4
+
+```toml
+ferogram = "0.6.5"
+```
+
+No API changes required.
+
+---
+
+## v0.6.4
+
+Released 2026-07-14. TL layer 228, tunable transfers, richer media downloads, a callback and inline query dispatcher, and a pipelined sender.
+
+### Communities and ephemeral messages
+
+Layer 228 adds Telegram Communities (`communities.*` methods, `Chat::Community`, `ChatFull::CommunityFull`, `Dialog::Community`) and ephemeral one-time messages (`ephemeral.*` methods, `EphemeralMessage`, `InputReplyTo::EphemeralMessage`).
+
+### Transfer tuning and pipelining
+
+`TransferLimits` and `ClientBuilder::transfer_limits(...)` set how many parallel connections a transfer may open and how deep each connection's request pipeline goes. Shorthands: `download_tcp_connections`, `upload_tcp_connections`, `max_tcp_connections`, `download_pipeline_depth`, `upload_pipeline_depth` and `bypass_tcp_allotments`. Under the hood, `ferogram-mtsender` gains `PipelinedSender` and `spawn_pipelined`, which keep several chunk requests in flight on one connection. Download chunks cap at 512 KB and uploads use a three-tier part size table.
+
+### More things you can download
+
+`Downloadable` now covers `tl::enums::MessageMedia` (resolved through games, web pages, polls, stories and paid media), `ProfilePhoto`, specific thumbnails (`Photo::thumb(type)`, `Document::thumb(type)`), `RawLocation`, video cover photos through `video_cover(media)`, and quality selection with `MediaQuality` and `available_qualities(media)`. `Client::download_file` works with any `D: Downloadable`.
+
+### Dispatcher for callbacks and inline queries
+
+`Router::on_callback_query`, `on_inline_query`, `on_inline_send` and `on_callback_query_fsm` route those updates next to messages. `Filter` is generic over the update type, so the same `&`, `|` and `!` combinators work on `CallbackQuery` and `InlineQuery`.
+
+### Login
+
+`request_login_code_with_options`, `resend_code` and `SendCodeOptions` cover flash call, missed call and Firebase delivery. `sign_out()` keeps the `future_auth_token` Telegram returns and replays it on the next `request_login_code`, so a re-login can skip code entry. In that case you get `SendCodeOutcome::AlreadyAuthorized`. `Client::interactive_sign_in` is now public.
+
+### Smaller additions
+
+- `BannedRightsBuilder` for granular channel ban rights. `ban`, `kick` and `restrict` all share one implementation built on it.
+- `Client::get_chat_photos(peer, limit)` returns photo history for groups and channels.
+- `Client::cache_entities(users, chats)` feeds users and chats from a raw RPC call into the peer cache.
+- `ClientBuilder::dc_id_override(dc_id)` registers a connection under a custom DC id.
+- `PeerCache::stats()`, `PersistedSession::stats()`, `UserFull` and `MessagePage` helpers.
+- Session saves and snapshot flushes run on `spawn_blocking`, so SQLite and file writes no longer stall async tasks.
+
+### Fixes
+
+- The dc-tagged `p_q_inner_data` is no longer sent on normal connects. Telegram rejects it with RPC 444 outside DC2.
+- Reconnect keeps a still-valid auth key on timeout, and clears a rejected one (RPC 401, `AUTH_KEY_UNREGISTERED`) before retrying with fresh DH.
+- `get_chat_participants` returns a clear error for `ChatFull::CommunityFull`.
+- `#[derive(FsmState)]` match-arm codegen and crate path resolution.
+
+### Breaking changes
+
+- `request_login_code` and `resend_code` return `SendCodeOutcome` instead of `LoginToken`. Match on `SendCodeOutcome::CodeRequired(token)` to get the old value.
+- `media::download_worker_count` and `upload_worker_count` take an extra `max_workers: usize`.
+
+### Upgrading from 0.6.3
+
+```toml
+ferogram = "0.6.4"
+```
+
+Update the `request_login_code` call sites to match on `SendCodeOutcome`.
 
 ---
 
 ## v0.6.3
 
-Released 2026-05-29. Transfer progress tracking, resumable transfers, and typed errors.
+Released 2026-06-28. Transfer progress tracking, resumable transfers, and typed errors.
 
 ### Transfer progress and control
 
@@ -57,10 +282,49 @@ match result {
 ### Upgrading from 0.5.2
 
 ```toml
-ferogram = "0.6.4"
+ferogram = "0.6.3"
 ```
 
 Rename `upload_file_from_path` call sites to `upload_file`. Add `None` as the last argument to all upload and download calls.
+
+---
+
+## v0.6.2
+
+Released 2026-06-24. Transport, reconnect and update synchronization stabilization.
+
+### Pagination
+
+`Client::get_message_history` and `Client::get_replies` take an extra `add_offset: i32` for offset-based pagination. Pass `0` for the previous behavior.
+
+### Reconnect and transport
+
+Frame parsing and validation in Full transport mode was fixed, along with transport desyncs that caused CRC mismatches. Reconnect handling after network interruptions and auth-key reuse is more reliable, and several cases that left a client disconnected after connectivity returned are gone. Update gap recovery and account and channel difference scheduling were fixed too. Ownership boundaries between `ferogram`, `ferogram-connect`, `ferogram-mtsender`, `ferogram-session` and `ferogram-parsers` were cleaned up.
+
+### Diagnostics
+
+Logs now carry connection generation, reader lifecycle and session identity (`[conn_gen=X]`, `[reader#N]`, `[sid=...]`), plus frame-level transport tracing for sequence tracking and CRC validation.
+
+### Upgrading from 0.6.0
+
+```toml
+ferogram = "0.6.2"
+```
+
+Add `0` as the `add_offset` argument to `get_message_history` and `get_replies` calls.
+
+---
+
+## v0.6.0
+
+Released 2026-06-01. Transfer progress and control, typed errors, and resumable transfers. The 0.6.3 section below covers the same APIs with examples.
+
+- `TransferHandle` and `TransferProgress` for progress, pause, resume and cancel.
+- `InvocationErrorExt` with `.kind()` and `.friendly()`.
+- `UploadedFile::as_auto_media()` and `From<UploadedFile> for InputMedia`.
+- `download_resumable` and `upload_resumable` under the `experimental` feature.
+- Fixed: `download_resumable` ignored its saved offset and restarted from byte 0, and compared a partial SHA-256 against the final file. Interrupted downloads now flush to a `.partial` file that survives a restart.
+- Breaking: `upload_file_from_path` is now `upload_file`, upload and download calls take a `handle: Option<&TransferHandle>` last argument, and `send_file` takes `impl Into<InputMedia>`.
 
 ---
 
@@ -792,7 +1056,7 @@ FakeTLS transport now prepends the Change Cipher Spec record to the first applic
 
 ## v0.1.0
 
-Released 2026-04-11. The initial release of ferogram, renamed and rebranded from [layer](https://github.com/ankit-chaubey/layer) v0.5.0.
+Released 2026-04-11. The initial release of ferogram.
 
 ### Proxy and transport
 
