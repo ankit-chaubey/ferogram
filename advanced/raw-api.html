@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../theme/custom-3cd05ff1.css">
+        <link rel="stylesheet" href="../theme/custom-77732367.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cd8d88f4.js";
+            window.path_to_searchindex_js = "../searchindex-4f2f0348.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5d15c526.js"></script>
+        <script src="../toc-c3257afc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -329,9 +329,6 @@ if let enums::UserFull::UserFull(info) = uf.full_user {
 </span>// This populates the peer cache
 let peer = client.resolve("@username").await?;
 
-// For users
-let user_hash = client.inner_peer_cache_users().get(&amp;user_id).copied().unwrap_or(0);
-
 // Simpler: use resolve_to_input_peer for a ready-to-use InputPeer
 let input_peer = client.resolve_to_input_peer("@username").await?;
 <span class="boring">}</span></code></pre>
@@ -366,27 +363,13 @@ match client.invoke(&amp;req).await {
 <span class="boring">}</span></code></pre>
 <p>Issues a single <code>GetDialogs</code> call and caches all returned channel and user access hashes. Call this at startup if your code needs to address channels by ID before any update has come in for them. Without this, a <code>CHANNEL_INVALID</code> error can appear on the first request to a channel the bot hasn’t interacted with yet in the current session.</p>
 <p>This is opt-in; ferogram no longer calls <code>GetDialogs</code> automatically at startup. See the v0.3.5 release notes for why.</p>
-<h3 id="cache_users_slice_pub--cache_chats_slice_pub"><a class="header" href="#cache_users_slice_pub--cache_chats_slice_pub"><code>cache_users_slice_pub</code> / <code>cache_chats_slice_pub</code></a></h3>
+<h3 id="cache_users_slice--cache_chats_slice"><a class="header" href="#cache_users_slice--cache_chats_slice"><code>cache_users_slice</code> / <code>cache_chats_slice</code></a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>client.cache_users_slice_pub(&amp;users_vec).await;
-client.cache_chats_slice_pub(&amp;chats_vec).await;
+</span>client.cache_users_slice(&amp;users_vec).await;
+client.cache_chats_slice(&amp;chats_vec).await;
 <span class="boring">}</span></code></pre>
 <p>Manually insert <code>tl::enums::User</code> or <code>tl::enums::Chat</code> slices into the access-hash cache. Useful when you’ve called a raw RPC that returned user or chat objects and want them to be addressable by subsequent high-level calls.</p>
-<hr>
-<h2 id="update-state"><a class="header" href="#update-state">Update state</a></h2>
-<h3 id="sync_update_state"><a class="header" href="#sync_update_state"><code>sync_update_state</code></a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>client.sync_update_state().await;
-<span class="boring">}</span></code></pre>
-<p>Calls <code>updates.getState</code> and resets the internal pts/qts/seq/date counters to match the server. Called automatically on <code>connect()</code>. Call it manually after resuming from a long hibernation to avoid replaying a large backlog of missed updates.</p>
-<h3 id="sync_pts_state"><a class="header" href="#sync_pts_state"><code>sync_pts_state</code></a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>client.sync_pts_state().await?;
-<span class="boring">}</span></code></pre>
-<p>The fallible version of <code>sync_update_state</code>. Returns an error if the RPC itself fails. <code>sync_update_state</code> silently discards that error; use <code>sync_pts_state</code> directly when you need to handle or log a failure.</p>
 
                     </main>
 

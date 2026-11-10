@@ -367,13 +367,31 @@ li > ul, li > ol { margin: 0.3em 0; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(124,106,247,0.6); }
 
 /* ── Nav arrows ──────────────────────────────────────────────── */
-.nav-chapters .fa {
-  background: rgba(124,106,247,0.15);
-  border-radius: 50%;
-  padding: 14px;
-  transition: background 0.2s;
+/* Same size as the default mdBook / Rust book arrows: 2.5em of a 16px body.
+   The root font size is raised above, so the size is pinned in px here and the
+   inner icon is told to inherit it (the generic `.content span` rule would
+   otherwise resize it). */
+.nav-chapters,
+.mobile-nav-chapters {
+  font-size: 40px !important;
 }
-.nav-chapters .fa:hover { background: rgba(124,106,247,0.3); }
+.nav-chapters i,
+.nav-chapters span,
+.nav-chapters .fa,
+.nav-chapters .fa-svg,
+.mobile-nav-chapters i,
+.mobile-nav-chapters span,
+.mobile-nav-chapters .fa,
+.mobile-nav-chapters .fa-svg {
+  font-size: inherit !important;
+  padding: 0 !important;
+  background: none !important;
+  border-radius: 0 !important;
+}
+.nav-chapters:hover,
+.mobile-nav-chapters:hover {
+  color: var(--layer-accent-light);
+}
 
 /* ── Top bar ─────────────────────────────────────────────────── */
 #menu-bar {

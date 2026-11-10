@@ -29,7 +29,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="theme/custom-3cd05ff1.css">
+        <link rel="stylesheet" href="theme/custom-77732367.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cd8d88f4.js";
+            window.path_to_searchindex_js = "searchindex-4f2f0348.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-5d15c526.js"></script>
+        <script src="toc-c3257afc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,7 +182,7 @@
                         <h1 id="ferogram"><a class="header" href="#ferogram">ferogram</a></h1>
 <p><a href="https://crates.io/crates/ferogram"><img src="https://img.shields.io/crates/v/ferogram?color=fc8d62&amp;label=ferogram&amp;style=flat-square" alt="Crates.io"></a>
 <a href="https://docs.rs/ferogram"><img src="https://img.shields.io/docsrs/ferogram?style=flat-square&amp;color=22c55e" alt="docs.rs"></a>
-<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-232-8b5cf6?style=flat-square" alt="TL Layer"></a>
+<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-233-8b5cf6?style=flat-square" alt="TL Layer"></a>
 <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License"></a></p>
 <p>Hey, glad you’re here.</p>
 <p>ferogram is an async Rust library for Telegram’s MTProto protocol, built by <a href="https://github.com/ankit-chaubey">Ankit Chaubey</a>. It talks to Telegram directly, no Bot API proxy in between, and it works for both bots and user accounts from the same API.</p>
@@ -191,7 +191,7 @@
 <p>If something’s missing for you, drop by <a href="https://t.me/FerogramChat">t.me/FerogramChat</a>. I genuinely like hearing what people are building with it.</p>
 <h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.6.6"
+ferogram = "0.6.7"
 tokio    = { version = "1", features = ["full"] }
 </code></pre>
 <p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
@@ -205,7 +205,7 @@ tokio    = { version = "1", features = ["full"] }
 <h2 id="whats-under-the-hood"><a class="header" href="#whats-under-the-hood">What’s under the hood</a></h2>
 <p>Everything in the workspace is written from scratch: the <code>.tl</code> schema parser, the TL code generator, AES-IGE crypto, the DH key exchange, MTProto framing, the session layer, and the high-level client on top. Each piece is its own crate so you can pull in just what you need. Most people never touch any of it directly, but it’s all there if you do.</p>
 <h2 id="crates"><a class="header" href="#crates">Crates</a></h2>
-<p>Most people only need <code>ferogram</code>. But each crate is independently published if you need a specific layer on its own.</p>
+<p>Most people only need <code>ferogram</code>. But each crate is independently published if you need a specific layer on its own. They share the workspace version, except <code>ferogram-e2e</code>, which is versioned separately.</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -213,6 +213,8 @@ tokio    = { version = "1", features = ["full"] }
 </thead>
 <tbody>
 <tr><td><a href="https://docs.rs/ferogram"><code>ferogram</code></a></td><td>High-level client. Auth, messaging, media, dispatcher, FSM, middleware.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-msgbox"><code>ferogram-msgbox</code></a></td><td>Update-gap tracking. pts/qts/seq bookkeeping and gap detection for the <code>Updates</code> stream.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-e2e"><code>ferogram-e2e</code></a></td><td>Secret chats. DH exchange, message and file encryption, re-keying, TTLs. Client-independent via <code>E2eTransport</code>; reached through the <code>e2e</code> feature of <code>ferogram</code>.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-session"><code>ferogram-session</code></a></td><td>Session types and pluggable storage backends (file, memory, SQLite, LibSQL, base64).</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-fsm"><code>ferogram-fsm</code></a></td><td>FSM state storage and context. <code>StateStorage</code> trait, <code>MemoryStorage</code>, <code>StateContext</code>.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-parsers"><code>ferogram-parsers</code></a></td><td>Telegram Markdown and HTML entity parsers.</td></tr>
@@ -229,6 +231,8 @@ tokio    = { version = "1", features = ["full"] }
 </div>
 <p>The rough dependency chain:</p>
 <pre><code>ferogram
+├ ferogram-msgbox
+│ └ ferogram-tl-types
 └ ferogram-mtsender
   └ ferogram-connect
     ├ ferogram-mtproto
@@ -243,7 +247,10 @@ tokio    = { version = "1", features = ["full"] }
 <pre><code class="language-bash">pip install ferogram
 </code></pre>
 <h2 id="secret-chats"><a class="header" href="#secret-chats">Secret chats</a></h2>
-<p>Secret chats (end-to-end encrypted) are fully implemented but not published to crates.io yet. The plan is to release once there is enough community demand for it.</p>
+<p>Secret chats (end-to-end encrypted) are supported behind the <code>e2e</code> feature, built on the separate <a href="https://crates.io/crates/ferogram-e2e"><code>ferogram-e2e</code></a> crate.</p>
+<pre><code class="language-toml">ferogram = { version = "0.6", features = ["e2e"] }
+</code></pre>
+<p>See <a href="#secret-chats-1">Secret Chats</a> for a walkthrough.</p>
 <h2 id="voice-and-video-calls"><a class="header" href="#voice-and-video-calls">Voice and video calls</a></h2>
 <p>Group audio calls are fully implemented, stable, and already in active production use by the author. Written in Rust from scratch, not a wrapper around anything.</p>
 <p>Group video calls are implemented and stable for most scenarios, with some known codec edge cases still being ironed out.</p>
@@ -807,7 +814,7 @@ See <a href="#peer-cache-helpers">Raw API Access</a> for usage details.</p>
 <h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
 <h2 id="add-to-cargotoml"><a class="header" href="#add-to-cargotoml">Add to Cargo.toml</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.6.6"
+ferogram = "0.6.7"
 tokio        = { version = "1", features = ["full"] }
 </code></pre>
 <p><code>ferogram</code> re-exports everything you need for both user clients and bots.</p>
@@ -847,12 +854,16 @@ let api_hash = "deadbeef..."; // ← never do this in a public repo
 </ol>
 <hr>
 <h2 id="optional-features"><a class="header" href="#optional-features">Optional features</a></h2>
+<h3 id="secret-chats-end-to-end-encryption"><a class="header" href="#secret-chats-end-to-end-encryption">Secret chats (end-to-end encryption)</a></h3>
+<pre><code class="language-toml">ferogram = { version = "0.6.7", features = ["e2e"] }
+</code></pre>
+<p>Enables Telegram secret chats (MTProto 2.0). The <code>ferogram-e2e</code> crate is re-exported as <code>ferogram::e2e</code>. Chats are kept in a small <code>&lt;session_name&gt;.e2e</code> file next to your session so they survive restarts. See the <code>secret_chat</code> example in the repository.</p>
 <h3 id="sqlite-session-storage"><a class="header" href="#sqlite-session-storage">SQLite session storage</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.6.6", features = ["sqlite-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.7", features = ["sqlite-session"] }
 </code></pre>
 <p>Stores session data in a SQLite database instead of a binary file. Better choice for long-running servers where crash-corruption of the binary file is a concern.</p>
 <h3 id="libsql--turso-session-storage-new-in-v020"><a class="header" href="#libsql--turso-session-storage-new-in-v020">LibSQL / Turso session storage: New in v0.2.0</a></h3>
-<pre><code class="language-toml">ferogram = { version = "0.6.6", features = ["libsql-session"] }
+<pre><code class="language-toml">ferogram = { version = "0.6.7", features = ["libsql-session"] }
 </code></pre>
 <p>Backed by <a href="https://github.com/tursodatabase/libsql">libsql</a>: supports local embedded databases and remote Turso cloud databases. Ideal for serverless or distributed deployments.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -886,10 +897,10 @@ let (client, _shutdown) = Client::builder()
 <p>See <a href="#session-backends-1">Session Backends</a> for the full guide.</p>
 <h3 id="html-entity-parsing"><a class="header" href="#html-entity-parsing">HTML entity parsing</a></h3>
 <pre><code class="language-toml"># Built-in hand-rolled HTML parser (no extra deps)
-ferogram = { version = "0.6.6", features = ["html"] }
+ferogram = { version = "0.6.7", features = ["html"] }
 
 # OR: spec-compliant html5ever tokenizer (overrides built-in)
-ferogram = { version = "0.6.6", features = ["html5ever"] }
+ferogram = { version = "0.6.7", features = ["html5ever"] }
 </code></pre>
 <div class="table-wrapper">
 <table>
@@ -904,7 +915,7 @@ ferogram = { version = "0.6.6", features = ["html5ever"] }
 </div>
 <h3 id="raw-type-system-features-ferogram-tl-types"><a class="header" href="#raw-type-system-features-ferogram-tl-types">Raw type system features (<code>ferogram-tl-types</code>)</a></h3>
 <p>If you use <code>ferogram-tl-types</code> directly for raw API access:</p>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.6", features = [
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.7", features = [
     "tl-api",          # Telegram API types (required)
     "tl-mtproto",      # Low-level MTProto types
     "impl-debug",      # Debug trait on all types (default ON)
@@ -920,7 +931,7 @@ ferogram = { version = "0.6.6", features = ["html5ever"] }
 
 fn main() {
     println!("Using Telegram API Layer {}", LAYER);
-    // → Using Telegram API Layer 232
+    // → Using Telegram API Layer 233
 }</code></pre>
 <hr>
 <h2 id="platform-notes"><a class="header" href="#platform-notes">Platform notes</a></h2>
@@ -1106,9 +1117,9 @@ async fn dispatch(
         // Callback queries
         Update::CallbackQuery(cb) =&gt; {
             match cb.data().unwrap_or("") {
-                "help"  =&gt; { client.answer_callback_query(cb.query_id, Some("Send /help for commands"), false, None, 0).await?; }
-                "about" =&gt; { client.answer_callback_query(cb.query_id, Some("Built with ferogram: Rust MTProto 🦀"), true, None, 0).await?; }
-                _       =&gt; { client.answer_callback_query(cb.query_id, None, false, None, 0).await?; }
+                "help"  =&gt; { client.answer_callback_query(cb.query_id, Some("Send /help for commands"), false).await?; }
+                "about" =&gt; { client.answer_callback_query(cb.query_id, Some("Built with ferogram: Rust MTProto 🦀"), true).await?; }
+                _       =&gt; { client.answer_callback_query(cb.query_id, None, false).await?; }
             }
         }
 
@@ -1907,13 +1918,13 @@ msg.click_button_where(|text, data| text.starts_with("✅")).await?;
 client.edit_message("@peer", msg_id, InputMessage::text("New text")).await?;
 
 // Forward messages
-client.forward_messages("@source", &amp;[id1, id2], "@dest").await?;
+client.forward_messages("@dest", &amp;[id1, id2], "@source", ForwardOptions::default()).await?;
 
 // Delete messages (revoke = remove for everyone)
 client.delete_messages(&amp;[msg_id_1, msg_id_2], true).await?;
 
 // Pin / unpin
-client.pin_message("@peer", msg_id).await?;
+client.pin_message("@peer", msg_id, true).await?;
 client.pin_message("@peer", msg_id, false).await?;
 client.unpin_all_messages("@peer").await?;
 
@@ -1924,18 +1935,29 @@ let pinned = client.get_pinned_message("@peer").await?;
 client.mark_read("@peer").await?;
 
 // Export a permanent message link
-let link = client.export_message_link("@peer", msg_id).await?;
+let link = client.export_message_link("@peer", msg_id, LinkKind::Normal).await?;
 
 // Who has read a message (groups/channels with read receipts)
 let readers = client.get_message_read_participants("@peer", msg_id).await?;
 <span class="boring">}</span></code></pre>
 <hr>
+<h2 id="resolve-a-message-link"><a class="header" href="#resolve-a-message-link">Resolve a message link</a></h2>
+<p><code>get_message_by_link</code> fetches the message a <code>t.me</code> link points at. It accepts <code>t.me/&lt;username&gt;/&lt;id&gt;</code>, <code>t.me/c/&lt;channel_id&gt;/&lt;id&gt;</code>, and, for forum topics, <code>t.me/c/&lt;channel_id&gt;/&lt;topic_id&gt;/&lt;id&gt;</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if let Some(msg) = client.get_message_by_link("https://t.me/c/1234567890/5/42").await? {
+    println!("{}", msg.text().unwrap_or(""));
+}
+<span class="boring">}</span></code></pre>
+<p>It returns <code>Ok(None)</code> if the message does not exist or does not belong to the topic named in the link, and an error if the string is not a message link. With a topic ID, the message must be the topic root or belong to the topic. Private channels must already be known to the client.</p>
+<p>To parse a link without fetching anything, use <code>MessageLink::parse(link)</code>, which returns <code>Option&lt;MessageLink&gt;</code> with <code>peer</code>, <code>topic_id</code> and <code>message_id</code>.</p>
+<hr>
 <h2 id="fetch-message-history"><a class="header" href="#fetch-message-history">Fetch message history</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// get_message_history(peer, limit, offset_id)
+</span>// get_message_history(peer, limit, offset_id, add_offset)
 // offset_id = 0 starts from the newest
-let messages = client.get_message_history("@peer", 50, 0).await?;
+let messages = client.get_message_history("@peer", 50, 0, 0).await?;
 
 for msg in messages {
     println!("{}: {}", msg.id(), msg.text().unwrap_or(""));
@@ -2548,7 +2570,7 @@ client.send_album(peer.clone(), items).await?;
 </span>// To bytes: sequential
 ```rust
 let mut buf = Vec::new();
-client.download(msg.media().unwrap(), &amp;mut buf).await?;
+client.download(msg.media().unwrap(), &amp;mut buf, None).await?;
 
 client.download_file(msg.media().unwrap(), "/tmp/output.jpg").await?;
 
@@ -2570,7 +2592,7 @@ if let Some(mut iter) = client.iter_download(msg.media().unwrap()) {
 <tr><th>Method</th><th>Dest</th><th>Returns</th></tr>
 </thead>
 <tbody>
-<tr><td><code>client.download(media, dest)</code></td><td>any <code>AsyncWrite</code></td><td><code>u64</code> bytes written</td></tr>
+<tr><td><code>client.download(media, dest, handle)</code></td><td>any <code>AsyncWrite</code> (<code>handle</code> is <code>Option&lt;&amp;TransferHandle&gt;</code>)</td><td><code>u64</code> bytes written</td></tr>
 <tr><td><code>client.download_file(media, path)</code></td><td>file on disk</td><td><code>u64</code> bytes written</td></tr>
 <tr><td><code>client.download_media(media, quality, path, handle)</code></td><td>file on disk</td><td><code>u64</code> bytes written</td></tr>
 <tr><td><code>client.iter_download(media)</code></td><td>caller-driven</td><td><code>Option&lt;DownloadIter&gt;</code></td></tr>
@@ -2581,15 +2603,15 @@ if let Some(mut iter) = client.iter_download(msg.media().unwrap()) {
 </div>
 <p><code>download_media</code> picks a quality variant for documents such as videos with alternates. Photos have no quality variants, so <code>quality</code> is ignored and the largest size is downloaded, progressive JPEG included.</p>
 <h2 id="downloadable-trait"><a class="header" href="#downloadable-trait"><code>Downloadable</code> trait</a></h2>
-<p><code>Photo</code>, <code>Document</code>, and <code>Sticker</code> all implement <code>Downloadable</code>, so you can use <code>client.download_item(&amp;item)</code> (internal) on any of them uniformly.
-For the public API, pass <code>msg.media()</code> to <code>client.download</code>.</p>
+<p><code>Photo</code>, <code>Document</code>, and <code>Sticker</code> all implement <code>Downloadable</code>, so you can pass any of them, or <code>msg.media()</code>, to <code>client.download</code> uniformly.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use ferogram::media::Downloadable;
 
-async fn save_any&lt;D: Downloadable&gt;(client: &amp;Client, item: &amp;D) -&gt; Vec&lt;u8&gt; {
-    // internal method - public API uses client.download(media, dest)
-    client.download(item).await.unwrap()
+async fn save_any&lt;D: Downloadable&gt;(client: &amp;Client, item: &amp;D) -&gt; Result&lt;Vec&lt;u8&gt;, ferogram::InvocationError&gt; {
+    let mut buf = Vec::new();
+    client.download(item, &amp;mut buf, None).await?;
+    Ok(buf)
 }
 <span class="boring">}</span></code></pre>
 <hr>
@@ -2599,7 +2621,7 @@ async fn save_any&lt;D: Downloadable&gt;(client: &amp;Client, item: &amp;D) -&gt
 </span>// Get an InputFileLocation from the raw message
 use ferogram::media::download_location_from_media;
 
-// use msg.bytes() or client.download(msg.media().unwrap(), &amp;mut buf) instead
+// use msg.bytes() or client.download(msg.media().unwrap(), &amp;mut buf, None) instead
 
 // Or via IncomingMessage convenience:
 client.download_file(msg.media().unwrap(), "output.jpg").await?;
@@ -3406,7 +3428,7 @@ is.edit_message(&amp;client, updated_input_msg).await?;
 </span><span class="boring">fn main() {
 </span>Update::ShippingQuery(sq) =&gt; {
     // sq.query_id, sq.user_id, sq.payload, sq.shipping_address
-    client.answer_shipping_query(sq.query_id, true, shipping_options, None).await?;
+    client.answer_shipping_query(sq.query_id, None, Some(shipping_options)).await?;
 }
 <span class="boring">}</span></code></pre>
 <hr>
@@ -3521,6 +3543,7 @@ msg.view_count()             // Option&lt;i32&gt;: view count (channels)
 msg.reply_count()            // Option&lt;i32&gt;: number of replies in thread
 msg.reaction_count()         // i32: total reactions
 msg.reply_to_message_id()    // Option&lt;i32&gt;: ID of the message replied to
+msg.reply_to_top_message_id() // Option&lt;i32&gt;: thread start; the topic root in a forum supergroup
 
 // Typed timestamps
 msg.date_utc()               // Option&lt;DateTime&lt;Utc&gt;&gt;
@@ -3552,7 +3575,7 @@ msg.sender_user()            // async → Option&lt;User&gt; (fetches from cache
 <span class="boring">}</span></code></pre>
 <hr>
 <h2 id="convenience-action-methods"><a class="header" href="#convenience-action-methods">Convenience action methods</a></h2>
-<p>These methods work without passing a <code>&amp;Client</code> when the message came from <code>stream_updates()</code> (the client reference is embedded). Use the <code>_with(client)</code> variants when you hold the message outside an update handler.</p>
+<p>These methods work without passing a <code>&amp;Client</code> when the message came from <code>stream_updates()</code> (the client reference is embedded). <code>delete_with</code> and <code>forward_to_with</code> take an explicit client for messages you hold outside an update handler.</p>
 <h3 id="reply"><a class="header" href="#reply">Reply</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -3560,15 +3583,11 @@ msg.sender_user()            // async → Option&lt;User&gt; (fetches from cache
 msg.reply("Got it! ✅").await?;
 
 // Reply with full InputMessage control
-msg.reply_ex(
+msg.reply(
     InputMessage::text("Here you go")
         .silent(true)
         .no_webpage(true)
 ).await?;
-
-// Explicit client variants
-msg.reply_with(&amp;client, "Hi").await?;
-msg.reply_ex_with(&amp;client, input_msg).await?;
 <span class="boring">}</span></code></pre>
 <h3 id="respond-no-reply-thread"><a class="header" href="#respond-no-reply-thread">Respond (no reply thread)</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -3576,17 +3595,12 @@ msg.reply_ex_with(&amp;client, input_msg).await?;
 </span>// Send to the same chat without quoting
 msg.respond("Hello everyone!").await?;
 msg.respond(InputMessage::text("...").keyboard(kb)).await?;
-
-// Explicit client variants
-msg.respond_with(&amp;client, "Hi").await?;
-msg.respond_with(&amp;client, input_msg).await?;
 <span class="boring">}</span></code></pre>
 <h3 id="edit"><a class="header" href="#edit">Edit</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Edit this message's text
 msg.edit("Updated content").await?;
-msg.edit_with(&amp;client, "Updated content").await?;
 <span class="boring">}</span></code></pre>
 <h3 id="delete"><a class="header" href="#delete">Delete</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -4793,18 +4807,6 @@ Immediately closes the TCP connection and stops the reader task without waiting 
 
 <div class="api-card">
 <div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.sync_update_state() <span class="api-badge-new">New 0.2.0</span></span>
-</div>
-
-<div class="api-card-body">
-Forces an immediate <code>updates.getState</code> round-trip and reconciles local pts/seq/qts counters. Useful after a long disconnect or when you suspect a gap but don't want to wait for the gap-detection timer.
-</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
 <span class="api-badge">sync</span>
 <span class="api-card-sig">client.signal_network_restored()</span>
 </div>
@@ -4950,20 +4952,20 @@ Full-featured send with the <a href="#inputmessage-builder"><code>InputMessage</
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.edit_inline_message(inline_msg_id: tl::enums::InputBotInlineMessageId, text: &amp;str) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.edit_inline_message(id: tl::enums::InputBotInlineMessageId, new_text: impl Into&lt;InputMessage&gt;, reply_markup: Option&lt;tl::enums::ReplyMarkup&gt;) → Result&lt;bool, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Edit the text of a message that was sent via inline mode. The <code>inline_msg_id</code> is provided in <code>Update::InlineSend</code>.</div>
+<div class="api-card-body">Edit the text of a message that was sent via inline mode. The inline message ID is provided in <code>Update::InlineSend</code>.</div>
 
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.forward_messages(from_peer: Peer, to_peer: Peer, ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.forward_messages(destination: impl Into&lt;PeerRef&gt;, message_ids: &amp;[i32], source: impl Into&lt;PeerRef&gt;, opts: ForwardOptions) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Forward one or more messages from <code>from_peer</code> into <code>to_peer</code>.</div>
+<div class="api-card-body">Forward messages from <code>source</code> into <code>destination</code>. <code>ForwardOptions</code> controls silent sending, dropping the author or media captions, and <code>noforwards</code>; pass <code>ForwardOptions::default()</code> for a plain forward. Returns the new messages.</div>
 
 </div>
 
@@ -4990,10 +4992,10 @@ Full-featured send with the <a href="#inputmessage-builder"><code>InputMessage</
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.pin_message(peer: Peer, message_id: i32, silent: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.pin_message(peer: impl Into&lt;PeerRef&gt;, id: i32, pin: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Pin a message. <code>silent: true</code> pins without notifying members.</div>
+<div class="api-card-body">Pin a message with <code>pin: true</code>, or unpin it with <code>pin: false</code>.</div>
 
 </div>
 
@@ -5099,7 +5101,7 @@ See <a href="#reactions">Reactions</a> for the full guide.</p>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_chat_action(peer: Peer, action: SendMessageAction) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.send_chat_action(peer: impl Into&lt;PeerRef&gt;, action: tl::enums::SendMessageAction) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -5123,7 +5125,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge">sync</span>
-<span class="api-card-sig">client.search_global_builder(query: &amp;str) → GlobalSearchBuilder</span>
+<span class="api-card-sig">client.search_global(query: &amp;str) → GlobalSearchBuilder</span>
 </div>
 
 <div class="api-card-body">Returns a <a href="#search-1"><code>GlobalSearchBuilder</code></a> for searching across all dialogs simultaneously.</div>
@@ -5137,16 +5139,6 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 </div>
 
 <div class="api-card-body">Build a message search for a peer. Chain <code>.query()</code>, <code>.limit()</code>, <code>.filter()</code>, etc., then call <code>.collect(&amp;client).await?</code> to run it. For a one-shot query, use <code>client.search().query("text").collect(&amp;client).await?</code>.</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.search_global(query: &amp;str, limit: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">Simple one-shot global search. For advanced options use <code>client.search_global_builder()</code>.</div>
 
 </div>
 
@@ -5235,20 +5227,10 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.pin_dialog(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">Pin a dialog to the top of the dialog list.</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
 <span class="api-card-sig">client.pin_dialog(peer: impl Into&lt;PeerRef&gt;, pin: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Unpin a previously pinned dialog.</div>
+<div class="api-card-body">Pin a dialog to the top of the dialog list with <code>pin: true</code>, or unpin it with <code>pin: false</code>.</div>
 
 </div>
 
@@ -5265,10 +5247,10 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.mark_dialog_unread(peer: impl Into&lt;PeerRef&gt;, unread: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.mark_dialog_unread(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Manually mark a dialog as unread (<code>true</code>) or read (<code>false</code>). This sets the unread dot without actually having new messages.</div>
+<div class="api-card-body">Manually mark a dialog as unread. This sets the unread dot without actually having new messages. To clear it, call <code>mark_read</code>.</div>
 
 </div>
 
@@ -5312,24 +5294,14 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <span class="api-card-sig">client.get_participants(peer: impl Into&lt;PeerRef&gt;, limit: i32) → Result&lt;Vec&lt;Participant&gt;, InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Fetch members of a chat or channel. Pass <code>limit = 0</code> for the default server maximum per page. Use <code>iter_participants</code> to lazily page all members.</div>
+<div class="api-card-body">Fetch members of a chat or channel. Pass <code>limit = 0</code> for the default server maximum per page.</div>
 
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.iter_participants(peer: impl Into&lt;PeerRef&gt;, filter: Option&lt;tl::enums::ChannelParticipantsFilter&gt;, limit: i32) → Result&lt;Vec&lt;Participant&gt;, InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">Fetch all members of a channel or supergroup, optionally filtered and limited. Pass <code>filter = None</code> and <code>limit = 0</code> to retrieve all members up to the server default. For basic groups use <code>get_participants</code>.</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.kick(peer: impl Into&lt;PeerRef&gt;, user_id: i64) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.kick(peer: impl Into&lt;PeerRef&gt;, user_id: i64, revoke_history: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Remove a user from a group, channel, or supergroup.</div>
@@ -5349,17 +5321,17 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_admin(peer: impl Into&lt;PeerRef&gt;, user_id: i64, rights: AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_admin(channel: impl Into&lt;PeerRef&gt;, user_id: i64, build: impl FnOnce(AdminRightsBuilder) → AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
-<div class="api-card-body">Set admin rights. Use <code>AdminRightsBuilder::full_admin()</code> to promote or <code>AdminRightsBuilder::new()</code> to demote.</div>
+<div class="api-card-body">Set admin rights. The closure receives an empty <code>AdminRightsBuilder</code>. Return <code>AdminRightsBuilder::full_admin()</code> to promote with all standard rights, or the builder unchanged (<code>|b| b</code>) to demote.</div>
 
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_admin(peer: impl Into&lt;PeerRef&gt;, user_id: i64, rights: AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_admin(channel: impl Into&lt;PeerRef&gt;, user_id: i64, build: impl FnOnce(AdminRightsBuilder) → AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Promote a user to admin with specified rights. See <a href="#admin--ban-rights">Admin &amp; Ban Rights</a>.</div>
@@ -5465,7 +5437,7 @@ client.send_album(peer, vec![
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.download(media: &amp;MessageMedia, dest: impl AsyncWrite + Unpin) → Result&lt;u64, InvocationError&gt;</span>
+<span class="api-card-sig">client.download(item: &amp;impl Downloadable, dest: impl AsyncWrite + Unpin, handle: Option&lt;&amp;TransferHandle&gt;) → Result&lt;u64, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Download a media file and write it to <code>path</code>. The <code>path</code> argument accepts anything that implements <code>AsRef&lt;Path&gt;</code> (e.g. <code>&amp;str</code>, <code>String</code>, <code>PathBuf</code>). DC routing is handled automatically.</div>
@@ -5477,7 +5449,7 @@ client.send_album(peer, vec![
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.answer_callback_query(query_id: i64, text: Option&lt;&amp;str&gt;, alert: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.answer_callback_query(query_id: i64, text: Option&lt;&amp;str&gt;, alert: bool) → Result&lt;bool, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Acknowledge an inline button press. <code>text</code> shows a toast (or alert if <code>alert=true</code>). Must be called within 60 seconds of the button press.</div>
@@ -5487,7 +5459,7 @@ client.send_album(peer, vec![
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.answer_inline_query(query_id: i64, results: Vec&lt;InputBotInlineResult&gt;, cache_time: i32, is_personal: bool, next_offset: Option&lt;&amp;str&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.answer_inline_query(query_id: i64, results: Vec&lt;InputBotInlineResult&gt;, cache_time: i32, is_personal: bool, next_offset: Option&lt;String&gt;) → Result&lt;bool, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Respond to an inline query with a list of results. <code>cache_time</code> in seconds. Empty result list now handled correctly (fixed in v0.2.0).</div>
@@ -5642,7 +5614,7 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(peer).title(: impl Into&lt;PeerRef&gt;, title: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).title(title: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Rename a chat, group, channel, or supergroup. Works for both basic groups and channels/supergroups.</div>
@@ -5652,7 +5624,7 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(peer).bio(: impl Into&lt;PeerRef&gt;, about: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).bio(bio: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Set or update the description/about text for any chat type.</div>
@@ -5662,7 +5634,7 @@ let state = client.invoke(&amp;functions::updates::GetState {}).await?;</code></
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(peer).chat_photo(peer: impl Into&lt;PeerRef&gt;, photo: tl::enums::InputChatPhoto) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).chat_photo(photo: tl::enums::InputChatPhoto).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Change the profile photo of a chat. Pass <code>tl::enums::InputChatPhoto::Empty</code> to remove the current photo.</div>
@@ -5811,16 +5783,6 @@ tl::enums::ChatReactions::ChatReactionsNone
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.forward_messages_returning(destination: impl Into&lt;PeerRef&gt;, message_ids: &amp;[i32], source: impl Into&lt;PeerRef&gt;) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">Like <code>forward_messages</code> but returns the newly created message objects in the destination chat. Useful when you need the forwarded message IDs immediately.</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
 <span class="api-card-sig">msg.get_reply() → Option&lt;&amp;IncomingMessage&gt;</span>
 </div>
 
@@ -5855,16 +5817,6 @@ tl::enums::ChatReactions::ChatReactionsNone
 </div>
 
 <div class="api-card-body">Fetch the currently pinned message in a chat. Returns <code>None</code> if nothing is pinned.</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.pin_message(peer: impl Into&lt;PeerRef&gt;, message_id: i32, silent: bool, unpin: bool, pm_oneside: bool) → Result&lt;(), InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">Pin (or unpin) a message. Set <code>silent = true</code> to avoid a pin notification. <code>pm_oneside = true</code> pins only for the logged-in user in DMs.</div>
 
 </div>
 
@@ -5950,11 +5902,11 @@ tl::enums::ChatReactions::ChatReactionsNone
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.export_message_link(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, grouped: bool, thread: bool) → Result&lt;String, InvocationError&gt;</span>
+<span class="api-card-sig">client.export_message_link(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, kind: LinkKind) → Result&lt;String, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Get a <code>t.me/c/…</code> permalink for a message in a channel. <code>grouped = true</code> returns a link to the album group; <code>thread = true</code> links to the discussion thread. Only works for channels (not basic groups).
+Get a <code>t.me/c/…</code> permalink for a message in a channel. <code>kind</code> is <code>LinkKind::Normal</code> for a plain permalink, <code>LinkKind::Grouped</code> for a link to the whole album, or <code>LinkKind::Thread</code> for the discussion thread. Only works for channels (not basic groups).
 </div>
 
 </div>
@@ -6932,7 +6884,7 @@ The <code>raw</code> field is public if you need direct TL access.
 <span class="api-card-sig">user.photo() → Option&lt;&amp;tl::types::UserProfilePhoto&gt;</span>
 </div>
 
-<div class="api-card-body">Profile photo metadata, if set. Use <code>client.iter_profile_photos()</code> to download the actual image.</div>
+<div class="api-card-body">Profile photo metadata, if set. Use <code>client.iter_profile_photos(peer, chunk_size)</code> to download the actual image.</div>
 
 </div>
 
@@ -7566,7 +7518,7 @@ client.send_message("https://t.me/+AbCdEfGhIjKl", "hi").await?;
 client.send_message(12345678_i64, "hi").await?;
 
 // Negative i64: Bot-API channel ID (-100... prefix)
-client.get_message_history(-1001234567890_i64, 50, 0).await?;
+client.get_message_history(-1001234567890_i64, 50, 0, 0).await?;
 
 // Small negative i64: basic group
 client.mark_read(-123456_i64).await?;
@@ -7869,10 +7821,11 @@ for p in &amp;members {
     );
 }
 <span class="boring">}</span></code></pre>
-<h3 id="paginated-iterator-large-groups"><a class="header" href="#paginated-iterator-large-groups">Paginated iterator (large groups)</a></h3>
+<h3 id="fetch-all-members"><a class="header" href="#fetch-all-members">Fetch all members</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let members = client.iter_participants(peer.clone(), None, 0).await?;
+</span>// limit = 0 uses the server default page size
+let members = client.get_participants(peer.clone(), 0).await?;
 for p in &amp;members {
     println!("{}", p.user.first_name.as_deref().unwrap_or(""));
 }
@@ -7899,7 +7852,7 @@ p.is_member()   // bool: active member (not banned, not left)
 </span><span class="boring">fn main() {
 </span>// Removes the user from a basic group by chat_id (i64)
 // For channels/supergroups, use ban instead
-client.kick(chat_id, user_id).await?;
+client.kick(chat_id, user_id, false).await?;
 <span class="boring">}</span></code></pre>
 <blockquote>
 <p><strong>Note:</strong> <code>kick</code> takes a <code>chat_id: i64</code>, not a <code>PeerRef</code>. Use the raw numeric ID of the basic group.</p>
@@ -7968,10 +7921,10 @@ client
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Quick promote (all standard rights except add_admins)
-client.set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin()).await?;
+client.set_admin(peer.clone(), user_id, |_| AdminRightsBuilder::full_admin()).await?;
 
 // Demote back to regular member
-client.set_admin(peer.clone(), user_id, AdminRightsBuilder::new()).await?;
+client.set_admin(peer.clone(), user_id, |b| b).await?;
 <span class="boring">}</span></code></pre>
 <p>For fine-grained control, use <code>set_admin</code> with <code>AdminRightsBuilder</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -7980,27 +7933,24 @@ client.set_admin(peer.clone(), user_id, AdminRightsBuilder::new()).await?;
 
 // Promote with specific rights and a custom title
 client
-    .set_admin(
-        peer.clone(),
-        user_id,
-        AdminRightsBuilder::new()
-            .post_messages(true)
+    .set_admin(peer.clone(), user_id, |b| {
+        b.post_messages(true)
             .delete_messages(true)
             .ban_users(true)
             .invite_users(true)
             .pin_messages(true)
-            .rank("Moderator"), // custom admin title (max 16 chars)
-    )
+            .rank("Moderator") // custom admin title (max 16 chars)
+    })
     .await?;
 
 // Full admin (all standard rights except add_admins)
 client
-    .set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin())
+    .set_admin(peer.clone(), user_id, |_| AdminRightsBuilder::full_admin())
     .await?;
 
-// Demote: pass an empty builder to remove all admin rights
+// Demote: return the empty builder unchanged to remove all admin rights
 client
-    .set_admin(peer.clone(), user_id, AdminRightsBuilder::new())
+    .set_admin(peer.clone(), user_id, |b| b)
     .await?;
 <span class="boring">}</span></code></pre>
 <h3 id="adminrightsbuilder-methods"><a class="header" href="#adminrightsbuilder-methods"><code>AdminRightsBuilder</code> methods</a></h3>
@@ -8115,7 +8065,7 @@ for p in &amp;members {
 <h2 id="profilephotoiter-extended-methods"><a class="header" href="#profilephotoiter-extended-methods"><code>ProfilePhotoIter</code>: extended methods</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let mut iter = client.iter_profile_photos(user_id);
+</span>let mut iter = client.iter_profile_photos(user_id, 0).await?;
 
 // Total photo count (available after first fetch)
 if let Some(total) = iter.total_count() {
@@ -8152,9 +8102,8 @@ client.restrict(
 // Set admin rights directly
 client.set_admin(
     peer.clone(),
-    user_input_peer,
-    AdminRightsBuilder::new().delete_messages(true),
-    Some("Moderator".into()),  // optional custom rank
+    user_id,
+    |b| b.delete_messages(true).rank("Moderator"),  // rank is the optional custom title
 ).await?;
 <span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -8417,7 +8366,7 @@ while let Some(msg) = iter.next(&amp;client).await? {
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Latest N messages from a peer
-let messages = client.get_message_history(peer.clone(), 20).await?;
+let messages = client.get_message_history(peer.clone(), 20, 0, 0).await?;
 
 // Specific message IDs
 let messages = client.get_messages(peer.clone(), &amp;[100, 101, 102]).await?;
@@ -8456,14 +8405,14 @@ client.clear_mentions(peer.clone()).await?;
 client.delete_dialog(peer.clone()).await?;
 
 // Pin / unpin a dialog
-client.pin_dialog(peer.clone()).await?;
+client.pin_dialog(peer.clone(), true).await?;
 client.pin_dialog(peer.clone(), false).await?;
 
 // Get pinned dialogs (folder_id: 0 = main, 1 = archived)
 let pinned = client.get_pinned_dialogs(0).await?;
 
 // Set manual unread flag on a dialog
-client.mark_dialog_unread(peer.clone(), true).await?;
+client.mark_dialog_unread(peer.clone()).await?;
 
 // Clear the manual unread flag
 client.mark_read(peer.clone()).await?;
@@ -8483,25 +8432,18 @@ let hash = Client::parse_invite_hash("https://t.me/+AbCdEfG12345");
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Move to archive - chat disappears from the main dialog list
-client.archive("@somebot").await?;
+client.archive("@somebot", true).await?;
 
 // Move back to main list
-client.archive("@somebot").await?;
+client.archive("@somebot", false).await?;
 <span class="boring">}</span></code></pre>
 <p>Archived chats still receive messages; they are simply hidden from the main list and muted by default until the user opens them.</p>
-<h3 id="low-level-folder-move"><a class="header" href="#low-level-folder-move">Low-level folder move</a></h3>
-<p>For finer control (e.g. custom folders), use <code>move_to_folder</code>:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// folder_id 0 = main list, 1 = archive
-client.move_to_folder("@somebot", 0).await?;
-<span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="search-1"><a class="header" href="#search-1">Search</a></h1>
 <p><code>ferogram</code> provides two fluent search builders:</p>
 <ul>
-<li><strong><code>SearchBuilder</code></strong>: search within a single peer (<code>client.search()</code>)</li>
-<li><strong><code>GlobalSearchBuilder</code></strong>: search across all dialogs (<code>client.search_global_builder()</code>)</li>
+<li><strong><code>SearchBuilder</code></strong>: search within a single peer (<code>client.search(peer, query)</code>)</li>
+<li><strong><code>GlobalSearchBuilder</code></strong>: search across all dialogs (<code>client.search_global(query)</code>)</li>
 </ul>
 <p>Both builders return <code>Vec&lt;IncomingMessage&gt;</code> from <code>.fetch(&amp;client).await?</code>.</p>
 <hr>
@@ -8666,7 +8608,7 @@ loop {
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let results = client
-    .search_global_builder("rust async")
+    .search_global("rust async")
     .limit(30)
     .fetch(&amp;client)
     .await?;
@@ -8701,7 +8643,7 @@ for msg in &amp;results {
 </span><span class="boring">fn main() {
 </span>// Channels only
 let channel_results = client
-    .search_global_builder("announcement")
+    .search_global("announcement")
     .broadcasts_only(true)
     .limit(20)
     .fetch(&amp;client)
@@ -8709,14 +8651,14 @@ let channel_results = client
 
 // Groups / supergroups only
 let group_results = client
-    .search_global_builder("discussion")
+    .search_global("discussion")
     .groups_only(true)
     .fetch(&amp;client)
     .await?;
 
 // Private chats and bots only
 let dm_results = client
-    .search_global_builder("invoice")
+    .search_global("invoice")
     .users_only(true)
     .fetch(&amp;client)
     .await?;
@@ -8728,7 +8670,7 @@ let dm_results = client
 let cutoff = (chrono::Utc::now().timestamp() - 30 * 86400) as i32;
 
 let photos = client
-    .search_global_builder("")
+    .search_global("")
     .broadcasts_only(true)
     .filter(MessagesFilter::InputMessagesFilterPhotos)
     .min_date(cutoff)
@@ -8742,10 +8684,10 @@ let photos = client
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Per-chat search via the builder with defaults
-let results = client.search(peer.clone()).query("query").limit(20).collect(&amp;client).await?;
+let results = client.search(peer.clone(), "query").limit(20).fetch(&amp;client).await?;
 
 // Global search: returns Vec&lt;IncomingMessage&gt;
-let results = client.search_global("ferogram rust", 10).await?;
+let results = client.search_global("ferogram rust").limit(10).fetch(&amp;client).await?;
 <span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="typing-guard"><a class="header" href="#typing-guard">Typing Guard</a></h1>
@@ -8841,7 +8783,6 @@ send_reply(client, peer).await?;
 </span>client.send_chat_action(
     peer.clone(),
     tl::enums::SendMessageAction::SendMessageTypingAction,
-    None, // top_msg_id: Some(id) for forum topics
 ).await?;
 <span class="boring">}</span></code></pre>
 <p>Telegram shows the indicator for ~5 seconds and then removes it automatically.</p>
@@ -9032,7 +8973,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(peer).title(: impl Into&lt;PeerRef&gt;, title: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).title(title: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Rename a chat, group, channel, or supergroup.</div>
@@ -9042,7 +8983,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(peer).bio(: impl Into&lt;PeerRef&gt;, about: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).bio(bio: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Set or update the description/about text. Works for all chat types.</div>
@@ -9052,7 +8993,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(peer).chat_photo(peer: impl Into&lt;PeerRef&gt;, photo: tl::enums::InputChatPhoto) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).chat_photo(photo: tl::enums::InputChatPhoto).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">Change the group/channel photo. Pass <code>InputChatPhoto::Empty</code> to remove it.
@@ -9061,17 +9002,16 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 </span>// Set a new photo (upload first)
 let uploaded = client.upload_file("photo.jpg").await?;
 client.set_profile(peer).chat_photo(
-    peer.clone(),
     tl::enums::InputChatPhoto::InputChatUploadedPhoto(
         tl::types::InputChatUploadedPhoto {
             video: false, video_emoji_markup: None,
             file: Some(uploaded.into_input_file()),
         }
     ),
-).await?;
+).send().await?;
 
 // Remove photo
-client.set_profile(peer).chat_photo(peer.clone(), tl::enums::InputChatPhoto::Empty).await?;
+client.set_profile(peer).chat_photo(tl::enums::InputChatPhoto::Empty).send().await?;
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -9214,7 +9154,7 @@ client.edit_chat_default_banned_rights(chat.clone(), |b| {
 client.set_history_ttl(chat.clone(), 604_800).await?;
 
 // 5. Generate an approval-gated invite link
-let inv = client.export_invite_link(chat.clone(), None, None, true).await?;
+let inv = client.export_invite_link(chat.clone(), None, None, true, None).await?;
 println!("Invite: {}", match &amp;inv {
     tl::enums::ExportedChatInvite::Invite(i) =&gt; &amp;i.link,
     _ =&gt; "",
@@ -9316,7 +9256,7 @@ client.set_default_send_as("@group", "@mychannel").await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.export_invite_link(peer: impl Into&lt;PeerRef&gt;, expire_date: Option&lt;i32&gt;, usage_limit: Option&lt;i32&gt;, request_needed: bool) → Result&lt;tl::enums::ExportedChatInvite, InvocationError&gt;</span>
+<span class="api-card-sig">client.export_invite_link(peer: impl Into&lt;PeerRef&gt;, expire_date: Option&lt;i32&gt;, usage_limit: Option&lt;i32&gt;, request_needed: bool, title: Option&lt;String&gt;) → Result&lt;tl::enums::ExportedChatInvite, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -9329,13 +9269,13 @@ Create a new invite link for a chat.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Permanent link, up to 50 uses
-let inv = client.export_invite_link(peer.clone(), None, Some(50), false).await?;
+let inv = client.export_invite_link(peer.clone(), None, Some(50), false, None).await?;
 
 // Link that expires in 24 hours, requires approval
 let tomorrow = (std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH).unwrap()
     .as_secs() + 86400) as i32;
-let inv = client.export_invite_link(peer.clone(), Some(tomorrow), None, true).await?;
+let inv = client.export_invite_link(peer.clone(), Some(tomorrow), None, true, None).await?;
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -9375,7 +9315,7 @@ Revoke an existing invite link immediately. After revocation the link stops acce
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.edit_invite_link(peer: impl Into&lt;PeerRef&gt;, link: impl Into&lt;String&gt;, expire_date: Option&lt;i32&gt;, usage_limit: Option&lt;i32&gt;, request_needed: bool) → Result&lt;tl::enums::ExportedChatInvite, InvocationError&gt;</span>
+<span class="api-card-sig">client.edit_invite_link(peer: impl Into&lt;PeerRef&gt;, link: impl Into&lt;String&gt;, expire_date: Option&lt;i32&gt;, usage_limit: Option&lt;i32&gt;, request_needed: Option&lt;bool&gt;, title: Option&lt;String&gt;) → Result&lt;tl::enums::ExportedChatInvite, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -9389,7 +9329,7 @@ Update an existing invite link's properties. Only non-permanent links can be edi
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_invite_links(peer: impl Into&lt;PeerRef&gt;, admin_id: i64, revoked: bool, limit: i32) → Result&lt;Vec&lt;tl::enums::ExportedChatInvite&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_invite_links(peer: impl Into&lt;PeerRef&gt;, admin_id: i64, revoked: bool, limit: i32, offset_date: Option&lt;i32&gt;, offset_link: Option&lt;String&gt;) → Result&lt;Vec&lt;tl::enums::ExportedChatInvite&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -9398,7 +9338,7 @@ List invite links created by a specific admin. Pass <code>revoked: false</code> 
 </span><span class="boring">fn main() {
 </span>// All active links created by the logged-in user (user_id from get_me)
 let me = client.get_me().await?;
-let links = client.get_invite_links(peer.clone(), me.id, false, 100).await?;
+let links = client.get_invite_links(peer.clone(), me.id, false, 100, None, None).await?;
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -9434,11 +9374,11 @@ Bulk-delete all revoked links created by <code>admin_id</code> in one call. Usef
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.approve_join_request(peer: impl Into&lt;PeerRef&gt;, user_id: i64) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.join_request(peer: impl Into&lt;PeerRef&gt;, user_id: i64, approve: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Approve a single pending join request. The user is added to the chat immediately.
+Approve or decline a single pending join request. Pass <code>approve: true</code> to add the user to the chat, or <code>false</code> to reject and dismiss the request.
 </div>
 
 </div>
@@ -9446,35 +9386,11 @@ Approve a single pending join request. The user is added to the chat immediately
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.reject_join_request(peer: impl Into&lt;PeerRef&gt;, user_id: i64) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.all_join_requests(peer: impl Into&lt;PeerRef&gt;, approve: bool, link: Option&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Reject and dismiss a single pending join request.
-</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.approve_all_join_requests(peer: impl Into&lt;PeerRef&gt;, link: Option&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">
-Approve all pending join requests at once. If <code>link</code> is <code>Some(url)</code>, only requests submitted via that specific link are approved. Pass <code>None</code> to approve all pending requests regardless of which link they came from.
-</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.reject_all_join_requests(peer: impl Into&lt;PeerRef&gt;, link: Option&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">
-Reject all pending join requests at once, with the same optional link filter as <code>approve_all_join_requests</code>.
+Approve or decline every pending join request at once. If <code>link</code> is <code>Some(url)</code>, only requests submitted via that specific link are affected. Pass <code>None</code> to act on all pending requests regardless of which link they came from.
 </div>
 
 </div>
@@ -9484,7 +9400,7 @@ Reject all pending join requests at once, with the same optional link filter as 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_invite_link_members(peer: impl Into&lt;PeerRef&gt;, link: Option&lt;String&gt;, requested: bool, limit: i32) → Result&lt;tl::types::messages::ChatInviteImporters, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_invite_link_members(peer: impl Into&lt;PeerRef&gt;, link: Option&lt;String&gt;, requested: bool, limit: i32, offset_date: i32, offset_user_id: i64) → Result&lt;Vec&lt;tl::types::ChatInviteImporter&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -9498,7 +9414,7 @@ List members who joined via a specific invite link, or all pending join requeste
 </span><span class="boring">fn main() {
 </span>// Who is waiting for approval?
 let pending = client
-    .get_invite_link_members(peer.clone(), None, true, 50)
+    .get_invite_link_members(peer.clone(), None, true, 50, 0, 0)
     .await?;
 <span class="boring">}</span></code></pre>
 </div>
@@ -9523,7 +9439,7 @@ Get a breakdown of each admin's invite link counts (active, revoked). Useful for
 </span><span class="boring">fn main() {
 </span>// Create link that requires admin approval
 let inv = client
-    .export_invite_link(peer.clone(), None, None, true)
+    .export_invite_link(peer.clone(), None, None, true, None)
     .await?;
 
 println!("Share this link: {}", match &amp;inv {
@@ -9533,12 +9449,12 @@ println!("Share this link: {}", match &amp;inv {
 
 // Later: check who is waiting
 let pending = client
-    .get_invite_link_members(peer.clone(), None, true, 100)
+    .get_invite_link_members(peer.clone(), None, true, 100, 0, 0)
     .await?;
 
-for importer in &amp;pending.importers {
+for importer in &amp;pending {
     println!("Approving user {}", importer.user_id);
-    client.approve_join_request(peer.clone(), importer.user_id).await?;
+    client.join_request(peer.clone(), importer.user_id, true).await?;
 }
 <span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -9571,14 +9487,14 @@ Fetch the full contact list. Returns <code>None</code> when the server indicates
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.add_contact(user_id: i64, first_name: impl Into&lt;String&gt;, last_name: impl Into&lt;String&gt;, phone: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.add_contact(user_id: i64, first_name: impl Into&lt;String&gt;, last_name: impl Into&lt;String&gt;, phone: impl Into&lt;String&gt;, add_phone_privacy_exception: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
 Add a user to your contact list. <code>phone</code> can be an empty string if you are adding by user ID rather than phone number. The name you supply is stored locally as your label for this contact, independent of the user's own profile name.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>client.add_contact(user_id, "Alice", "Smith", "").await?;
+</span>client.add_contact(user_id, "Alice", "Smith", "", false).await?;
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -9637,11 +9553,11 @@ for user in &amp;result.users {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.block(peer: impl Into&lt;PeerRef&gt;, block: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.block(peer: impl Into&lt;PeerRef&gt;, block: bool, my_stories_from: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Block a user. Blocked users cannot send you messages, see your phone number, or add you to groups. The block also suppresses their stories from your feed.
+Block a user with <code>block: true</code>, or unblock them with <code>block: false</code>. Blocked users cannot send you messages, see your phone number, or add you to groups. With <code>my_stories_from: true</code> only your stories are hidden from them, instead of a full block.
 </div>
 
 </div>
@@ -9649,11 +9565,11 @@ Block a user. Blocked users cannot send you messages, see your phone number, or 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<!-- removed: use block(peer, false) --> → Result&lt;(), InvocationError&gt;
+<span class="api-card-sig">client.block(peer, false, false) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Remove a user from your block list.
+Remove a user from your block list by calling <code>block</code> with <code>block: false</code>.
 </div>
 
 </div>
@@ -9661,7 +9577,7 @@ Remove a user from your block list.
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_blocked_users(offset: i32, limit: i32) → Result&lt;Vec&lt;tl::enums::Peer&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_blocked_users(offset: i32, limit: i32, my_stories_from: bool) → Result&lt;Vec&lt;tl::enums::Peer&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -9670,7 +9586,7 @@ Paginate through your block list. Start with <code>offset = 0</code>. The server
 </span><span class="boring">fn main() {
 </span>let mut offset = 0;
 loop {
-    let page = client.get_blocked_users(offset, 100).await?;
+    let page = client.get_blocked_users(offset, 100, false).await?;
     if page.is_empty() { break; }
     offset += page.len() as i32;
     for peer in &amp;page {
@@ -9689,14 +9605,14 @@ loop {
 </span>// Find and block all users named "Spammer"
 let results = client.search_contacts("Spammer", 50).await?;
 for peer in results {
-    client.block(peer, true).await?;
+    client.block(peer, true, false).await?;
     println!("Blocked {peer:?}");
 }
 
 // List current block list
 let mut offset = 0;
 loop {
-    let page = client.get_blocked_users(offset, 100).await?;
+    let page = client.get_blocked_users(offset, 100, false).await?;
     if page.is_empty() { break; }
     println!("Blocked users page: {page:?}");
     offset += page.len() as i32;
@@ -9710,22 +9626,18 @@ loop {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").name(first: impl Into&lt;String&gt;, last: impl Into&lt;String&gt;).bio(bio: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Change your display name and/or bio. Pass <code>None</code> for any field you want to leave unchanged. Returns the updated <code>User</code> object.
+Change your display name and/or bio. Chain only the setters you need; anything you do not call is left unchanged, and nothing is sent until <code>.send()</code>.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Change just the bio
-client.set_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
+client.set_profile("me").bio("🦀 Rust developer").send().await?;
 
 // Change full name
-client.set_profile(
-    Some("Alice".to_string()),
-    Some("Smith".to_string()),
-    None,
-).await?;
+client.set_profile("me").name("Alice", "Smith").send().await?;
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -9734,11 +9646,11 @@ client.set_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile("me").username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").username(username: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
+Set or change your @username. Pass an empty string to remove the username. Telegram will return an error if the username is already taken or violates naming rules.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>client.set_profile("me").username("my_new_handle").send().await?;
@@ -9755,7 +9667,7 @@ client.set_profile("me").username("").send().await?;  // remove username
 </div>
 
 <div class="api-card-body">
-Manually set your online/offline status. Pass <code>offline: false</code> to appear online, <code>true</code> to mark yourself as offline. Telegram resets online status automatically after ~5 minutes of inactivity, so call this periodically if you need a persistent "online" appearance.
+Manually set your online/offline status. Pass <code>true</code> to appear online, <code>false</code> to appear offline. Telegram resets online status automatically after ~5 minutes of inactivity, so call this periodically if you need a persistent "online" appearance.
 </div>
 
 </div>
@@ -9765,7 +9677,7 @@ Manually set your online/offline status. Pass <code>offline: false</code> to app
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile("me").photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").photo(file: UploadedFile).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -9774,7 +9686,7 @@ Set or add a new profile photo. Upload the image with <code>upload_file(path)</c
 </span><span class="boring">fn main() {
 </span>let bytes = tokio::fs::read("avatar.jpg").await?;
 let uploaded = client.upload_file("avatar.jpg").await?;
-let photo = client.set_profile("me").photo(uploaded).send().await?;
+client.set_profile("me").photo(uploaded).send().await?;
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -9793,22 +9705,18 @@ let photo = client.set_profile("me").photo(uploaded).send().await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").name(first: impl Into&lt;String&gt;, last: impl Into&lt;String&gt;).bio(bio: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Change your display name and/or bio. Pass <code>None</code> for any field you want to leave unchanged. Returns the updated <code>User</code> object.
+Change your display name and/or bio. Chain only the setters you need; anything you do not call is left unchanged, and nothing is sent until <code>.send()</code>.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Change just the bio
-client.set_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
+client.set_profile("me").bio("🦀 Rust developer").send().await?;
 
 // Change full name
-client.set_profile(
-    Some("Alice".to_string()),
-    Some("Smith".to_string()),
-    None,
-).await?;
+client.set_profile("me").name("Alice", "Smith").send().await?;
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -9817,11 +9725,11 @@ client.set_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile("me").username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").username(username: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
+Set or change your @username. Pass an empty string to remove the username. Telegram will return an error if the username is already taken or violates naming rules.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>client.set_profile("me").username("my_new_handle").send().await?;
@@ -9891,16 +9799,16 @@ while let Some(photo) = iter.next(&amp;client).await? {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile("me").photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").photo(file: UploadedFile).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Set or add a new profile photo. Upload the image with <code>upload_file(path)</code> first. Returns the new <code>Photo</code> object.
+Set or add a new profile photo. Upload the image with <code>upload_file(path)</code> first.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let bytes = tokio::fs::read("avatar.jpg").await?;
 let uploaded = client.upload_file("avatar.jpg").await?;
-let photo = client.set_profile("me").photo(uploaded).send().await?;
+client.set_profile("me").photo(uploaded).send().await?;
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -9990,11 +9898,11 @@ for s in sessions {
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Update name and bio at once
-client.set_profile(
-    Some("Bot".to_string()),
-    Some("Account".to_string()),
-    Some("Powered by ferogram 🦀".to_string()),
-).await?;
+client.set_profile("me")
+    .name("Bot", "Account")
+    .bio("Powered by ferogram 🦀")
+    .send()
+    .await?;
 
 // Set a new avatar
 let bytes = tokio::fs::read("new_avatar.png").await?;
@@ -10296,18 +10204,6 @@ client.send_vote(peer.clone(), 1234, vec![vec![0]]).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.poll_results(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, poll_hash: i64) -&gt; Result&lt;(), InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">
-Request a fresh result snapshot from the server. The server responds with an `updateMessagePoll` in the update stream. `poll_hash` comes from `PollResults.results_hash` on the message.
-</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
 <span class="api-card-sig">client.get_poll_votes(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, option: Option&lt;Vec&lt;u8&gt;&gt;, limit: i32, offset: Option&lt;String&gt;) -&gt; Result&lt;tl::types::messages::VotesList, InvocationError&gt;</span>
 </div>
 
@@ -10435,33 +10331,21 @@ for doc in &amp;set.documents {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.toggle_stickers(stickerset: tl::enums::InputStickerSet, archived: bool) → Result&lt;tl::enums::messages::StickerSetInstallResult, InvocationError&gt;</span>
+<span class="api-card-sig">client.toggle_stickers(stickerset: tl::enums::InputStickerSet, install: bool) → Result&lt;Option&lt;tl::enums::messages::StickerSetInstallResult&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Install a sticker set for the current account. Pass <code>archived: true</code> to add it to the archive instead of the active set list.
-<p>The return value is <code>StickerSetInstallResult::Success</code> on a clean install, or <code>StickerSetInstallResult::Archive</code> when older sets were moved to the archive to make room.</p>
+Install (<code>install: true</code>) or uninstall (<code>install: false</code>) a sticker set for the current account.
+<p>When installing, the return value is <code>Some(StickerSetInstallResult::Success)</code> on a clean install, or <code>Some(StickerSetInstallResult::Archive)</code> when older sets were moved to the archive to make room.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let result = client.toggle_stickers(
     tl::enums::InputStickerSet::InputStickerSetShortName(
         tl::types::InputStickerSetShortName { short_name: "Animals".into() }
     ),
-    false,
+    true, // install
 ).await?;
 <span class="boring">}</span></code></pre>
-</div>
-
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.untoggle_stickers(stickerset: tl::enums::InputStickerSet) → Result&lt;(), InvocationError&gt;</span>
-</div>
-
-<div class="api-card-body">
-Remove a sticker set from the account's installed sets.
 </div>
 
 </div>
@@ -10846,7 +10730,8 @@ client.delete_bot_commands(None, "").await?;
 <p>Retrieve the current values:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let info = client.get_bot_info("").await?;
+</span>// bot: None means your own bot; lang_code "" is the default language
+let info = client.get_bot_info(None::&lt;&amp;str&gt;, "").await?;
 println!("Name: {}", info.name);
 println!("About: {}", info.about);
 println!("Description: {}", info.description);
@@ -10930,21 +10815,23 @@ if the user already scanned before you called it.</p>
 <p>Send a payment invoice to a chat (bots only):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>client.send_invoice(
+</span>use ferogram::InvoiceOptions;
+
+client.send_invoice(
     "@user",
     "Premium subscription",          // title
     "One month of premium access",   // description
     "sub_monthly",                   // payload (your internal ID)
-    "USD",                           // currency
-    &amp;[
-        ("1 Month Premium", 999),    // (label, amount in cents)
-    ],
-    None,                            // photo_url
-    false,                           // need_name
-    false,                           // need_phone
-    false,                           // need_email
-    false,                           // need_shipping_address
-    false,                           // is_flexible (shipping address changes price)
+    InvoiceOptions {
+        currency: "USD".into(),
+        prices: vec![("1 Month Premium".into(), 999)], // (label, amount in cents)
+        photo_url: None,
+        need_name: false,
+        need_phone: false,
+        need_email: false,
+        need_shipping_address: false,
+        is_flexible: false,      // shipping address changes price
+    },
 ).await?;
 <span class="boring">}</span></code></pre>
 <p>Handle the resulting shipping and pre-checkout queries via <code>Update::ShippingQuery</code> and <code>Update::PreCheckoutQuery</code>:</p>
@@ -11379,9 +11266,6 @@ if let enums::UserFull::UserFull(info) = uf.full_user {
 </span>// This populates the peer cache
 let peer = client.resolve("@username").await?;
 
-// For users
-let user_hash = client.inner_peer_cache_users().get(&amp;user_id).copied().unwrap_or(0);
-
 // Simpler: use resolve_to_input_peer for a ready-to-use InputPeer
 let input_peer = client.resolve_to_input_peer("@username").await?;
 <span class="boring">}</span></code></pre>
@@ -11416,27 +11300,13 @@ match client.invoke(&amp;req).await {
 <span class="boring">}</span></code></pre>
 <p>Issues a single <code>GetDialogs</code> call and caches all returned channel and user access hashes. Call this at startup if your code needs to address channels by ID before any update has come in for them. Without this, a <code>CHANNEL_INVALID</code> error can appear on the first request to a channel the bot hasn’t interacted with yet in the current session.</p>
 <p>This is opt-in; ferogram no longer calls <code>GetDialogs</code> automatically at startup. See the v0.3.5 release notes for why.</p>
-<h3 id="cache_users_slice_pub--cache_chats_slice_pub"><a class="header" href="#cache_users_slice_pub--cache_chats_slice_pub"><code>cache_users_slice_pub</code> / <code>cache_chats_slice_pub</code></a></h3>
+<h3 id="cache_users_slice--cache_chats_slice"><a class="header" href="#cache_users_slice--cache_chats_slice"><code>cache_users_slice</code> / <code>cache_chats_slice</code></a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>client.cache_users_slice_pub(&amp;users_vec).await;
-client.cache_chats_slice_pub(&amp;chats_vec).await;
+</span>client.cache_users_slice(&amp;users_vec).await;
+client.cache_chats_slice(&amp;chats_vec).await;
 <span class="boring">}</span></code></pre>
 <p>Manually insert <code>tl::enums::User</code> or <code>tl::enums::Chat</code> slices into the access-hash cache. Useful when you’ve called a raw RPC that returned user or chat objects and want them to be addressable by subsequent high-level calls.</p>
-<hr>
-<h2 id="update-state"><a class="header" href="#update-state">Update state</a></h2>
-<h3 id="sync_update_state"><a class="header" href="#sync_update_state"><code>sync_update_state</code></a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>client.sync_update_state().await;
-<span class="boring">}</span></code></pre>
-<p>Calls <code>updates.getState</code> and resets the internal pts/qts/seq/date counters to match the server. Called automatically on <code>connect()</code>. Call it manually after resuming from a long hibernation to avoid replaying a large backlog of missed updates.</p>
-<h3 id="sync_pts_state"><a class="header" href="#sync_pts_state"><code>sync_pts_state</code></a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>client.sync_pts_state().await?;
-<span class="boring">}</span></code></pre>
-<p>The fallible version of <code>sync_update_state</code>. Returns an error if the RPC itself fails. <code>sync_update_state</code> silently discards that error; use <code>sync_pts_state</code> directly when you need to handle or log a failure.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="retry--flood-wait"><a class="header" href="#retry--flood-wait">Retry &amp; Flood Wait</a></h1>
 <p>Telegram’s rate limiting system sends <code>FLOOD_WAIT_X</code> errors when you call the API too frequently. <code>X</code> is the number of seconds you must wait before retrying.</p>
@@ -11500,18 +11370,22 @@ struct CappedSleep {
 
 impl RetryPolicy for CappedSleep {
     fn should_retry(&amp;self, ctx: &amp;RetryContext) -&gt; ControlFlow&lt;(), Duration&gt; {
-        if ctx.attempt() &gt;= self.max_attempts {
-            log::warn!("Giving up after {} attempts", ctx.attempt());
+        let attempt = ctx.fail_count.get();
+        if attempt &gt;= self.max_attempts {
+            log::warn!("Giving up after {attempt} attempts");
             return ControlFlow::Break(());
         }
 
-        let wait = ctx.flood_wait_secs();
+        // Only FLOOD_WAIT errors carry a wait time. Anything else is not retried here.
+        let Some(wait) = ctx.error.flood_wait_seconds() else {
+            return ControlFlow::Break(());
+        };
         if wait &gt; self.max_wait_secs {
             log::warn!("FLOOD_WAIT too long ({wait}s), giving up");
             return ControlFlow::Break(());
         }
 
-        log::info!("FLOOD_WAIT {wait}s (attempt {})", ctx.attempt());
+        log::info!("FLOOD_WAIT {wait}s (attempt {attempt})");
         ControlFlow::Continue(Duration::from_secs(wait))
     }
 }
@@ -11524,16 +11398,16 @@ let (client, _shutdown) = Client::connect(Config {
     ..Default::default()
 }).await?;
 <span class="boring">}</span></code></pre>
-<h2 id="retrycontext-fields"><a class="header" href="#retrycontext-fields">RetryContext fields</a></h2>
+<h2 id="retrycontext"><a class="header" href="#retrycontext">RetryContext</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>ctx.flood_wait_secs()</code></td><td><code>u64</code></td><td>How long Telegram wants you to wait</td></tr>
-<tr><td><code>ctx.attempt()</code></td><td><code>u32</code></td><td>How many times this call has been retried</td></tr>
-<tr><td><code>ctx.error_message()</code></td><td><code>&amp;str</code></td><td>The raw error message string</td></tr>
+<tr><td><code>ctx.fail_count</code></td><td><code>NonZeroU32</code></td><td>How many times this request has failed, starting at 1</td></tr>
+<tr><td><code>ctx.slept_so_far</code></td><td><code>Duration</code></td><td>Total time already slept for this request across earlier retries</td></tr>
+<tr><td><code>ctx.error</code></td><td><code>InvocationError</code></td><td>The most recent error. <code>ctx.error.flood_wait_seconds()</code> returns <code>Option&lt;u64&gt;</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -12346,6 +12220,84 @@ let bytes = cdn.download_all(Some(total_size)).await?;
 println!("Downloaded {} bytes", bytes.len());
 <span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="secret-chats-1"><a class="header" href="#secret-chats-1">Secret Chats</a></h1>
+<p>Secret chats are end-to-end encrypted one-to-one chats (MTProto 2.0). They are available behind the <code>e2e</code> feature, which pulls in the <a href="https://crates.io/crates/ferogram-e2e"><code>ferogram-e2e</code></a> crate and exposes it as <code>ferogram::e2e</code>.</p>
+<pre><code class="language-toml">ferogram = { version = "0.6", features = ["e2e"] }
+</code></pre>
+<h2 id="start-a-chat"><a class="header" href="#start-a-chat">Start a chat</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::e2e::{E2eClient, E2eClientExt, E2eEvent};
+
+// Chats are kept in `mybot.e2e` next to the session, so they survive restarts.
+let e2e = E2eClient::for_session(client.clone(), "mybot.session")?;
+
+// "@username", a phone number or a user id. The access hash is looked up for you.
+let chat_id = e2e.request_secret_chat("@username").await?;
+<span class="boring">}</span></code></pre>
+<p>The chat is usable once the other person accepts it and an <code>E2eEvent::ChatReady</code> arrives.</p>
+<h2 id="handle-updates"><a class="header" href="#handle-updates">Handle updates</a></h2>
+<p>Secret chat traffic arrives through the normal update stream. Pass every update to <code>handle_client_update</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let mut stream = client.stream_updates();
+while let Some(update) = stream.next().await {
+    match e2e.handle_client_update(&amp;update).await? {
+        Some(E2eEvent::ChatReady { chat_id }) =&gt; {
+            e2e.send_text(chat_id, "hello", 0).await?;
+        }
+        Some(E2eEvent::Message { chat_id, message, .. }) =&gt; {
+            println!("{chat_id}: {message:?}");
+        }
+        _ =&gt; {}
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Incoming chat requests are accepted automatically and reported as <code>E2eEvent::ChatRequested</code>, followed by <code>ChatReady</code>.</p>
+<h2 id="events"><a class="header" href="#events">Events</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Event</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ChatRequested</code></td><td>Someone asked for a secret chat with you (already accepted)</td></tr>
+<tr><td><code>ChatReady</code></td><td>The key exchange finished, the chat can be used</td></tr>
+<tr><td><code>ChatDiscarded</code></td><td>The other side ended the chat</td></tr>
+<tr><td><code>Message</code></td><td>A decrypted message, with the encrypted file reference if it has media</td></tr>
+<tr><td><code>MessageExpired</code></td><td>A self-destruct timer ran out</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="what-you-can-do"><a class="header" href="#what-you-can-do">What you can do</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>send_text(chat_id, text, ttl)</code></td><td>Send text, with an optional self-destruct timer in seconds (<code>0</code> for none)</td></tr>
+<tr><td><code>send_photo(...)</code>, <code>send_file(...)</code></td><td>Encrypt and upload media</td></tr>
+<tr><td><code>download_decrypted_file(...)</code></td><td>Download and decrypt media from a <code>Message</code> event</td></tr>
+<tr><td><code>set_encrypted_typing(chat_id, typing)</code></td><td>Typing indicator</td></tr>
+<tr><td><code>emoji_fingerprint(chat_id)</code></td><td>Four emojis both people can compare to check the key</td></tr>
+<tr><td><code>initiate_rekey(chat_id)</code></td><td>Start a key re-exchange</td></tr>
+<tr><td><code>discard(chat_id, delete_history)</code></td><td>End the chat</td></tr>
+<tr><td><code>subscribe()</code></td><td>Receive events that are not tied to an update, such as <code>MessageExpired</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="storage"><a class="header" href="#storage">Storage</a></h2>
+<p><code>E2eClient::for_session</code> stores chats in a small binary file, <code>&lt;session_name&gt;.e2e</code> (<code>mybot.session</code> becomes <code>mybot.e2e</code>). Writes are atomic, the file is checksummed, and on Unix it is created with mode <code>0600</code>. <code>E2eClient::new</code> keeps chats in memory only, and <code>E2eClient::with_persistence(client, path)</code> takes an explicit path.</p>
+<p>The file holds each chat’s key unencrypted, so keep it as private as your session file.</p>
+<h2 id="limits"><a class="header" href="#limits">Limits</a></h2>
+<ul>
+<li>Secret chats are one-to-one between users. Bots, groups and channels can’t use them.</li>
+<li>As in Telegram itself, a secret chat belongs to one device.</li>
+<li>Running a client other than ferogram? Implement <code>E2eTransport</code> for it and call <code>E2eClient::handle_update</code> with raw updates.</li>
+</ul>
+<p>See the <a href="https://github.com/ankit-chaubey/ferogram/blob/main/ferogram/examples/secret_chat.rs"><code>secret_chat</code> example</a> for a complete program.</p>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="configuration"><a class="header" href="#configuration">Configuration</a></h1>
 <p><code>Config</code> is the struct passed to <code>Client::connect</code>. The recommended way to build it is via <code>Client::builder()</code>. All fields except <code>api_id</code> and <code>api_hash</code> have defaults.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -12692,14 +12644,22 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <p><code>ferogram</code> is a workspace of focused, single-responsibility crates. Understanding the stack helps when you need to go below the high-level API.</p>
 <h2 id="dependency-graph"><a class="header" href="#dependency-graph">Dependency graph</a></h2>
 <pre><code>Your App
- └ ferogram ← high-level Client, UpdateStream, InputMessage
- ├ ferogram-session ← session persistence, DC table, backends
- ├ ferogram-parsers ← Markdown and HTML entity parsing
- ├ ferogram-mtproto ← MTProto session, DH, message framing
- │ └ ferogram-crypto ← AES-IGE, RSA, SHA, factorize
- └ ferogram-tl-types ← all generated types + LAYER constant
- ├ ferogram-tl-gen (build-time code generator)
- └ ferogram-tl-parser (build-time TL schema parser)
+└ ferogram                high-level Client, UpdateStream, InputMessage
+  ├ ferogram-msgbox       pts/qts/seq gap tracking
+  │ └ ferogram-tl-types
+  ├ ferogram-mtsender     DC pool, retry policy
+  │ └ ferogram-connect    TCP, framing, obfuscation, proxies
+  │   ├ ferogram-mtproto  MTProto session, DH, message framing
+  │   │ ├ ferogram-tl-types   all generated types + LAYER constant
+  │   │ │ └ (build) ferogram-tl-gen
+  │   │ │   └ (build) ferogram-tl-parser
+  │   │ └ ferogram-crypto
+  │   └ ferogram-crypto
+  ├ ferogram-session      session persistence, DC table, backends
+  ├ ferogram-parsers      Markdown and HTML entity parsing (feature: parsers)
+  ├ ferogram-fsm          FSM state storage (feature: fsm)
+  ├ ferogram-derive       #[derive(FsmState)] (feature: derive)
+  └ ferogram-e2e          secret chats (feature: e2e)
 </code></pre>
 <hr>
 <h2 id="ferogram-1"><a class="header" href="#ferogram-1">ferogram</a></h2>
@@ -12726,6 +12686,24 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <li>Error types: <code>InvocationError</code>, <code>RpcError</code>, <code>SignInError</code>, <code>LoginToken</code>, <code>PasswordToken</code></li>
 <li>Retry traits: <code>RetryPolicy</code>, <code>AutoSleep</code>, <code>NoRetries</code>, <code>RetryContext</code></li>
 </ul>
+<hr>
+<h2 id="ferogram-e2e"><a class="header" href="#ferogram-e2e">ferogram-e2e</a></h2>
+<p><strong>Secret chats (end-to-end encryption).</strong> Optional, enabled by the <code>e2e</code> feature of <code>ferogram</code>. Versioned separately from the rest of the workspace.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Component</th><th>Usage</th></tr>
+</thead>
+<tbody>
+<tr><td><code>E2eClient</code></td><td>Request, accept and use secret chats; <code>for_session</code> keeps them in <code>&lt;session_name&gt;.e2e</code></td></tr>
+<tr><td><code>E2eEvent</code></td><td>Chat requested / ready / discarded, incoming messages, expired messages</td></tr>
+<tr><td><code>E2eTransport</code></td><td>Trait that connects any client to the crate (implemented for <code>ferogram::Client</code>)</td></tr>
+<tr><td><code>crypto</code>, <code>dh</code></td><td>MTProto 2.0 message and file encryption, DH key exchange</td></tr>
+<tr><td><code>tl</code>, <code>state</code>, <code>upload</code></td><td>Inner secret chat TL layer, per-chat state and store, encrypted file upload</td></tr>
+</tbody>
+</table>
+</div>
+<p>It depends only on <code>ferogram-crypto</code> and <code>ferogram-tl-types</code>, not on <code>ferogram</code>.</p>
 <hr>
 <h2 id="ferogram-tl-types"><a class="header" href="#ferogram-tl-types">ferogram-tl-types</a></h2>
 <p><strong>All generated Telegram API types.</strong> Auto-regenerated at <code>cargo build</code> from <code>tl/api.tl</code>.</p>
@@ -12764,8 +12742,11 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <li>Message framing: serialization, padding, encryption, HMAC</li>
 <li><code>msg_container</code> unpacking (batched responses)</li>
 <li>gzip decompression of <code>gzip_packed</code> responses</li>
-<li>Transport abstraction (abridged, intermediate, obfuscated)</li>
+<li>Error recovery: <code>bad_msg_notification</code>, <code>bad_server_salt</code>, <code>msg_resend_req</code></li>
+<li>Acknowledgements via <code>MsgsAck</code></li>
+<li>Temporary key binding for PFS (<code>bind_temp_key</code>)</li>
 </ul>
+<p>Transport framing (abridged, intermediate, obfuscated) lives in <a href="#ferogram-connect"><code>ferogram-connect</code></a>, not here.</p>
 <h3 id="dh-handshake-steps"><a class="header" href="#dh-handshake-steps">DH handshake steps</a></h3>
 <ol>
 <li><strong>PQ factorization</strong>: <code>req_pq_multi</code> → server sends <code>resPQ</code></li>
@@ -12830,9 +12811,66 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <li>Optional: <code>impl Debug</code>, <code>impl From</code>, <code>impl TryFrom</code>, <code>impl Serialize/Deserialize</code></li>
 </ul>
 <hr>
+<h2 id="ferogram-connect"><a class="header" href="#ferogram-connect">ferogram-connect</a></h2>
+<p><strong>Raw TCP connection, MTProto framing, and the transport layer.</strong> Sits between a <code>TcpStream</code> and decrypted MTProto messages. <code>ferogram</code> re-exports everything here.</p>
+<h3 id="what-it-provides-3"><a class="header" href="#what-it-provides-3">What it provides</a></h3>
+<ul>
+<li>Abridged, Intermediate, Padded Intermediate, and Full transport framing</li>
+<li>Obfuscated2 (AES-256-CTR) transport for bypassing DPI and for MTProxy</li>
+<li>FakeTLS transport for <code>0xee</code> MTProxy secrets</li>
+<li>SOCKS5 proxy with optional username and password (feature: <code>socks5</code>)</li>
+<li>MTProxy link parsing and connection (<code>tg://proxy?...</code> and <code>https://t.me/proxy?...</code>)</li>
+<li>Keepalive pings with a configurable interval</li>
+<li>gzip inflate and compress for MTProto containers</li>
+</ul>
+<h3 id="stack-position"><a class="header" href="#stack-position">Stack position</a></h3>
+<pre><code>ferogram
+└ ferogram-mtsender
+  └ ferogram-connect  &lt;-- here
+    ├ ferogram-mtproto
+    └ ferogram-crypto
+</code></pre>
+<hr>
+<h2 id="ferogram-mtsender"><a class="header" href="#ferogram-mtsender">ferogram-mtsender</a></h2>
+<p><strong>DC connection pool and retry policy.</strong> Manages connections to the Telegram datacenters and drives the retry loop for RPC calls. <code>ferogram</code> re-exports the retry types.</p>
+<h3 id="what-it-provides-4"><a class="header" href="#what-it-provides-4">What it provides</a></h3>
+<ul>
+<li><code>DcPool</code>: one <code>DcConnection</code> per DC, created on demand</li>
+<li><code>DcConnection</code>: owns the sender loop for a single DC</li>
+<li><code>RetryPolicy</code> trait with the built-in <code>AutoSleep</code>, <code>NoRetries</code>, and <code>CircuitBreaker</code></li>
+<li><code>FLOOD_WAIT</code> and <code>SLOWMODE_WAIT</code> auto-sleep with jitter</li>
+<li>Exponential backoff for transient I/O errors</li>
+</ul>
+<p><code>AutoSleep</code> is the default policy used by <code>ferogram</code>.</p>
+<hr>
+<h2 id="ferogram-msgbox"><a class="header" href="#ferogram-msgbox">ferogram-msgbox</a></h2>
+<p><strong>Update-gap tracking.</strong> A pure state machine, with no async and no networking, that keeps the <code>pts</code>, <code>qts</code>, <code>seq</code> and <code>date</code> counters (plus a separate <code>pts</code> per channel) and detects when the <code>Updates</code> stream has dropped something. <code>ferogram</code> re-exports it as <code>ferogram::message_box</code>.</p>
+<h3 id="what-it-provides-5"><a class="header" href="#what-it-provides-5">What it provides</a></h3>
+<ul>
+<li><code>MessageBoxes</code>: the state machine. <code>process_updates()</code> takes an <code>UpdatesLike</code> and returns either the update batch or a <code>Gap</code></li>
+<li>Gap detection, with a short buffering window for out-of-order updates before it asks for a diff</li>
+<li>A periodic catch-up <code>getDifference</code> when one is due, even with no known gap</li>
+<li><code>classify_own_response</code>, which folds updates piggybacked on your own RPC responses into the same <code>pts</code> sequence</li>
+<li><code>apply_difference</code>, to feed <code>updates.getDifference</code> and <code>updates.getChannelDifference</code> results back into state</li>
+</ul>
+<hr>
+<h2 id="ferogram-fsm"><a class="header" href="#ferogram-fsm">ferogram-fsm</a></h2>
+<p><strong>FSM state storage and context for bots.</strong> Used by the <code>ferogram</code> dispatcher when you register FSM handlers. <code>ferogram</code> re-exports it behind the <code>fsm</code> feature.</p>
+<h3 id="what-it-provides-6"><a class="header" href="#what-it-provides-6">What it provides</a></h3>
+<ul>
+<li><code>StateStorage</code> trait, so you can plug in any backend</li>
+<li><code>MemoryStorage</code>: built in, in-process, no persistence</li>
+<li><code>StateContext</code>: read, write, and transition state per user or chat</li>
+<li><code>StateKey</code>: scope state by user id, chat id, or both</li>
+<li><code>FsmState</code> trait that your state enum implements</li>
+</ul>
+<hr>
+<h2 id="ferogram-derive-1"><a class="header" href="#ferogram-derive-1">ferogram-derive</a></h2>
+<p><strong>Procedural macros for the workspace.</strong> Currently exposes <code>#[derive(FsmState)]</code>, which implements <code>FsmState</code> for an enum of unit variants. Keys are namespaced with the module path and enum name, so identically named variants on different enums do not collide in storage. Most people get it through the <code>derive</code> feature of <code>ferogram</code>.</p>
+<hr>
 <h2 id="ferogram-session"><a class="header" href="#ferogram-session">ferogram-session</a></h2>
 <p><strong>Session persistence types and pluggable storage backends.</strong></p>
-<h3 id="what-it-provides-3"><a class="header" href="#what-it-provides-3">What it provides</a></h3>
+<h3 id="what-it-provides-7"><a class="header" href="#what-it-provides-7">What it provides</a></h3>
 <ul>
 <li><code>PersistedSession</code>: versioned binary format holding the full DC table, update state, and peer cache</li>
 <li><code>SessionBackend</code> trait: implement to add custom storage (Redis, Postgres, etc.)</li>
@@ -12858,14 +12896,14 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 </tbody>
 </table>
 </div>
-<h3 id="stack-position"><a class="header" href="#stack-position">Stack position</a></h3>
+<h3 id="stack-position-1"><a class="header" href="#stack-position-1">Stack position</a></h3>
 <pre><code>ferogram
 └ ferogram-session
 </code></pre>
 <hr>
 <h2 id="ferogram-parsers"><a class="header" href="#ferogram-parsers">ferogram-parsers</a></h2>
 <p><strong>Telegram HTML and Markdown entity parsers.</strong></p>
-<h3 id="what-it-provides-4"><a class="header" href="#what-it-provides-4">What it provides</a></h3>
+<h3 id="what-it-provides-8"><a class="header" href="#what-it-provides-8">What it provides</a></h3>
 <ul>
 <li><code>parse_markdown(src)</code> → <code>(String, Vec&lt;MessageEntity&gt;)</code>: Telegram-flavoured Markdown to plain text + entity list</li>
 <li><code>generate_markdown(text, entities)</code> → <code>String</code>: entity list back to Markdown</li>
@@ -12905,7 +12943,7 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 </tbody>
 </table>
 </div>
-<h3 id="stack-position-1"><a class="header" href="#stack-position-1">Stack position</a></h3>
+<h3 id="stack-position-2"><a class="header" href="#stack-position-2">Stack position</a></h3>
 <pre><code>ferogram
 └ ferogram-parsers
   └ ferogram-tl-types (tl-api feature)
@@ -12921,10 +12959,18 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <tbody>
 <tr><td><code>sqlite-session</code></td><td>❌</td><td>SQLite-backed session storage via <code>rusqlite</code></td></tr>
 <tr><td><code>libsql-session</code></td><td>❌</td><td>libsql / Turso session storage: local or remote (<strong>Added in v0.3.0</strong>)</td></tr>
-<tr><td><code>html</code></td><td>❌</td><td>Built-in hand-rolled HTML parser (<code>parse_html</code>, <code>generate_html</code>)</td></tr>
-<tr><td><code>html5ever</code></td><td>❌</td><td>Spec-compliant html5ever tokenizer: overrides the built-in <code>html</code> parser</td></tr>
+<tr><td><code>parsers</code></td><td>❌</td><td>HTML and Markdown entity parsers (<code>parse_html</code>, <code>generate_html</code>, <code>parse_markdown</code>)</td></tr>
+<tr><td><code>html</code></td><td>❌</td><td>Alias of <code>parsers</code></td></tr>
+<tr><td><code>html5ever</code></td><td>❌</td><td>Spec-compliant html5ever tokenizer: overrides the built-in HTML parser</td></tr>
 <tr><td><code>serde</code></td><td>❌</td><td><code>serde::Serialize</code> / <code>Deserialize</code> on <code>Config</code> and public structs</td></tr>
 <tr><td><code>derive</code></td><td>❌</td><td><code>#[derive(FsmState)]</code> proc-macro for FSM state enums</td></tr>
+<tr><td><code>fsm</code></td><td>❌</td><td>FSM dispatcher helpers (<code>dp.on_message_fsm</code>, <code>FsmState</code>)</td></tr>
+<tr><td><code>experimental</code></td><td>❌</td><td>Experimental transfer APIs, such as resumable transfers</td></tr>
+<tr><td><code>libsql-remote-session</code></td><td>❌</td><td><code>LibSqlBackend</code> over remote Turso and embedded replicas (<code>open_remote</code>, <code>open_replica</code>)</td></tr>
+<tr><td><code>resilient-connect</code></td><td>❌</td><td>DNS-over-HTTPS and special-config fallback for censored networks</td></tr>
+<tr><td><code>socks5</code></td><td>❌</td><td>SOCKS5 proxy support for outgoing connections</td></tr>
+<tr><td><code>metrics</code></td><td>❌</td><td>RPC and connection counters, histograms, gauges</td></tr>
+<tr><td><code>e2e</code></td><td>❌</td><td>Secret chats (end-to-end encryption). Re-exports <code>ferogram-e2e</code> as <code>ferogram::e2e</code></td></tr>
 <tr><td><code>parser</code></td><td>❌</td><td>Re-exports <code>ferogram-tl-parser</code> for custom TL schema tooling</td></tr>
 <tr><td><code>codegen</code></td><td>❌</td><td>Re-exports <code>ferogram-tl-gen</code> for custom code generation tooling</td></tr>
 </tbody>
@@ -12944,19 +12990,22 @@ Client::builder().retry_policy(Arc::new(NoRetries))
 <li><code>ClientBuilder</code>: fluent connection builder</li>
 </ul>
 <pre><code class="language-toml"># SQLite session only
-ferogram = { version = "0.6.6", features = ["sqlite-session"] }
+ferogram = { version = "0.6.7", features = ["sqlite-session"] }
 
 # LibSQL / Turso session (new in 0.2.0)
-ferogram = { version = "0.6.6", features = ["libsql-session"] }
+ferogram = { version = "0.6.7", features = ["libsql-session"] }
 
 # HTML parsing (minimal, no extra deps)
-ferogram = { version = "0.6.6", features = ["html"] }
+ferogram = { version = "0.6.7", features = ["html"] }
 
 # HTML parsing (spec-compliant, adds html5ever dep)
-ferogram = { version = "0.6.6", features = ["html5ever"] }
+ferogram = { version = "0.6.7", features = ["html5ever"] }
+
+# Secret chats (end-to-end encryption)
+ferogram = { version = "0.6.7", features = ["e2e"] }
 
 # Multiple features at once
-ferogram = { version = "0.6.6", features = ["sqlite-session", "html"] }
+ferogram = { version = "0.6.7", features = ["sqlite-session", "html"] }
 </code></pre>
 <hr>
 <h2 id="ferogram-tl-types-1"><a class="header" href="#ferogram-tl-types-1">ferogram-tl-types</a></h2>
@@ -12978,14 +13027,14 @@ ferogram = { version = "0.6.6", features = ["sqlite-session", "html"] }
 </table>
 </div>
 <h3 id="example-enable-serde"><a class="header" href="#example-enable-serde">Example: enable serde</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.6", features = ["tl-api", "impl-serde"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.7", features = ["tl-api", "impl-serde"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let json = serde_json::to_string(&amp;some_tl_type)?;
 <span class="boring">}</span></code></pre>
 <h3 id="example-name_for_id-debugging"><a class="header" href="#example-name_for_id-debugging">Example: name_for_id (debugging)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.6", features = ["tl-api", "name-for-id"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.7", features = ["tl-api", "name-for-id"] }
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -12996,13 +13045,13 @@ if let Some(name) = name_for_id(0x74ae4240) {
 }
 <span class="boring">}</span></code></pre>
 <h3 id="example-minimal-no-debug-no-conversions"><a class="header" href="#example-minimal-no-debug-no-conversions">Example: minimal (no Debug, no conversions)</a></h3>
-<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.6", default-features = false, features = ["tl-api"] }
+<pre><code class="language-toml">ferogram-tl-types = { version = "0.6.7", default-features = false, features = ["tl-api"] }
 </code></pre>
 <p>Reduces compile time when you don’t need convenience traits.</p>
 <hr>
 <h2 id="string-session-no-feature-flag-needed"><a class="header" href="#string-session-no-feature-flag-needed">String session: no feature flag needed</a></h2>
 <p><code>StringSessionBackend</code> and <code>export_session_string()</code> are available in the default build: no feature flag required:</p>
-<pre><code class="language-toml">ferogram = "0.6.6"   # already includes StringSessionBackend
+<pre><code class="language-toml">ferogram = "0.6.7"   # already includes StringSessionBackend
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {

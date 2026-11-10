@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../theme/custom-3cd05ff1.css">
+        <link rel="stylesheet" href="../theme/custom-77732367.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cd8d88f4.js";
+            window.path_to_searchindex_js = "../searchindex-4f2f0348.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5d15c526.js"></script>
+        <script src="../toc-c3257afc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -267,7 +267,7 @@ while let Some(msg) = iter.next(&amp;client).await? {
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Latest N messages from a peer
-let messages = client.get_message_history(peer.clone(), 20).await?;
+let messages = client.get_message_history(peer.clone(), 20, 0, 0).await?;
 
 // Specific message IDs
 let messages = client.get_messages(peer.clone(), &amp;[100, 101, 102]).await?;
@@ -306,14 +306,14 @@ client.clear_mentions(peer.clone()).await?;
 client.delete_dialog(peer.clone()).await?;
 
 // Pin / unpin a dialog
-client.pin_dialog(peer.clone()).await?;
+client.pin_dialog(peer.clone(), true).await?;
 client.pin_dialog(peer.clone(), false).await?;
 
 // Get pinned dialogs (folder_id: 0 = main, 1 = archived)
 let pinned = client.get_pinned_dialogs(0).await?;
 
 // Set manual unread flag on a dialog
-client.mark_dialog_unread(peer.clone(), true).await?;
+client.mark_dialog_unread(peer.clone()).await?;
 
 // Clear the manual unread flag
 client.mark_read(peer.clone()).await?;
@@ -333,19 +333,12 @@ let hash = Client::parse_invite_hash("https://t.me/+AbCdEfG12345");
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Move to archive - chat disappears from the main dialog list
-client.archive("@somebot").await?;
+client.archive("@somebot", true).await?;
 
 // Move back to main list
-client.archive("@somebot").await?;
+client.archive("@somebot", false).await?;
 <span class="boring">}</span></code></pre>
 <p>Archived chats still receive messages; they are simply hidden from the main list and muted by default until the user opens them.</p>
-<h3 id="low-level-folder-move"><a class="header" href="#low-level-folder-move">Low-level folder move</a></h3>
-<p>For finer control (e.g. custom folders), use <code>move_to_folder</code>:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// folder_id 0 = main list, 1 = archive
-client.move_to_folder("@somebot", 0).await?;
-<span class="boring">}</span></code></pre>
 
                     </main>
 

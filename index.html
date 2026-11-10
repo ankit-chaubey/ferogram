@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="theme/custom-3cd05ff1.css">
+        <link rel="stylesheet" href="theme/custom-77732367.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cd8d88f4.js";
+            window.path_to_searchindex_js = "searchindex-4f2f0348.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-5d15c526.js"></script>
+        <script src="toc-c3257afc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,7 +184,7 @@
                         <h1 id="ferogram"><a class="header" href="#ferogram">ferogram</a></h1>
 <p><a href="https://crates.io/crates/ferogram"><img src="https://img.shields.io/crates/v/ferogram?color=fc8d62&amp;label=ferogram&amp;style=flat-square" alt="Crates.io"></a>
 <a href="https://docs.rs/ferogram"><img src="https://img.shields.io/docsrs/ferogram?style=flat-square&amp;color=22c55e" alt="docs.rs"></a>
-<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-232-8b5cf6?style=flat-square" alt="TL Layer"></a>
+<a href="https://core.telegram.org/schema"><img src="https://img.shields.io/badge/TL%20Layer-233-8b5cf6?style=flat-square" alt="TL Layer"></a>
 <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License"></a></p>
 <p>Hey, glad you’re here.</p>
 <p>ferogram is an async Rust library for Telegram’s MTProto protocol, built by <a href="https://github.com/ankit-chaubey">Ankit Chaubey</a>. It talks to Telegram directly, no Bot API proxy in between, and it works for both bots and user accounts from the same API.</p>
@@ -193,7 +193,7 @@
 <p>If something’s missing for you, drop by <a href="https://t.me/FerogramChat">t.me/FerogramChat</a>. I genuinely like hearing what people are building with it.</p>
 <h2 id="quick-install"><a class="header" href="#quick-install">Quick install</a></h2>
 <pre><code class="language-toml">[dependencies]
-ferogram = "0.6.6"
+ferogram = "0.6.7"
 tokio    = { version = "1", features = ["full"] }
 </code></pre>
 <p>Get <code>api_id</code> and <code>api_hash</code> from <a href="https://my.telegram.org">my.telegram.org</a>. That’s all you need to get started.</p>
@@ -207,7 +207,7 @@ tokio    = { version = "1", features = ["full"] }
 <h2 id="whats-under-the-hood"><a class="header" href="#whats-under-the-hood">What’s under the hood</a></h2>
 <p>Everything in the workspace is written from scratch: the <code>.tl</code> schema parser, the TL code generator, AES-IGE crypto, the DH key exchange, MTProto framing, the session layer, and the high-level client on top. Each piece is its own crate so you can pull in just what you need. Most people never touch any of it directly, but it’s all there if you do.</p>
 <h2 id="crates"><a class="header" href="#crates">Crates</a></h2>
-<p>Most people only need <code>ferogram</code>. But each crate is independently published if you need a specific layer on its own.</p>
+<p>Most people only need <code>ferogram</code>. But each crate is independently published if you need a specific layer on its own. They share the workspace version, except <code>ferogram-e2e</code>, which is versioned separately.</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -215,6 +215,8 @@ tokio    = { version = "1", features = ["full"] }
 </thead>
 <tbody>
 <tr><td><a href="https://docs.rs/ferogram"><code>ferogram</code></a></td><td>High-level client. Auth, messaging, media, dispatcher, FSM, middleware.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-msgbox"><code>ferogram-msgbox</code></a></td><td>Update-gap tracking. pts/qts/seq bookkeeping and gap detection for the <code>Updates</code> stream.</td></tr>
+<tr><td><a href="https://docs.rs/ferogram-e2e"><code>ferogram-e2e</code></a></td><td>Secret chats. DH exchange, message and file encryption, re-keying, TTLs. Client-independent via <code>E2eTransport</code>; reached through the <code>e2e</code> feature of <code>ferogram</code>.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-session"><code>ferogram-session</code></a></td><td>Session types and pluggable storage backends (file, memory, SQLite, LibSQL, base64).</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-fsm"><code>ferogram-fsm</code></a></td><td>FSM state storage and context. <code>StateStorage</code> trait, <code>MemoryStorage</code>, <code>StateContext</code>.</td></tr>
 <tr><td><a href="https://docs.rs/ferogram-parsers"><code>ferogram-parsers</code></a></td><td>Telegram Markdown and HTML entity parsers.</td></tr>
@@ -231,6 +233,8 @@ tokio    = { version = "1", features = ["full"] }
 </div>
 <p>The rough dependency chain:</p>
 <pre><code>ferogram
+├ ferogram-msgbox
+│ └ ferogram-tl-types
 └ ferogram-mtsender
   └ ferogram-connect
     ├ ferogram-mtproto
@@ -245,7 +249,10 @@ tokio    = { version = "1", features = ["full"] }
 <pre><code class="language-bash">pip install ferogram
 </code></pre>
 <h2 id="secret-chats"><a class="header" href="#secret-chats">Secret chats</a></h2>
-<p>Secret chats (end-to-end encrypted) are fully implemented but not published to crates.io yet. The plan is to release once there is enough community demand for it.</p>
+<p>Secret chats (end-to-end encrypted) are supported behind the <code>e2e</code> feature, built on the separate <a href="https://crates.io/crates/ferogram-e2e"><code>ferogram-e2e</code></a> crate.</p>
+<pre><code class="language-toml">ferogram = { version = "0.6", features = ["e2e"] }
+</code></pre>
+<p>See <a href="./advanced/secret-chats.html">Secret Chats</a> for a walkthrough.</p>
 <h2 id="voice-and-video-calls"><a class="header" href="#voice-and-video-calls">Voice and video calls</a></h2>
 <p>Group audio calls are fully implemented, stable, and already in active production use by the author. Written in Rust from scratch, not a wrapper around anything.</p>
 <p>Group video calls are implemented and stable for most scenarios, with some known codec edge cases still being ironed out.</p>

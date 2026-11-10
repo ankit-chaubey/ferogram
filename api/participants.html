@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../theme/custom-3cd05ff1.css">
+        <link rel="stylesheet" href="../theme/custom-77732367.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cd8d88f4.js";
+            window.path_to_searchindex_js = "../searchindex-4f2f0348.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5d15c526.js"></script>
+        <script src="../toc-c3257afc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -203,10 +203,11 @@ for p in &amp;members {
     );
 }
 <span class="boring">}</span></code></pre>
-<h3 id="paginated-iterator-large-groups"><a class="header" href="#paginated-iterator-large-groups">Paginated iterator (large groups)</a></h3>
+<h3 id="fetch-all-members"><a class="header" href="#fetch-all-members">Fetch all members</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let members = client.iter_participants(peer.clone(), None, 0).await?;
+</span>// limit = 0 uses the server default page size
+let members = client.get_participants(peer.clone(), 0).await?;
 for p in &amp;members {
     println!("{}", p.user.first_name.as_deref().unwrap_or(""));
 }
@@ -233,7 +234,7 @@ p.is_member()   // bool: active member (not banned, not left)
 </span><span class="boring">fn main() {
 </span>// Removes the user from a basic group by chat_id (i64)
 // For channels/supergroups, use ban instead
-client.kick(chat_id, user_id).await?;
+client.kick(chat_id, user_id, false).await?;
 <span class="boring">}</span></code></pre>
 <blockquote>
 <p><strong>Note:</strong> <code>kick</code> takes a <code>chat_id: i64</code>, not a <code>PeerRef</code>. Use the raw numeric ID of the basic group.</p>
@@ -302,10 +303,10 @@ client
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Quick promote (all standard rights except add_admins)
-client.set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin()).await?;
+client.set_admin(peer.clone(), user_id, |_| AdminRightsBuilder::full_admin()).await?;
 
 // Demote back to regular member
-client.set_admin(peer.clone(), user_id, AdminRightsBuilder::new()).await?;
+client.set_admin(peer.clone(), user_id, |b| b).await?;
 <span class="boring">}</span></code></pre>
 <p>For fine-grained control, use <code>set_admin</code> with <code>AdminRightsBuilder</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -314,27 +315,24 @@ client.set_admin(peer.clone(), user_id, AdminRightsBuilder::new()).await?;
 
 // Promote with specific rights and a custom title
 client
-    .set_admin(
-        peer.clone(),
-        user_id,
-        AdminRightsBuilder::new()
-            .post_messages(true)
+    .set_admin(peer.clone(), user_id, |b| {
+        b.post_messages(true)
             .delete_messages(true)
             .ban_users(true)
             .invite_users(true)
             .pin_messages(true)
-            .rank("Moderator"), // custom admin title (max 16 chars)
-    )
+            .rank("Moderator") // custom admin title (max 16 chars)
+    })
     .await?;
 
 // Full admin (all standard rights except add_admins)
 client
-    .set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin())
+    .set_admin(peer.clone(), user_id, |_| AdminRightsBuilder::full_admin())
     .await?;
 
-// Demote: pass an empty builder to remove all admin rights
+// Demote: return the empty builder unchanged to remove all admin rights
 client
-    .set_admin(peer.clone(), user_id, AdminRightsBuilder::new())
+    .set_admin(peer.clone(), user_id, |b| b)
     .await?;
 <span class="boring">}</span></code></pre>
 <h3 id="adminrightsbuilder-methods"><a class="header" href="#adminrightsbuilder-methods"><code>AdminRightsBuilder</code> methods</a></h3>
@@ -449,7 +447,7 @@ for p in &amp;members {
 <h2 id="profilephotoiter-extended-methods"><a class="header" href="#profilephotoiter-extended-methods"><code>ProfilePhotoIter</code>: extended methods</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let mut iter = client.iter_profile_photos(user_id);
+</span>let mut iter = client.iter_profile_photos(user_id, 0).await?;
 
 // Total photo count (available after first fetch)
 if let Some(total) = iter.total_count() {
@@ -486,9 +484,8 @@ client.restrict(
 // Set admin rights directly
 client.set_admin(
     peer.clone(),
-    user_input_peer,
-    AdminRightsBuilder::new().delete_messages(true),
-    Some("Moderator".into()),  // optional custom rank
+    user_id,
+    |b| b.delete_messages(true).rank("Moderator"),  // rank is the optional custom title
 ).await?;
 <span class="boring">}</span></code></pre>
 

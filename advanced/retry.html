@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../theme/custom-3cd05ff1.css">
+        <link rel="stylesheet" href="../theme/custom-77732367.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cd8d88f4.js";
+            window.path_to_searchindex_js = "../searchindex-4f2f0348.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5d15c526.js"></script>
+        <script src="../toc-c3257afc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -243,18 +243,22 @@ struct CappedSleep {
 
 impl RetryPolicy for CappedSleep {
     fn should_retry(&amp;self, ctx: &amp;RetryContext) -&gt; ControlFlow&lt;(), Duration&gt; {
-        if ctx.attempt() &gt;= self.max_attempts {
-            log::warn!("Giving up after {} attempts", ctx.attempt());
+        let attempt = ctx.fail_count.get();
+        if attempt &gt;= self.max_attempts {
+            log::warn!("Giving up after {attempt} attempts");
             return ControlFlow::Break(());
         }
 
-        let wait = ctx.flood_wait_secs();
+        // Only FLOOD_WAIT errors carry a wait time. Anything else is not retried here.
+        let Some(wait) = ctx.error.flood_wait_seconds() else {
+            return ControlFlow::Break(());
+        };
         if wait &gt; self.max_wait_secs {
             log::warn!("FLOOD_WAIT too long ({wait}s), giving up");
             return ControlFlow::Break(());
         }
 
-        log::info!("FLOOD_WAIT {wait}s (attempt {})", ctx.attempt());
+        log::info!("FLOOD_WAIT {wait}s (attempt {attempt})");
         ControlFlow::Continue(Duration::from_secs(wait))
     }
 }
@@ -267,16 +271,16 @@ let (client, _shutdown) = Client::connect(Config {
     ..Default::default()
 }).await?;
 <span class="boring">}</span></code></pre>
-<h2 id="retrycontext-fields"><a class="header" href="#retrycontext-fields">RetryContext fields</a></h2>
+<h2 id="retrycontext"><a class="header" href="#retrycontext">RetryContext</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>ctx.flood_wait_secs()</code></td><td><code>u64</code></td><td>How long Telegram wants you to wait</td></tr>
-<tr><td><code>ctx.attempt()</code></td><td><code>u32</code></td><td>How many times this call has been retried</td></tr>
-<tr><td><code>ctx.error_message()</code></td><td><code>&amp;str</code></td><td>The raw error message string</td></tr>
+<tr><td><code>ctx.fail_count</code></td><td><code>NonZeroU32</code></td><td>How many times this request has failed, starting at 1</td></tr>
+<tr><td><code>ctx.slept_so_far</code></td><td><code>Duration</code></td><td>Total time already slept for this request across earlier retries</td></tr>
+<tr><td><code>ctx.error</code></td><td><code>InvocationError</code></td><td>The most recent error. <code>ctx.error.flood_wait_seconds()</code> returns <code>Option&lt;u64&gt;</code></td></tr>
 </tbody>
 </table>
 </div>

@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../theme/custom-3cd05ff1.css">
+        <link rel="stylesheet" href="../theme/custom-77732367.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cd8d88f4.js";
+            window.path_to_searchindex_js = "../searchindex-4f2f0348.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5d15c526.js"></script>
+        <script src="../toc-c3257afc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -210,14 +210,14 @@ Fetch the full contact list. Returns <code>None</code> when the server indicates
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.add_contact(user_id: i64, first_name: impl Into&lt;String&gt;, last_name: impl Into&lt;String&gt;, phone: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.add_contact(user_id: i64, first_name: impl Into&lt;String&gt;, last_name: impl Into&lt;String&gt;, phone: impl Into&lt;String&gt;, add_phone_privacy_exception: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
 Add a user to your contact list. <code>phone</code> can be an empty string if you are adding by user ID rather than phone number. The name you supply is stored locally as your label for this contact, independent of the user's own profile name.
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>client.add_contact(user_id, "Alice", "Smith", "").await?;
+</span>client.add_contact(user_id, "Alice", "Smith", "", false).await?;
 <span class="boring">}</span></code></pre>
 </div>
 
@@ -276,11 +276,11 @@ for user in &amp;result.users {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.block(peer: impl Into&lt;PeerRef&gt;, block: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.block(peer: impl Into&lt;PeerRef&gt;, block: bool, my_stories_from: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Block a user. Blocked users cannot send you messages, see your phone number, or add you to groups. The block also suppresses their stories from your feed.
+Block a user with <code>block: true</code>, or unblock them with <code>block: false</code>. Blocked users cannot send you messages, see your phone number, or add you to groups. With <code>my_stories_from: true</code> only your stories are hidden from them, instead of a full block.
 </div>
 
 </div>
@@ -288,11 +288,11 @@ Block a user. Blocked users cannot send you messages, see your phone number, or 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<!-- removed: use block(peer, false) --> → Result&lt;(), InvocationError&gt;
+<span class="api-card-sig">client.block(peer, false, false) → Result&lt;(), InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
-Remove a user from your block list.
+Remove a user from your block list by calling <code>block</code> with <code>block: false</code>.
 </div>
 
 </div>
@@ -300,7 +300,7 @@ Remove a user from your block list.
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_blocked_users(offset: i32, limit: i32) → Result&lt;Vec&lt;tl::enums::Peer&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_blocked_users(offset: i32, limit: i32, my_stories_from: bool) → Result&lt;Vec&lt;tl::enums::Peer&gt;, InvocationError&gt;</span>
 </div>
 
 <div class="api-card-body">
@@ -309,7 +309,7 @@ Paginate through your block list. Start with <code>offset = 0</code>. The server
 </span><span class="boring">fn main() {
 </span>let mut offset = 0;
 loop {
-    let page = client.get_blocked_users(offset, 100).await?;
+    let page = client.get_blocked_users(offset, 100, false).await?;
     if page.is_empty() { break; }
     offset += page.len() as i32;
     for peer in &amp;page {
@@ -328,14 +328,14 @@ loop {
 </span>// Find and block all users named "Spammer"
 let results = client.search_contacts("Spammer", 50).await?;
 for peer in results {
-    client.block(peer, true).await?;
+    client.block(peer, true, false).await?;
     println!("Blocked {peer:?}");
 }
 
 // List current block list
 let mut offset = 0;
 loop {
-    let page = client.get_blocked_users(offset, 100).await?;
+    let page = client.get_blocked_users(offset, 100, false).await?;
     if page.is_empty() { break; }
     println!("Blocked users page: {page:?}");
     offset += page.len() as i32;

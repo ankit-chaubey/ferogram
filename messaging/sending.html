@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="../theme/custom-3cd05ff1.css">
+        <link rel="stylesheet" href="../theme/custom-77732367.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cd8d88f4.js";
+            window.path_to_searchindex_js = "../searchindex-4f2f0348.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5d15c526.js"></script>
+        <script src="../toc-c3257afc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -299,13 +299,13 @@ msg.click_button_where(|text, data| text.starts_with("✅")).await?;
 client.edit_message("@peer", msg_id, InputMessage::text("New text")).await?;
 
 // Forward messages
-client.forward_messages("@source", &amp;[id1, id2], "@dest").await?;
+client.forward_messages("@dest", &amp;[id1, id2], "@source", ForwardOptions::default()).await?;
 
 // Delete messages (revoke = remove for everyone)
 client.delete_messages(&amp;[msg_id_1, msg_id_2], true).await?;
 
 // Pin / unpin
-client.pin_message("@peer", msg_id).await?;
+client.pin_message("@peer", msg_id, true).await?;
 client.pin_message("@peer", msg_id, false).await?;
 client.unpin_all_messages("@peer").await?;
 
@@ -316,18 +316,29 @@ let pinned = client.get_pinned_message("@peer").await?;
 client.mark_read("@peer").await?;
 
 // Export a permanent message link
-let link = client.export_message_link("@peer", msg_id).await?;
+let link = client.export_message_link("@peer", msg_id, LinkKind::Normal).await?;
 
 // Who has read a message (groups/channels with read receipts)
 let readers = client.get_message_read_participants("@peer", msg_id).await?;
 <span class="boring">}</span></code></pre>
 <hr>
+<h2 id="resolve-a-message-link"><a class="header" href="#resolve-a-message-link">Resolve a message link</a></h2>
+<p><code>get_message_by_link</code> fetches the message a <code>t.me</code> link points at. It accepts <code>t.me/&lt;username&gt;/&lt;id&gt;</code>, <code>t.me/c/&lt;channel_id&gt;/&lt;id&gt;</code>, and, for forum topics, <code>t.me/c/&lt;channel_id&gt;/&lt;topic_id&gt;/&lt;id&gt;</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if let Some(msg) = client.get_message_by_link("https://t.me/c/1234567890/5/42").await? {
+    println!("{}", msg.text().unwrap_or(""));
+}
+<span class="boring">}</span></code></pre>
+<p>It returns <code>Ok(None)</code> if the message does not exist or does not belong to the topic named in the link, and an error if the string is not a message link. With a topic ID, the message must be the topic root or belong to the topic. Private channels must already be known to the client.</p>
+<p>To parse a link without fetching anything, use <code>MessageLink::parse(link)</code>, which returns <code>Option&lt;MessageLink&gt;</code> with <code>peer</code>, <code>topic_id</code> and <code>message_id</code>.</p>
+<hr>
 <h2 id="fetch-message-history"><a class="header" href="#fetch-message-history">Fetch message history</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// get_message_history(peer, limit, offset_id)
+</span>// get_message_history(peer, limit, offset_id, add_offset)
 // offset_id = 0 starts from the newest
-let messages = client.get_message_history("@peer", 50, 0).await?;
+let messages = client.get_message_history("@peer", 50, 0, 0).await?;
 
 for msg in messages {
     println!("{}: {}", msg.id(), msg.text().unwrap_or(""));
