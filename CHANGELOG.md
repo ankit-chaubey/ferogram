@@ -9,18 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- TL layer bumped to 233.
-- `Client::toggle_forum` sends the new `sidebar` flag of `channels.toggleForum` as `false`, so topics mode keeps the existing layout.
-- `Update` constructor ID table covers the new layer 233 updates (`updateBotWidgetQuery`, `updateInlineBotWidgetQuery`, `updateBotWidgetCopyQuery`, `updateEditForumTopic`, `updateMessageWidgetData`, `updateTranscribedAudioFile`); they are delivered as `Update::Raw`.
-
-### Schema (layer 233)
-
-- Widgets: `inputMediaWidget`, `inputMediaWidgetId`, `messageMediaWidget`, `inputBotInlineMessageWidget`, `inputBotInlineMessageWidgetId`, `botInlineMessageWidget`, `userWallet`, `widgetQueryType*`, `messages.botWidgetQueryAnswer`, `messages.widgetPublicData*` and the `messages.*Widget*` functions.
-- Transcription: `messages.transcribeAudioFile`, `messages.getTranscriptionLangs`.
-- `channel.forum_sidebar` and `user.bot_forum_sidebar` flags; `channels.toggleForum` gains `sidebar`.
-
 ---
 
 ## [0.6.7] - 2026-11-10
@@ -39,9 +27,18 @@ All crates except `ferogram-e2e` are released as 0.6.7. `ferogram-e2e` is versio
 
 ### Changed
 
+- TL layer bumped to 233.
+- `Client::toggle_forum` sends the new `sidebar` flag of `channels.toggleForum` as `false`, so topics mode keeps the existing layout.
+- `Update` constructor ID table covers the new layer 233 updates (`updateBotWidgetQuery`, `updateInlineBotWidgetQuery`, `updateBotWidgetCopyQuery`, `updateEditForumTopic`, `updateMessageWidgetData`, `updateTranscribedAudioFile`); they are delivered as `Update::Raw`.
 - Secret chats are no longer described as unreleased in the README and docs.
 - Docs: the feature flag tables match `ferogram/Cargo.toml` (`parsers` and `html` are off by default; `fsm`, `libsql-remote-session`, `resilient-connect`, `socks5`, `metrics` and `experimental` are listed). The crate pages cover `ferogram-msgbox`, `ferogram-mtsender`, `ferogram-connect`, `ferogram-fsm` and `ferogram-derive`, and the dependency graph matches `ARCHITECTURE.md`.
 - Docs: the next and previous page arrows in the book are back to the default mdBook size.
+
+### Schema (layer 233)
+
+- Widgets: `inputMediaWidget`, `inputMediaWidgetId`, `messageMediaWidget`, `inputBotInlineMessageWidget`, `inputBotInlineMessageWidgetId`, `botInlineMessageWidget`, `userWallet`, `widgetQueryType*`, `messages.botWidgetQueryAnswer`, `messages.widgetPublicData*` and the `messages.*Widget*` functions.
+- Transcription: `messages.transcribeAudioFile`, `messages.getTranscriptionLangs`.
+- `channel.forum_sidebar` and `user.bot_forum_sidebar` flags; `channels.toggleForum` gains `sidebar`.
 
 ### Fixed
 
