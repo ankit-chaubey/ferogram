@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- TL layer bumped to 233.
+- `Client::toggle_forum` sends the new `sidebar` flag of `channels.toggleForum` as `false`, so topics mode keeps the existing layout.
+- `Update` constructor ID table covers the new layer 233 updates (`updateBotWidgetQuery`, `updateInlineBotWidgetQuery`, `updateBotWidgetCopyQuery`, `updateEditForumTopic`, `updateMessageWidgetData`, `updateTranscribedAudioFile`); they are delivered as `Update::Raw`.
+
+### Schema (layer 233)
+
+- Widgets: `inputMediaWidget`, `inputMediaWidgetId`, `messageMediaWidget`, `inputBotInlineMessageWidget`, `inputBotInlineMessageWidgetId`, `botInlineMessageWidget`, `userWallet`, `widgetQueryType*`, `messages.botWidgetQueryAnswer`, `messages.widgetPublicData*` and the `messages.*Widget*` functions.
+- Transcription: `messages.transcribeAudioFile`, `messages.getTranscriptionLangs`.
+- `channel.forum_sidebar` and `user.bot_forum_sidebar` flags; `channels.toggleForum` gains `sidebar`.
+
 ---
 
 ## [0.6.7] - 2026-11-10

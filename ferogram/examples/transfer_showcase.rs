@@ -341,7 +341,7 @@ async fn demo_resumable_download(client: &Client) -> Result<(), Box<dyn std::err
 
     let mut buf1 = Vec::new();
     let r1 = client
-        .download_resumable(&media, &mut buf1, &handle1, |p| {
+        .download_resumable(media, &mut buf1, &handle1, |p| {
             println!(
                 "  download_resumable (run 1): {:.0}% | {}",
                 p.percent(),
@@ -363,7 +363,7 @@ async fn demo_resumable_download(client: &Client) -> Result<(), Box<dyn std::err
     let handle2 = TransferHandle::new();
     let mut buf2 = Vec::new();
     let bytes = client
-        .download_resumable(&media, &mut buf2, &handle2, |p| {
+        .download_resumable(media, &mut buf2, &handle2, |p| {
             println!(
                 "  download_resumable (run 2): {:.0}% | {}",
                 p.percent(),

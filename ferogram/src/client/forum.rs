@@ -174,6 +174,7 @@ impl Client {
             channel,
             enabled,
             tabs: false,
+            sidebar: false,
         };
         self.rpc_write(&req).await
     }

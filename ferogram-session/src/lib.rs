@@ -2284,7 +2284,7 @@ mod sqlite_backend_tests {
     #[test]
     fn future_auth_token_roundtrip() {
         let b = SqliteBackend::in_memory().unwrap();
-        let mut s = PersistedSession {
+        let s = PersistedSession {
             home_dc_id: 2,
             future_auth_token: Some(vec![1, 2, 3, 4, 5]),
             ..Default::default()

@@ -1176,11 +1176,11 @@ fn eval(expr: &str) -> Result<String, String> {
             let lhs: f64 = expr[..pos]
                 .trim()
                 .parse()
-                .map_err(|_| format!("bad: '{}'", &expr[..pos].trim()))?;
+                .map_err(|_| format!("bad: '{}'", expr[..pos].trim()))?;
             let rhs: f64 = expr[pos + 1..]
                 .trim()
                 .parse()
-                .map_err(|_| format!("bad: '{}'", &expr[pos + 1..].trim()))?;
+                .map_err(|_| format!("bad: '{}'", expr[pos + 1..].trim()))?;
             let res = match op {
                 '+' => lhs + rhs,
                 '-' => lhs - rhs,

@@ -129,7 +129,7 @@ async fn handle_media(
         .unwrap_or_else(|| PeerRef::from(msg.id() as i64));
 
     let media = msg.media().unwrap();
-    let fname = file_name_from_media(&media);
+    let fname = file_name_from_media(media);
 
     // Send initial status with placeholder Cancel button.
     let status = client
@@ -174,7 +174,7 @@ async fn handle_media(
             let mut ticks = 0u64;
             while let Some(p) = rx.recv().await {
                 ticks += 1;
-                if ticks % CHAT_EDIT_INTERVAL_SECS == 0 {
+                if ticks.is_multiple_of(CHAT_EDIT_INTERVAL_SECS) {
                     let bar = progress_bar(p.percent());
                     let html = if p.total > 0 && p.speed_bps() > 512 {
                         format!(
@@ -262,7 +262,7 @@ async fn handle_media(
             let mut ticks = 0u64;
             while let Some(p) = rx.recv().await {
                 ticks += 1;
-                if ticks % CHAT_EDIT_INTERVAL_SECS == 0 {
+                if ticks.is_multiple_of(CHAT_EDIT_INTERVAL_SECS) {
                     let bar = progress_bar(p.percent());
                     let html = if p.total > 0 && p.speed_bps() > 512 {
                         format!(
@@ -362,7 +362,7 @@ fn file_name_from_media(media: &tl::enums::MessageMedia) -> String {
         }
         return format!(
             "file.{}",
-            doc.mime_type().split('/').last().unwrap_or("bin")
+            doc.mime_type().split('/').next_back().unwrap_or("bin")
         );
     }
     "photo.jpg".to_string()
