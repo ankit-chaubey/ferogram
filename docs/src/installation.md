@@ -6,7 +6,7 @@
 
 ```toml
 [dependencies]
-ferogram = "0.6.6"
+ferogram = "0.6.7"
 tokio        = { version = "1", features = ["full"] }
 ```
 
@@ -54,10 +54,18 @@ For bots, additionally get a **bot token** from [@BotFather](https://t.me/BotFat
 
 ## Optional features
 
+### Secret chats (end-to-end encryption)
+
+```toml
+ferogram = { version = "0.6.7", features = ["e2e"] }
+```
+
+Enables Telegram secret chats (MTProto 2.0). The `ferogram-e2e` crate is re-exported as `ferogram::e2e`. Chats are kept in a small `<session_name>.e2e` file next to your session so they survive restarts. See the `secret_chat` example in the repository.
+
 ### SQLite session storage
 
 ```toml
-ferogram = { version = "0.6.6", features = ["sqlite-session"] }
+ferogram = { version = "0.6.7", features = ["sqlite-session"] }
 ```
 
 Stores session data in a SQLite database instead of a binary file. Better choice for long-running servers where crash-corruption of the binary file is a concern.
@@ -65,7 +73,7 @@ Stores session data in a SQLite database instead of a binary file. Better choice
 ### LibSQL / Turso session storage: New in v0.2.0
 
 ```toml
-ferogram = { version = "0.6.6", features = ["libsql-session"] }
+ferogram = { version = "0.6.7", features = ["libsql-session"] }
 ```
 
 Backed by [libsql](https://github.com/tursodatabase/libsql): supports local embedded databases and remote Turso cloud databases. Ideal for serverless or distributed deployments.
@@ -106,10 +114,10 @@ See [Session Backends](./authentication/session-backends.md) for the full guide.
 
 ```toml
 # Built-in hand-rolled HTML parser (no extra deps)
-ferogram = { version = "0.6.6", features = ["html"] }
+ferogram = { version = "0.6.7", features = ["html"] }
 
 # OR: spec-compliant html5ever tokenizer (overrides built-in)
-ferogram = { version = "0.6.6", features = ["html5ever"] }
+ferogram = { version = "0.6.7", features = ["html5ever"] }
 ```
 
 | Feature | Deps added | Notes |
@@ -122,7 +130,7 @@ ferogram = { version = "0.6.6", features = ["html5ever"] }
 If you use `ferogram-tl-types` directly for raw API access:
 
 ```toml
-ferogram-tl-types = { version = "0.6.6", features = [
+ferogram-tl-types = { version = "0.6.7", features = [
     "tl-api",          # Telegram API types (required)
     "tl-mtproto",      # Low-level MTProto types
     "impl-debug",      # Debug trait on all types (default ON)

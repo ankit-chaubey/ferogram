@@ -6,15 +6,22 @@
 
 ```
 Your App
- └ ferogram ← high-level Client, UpdateStream, InputMessage
- ├ ferogram-session ← session persistence, DC table, backends
- ├ ferogram-e2e ← secret chats (optional, `e2e` feature)
- ├ ferogram-parsers ← Markdown and HTML entity parsing
- ├ ferogram-mtproto ← MTProto session, DH, message framing
- │ └ ferogram-crypto ← AES-IGE, RSA, SHA, factorize
- └ ferogram-tl-types ← all generated types + LAYER constant
- ├ ferogram-tl-gen (build-time code generator)
- └ ferogram-tl-parser (build-time TL schema parser)
+└ ferogram                high-level Client, UpdateStream, InputMessage
+  ├ ferogram-msgbox       pts/qts/seq gap tracking
+  │ └ ferogram-tl-types
+  ├ ferogram-mtsender     DC pool, retry policy
+  │ └ ferogram-connect    TCP, framing, obfuscation, proxies
+  │   ├ ferogram-mtproto  MTProto session, DH, message framing
+  │   │ ├ ferogram-tl-types   all generated types + LAYER constant
+  │   │ │ └ (build) ferogram-tl-gen
+  │   │ │   └ (build) ferogram-tl-parser
+  │   │ └ ferogram-crypto
+  │   └ ferogram-crypto
+  ├ ferogram-session      session persistence, DC table, backends
+  ├ ferogram-parsers      Markdown and HTML entity parsing (feature: parsers)
+  ├ ferogram-fsm          FSM state storage (feature: fsm)
+  ├ ferogram-derive       #[derive(FsmState)] (feature: derive)
+  └ ferogram-e2e          secret chats (feature: e2e)
 ```
 
 ---
@@ -98,7 +105,11 @@ Most Telegram API fields use `enums::*` types because the wire format is polymor
 - Message framing: serialization, padding, encryption, HMAC
 - `msg_container` unpacking (batched responses)
 - gzip decompression of `gzip_packed` responses
-- Transport abstraction (abridged, intermediate, obfuscated)
+- Error recovery: `bad_msg_notification`, `bad_server_salt`, `msg_resend_req`
+- Acknowledgements via `MsgsAck`
+- Temporary key binding for PFS (`bind_temp_key`)
+
+Transport framing (abridged, intermediate, obfuscated) lives in [`ferogram-connect`](#ferogram-connect), not here.
 
 ### DH handshake steps
 
@@ -159,6 +170,78 @@ Each type automatically gets:
 - `impl Deserializable`: binary TL decoding
 - `impl Identifiable`: `const CONSTRUCTOR_ID: u32`
 - Optional: `impl Debug`, `impl From`, `impl TryFrom`, `impl Serialize/Deserialize`
+
+---
+
+## ferogram-connect
+
+**Raw TCP connection, MTProto framing, and the transport layer.** Sits between a `TcpStream` and decrypted MTProto messages. `ferogram` re-exports everything here.
+
+### What it provides
+- Abridged, Intermediate, Padded Intermediate, and Full transport framing
+- Obfuscated2 (AES-256-CTR) transport for bypassing DPI and for MTProxy
+- FakeTLS transport for `0xee` MTProxy secrets
+- SOCKS5 proxy with optional username and password (feature: `socks5`)
+- MTProxy link parsing and connection (`tg://proxy?...` and `https://t.me/proxy?...`)
+- Keepalive pings with a configurable interval
+- gzip inflate and compress for MTProto containers
+
+### Stack position
+
+```
+ferogram
+└ ferogram-mtsender
+  └ ferogram-connect  <-- here
+    ├ ferogram-mtproto
+    └ ferogram-crypto
+```
+
+---
+
+## ferogram-mtsender
+
+**DC connection pool and retry policy.** Manages connections to the Telegram datacenters and drives the retry loop for RPC calls. `ferogram` re-exports the retry types.
+
+### What it provides
+- `DcPool`: one `DcConnection` per DC, created on demand
+- `DcConnection`: owns the sender loop for a single DC
+- `RetryPolicy` trait with the built-in `AutoSleep`, `NoRetries`, and `CircuitBreaker`
+- `FLOOD_WAIT` and `SLOWMODE_WAIT` auto-sleep with jitter
+- Exponential backoff for transient I/O errors
+
+`AutoSleep` is the default policy used by `ferogram`.
+
+---
+
+## ferogram-msgbox
+
+**Update-gap tracking.** A pure state machine, with no async and no networking, that keeps the `pts`, `qts`, `seq` and `date` counters (plus a separate `pts` per channel) and detects when the `Updates` stream has dropped something. `ferogram` re-exports it as `ferogram::message_box`.
+
+### What it provides
+- `MessageBoxes`: the state machine. `process_updates()` takes an `UpdatesLike` and returns either the update batch or a `Gap`
+- Gap detection, with a short buffering window for out-of-order updates before it asks for a diff
+- A periodic catch-up `getDifference` when one is due, even with no known gap
+- `classify_own_response`, which folds updates piggybacked on your own RPC responses into the same `pts` sequence
+- `apply_difference`, to feed `updates.getDifference` and `updates.getChannelDifference` results back into state
+
+---
+
+## ferogram-fsm
+
+**FSM state storage and context for bots.** Used by the `ferogram` dispatcher when you register FSM handlers. `ferogram` re-exports it behind the `fsm` feature.
+
+### What it provides
+- `StateStorage` trait, so you can plug in any backend
+- `MemoryStorage`: built in, in-process, no persistence
+- `StateContext`: read, write, and transition state per user or chat
+- `StateKey`: scope state by user id, chat id, or both
+- `FsmState` trait that your state enum implements
+
+---
+
+## ferogram-derive
+
+**Procedural macros for the workspace.** Currently exposes `#[derive(FsmState)]`, which implements `FsmState` for an enum of unit variants. Keys are namespaced with the module path and enum name, so identically named variants on different enums do not collide in storage. Most people get it through the `derive` feature of `ferogram`.
 
 ---
 

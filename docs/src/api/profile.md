@@ -9,21 +9,17 @@ Methods for updating your own profile, managing active sessions, and controlling
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").name(first: impl Into&lt;String&gt;, last: impl Into&lt;String&gt;).bio(bio: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Change your display name and/or bio. Pass <code>None</code> for any field you want to leave unchanged. Returns the updated <code>User</code> object.
+Change your display name and/or bio. Chain only the setters you need; anything you do not call is left unchanged, and nothing is sent until <code>.send()</code>.
 
 ```rust
 // Change just the bio
-client.set_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
+client.set_profile("me").bio("🦀 Rust developer").send().await?;
 
 // Change full name
-client.set_profile(
-    Some("Alice".to_string()),
-    Some("Smith".to_string()),
-    None,
-).await?;
+client.set_profile("me").name("Alice", "Smith").send().await?;
 ```
 </div>
 </div>
@@ -31,10 +27,10 @@ client.set_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile("me").username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").username(username: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
+Set or change your @username. Pass an empty string to remove the username. Telegram will return an error if the username is already taken or violates naming rules.
 
 ```rust
 client.set_profile("me").username("my_new_handle").send().await?;
@@ -49,7 +45,7 @@ client.set_profile("me").username("").send().await?;  // remove username
 <span class="api-card-sig">client.set_presence(true) / set_presence(false) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Manually set your online/offline status. Pass <code>offline: false</code> to appear online, <code>true</code> to mark yourself as offline. Telegram resets online status automatically after ~5 minutes of inactivity, so call this periodically if you need a persistent "online" appearance.
+Manually set your online/offline status. Pass <code>true</code> to appear online, <code>false</code> to appear offline. Telegram resets online status automatically after ~5 minutes of inactivity, so call this periodically if you need a persistent "online" appearance.
 </div>
 </div>
 
@@ -60,7 +56,7 @@ Manually set your online/offline status. Pass <code>offline: false</code> to app
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile("me").photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").photo(file: UploadedFile).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Set or add a new profile photo. Upload the image with <code>upload_file(path)</code> first.
@@ -68,7 +64,7 @@ Set or add a new profile photo. Upload the image with <code>upload_file(path)</c
 ```rust
 let bytes = tokio::fs::read("avatar.jpg").await?;
 let uploaded = client.upload_file("avatar.jpg").await?;
-let photo = client.set_profile("me").photo(uploaded).send().await?;
+client.set_profile("me").photo(uploaded).send().await?;
 ```
 </div>
 </div>
@@ -89,21 +85,17 @@ Methods for updating your own profile, managing active sessions, and controlling
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(first_name: Option&lt;String&gt;, last_name: Option&lt;String&gt;, about: Option&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").name(first: impl Into&lt;String&gt;, last: impl Into&lt;String&gt;).bio(bio: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Change your display name and/or bio. Pass <code>None</code> for any field you want to leave unchanged. Returns the updated <code>User</code> object.
+Change your display name and/or bio. Chain only the setters you need; anything you do not call is left unchanged, and nothing is sent until <code>.send()</code>.
 
 ```rust
 // Change just the bio
-client.set_profile(None, None, Some("🦀 Rust developer".to_string())).await?;
+client.set_profile("me").bio("🦀 Rust developer").send().await?;
 
 // Change full name
-client.set_profile(
-    Some("Alice".to_string()),
-    Some("Smith".to_string()),
-    None,
-).await?;
+client.set_profile("me").name("Alice", "Smith").send().await?;
 ```
 </div>
 </div>
@@ -111,10 +103,10 @@ client.set_profile(
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile("me").username(username: impl Into&lt;String&gt;) → Result&lt;tl::enums::User, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").username(username: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Set or change your @username. Pass an empty string to remove the username. Returns the updated <code>User</code> object. Telegram will return an error if the username is already taken or violates naming rules.
+Set or change your @username. Pass an empty string to remove the username. Telegram will return an error if the username is already taken or violates naming rules.
 
 ```rust
 client.set_profile("me").username("my_new_handle").send().await?;
@@ -179,15 +171,15 @@ while let Some(photo) = iter.next(&client).await? {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile("me").photo(file: UploadedFile) → Result&lt;tl::enums::Photo, InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile("me").photo(file: UploadedFile).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Set or add a new profile photo. Upload the image with <code>upload_file(path)</code> first. Returns the new <code>Photo</code> object.
+Set or add a new profile photo. Upload the image with <code>upload_file(path)</code> first.
 
 ```rust
 let bytes = tokio::fs::read("avatar.jpg").await?;
 let uploaded = client.upload_file("avatar.jpg").await?;
-let photo = client.set_profile("me").photo(uploaded).send().await?;
+client.set_profile("me").photo(uploaded).send().await?;
 ```
 </div>
 </div>
@@ -267,11 +259,11 @@ for s in sessions {
 
 ```rust
 // Update name and bio at once
-client.set_profile(
-    Some("Bot".to_string()),
-    Some("Account".to_string()),
-    Some("Powered by ferogram 🦀".to_string()),
-).await?;
+client.set_profile("me")
+    .name("Bot", "Account")
+    .bio("Powered by ferogram 🦀")
+    .send()
+    .await?;
 
 // Set a new avatar
 let bytes = tokio::fs::read("new_avatar.png").await?;

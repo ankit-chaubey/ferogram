@@ -50,6 +50,8 @@ while let Some(update) = stream.next().await {
 }
 ```
 
+Incoming secret chat requests are accepted automatically by `handle_update` (or `handle_client_update`), which then returns `E2eEvent::ChatRequested`. With `ferogram`, secret chat updates arrive as `Update::Raw`, and `handle_client_update` ignores every other update.
+
 A runnable version is in [`ferogram/examples/secret_chat.rs`](https://github.com/ankit-chaubey/ferogram/blob/main/ferogram/examples/secret_chat.rs).
 
 ## Storage

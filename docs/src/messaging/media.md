@@ -135,7 +135,7 @@ client.send_album(peer.clone(), items).await?;
 // To bytes: sequential
 ```rust
 let mut buf = Vec::new();
-client.download(msg.media().unwrap(), &mut buf).await?;
+client.download(msg.media().unwrap(), &mut buf, None).await?;
 
 client.download_file(msg.media().unwrap(), "/tmp/output.jpg").await?;
 
@@ -154,7 +154,7 @@ if let Some(mut iter) = client.iter_download(msg.media().unwrap()) {
 
 | Method | Dest | Returns |
 |--------|------|---------|
-| `client.download(media, dest)` | any `AsyncWrite` | `u64` bytes written |
+| `client.download(media, dest, handle)` | any `AsyncWrite` (`handle` is `Option<&TransferHandle>`) | `u64` bytes written |
 | `client.download_file(media, path)` | file on disk | `u64` bytes written |
 | `client.download_media(media, quality, path, handle)` | file on disk | `u64` bytes written |
 | `client.iter_download(media)` | caller-driven | `Option<DownloadIter>` |
@@ -165,15 +165,15 @@ if let Some(mut iter) = client.iter_download(msg.media().unwrap()) {
 
 ## `Downloadable` trait
 
-`Photo`, `Document`, and `Sticker` all implement `Downloadable`, so you can use `client.download_item(&item)` (internal) on any of them uniformly.
-For the public API, pass `msg.media()` to `client.download`.
+`Photo`, `Document`, and `Sticker` all implement `Downloadable`, so you can pass any of them, or `msg.media()`, to `client.download` uniformly.
 
 ```rust
 use ferogram::media::Downloadable;
 
-async fn save_any<D: Downloadable>(client: &Client, item: &D) -> Vec<u8> {
-    // internal method - public API uses client.download(media, dest)
-    client.download(item).await.unwrap()
+async fn save_any<D: Downloadable>(client: &Client, item: &D) -> Result<Vec<u8>, ferogram::InvocationError> {
+    let mut buf = Vec::new();
+    client.download(item, &mut buf, None).await?;
+    Ok(buf)
 }
 ```
 
@@ -185,7 +185,7 @@ async fn save_any<D: Downloadable>(client: &Client, item: &D) -> Vec<u8> {
 // Get an InputFileLocation from the raw message
 use ferogram::media::download_location_from_media;
 
-// use msg.bytes() or client.download(msg.media().unwrap(), &mut buf) instead
+// use msg.bytes() or client.download(msg.media().unwrap(), &mut buf, None) instead
 
 // Or via IncomingMessage convenience:
 client.download_file(msg.media().unwrap(), "output.jpg").await?;

@@ -565,13 +565,17 @@ Requires the `e2e` feature flag. Backed by the `ferogram-e2e` crate, re-exported
 
 | Flag | Default | Description |
 |---|---|---|
-| `parsers` | yes | HTML and Markdown entity parsers |
-| `html` | yes | HTML entity parser and generator |
+| `parsers` | no | HTML and Markdown entity parsers |
+| `html` | no | Alias of `parsers` |
 | `derive` | no | `#[derive(FsmState)]` proc-macro |
 | `fsm` | no | FSM state machine support |
 | `e2e` | no | Secret chats (end-to-end encryption), re-exports `ferogram-e2e` as `ferogram::e2e` |
 | `sqlite-session` | no | `SqliteBackend` via rusqlite |
-| `libsql-session` | no | `LibSqlBackend` via libsql (Turso) |
+| `libsql-session` | no | `LibSqlBackend` via libsql, local file or in-memory |
+| `libsql-remote-session` | no | `LibSqlBackend` over remote Turso and embedded replicas (`open_remote`, `open_replica`) |
+| `resilient-connect` | no | DNS-over-HTTPS and special-config fallback for censored networks |
+| `socks5` | no | SOCKS5 proxy support for outgoing connections |
+| `metrics` | no | RPC and connection counters, histograms, gauges |
 | `experimental` | no | Resumable transfers, `upload_exp`, `download_exp` |
 | `serde` | no | serde on session and config types |
 | `html5ever` | no | Spec-compliant html5ever HTML parser |

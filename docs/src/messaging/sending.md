@@ -133,13 +133,13 @@ msg.click_button_where(|text, data| text.starts_with("✅")).await?;
 client.edit_message("@peer", msg_id, InputMessage::text("New text")).await?;
 
 // Forward messages
-client.forward_messages("@source", &[id1, id2], "@dest").await?;
+client.forward_messages("@dest", &[id1, id2], "@source", ForwardOptions::default()).await?;
 
 // Delete messages (revoke = remove for everyone)
 client.delete_messages(&[msg_id_1, msg_id_2], true).await?;
 
 // Pin / unpin
-client.pin_message("@peer", msg_id).await?;
+client.pin_message("@peer", msg_id, true).await?;
 client.pin_message("@peer", msg_id, false).await?;
 client.unpin_all_messages("@peer").await?;
 
@@ -150,7 +150,7 @@ let pinned = client.get_pinned_message("@peer").await?;
 client.mark_read("@peer").await?;
 
 // Export a permanent message link
-let link = client.export_message_link("@peer", msg_id).await?;
+let link = client.export_message_link("@peer", msg_id, LinkKind::Normal).await?;
 
 // Who has read a message (groups/channels with read receipts)
 let readers = client.get_message_read_participants("@peer", msg_id).await?;
@@ -158,12 +158,28 @@ let readers = client.get_message_read_participants("@peer", msg_id).await?;
 
 ---
 
+## Resolve a message link
+
+`get_message_by_link` fetches the message a `t.me` link points at. It accepts `t.me/<username>/<id>`, `t.me/c/<channel_id>/<id>`, and, for forum topics, `t.me/c/<channel_id>/<topic_id>/<id>`.
+
+```rust
+if let Some(msg) = client.get_message_by_link("https://t.me/c/1234567890/5/42").await? {
+    println!("{}", msg.text().unwrap_or(""));
+}
+```
+
+It returns `Ok(None)` if the message does not exist or does not belong to the topic named in the link, and an error if the string is not a message link. With a topic ID, the message must be the topic root or belong to the topic. Private channels must already be known to the client.
+
+To parse a link without fetching anything, use `MessageLink::parse(link)`, which returns `Option<MessageLink>` with `peer`, `topic_id` and `message_id`.
+
+---
+
 ## Fetch message history
 
 ```rust
-// get_message_history(peer, limit, offset_id)
+// get_message_history(peer, limit, offset_id, add_offset)
 // offset_id = 0 starts from the newest
-let messages = client.get_message_history("@peer", 50, 0).await?;
+let messages = client.get_message_history("@peer", 50, 0, 0).await?;
 
 for msg in messages {
     println!("{}: {}", msg.id(), msg.text().unwrap_or(""));

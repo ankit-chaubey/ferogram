@@ -29,7 +29,7 @@ client.send_message("https://t.me/+AbCdEfGhIjKl", "hi").await?;
 client.send_message(12345678_i64, "hi").await?;
 
 // Negative i64: Bot-API channel ID (-100... prefix)
-client.get_message_history(-1001234567890_i64, 50, 0).await?;
+client.get_message_history(-1001234567890_i64, 50, 0, 0).await?;
 
 // Small negative i64: basic group
 client.mark_read(-123456_i64).await?;

@@ -206,7 +206,7 @@ Fires during the payment flow when the user provides a shipping address (for phy
 ```rust
 Update::ShippingQuery(sq) => {
     // sq.query_id, sq.user_id, sq.payload, sq.shipping_address
-    client.answer_shipping_query(sq.query_id, true, shipping_options, None).await?;
+    client.answer_shipping_query(sq.query_id, None, Some(shipping_options)).await?;
 }
 ```
 

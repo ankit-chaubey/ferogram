@@ -101,7 +101,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(peer).title(: impl Into&lt;PeerRef&gt;, title: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).title(title: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Rename a chat, group, channel, or supergroup.</div>
 </div>
@@ -109,7 +109,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(peer).bio(: impl Into&lt;PeerRef&gt;, about: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).bio(bio: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Set or update the description/about text. Works for all chat types.</div>
 </div>
@@ -117,7 +117,7 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(peer).chat_photo(peer: impl Into&lt;PeerRef&gt;, photo: tl::enums::InputChatPhoto) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).chat_photo(photo: tl::enums::InputChatPhoto).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Change the group/channel photo. Pass <code>InputChatPhoto::Empty</code> to remove it.
 
@@ -125,17 +125,16 @@ let ch = client.create_channel("My News", "Daily updates", true).await?;
 // Set a new photo (upload first)
 let uploaded = client.upload_file("photo.jpg").await?;
 client.set_profile(peer).chat_photo(
-    peer.clone(),
     tl::enums::InputChatPhoto::InputChatUploadedPhoto(
         tl::types::InputChatUploadedPhoto {
             video: false, video_emoji_markup: None,
             file: Some(uploaded.into_input_file()),
         }
     ),
-).await?;
+).send().await?;
 
 // Remove photo
-client.set_profile(peer).chat_photo(peer.clone(), tl::enums::InputChatPhoto::Empty).await?;
+client.set_profile(peer).chat_photo(tl::enums::InputChatPhoto::Empty).send().await?;
 ```
 </div>
 </div>
@@ -262,7 +261,7 @@ client.edit_chat_default_banned_rights(chat.clone(), |b| {
 client.set_history_ttl(chat.clone(), 604_800).await?;
 
 // 5. Generate an approval-gated invite link
-let inv = client.export_invite_link(chat.clone(), None, None, true).await?;
+let inv = client.export_invite_link(chat.clone(), None, None, true, None).await?;
 println!("Invite: {}", match &inv {
     tl::enums::ExportedChatInvite::Invite(i) => &i.link,
     _ => "",

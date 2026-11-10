@@ -29,13 +29,13 @@ if let Some(contacts) = client.get_contacts().await? {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.add_contact(user_id: i64, first_name: impl Into&lt;String&gt;, last_name: impl Into&lt;String&gt;, phone: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.add_contact(user_id: i64, first_name: impl Into&lt;String&gt;, last_name: impl Into&lt;String&gt;, phone: impl Into&lt;String&gt;, add_phone_privacy_exception: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Add a user to your contact list. <code>phone</code> can be an empty string if you are adding by user ID rather than phone number. The name you supply is stored locally as your label for this contact, independent of the user's own profile name.
 
 ```rust
-client.add_contact(user_id, "Alice", "Smith", "").await?;
+client.add_contact(user_id, "Alice", "Smith", "", false).await?;
 ```
 </div>
 </div>
@@ -95,27 +95,27 @@ for user in &result.users {
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.block(peer: impl Into&lt;PeerRef&gt;, block: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.block(peer: impl Into&lt;PeerRef&gt;, block: bool, my_stories_from: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Block a user. Blocked users cannot send you messages, see your phone number, or add you to groups. The block also suppresses their stories from your feed.
+Block a user with <code>block: true</code>, or unblock them with <code>block: false</code>. Blocked users cannot send you messages, see your phone number, or add you to groups. With <code>my_stories_from: true</code> only your stories are hidden from them, instead of a full block.
 </div>
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<!-- removed: use block(peer, false) --> → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.block(peer, false, false) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Remove a user from your block list.
+Remove a user from your block list by calling <code>block</code> with <code>block: false</code>.
 </div>
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_blocked_users(offset: i32, limit: i32) → Result&lt;Vec&lt;tl::enums::Peer&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_blocked_users(offset: i32, limit: i32, my_stories_from: bool) → Result&lt;Vec&lt;tl::enums::Peer&gt;, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Paginate through your block list. Start with <code>offset = 0</code>. The server caps <code>limit</code> at 100.
@@ -123,7 +123,7 @@ Paginate through your block list. Start with <code>offset = 0</code>. The server
 ```rust
 let mut offset = 0;
 loop {
-    let page = client.get_blocked_users(offset, 100).await?;
+    let page = client.get_blocked_users(offset, 100, false).await?;
     if page.is_empty() { break; }
     offset += page.len() as i32;
     for peer in &page {
@@ -142,14 +142,14 @@ loop {
 // Find and block all users named "Spammer"
 let results = client.search_contacts("Spammer", 50).await?;
 for peer in results {
-    client.block(peer, true).await?;
+    client.block(peer, true, false).await?;
     println!("Blocked {peer:?}");
 }
 
 // List current block list
 let mut offset = 0;
 loop {
-    let page = client.get_blocked_users(offset, 100).await?;
+    let page = client.get_blocked_users(offset, 100, false).await?;
     if page.is_empty() { break; }
     println!("Blocked users page: {page:?}");
     offset += page.len() as i32;

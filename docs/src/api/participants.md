@@ -24,10 +24,11 @@ for p in &members {
 }
 ```
 
-### Paginated iterator (large groups)
+### Fetch all members
 
 ```rust
-let members = client.iter_participants(peer.clone(), None, 0).await?;
+// limit = 0 uses the server default page size
+let members = client.get_participants(peer.clone(), 0).await?;
 for p in &members {
     println!("{}", p.user.first_name.as_deref().unwrap_or(""));
 }
@@ -59,7 +60,7 @@ p.is_member()   // bool: active member (not banned, not left)
 ```rust
 // Removes the user from a basic group by chat_id (i64)
 // For channels/supergroups, use ban instead
-client.kick(chat_id, user_id).await?;
+client.kick(chat_id, user_id, false).await?;
 ```
 
 > **Note:** `kick` takes a `chat_id: i64`, not a `PeerRef`. Use the raw numeric ID of the basic group.
@@ -129,10 +130,10 @@ client
 
 ```rust
 // Quick promote (all standard rights except add_admins)
-client.set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin()).await?;
+client.set_admin(peer.clone(), user_id, |_| AdminRightsBuilder::full_admin()).await?;
 
 // Demote back to regular member
-client.set_admin(peer.clone(), user_id, AdminRightsBuilder::new()).await?;
+client.set_admin(peer.clone(), user_id, |b| b).await?;
 ```
 
 For fine-grained control, use `set_admin` with `AdminRightsBuilder`:
@@ -142,27 +143,24 @@ use ferogram::participants::AdminRightsBuilder;
 
 // Promote with specific rights and a custom title
 client
-    .set_admin(
-        peer.clone(),
-        user_id,
-        AdminRightsBuilder::new()
-            .post_messages(true)
+    .set_admin(peer.clone(), user_id, |b| {
+        b.post_messages(true)
             .delete_messages(true)
             .ban_users(true)
             .invite_users(true)
             .pin_messages(true)
-            .rank("Moderator"), // custom admin title (max 16 chars)
-    )
+            .rank("Moderator") // custom admin title (max 16 chars)
+    })
     .await?;
 
 // Full admin (all standard rights except add_admins)
 client
-    .set_admin(peer.clone(), user_id, AdminRightsBuilder::full_admin())
+    .set_admin(peer.clone(), user_id, |_| AdminRightsBuilder::full_admin())
     .await?;
 
-// Demote: pass an empty builder to remove all admin rights
+// Demote: return the empty builder unchanged to remove all admin rights
 client
-    .set_admin(peer.clone(), user_id, AdminRightsBuilder::new())
+    .set_admin(peer.clone(), user_id, |b| b)
     .await?;
 ```
 
@@ -278,7 +276,7 @@ for p in &members {
 ## `ProfilePhotoIter`: extended methods
 
 ```rust
-let mut iter = client.iter_profile_photos(user_id);
+let mut iter = client.iter_profile_photos(user_id, 0).await?;
 
 // Total photo count (available after first fetch)
 if let Some(total) = iter.total_count() {
@@ -312,8 +310,7 @@ client.restrict(
 // Set admin rights directly
 client.set_admin(
     peer.clone(),
-    user_input_peer,
-    AdminRightsBuilder::new().delete_messages(true),
-    Some("Moderator".into()),  // optional custom rank
+    user_id,
+    |b| b.delete_messages(true).rank("Moderator"),  // rank is the optional custom title
 ).await?;
 ```

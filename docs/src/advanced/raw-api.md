@@ -154,9 +154,6 @@ Many raw API calls need an `access_hash` alongside user/channel IDs. The interna
 // This populates the peer cache
 let peer = client.resolve("@username").await?;
 
-// For users
-let user_hash = client.inner_peer_cache_users().get(&user_id).copied().unwrap_or(0);
-
 // Simpler: use resolve_to_input_peer for a ready-to-use InputPeer
 let input_peer = client.resolve_to_input_peer("@username").await?;
 ```
@@ -198,32 +195,11 @@ Issues a single `GetDialogs` call and caches all returned channel and user acces
 
 This is opt-in; ferogram no longer calls `GetDialogs` automatically at startup. See the v0.3.5 release notes for why.
 
-### `cache_users_slice_pub` / `cache_chats_slice_pub`
+### `cache_users_slice` / `cache_chats_slice`
 
 ```rust
-client.cache_users_slice_pub(&users_vec).await;
-client.cache_chats_slice_pub(&chats_vec).await;
+client.cache_users_slice(&users_vec).await;
+client.cache_chats_slice(&chats_vec).await;
 ```
 
 Manually insert `tl::enums::User` or `tl::enums::Chat` slices into the access-hash cache. Useful when you've called a raw RPC that returned user or chat objects and want them to be addressable by subsequent high-level calls.
-
----
-
-## Update state
-
-### `sync_update_state`
-
-```rust
-client.sync_update_state().await;
-```
-
-Calls `updates.getState` and resets the internal pts/qts/seq/date counters to match the server. Called automatically on `connect()`. Call it manually after resuming from a long hibernation to avoid replaying a large backlog of missed updates.
-
-### `sync_pts_state`
-
-```rust
-client.sync_pts_state().await?;
-```
-
-The fallible version of `sync_update_state`. Returns an error if the RPC itself fails. `sync_update_state` silently discards that error; use `sync_pts_state` directly when you need to handle or log a failure.
-

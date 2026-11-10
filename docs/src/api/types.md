@@ -194,7 +194,7 @@ The <code>raw</code> field is public if you need direct TL access.
 <span class="api-badge">sync</span>
 <span class="api-card-sig">user.photo() → Option&lt;&tl::types::UserProfilePhoto&gt;</span>
 </div>
-<div class="api-card-body">Profile photo metadata, if set. Use <code>client.iter_profile_photos()</code> to download the actual image.</div>
+<div class="api-card-body">Profile photo metadata, if set. Use <code>client.iter_profile_photos(peer, chunk_size)</code> to download the actual image.</div>
 </div>
 
 <div class="api-card">

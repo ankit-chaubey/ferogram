@@ -38,6 +38,7 @@ msg.view_count()             // Option<i32>: view count (channels)
 msg.reply_count()            // Option<i32>: number of replies in thread
 msg.reaction_count()         // i32: total reactions
 msg.reply_to_message_id()    // Option<i32>: ID of the message replied to
+msg.reply_to_top_message_id() // Option<i32>: thread start; the topic root in a forum supergroup
 
 // Typed timestamps
 msg.date_utc()               // Option<DateTime<Utc>>
@@ -72,7 +73,7 @@ msg.sender_user()            // async → Option<User> (fetches from cache/API)
 
 ## Convenience action methods
 
-These methods work without passing a `&Client` when the message came from `stream_updates()` (the client reference is embedded). Use the `_with(client)` variants when you hold the message outside an update handler.
+These methods work without passing a `&Client` when the message came from `stream_updates()` (the client reference is embedded). `delete_with` and `forward_to_with` take an explicit client for messages you hold outside an update handler.
 
 ### Reply
 
@@ -81,15 +82,11 @@ These methods work without passing a `&Client` when the message came from `strea
 msg.reply("Got it! ✅").await?;
 
 // Reply with full InputMessage control
-msg.reply_ex(
+msg.reply(
     InputMessage::text("Here you go")
         .silent(true)
         .no_webpage(true)
 ).await?;
-
-// Explicit client variants
-msg.reply_with(&client, "Hi").await?;
-msg.reply_ex_with(&client, input_msg).await?;
 ```
 
 ### Respond (no reply thread)
@@ -98,10 +95,6 @@ msg.reply_ex_with(&client, input_msg).await?;
 // Send to the same chat without quoting
 msg.respond("Hello everyone!").await?;
 msg.respond(InputMessage::text("...").keyboard(kb)).await?;
-
-// Explicit client variants
-msg.respond_with(&client, "Hi").await?;
-msg.respond_with(&client, input_msg).await?;
 ```
 
 ### Edit
@@ -109,7 +102,6 @@ msg.respond_with(&client, input_msg).await?;
 ```rust
 // Edit this message's text
 msg.edit("Updated content").await?;
-msg.edit_with(&client, "Updated content").await?;
 ```
 
 ### Delete

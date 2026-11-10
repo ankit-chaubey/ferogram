@@ -2,8 +2,8 @@
 
 `ferogram` provides two fluent search builders:
 
-- **`SearchBuilder`**: search within a single peer (`client.search()`)
-- **`GlobalSearchBuilder`**: search across all dialogs (`client.search_global_builder()`)
+- **`SearchBuilder`**: search within a single peer (`client.search(peer, query)`)
+- **`GlobalSearchBuilder`**: search across all dialogs (`client.search_global(query)`)
 
 Both builders return `Vec<IncomingMessage>` from `.fetch(&client).await?`.
 
@@ -168,7 +168,7 @@ loop {
 
 ```rust
 let results = client
-    .search_global_builder("rust async")
+    .search_global("rust async")
     .limit(30)
     .fetch(&client)
     .await?;
@@ -199,7 +199,7 @@ for msg in &results {
 ```rust
 // Channels only
 let channel_results = client
-    .search_global_builder("announcement")
+    .search_global("announcement")
     .broadcasts_only(true)
     .limit(20)
     .fetch(&client)
@@ -207,14 +207,14 @@ let channel_results = client
 
 // Groups / supergroups only
 let group_results = client
-    .search_global_builder("discussion")
+    .search_global("discussion")
     .groups_only(true)
     .fetch(&client)
     .await?;
 
 // Private chats and bots only
 let dm_results = client
-    .search_global_builder("invoice")
+    .search_global("invoice")
     .users_only(true)
     .fetch(&client)
     .await?;
@@ -227,7 +227,7 @@ let dm_results = client
 let cutoff = (chrono::Utc::now().timestamp() - 30 * 86400) as i32;
 
 let photos = client
-    .search_global_builder("")
+    .search_global("")
     .broadcasts_only(true)
     .filter(MessagesFilter::InputMessagesFilterPhotos)
     .min_date(cutoff)
@@ -244,8 +244,8 @@ For quick lookups that don't need date/filter options:
 
 ```rust
 // Per-chat search via the builder with defaults
-let results = client.search(peer.clone()).query("query").limit(20).collect(&client).await?;
+let results = client.search(peer.clone(), "query").limit(20).fetch(&client).await?;
 
 // Global search: returns Vec<IncomingMessage>
-let results = client.search_global("ferogram rust", 10).await?;
+let results = client.search_global("ferogram rust").limit(10).fetch(&client).await?;
 ```

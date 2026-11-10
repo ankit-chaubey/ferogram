@@ -28,6 +28,12 @@ All crates except `ferogram-e2e` are released as 0.6.7. `ferogram-e2e` is versio
 ### Changed
 
 - Secret chats are no longer described as unreleased in the README and docs.
+- Docs: the feature flag tables match `ferogram/Cargo.toml` (`parsers` and `html` are off by default; `fsm`, `libsql-remote-session`, `resilient-connect`, `socks5`, `metrics` and `experimental` are listed). The crate pages cover `ferogram-msgbox`, `ferogram-mtsender`, `ferogram-connect`, `ferogram-fsm` and `ferogram-derive`, and the dependency graph matches `ARCHITECTURE.md`.
+- Docs: the next and previous page arrows in the book are back to the default mdBook size.
+
+### Fixed
+
+- Docs: corrected method signatures and examples that no longer matched the code, including the invite link, join request, pin, kick, `set_admin`, `set_profile`, contacts and block, dialogs, `get_message_history`, `forward_messages`, `export_message_link`, `download`, bot invoice and callback query pages. Removed methods that do not exist (`iter_participants`, `search_global_builder`, `move_to_folder`, `untoggle_stickers`, `sync_update_state`, `reply_ex`, `edit_with`) and fixed the retry policy example to use the real `RetryContext` fields.
 
 ---
 

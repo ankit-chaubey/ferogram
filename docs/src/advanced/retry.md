@@ -69,18 +69,22 @@ struct CappedSleep {
 
 impl RetryPolicy for CappedSleep {
     fn should_retry(&self, ctx: &RetryContext) -> ControlFlow<(), Duration> {
-        if ctx.attempt() >= self.max_attempts {
-            log::warn!("Giving up after {} attempts", ctx.attempt());
+        let attempt = ctx.fail_count.get();
+        if attempt >= self.max_attempts {
+            log::warn!("Giving up after {attempt} attempts");
             return ControlFlow::Break(());
         }
 
-        let wait = ctx.flood_wait_secs();
+        // Only FLOOD_WAIT errors carry a wait time. Anything else is not retried here.
+        let Some(wait) = ctx.error.flood_wait_seconds() else {
+            return ControlFlow::Break(());
+        };
         if wait > self.max_wait_secs {
             log::warn!("FLOOD_WAIT too long ({wait}s), giving up");
             return ControlFlow::Break(());
         }
 
-        log::info!("FLOOD_WAIT {wait}s (attempt {})", ctx.attempt());
+        log::info!("FLOOD_WAIT {wait}s (attempt {attempt})");
         ControlFlow::Continue(Duration::from_secs(wait))
     }
 }
@@ -94,13 +98,13 @@ let (client, _shutdown) = Client::connect(Config {
 }).await?;
 ```
 
-## RetryContext fields
+## RetryContext
 
-| Method | Returns | Description |
+| Field | Type | Description |
 |---|---|---|
-| `ctx.flood_wait_secs()` | `u64` | How long Telegram wants you to wait |
-| `ctx.attempt()` | `u32` | How many times this call has been retried |
-| `ctx.error_message()` | `&str` | The raw error message string |
+| `ctx.fail_count` | `NonZeroU32` | How many times this request has failed, starting at 1 |
+| `ctx.slept_so_far` | `Duration` | Total time already slept for this request across earlier retries |
+| `ctx.error` | `InvocationError` | The most recent error. `ctx.error.flood_wait_seconds()` returns `Option<u64>` |
 
 ## Avoiding flood waits
 

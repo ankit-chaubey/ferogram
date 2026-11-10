@@ -19,7 +19,7 @@ If something's missing for you, drop by [t.me/FerogramChat](https://t.me/Ferogra
 
 ```toml
 [dependencies]
-ferogram = "0.6.6"
+ferogram = "0.6.7"
 tokio    = { version = "1", features = ["full"] }
 ```
 
@@ -38,11 +38,13 @@ Everything in the workspace is written from scratch: the `.tl` schema parser, th
 
 ## Crates
 
-Most people only need `ferogram`. But each crate is independently published if you need a specific layer on its own.
+Most people only need `ferogram`. But each crate is independently published if you need a specific layer on its own. They share the workspace version, except `ferogram-e2e`, which is versioned separately.
 
 | Crate | What it does |
 |---|---|
 | [`ferogram`](https://docs.rs/ferogram) | High-level client. Auth, messaging, media, dispatcher, FSM, middleware. |
+| [`ferogram-msgbox`](https://docs.rs/ferogram-msgbox) | Update-gap tracking. pts/qts/seq bookkeeping and gap detection for the `Updates` stream. |
+| [`ferogram-e2e`](https://docs.rs/ferogram-e2e) | Secret chats. DH exchange, message and file encryption, re-keying, TTLs. Client-independent via `E2eTransport`; reached through the `e2e` feature of `ferogram`. |
 | [`ferogram-session`](https://docs.rs/ferogram-session) | Session types and pluggable storage backends (file, memory, SQLite, LibSQL, base64). |
 | [`ferogram-fsm`](https://docs.rs/ferogram-fsm) | FSM state storage and context. `StateStorage` trait, `MemoryStorage`, `StateContext`. |
 | [`ferogram-parsers`](https://docs.rs/ferogram-parsers) | Telegram Markdown and HTML entity parsers. |
@@ -59,6 +61,8 @@ The rough dependency chain:
 
 ```
 ferogram
+├ ferogram-msgbox
+│ └ ferogram-tl-types
 └ ferogram-mtsender
   └ ferogram-connect
     ├ ferogram-mtproto

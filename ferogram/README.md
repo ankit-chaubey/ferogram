@@ -44,7 +44,7 @@ If you're starting fresh, this is the only crate you need. Everything else in th
 
 ```toml
 [dependencies]
-ferogram = "0.6.6"
+ferogram = "0.6.7"
 tokio    = { version = "1.53", features = ["full"] }
 ```
 

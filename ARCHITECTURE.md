@@ -36,10 +36,10 @@ specific layer.
 | [`ferogram-tl-gen`](ferogram-tl-gen/) | Build-time code generator from TL AST to Rust source. |
 | [`ferogram-tl-parser`](ferogram-tl-parser/) | Parses `.tl` schema text into a Definition AST. |
 
-Each crate is independently published and versioned together with the rest of the
-workspace. Depend on one directly if you're building something narrower than a full
-client; `ferogram` re-exports the ones most people end up needing anyway, so day to
-day code rarely has to reach past it.
+Each crate is independently published. They share the workspace version, except
+`ferogram-e2e`, which is versioned on its own. Depend on one directly if you're building
+something narrower than a full client; `ferogram` re-exports the ones most people end up
+needing anyway, so day to day code rarely has to reach past it.
 
 ## Dependency chain
 
@@ -113,7 +113,7 @@ is built to catch.
 ## Feature flags
 
 ```toml
-ferogram = { version = "0.6.6", features = [
+ferogram = { version = "0.6.7", features = [
     "sqlite-session",         # SqliteBackend via rusqlite
     "libsql-session",         # LibSqlBackend, local file or in-memory, via libsql
     "libsql-remote-session",  # LibSqlBackend remote Turso + embedded replicas

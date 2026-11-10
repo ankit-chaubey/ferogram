@@ -111,7 +111,6 @@ If you don't need the automatic renewal, fire a single action:
 client.send_chat_action(
     peer.clone(),
     tl::enums::SendMessageAction::SendMessageTypingAction,
-    None, // top_msg_id: Some(id) for forum topics
 ).await?;
 ```
 

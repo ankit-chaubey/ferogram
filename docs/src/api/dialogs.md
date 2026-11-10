@@ -75,7 +75,7 @@ while let Some(msg) = iter.next(&client).await? {
 
 ```rust
 // Latest N messages from a peer
-let messages = client.get_message_history(peer.clone(), 20).await?;
+let messages = client.get_message_history(peer.clone(), 20, 0, 0).await?;
 
 // Specific message IDs
 let messages = client.get_messages(peer.clone(), &[100, 101, 102]).await?;
@@ -118,14 +118,14 @@ client.clear_mentions(peer.clone()).await?;
 client.delete_dialog(peer.clone()).await?;
 
 // Pin / unpin a dialog
-client.pin_dialog(peer.clone()).await?;
+client.pin_dialog(peer.clone(), true).await?;
 client.pin_dialog(peer.clone(), false).await?;
 
 // Get pinned dialogs (folder_id: 0 = main, 1 = archived)
 let pinned = client.get_pinned_dialogs(0).await?;
 
 // Set manual unread flag on a dialog
-client.mark_dialog_unread(peer.clone(), true).await?;
+client.mark_dialog_unread(peer.clone()).await?;
 
 // Clear the manual unread flag
 client.mark_read(peer.clone()).await?;
@@ -148,19 +148,11 @@ Move a dialog into the Telegram archive (folder 1) or back to the main list (fol
 
 ```rust
 // Move to archive - chat disappears from the main dialog list
-client.archive("@somebot").await?;
+client.archive("@somebot", true).await?;
 
 // Move back to main list
-client.archive("@somebot").await?;
+client.archive("@somebot", false).await?;
 ```
 
 Archived chats still receive messages; they are simply hidden from the main list and muted by default until the user opens them.
 
-### Low-level folder move
-
-For finer control (e.g. custom folders), use `move_to_folder`:
-
-```rust
-// folder_id 0 = main list, 1 = archive
-client.move_to_folder("@somebot", 0).await?;
-```

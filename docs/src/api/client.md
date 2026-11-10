@@ -88,16 +88,6 @@ Immediately closes the TCP connection and stops the reader task without waiting 
 
 <div class="api-card">
 <div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.sync_update_state() <span class="api-badge-new">New 0.2.0</span></span>
-</div>
-<div class="api-card-body">
-Forces an immediate <code>updates.getState</code> round-trip and reconciles local pts/seq/qts counters. Useful after a long disconnect or when you suspect a gap but don't want to wait for the gap-detection timer.
-</div>
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
 <span class="api-badge">sync</span>
 <span class="api-card-sig">client.signal_network_restored()</span>
 </div>
@@ -224,17 +214,17 @@ Full-featured send with the <a href="./input-message.md"><code>InputMessage</cod
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.edit_inline_message(inline_msg_id: tl::enums::InputBotInlineMessageId, text: &str) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.edit_inline_message(id: tl::enums::InputBotInlineMessageId, new_text: impl Into&lt;InputMessage&gt;, reply_markup: Option&lt;tl::enums::ReplyMarkup&gt;) → Result&lt;bool, InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Edit the text of a message that was sent via inline mode. The <code>inline_msg_id</code> is provided in <code>Update::InlineSend</code>.</div>
+<div class="api-card-body">Edit the text of a message that was sent via inline mode. The inline message ID is provided in <code>Update::InlineSend</code>.</div>
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.forward_messages(from_peer: Peer, to_peer: Peer, ids: Vec&lt;i32&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.forward_messages(destination: impl Into&lt;PeerRef&gt;, message_ids: &amp;[i32], source: impl Into&lt;PeerRef&gt;, opts: ForwardOptions) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Forward one or more messages from <code>from_peer</code> into <code>to_peer</code>.</div>
+<div class="api-card-body">Forward messages from <code>source</code> into <code>destination</code>. <code>ForwardOptions</code> controls silent sending, dropping the author or media captions, and <code>noforwards</code>; pass <code>ForwardOptions::default()</code> for a plain forward. Returns the new messages.</div>
 </div>
 
 <div class="api-card">
@@ -256,9 +246,9 @@ Full-featured send with the <a href="./input-message.md"><code>InputMessage</cod
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.pin_message(peer: Peer, message_id: i32, silent: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.pin_message(peer: impl Into&lt;PeerRef&gt;, id: i32, pin: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Pin a message. <code>silent: true</code> pins without notifying members.</div>
+<div class="api-card-body">Pin a message with <code>pin: true</code>, or unpin it with <code>pin: false</code>.</div>
 </div>
 
 <div class="api-card">
@@ -352,7 +342,7 @@ See <a href="../messaging/reactions.md">Reactions</a> for the full guide.
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.send_chat_action(peer: Peer, action: SendMessageAction) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.send_chat_action(peer: impl Into&lt;PeerRef&gt;, action: tl::enums::SendMessageAction) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Send a one-shot typing / uploading / recording indicator. Expires after ~5 seconds. Use <a href="./typing-guard.md"><code>TypingGuard</code></a> to keep it alive for longer operations. <code>top_msg_id</code> restricts the indicator to a forum topic.
@@ -374,7 +364,7 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge">sync</span>
-<span class="api-card-sig">client.search_global_builder(query: &str) → GlobalSearchBuilder</span>
+<span class="api-card-sig">client.search_global(query: &amp;str) → GlobalSearchBuilder</span>
 </div>
 <div class="api-card-body">Returns a <a href="./search.md"><code>GlobalSearchBuilder</code></a> for searching across all dialogs simultaneously.</div>
 </div>
@@ -385,14 +375,6 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <span class="api-card-sig">client.search(peer: impl Into&lt;PeerRef&gt;) → SearchBuilder</span>
 </div>
 <div class="api-card-body">Build a message search for a peer. Chain <code>.query()</code>, <code>.limit()</code>, <code>.filter()</code>, etc., then call <code>.collect(&client).await?</code> to run it. For a one-shot query, use <code>client.search().query("text").collect(&client).await?</code>.</div>
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.search_global(query: &str, limit: i32) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
-</div>
-<div class="api-card-body">Simple one-shot global search. For advanced options use <code>client.search_global_builder()</code>.</div>
 </div>
 
 ---
@@ -466,17 +448,9 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.pin_dialog(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
-</div>
-<div class="api-card-body">Pin a dialog to the top of the dialog list.</div>
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
 <span class="api-card-sig">client.pin_dialog(peer: impl Into&lt;PeerRef&gt;, pin: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Unpin a previously pinned dialog.</div>
+<div class="api-card-body">Pin a dialog to the top of the dialog list with <code>pin: true</code>, or unpin it with <code>pin: false</code>.</div>
 </div>
 
 <div class="api-card">
@@ -490,9 +464,9 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.mark_dialog_unread(peer: impl Into&lt;PeerRef&gt;, unread: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.mark_dialog_unread(peer: impl Into&lt;PeerRef&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Manually mark a dialog as unread (<code>true</code>) or read (<code>false</code>). This sets the unread dot without actually having new messages.</div>
+<div class="api-card-body">Manually mark a dialog as unread. This sets the unread dot without actually having new messages. To clear it, call <code>mark_read</code>.</div>
 </div>
 
 
@@ -534,21 +508,13 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <span class="api-badge api-badge-async">async</span>
 <span class="api-card-sig">client.get_participants(peer: impl Into&lt;PeerRef&gt;, limit: i32) → Result&lt;Vec&lt;Participant&gt;, InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Fetch members of a chat or channel. Pass <code>limit = 0</code> for the default server maximum per page. Use <code>iter_participants</code> to lazily page all members.</div>
+<div class="api-card-body">Fetch members of a chat or channel. Pass <code>limit = 0</code> for the default server maximum per page.</div>
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.iter_participants(peer: impl Into&lt;PeerRef&gt;, filter: Option&lt;tl::enums::ChannelParticipantsFilter&gt;, limit: i32) → Result&lt;Vec&lt;Participant&gt;, InvocationError&gt;</span>
-</div>
-<div class="api-card-body">Fetch all members of a channel or supergroup, optionally filtered and limited. Pass <code>filter = None</code> and <code>limit = 0</code> to retrieve all members up to the server default. For basic groups use <code>get_participants</code>.</div>
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.kick(peer: impl Into&lt;PeerRef&gt;, user_id: i64) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.kick(peer: impl Into&lt;PeerRef&gt;, user_id: i64, revoke_history: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Remove a user from a group, channel, or supergroup.</div>
 </div>
@@ -564,15 +530,15 @@ Send a one-shot typing / uploading / recording indicator. Expires after ~5 secon
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_admin(peer: impl Into&lt;PeerRef&gt;, user_id: i64, rights: AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_admin(channel: impl Into&lt;PeerRef&gt;, user_id: i64, build: impl FnOnce(AdminRightsBuilder) → AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
 </div>
-<div class="api-card-body">Set admin rights. Use <code>AdminRightsBuilder::full_admin()</code> to promote or <code>AdminRightsBuilder::new()</code> to demote.</div>
+<div class="api-card-body">Set admin rights. The closure receives an empty <code>AdminRightsBuilder</code>. Return <code>AdminRightsBuilder::full_admin()</code> to promote with all standard rights, or the builder unchanged (<code>|b| b</code>) to demote.</div>
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_admin(peer: impl Into&lt;PeerRef&gt;, user_id: i64, rights: AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_admin(channel: impl Into&lt;PeerRef&gt;, user_id: i64, build: impl FnOnce(AdminRightsBuilder) → AdminRightsBuilder) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Promote a user to admin with specified rights. See <a href="./admin-rights.md">Admin & Ban Rights</a>.</div>
 </div>
@@ -660,7 +626,7 @@ client.send_album(peer, vec![
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.download(media: &amp;MessageMedia, dest: impl AsyncWrite + Unpin) → Result&lt;u64, InvocationError&gt;</span>
+<span class="api-card-sig">client.download(item: &amp;impl Downloadable, dest: impl AsyncWrite + Unpin, handle: Option&lt;&amp;TransferHandle&gt;) → Result&lt;u64, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Download a media file and write it to <code>path</code>. The <code>path</code> argument accepts anything that implements <code>AsRef&lt;Path&gt;</code> (e.g. <code>&str</code>, <code>String</code>, <code>PathBuf</code>). DC routing is handled automatically.</div>
 </div>
@@ -672,7 +638,7 @@ client.send_album(peer, vec![
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.answer_callback_query(query_id: i64, text: Option&lt;&str&gt;, alert: bool) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.answer_callback_query(query_id: i64, text: Option&lt;&amp;str&gt;, alert: bool) → Result&lt;bool, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Acknowledge an inline button press. <code>text</code> shows a toast (or alert if <code>alert=true</code>). Must be called within 60 seconds of the button press.</div>
 </div>
@@ -680,7 +646,7 @@ client.send_album(peer, vec![
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.answer_inline_query(query_id: i64, results: Vec&lt;InputBotInlineResult&gt;, cache_time: i32, is_personal: bool, next_offset: Option&lt;&str&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.answer_inline_query(query_id: i64, results: Vec&lt;InputBotInlineResult&gt;, cache_time: i32, is_personal: bool, next_offset: Option&lt;String&gt;) → Result&lt;bool, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Respond to an inline query with a list of results. <code>cache_time</code> in seconds. Empty result list now handled correctly (fixed in v0.2.0).</div>
 </div>
@@ -809,7 +775,7 @@ let state = client.invoke(&functions::updates::GetState {}).await?;</code></pre>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(peer).title(: impl Into&lt;PeerRef&gt;, title: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).title(title: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Rename a chat, group, channel, or supergroup. Works for both basic groups and channels/supergroups.</div>
 </div>
@@ -817,7 +783,7 @@ let state = client.invoke(&functions::updates::GetState {}).await?;</code></pre>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(peer).bio(: impl Into&lt;PeerRef&gt;, about: impl Into&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).bio(bio: impl Into&lt;String&gt;).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Set or update the description/about text for any chat type.</div>
 </div>
@@ -825,7 +791,7 @@ let state = client.invoke(&functions::updates::GetState {}).await?;</code></pre>
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.set_profile(peer).chat_photo(peer: impl Into&lt;PeerRef&gt;, photo: tl::enums::InputChatPhoto) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.set_profile(peer).chat_photo(photo: tl::enums::InputChatPhoto).send() → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Change the profile photo of a chat. Pass <code>tl::enums::InputChatPhoto::Empty</code> to remove the current photo.</div>
 </div>
@@ -952,14 +918,6 @@ client.set_chat_reactions(peer.clone(),
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.forward_messages_returning(destination: impl Into&lt;PeerRef&gt;, message_ids: &[i32], source: impl Into&lt;PeerRef&gt;) → Result&lt;Vec&lt;IncomingMessage&gt;, InvocationError&gt;</span>
-</div>
-<div class="api-card-body">Like <code>forward_messages</code> but returns the newly created message objects in the destination chat. Useful when you need the forwarded message IDs immediately.</div>
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
 <span class="api-card-sig">msg.get_reply() → Option&lt;&amp;IncomingMessage&gt;</span>
 </div>
 <div class="api-card-body">Access the message this message replies to. Available directly on <code>IncomingMessage</code>. Returns <code>None</code> if not a reply. To fetch the replied-to message by ID, use <code>client.get_messages(peer, &amp;[id])</code>.</div>
@@ -987,14 +945,6 @@ client.set_chat_reactions(peer.clone(),
 <span class="api-card-sig">client.get_pinned_message(peer: impl Into&lt;PeerRef&gt;) → Result&lt;Option&lt;IncomingMessage&gt;, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">Fetch the currently pinned message in a chat. Returns <code>None</code> if nothing is pinned.</div>
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.pin_message(peer: impl Into&lt;PeerRef&gt;, message_id: i32, silent: bool, unpin: bool, pm_oneside: bool) → Result&lt;(), InvocationError&gt;</span>
-</div>
-<div class="api-card-body">Pin (or unpin) a message. Set <code>silent = true</code> to avoid a pin notification. <code>pm_oneside = true</code> pins only for the logged-in user in DMs.</div>
 </div>
 
 <div class="api-card">
@@ -1063,10 +1013,10 @@ client.set_chat_reactions(peer.clone(),
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.export_message_link(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, grouped: bool, thread: bool) → Result&lt;String, InvocationError&gt;</span>
+<span class="api-card-sig">client.export_message_link(peer: impl Into&lt;PeerRef&gt;, msg_id: i32, kind: LinkKind) → Result&lt;String, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Get a <code>t.me/c/…</code> permalink for a message in a channel. <code>grouped = true</code> returns a link to the album group; <code>thread = true</code> links to the discussion thread. Only works for channels (not basic groups).
+Get a <code>t.me/c/…</code> permalink for a message in a channel. <code>kind</code> is <code>LinkKind::Normal</code> for a plain permalink, <code>LinkKind::Grouped</code> for a link to the whole album, or <code>LinkKind::Thread</code> for the discussion thread. Only works for channels (not basic groups).
 </div>
 </div>
 

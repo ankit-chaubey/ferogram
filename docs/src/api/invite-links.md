@@ -9,7 +9,7 @@ Full API for creating, editing, revoking, and managing chat invite links, as wel
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.export_invite_link(peer: impl Into&lt;PeerRef&gt;, expire_date: Option&lt;i32&gt;, usage_limit: Option&lt;i32&gt;, request_needed: bool) → Result&lt;tl::enums::ExportedChatInvite, InvocationError&gt;</span>
+<span class="api-card-sig">client.export_invite_link(peer: impl Into&lt;PeerRef&gt;, expire_date: Option&lt;i32&gt;, usage_limit: Option&lt;i32&gt;, request_needed: bool, title: Option&lt;String&gt;) → Result&lt;tl::enums::ExportedChatInvite, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Create a new invite link for a chat.
@@ -20,13 +20,13 @@ Create a new invite link for a chat.
 
 ```rust
 // Permanent link, up to 50 uses
-let inv = client.export_invite_link(peer.clone(), None, Some(50), false).await?;
+let inv = client.export_invite_link(peer.clone(), None, Some(50), false, None).await?;
 
 // Link that expires in 24 hours, requires approval
 let tomorrow = (std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH).unwrap()
     .as_secs() + 86400) as i32;
-let inv = client.export_invite_link(peer.clone(), Some(tomorrow), None, true).await?;
+let inv = client.export_invite_link(peer.clone(), Some(tomorrow), None, true, None).await?;
 ```
 </div>
 </div>
@@ -63,7 +63,7 @@ Revoke an existing invite link immediately. After revocation the link stops acce
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.edit_invite_link(peer: impl Into&lt;PeerRef&gt;, link: impl Into&lt;String&gt;, expire_date: Option&lt;i32&gt;, usage_limit: Option&lt;i32&gt;, request_needed: bool) → Result&lt;tl::enums::ExportedChatInvite, InvocationError&gt;</span>
+<span class="api-card-sig">client.edit_invite_link(peer: impl Into&lt;PeerRef&gt;, link: impl Into&lt;String&gt;, expire_date: Option&lt;i32&gt;, usage_limit: Option&lt;i32&gt;, request_needed: Option&lt;bool&gt;, title: Option&lt;String&gt;) → Result&lt;tl::enums::ExportedChatInvite, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 Update an existing invite link's properties. Only non-permanent links can be edited. The same fields as <code>export_invite_link</code> apply.
@@ -77,7 +77,7 @@ Update an existing invite link's properties. Only non-permanent links can be edi
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_invite_links(peer: impl Into&lt;PeerRef&gt;, admin_id: i64, revoked: bool, limit: i32) → Result&lt;Vec&lt;tl::enums::ExportedChatInvite&gt;, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_invite_links(peer: impl Into&lt;PeerRef&gt;, admin_id: i64, revoked: bool, limit: i32, offset_date: Option&lt;i32&gt;, offset_link: Option&lt;String&gt;) → Result&lt;Vec&lt;tl::enums::ExportedChatInvite&gt;, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 List invite links created by a specific admin. Pass <code>revoked: false</code> for active links, <code>true</code> for revoked ones. Maximum <code>limit</code> is 100.
@@ -85,7 +85,7 @@ List invite links created by a specific admin. Pass <code>revoked: false</code> 
 ```rust
 // All active links created by the logged-in user (user_id from get_me)
 let me = client.get_me().await?;
-let links = client.get_invite_links(peer.clone(), me.id, false, 100).await?;
+let links = client.get_invite_links(peer.clone(), me.id, false, 100, None, None).await?;
 ```
 </div>
 </div>
@@ -119,40 +119,20 @@ When a link is created with `request_needed: true`, users who click it appear as
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.approve_join_request(peer: impl Into&lt;PeerRef&gt;, user_id: i64) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.join_request(peer: impl Into&lt;PeerRef&gt;, user_id: i64, approve: bool) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Approve a single pending join request. The user is added to the chat immediately.
+Approve or decline a single pending join request. Pass <code>approve: true</code> to add the user to the chat, or <code>false</code> to reject and dismiss the request.
 </div>
 </div>
 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.reject_join_request(peer: impl Into&lt;PeerRef&gt;, user_id: i64) → Result&lt;(), InvocationError&gt;</span>
+<span class="api-card-sig">client.all_join_requests(peer: impl Into&lt;PeerRef&gt;, approve: bool, link: Option&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
-Reject and dismiss a single pending join request.
-</div>
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.approve_all_join_requests(peer: impl Into&lt;PeerRef&gt;, link: Option&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
-</div>
-<div class="api-card-body">
-Approve all pending join requests at once. If <code>link</code> is <code>Some(url)</code>, only requests submitted via that specific link are approved. Pass <code>None</code> to approve all pending requests regardless of which link they came from.
-</div>
-</div>
-
-<div class="api-card">
-<div class="api-card-header">
-<span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.reject_all_join_requests(peer: impl Into&lt;PeerRef&gt;, link: Option&lt;String&gt;) → Result&lt;(), InvocationError&gt;</span>
-</div>
-<div class="api-card-body">
-Reject all pending join requests at once, with the same optional link filter as <code>approve_all_join_requests</code>.
+Approve or decline every pending join request at once. If <code>link</code> is <code>Some(url)</code>, only requests submitted via that specific link are affected. Pass <code>None</code> to act on all pending requests regardless of which link they came from.
 </div>
 </div>
 
@@ -163,7 +143,7 @@ Reject all pending join requests at once, with the same optional link filter as 
 <div class="api-card">
 <div class="api-card-header">
 <span class="api-badge api-badge-async">async</span>
-<span class="api-card-sig">client.get_invite_link_members(peer: impl Into&lt;PeerRef&gt;, link: Option&lt;String&gt;, requested: bool, limit: i32) → Result&lt;tl::types::messages::ChatInviteImporters, InvocationError&gt;</span>
+<span class="api-card-sig">client.get_invite_link_members(peer: impl Into&lt;PeerRef&gt;, link: Option&lt;String&gt;, requested: bool, limit: i32, offset_date: i32, offset_user_id: i64) → Result&lt;Vec&lt;tl::types::ChatInviteImporter&gt;, InvocationError&gt;</span>
 </div>
 <div class="api-card-body">
 List members who joined via a specific invite link, or all pending join requesters.
@@ -175,7 +155,7 @@ List members who joined via a specific invite link, or all pending join requeste
 ```rust
 // Who is waiting for approval?
 let pending = client
-    .get_invite_link_members(peer.clone(), None, true, 50)
+    .get_invite_link_members(peer.clone(), None, true, 50, 0, 0)
     .await?;
 ```
 </div>
@@ -198,7 +178,7 @@ Get a breakdown of each admin's invite link counts (active, revoked). Useful for
 ```rust
 // Create link that requires admin approval
 let inv = client
-    .export_invite_link(peer.clone(), None, None, true)
+    .export_invite_link(peer.clone(), None, None, true, None)
     .await?;
 
 println!("Share this link: {}", match &inv {
@@ -208,11 +188,11 @@ println!("Share this link: {}", match &inv {
 
 // Later: check who is waiting
 let pending = client
-    .get_invite_link_members(peer.clone(), None, true, 100)
+    .get_invite_link_members(peer.clone(), None, true, 100, 0, 0)
     .await?;
 
-for importer in &pending.importers {
+for importer in &pending {
     println!("Approving user {}", importer.user_id);
-    client.approve_join_request(peer.clone(), importer.user_id).await?;
+    client.join_request(peer.clone(), importer.user_id, true).await?;
 }
 ```

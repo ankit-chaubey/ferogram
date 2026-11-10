@@ -62,7 +62,8 @@ Pass `None` for any field you do not want to change.
 Retrieve the current values:
 
 ```rust
-let info = client.get_bot_info("").await?;
+// bot: None means your own bot; lang_code "" is the default language
+let info = client.get_bot_info(None::<&str>, "").await?;
 println!("Name: {}", info.name);
 println!("About: {}", info.about);
 println!("Description: {}", info.description);
@@ -160,21 +161,23 @@ if the user already scanned before you called it.
 Send a payment invoice to a chat (bots only):
 
 ```rust
+use ferogram::InvoiceOptions;
+
 client.send_invoice(
     "@user",
     "Premium subscription",          // title
     "One month of premium access",   // description
     "sub_monthly",                   // payload (your internal ID)
-    "USD",                           // currency
-    &[
-        ("1 Month Premium", 999),    // (label, amount in cents)
-    ],
-    None,                            // photo_url
-    false,                           // need_name
-    false,                           // need_phone
-    false,                           // need_email
-    false,                           // need_shipping_address
-    false,                           // is_flexible (shipping address changes price)
+    InvoiceOptions {
+        currency: "USD".into(),
+        prices: vec![("1 Month Premium".into(), 999)], // (label, amount in cents)
+        photo_url: None,
+        need_name: false,
+        need_phone: false,
+        need_email: false,
+        need_shipping_address: false,
+        is_flexible: false,      // shipping address changes price
+    },
 ).await?;
 ```
 

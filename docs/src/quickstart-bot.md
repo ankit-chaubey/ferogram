@@ -101,9 +101,9 @@ async fn dispatch(
         // Callback queries
         Update::CallbackQuery(cb) => {
             match cb.data().unwrap_or("") {
-                "help"  => { client.answer_callback_query(cb.query_id, Some("Send /help for commands"), false, None, 0).await?; }
-                "about" => { client.answer_callback_query(cb.query_id, Some("Built with ferogram: Rust MTProto 🦀"), true, None, 0).await?; }
-                _       => { client.answer_callback_query(cb.query_id, None, false, None, 0).await?; }
+                "help"  => { client.answer_callback_query(cb.query_id, Some("Send /help for commands"), false).await?; }
+                "about" => { client.answer_callback_query(cb.query_id, Some("Built with ferogram: Rust MTProto 🦀"), true).await?; }
+                _       => { client.answer_callback_query(cb.query_id, None, false).await?; }
             }
         }
 
