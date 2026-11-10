@@ -267,16 +267,15 @@ impl IncomingMessage {
     }
 
     /// ID of the message that started this message thread.
+    ///
+    /// In a forum supergroup this is the topic root message ID for replies
+    /// inside a topic.
     pub fn reply_to_top_message_id(&self) -> Option<i32> {
         match &self.raw {
-            tl::enums::Message::Message(m) => {
-                m.reply_to.as_ref().and_then(|reply| match reply {
-                    tl::enums::MessageReplyHeader::MessageReplyHeader(header) => {
-                        header.reply_to_top_id
-                    }
-                    _ => None,
-                })
-            }
+            tl::enums::Message::Message(m) => m.reply_to.as_ref().and_then(|reply| match reply {
+                tl::enums::MessageReplyHeader::MessageReplyHeader(header) => header.reply_to_top_id,
+                _ => None,
+            }),
             _ => None,
         }
     }

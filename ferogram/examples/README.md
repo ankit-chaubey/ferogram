@@ -214,6 +214,24 @@ Or if you want a ready-made userbot without building it yourself, check out [Fer
 
 ---
 
+## Secret chats
+
+### `secret_chat.rs`
+
+Opens an end-to-end encrypted secret chat with another user, waits for the other side to accept, and sends "hello from ferogram-e2e". Uses `quick_connect`, plus the `e2e` feature, which is not on by default.
+
+Set `API_ID`, `API_HASH` and `TARGET` (a `@username`, phone number or user id) at the top of the file. Run it with:
+
+```
+cargo run --features e2e --example secret_chat
+```
+
+The chat becomes ready once the other side accepts. A secret chat belongs to one device, as in Telegram itself. Chats are stored in `e2e.e2e` next to the session file, so they survive restarts. Only works with users, not bots.
+
+For a walkthrough of the API, see the [secret chats guide](../../docs/src/advanced/secret-chats.md).
+
+---
+
 ## quick_connect or Client::builder - which one?
 
 You'll see both used across the examples and it can be a bit confusing at first. Here's the short version:
@@ -263,3 +281,4 @@ Most of the simpler examples use `quick_connect`. The heavier ones like [`showca
 | `string_session_gen` | user | `quick_connect` | generate a session string |
 | `serverless_userbot` | user | builder + string session | verify string session, send to self |
 | `userbot` | user | builder | full-featured userbot reference |
+| `secret_chat` | user | `quick_connect` | end-to-end encrypted secret chat (needs `--features e2e`) |

@@ -11,27 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.6.7-b2] - 2026-11-09
+## [0.6.7] - 2026-11-10
 
-Beta release.
+All crates except `ferogram-e2e` are released as 0.6.7. `ferogram-e2e` is versioned separately and ships as 0.1.0 (see below).
 
 ### Added
 
-- `ferogram-e2e` 0.1.0-b1 (versioned separately from the workspace) and the `e2e` feature of `ferogram`: Telegram secret chats (MTProto 2.0
-  end-to-end encryption). DH key exchange, message and file encryption, encrypted media
-  upload/download, re-keying, self-destruct TTLs and service messages. Chats persist to a small
-  binary store, `<session_name>.e2e` (`E2eClient::for_session`): atomic writes, checksummed,
-  mode `0600` on Unix. `ferogram::e2e` re-exports the crate, implements `E2eTransport` for
-  `Client`, and adds `E2eClientExt::handle_client_update` for feeding `Update`s and
-  `E2eClientExt::request_secret_chat("@user")`, which resolves the access hash from the peer cache.
-  Example: `secret_chat`.
-- `ferogram-e2e` does not depend on `ferogram`; any client can drive it by implementing
-  `E2eTransport`.
+- `e2e` feature on `ferogram`: Telegram secret chats (end-to-end encryption), available as `ferogram::e2e` and backed by the new `ferogram-e2e` crate.
+  - `E2eClient::for_session(client, "mybot.session")` keeps chats in `mybot.e2e` next to the session.
+  - `E2eClientExt::request_secret_chat("@user")` resolves the access hash from the peer cache.
+  - `E2eClientExt::handle_client_update(&update)` feeds `Update`s from the update stream.
+  - `secret_chat` example (20 examples now) and a Secret Chats page in the docs.
+- `IncomingMessage::reply_to_top_message_id()`: the topic root / thread start message ID from the reply header.
+- `Client::get_message_by_link(link)` and `MessageLink`: resolve `t.me/<username>/<id>`, `t.me/c/<channel_id>/<id>` and `t.me/c/<channel_id>/<topic_id>/<id>`. With a topic ID, the message must be the topic root or belong to the topic (reply-to-top ID, falling back to the direct reply ID); other messages are rejected.
 
-### Fixed
+### Changed
 
-- `ferogram-e2e`: decrypting a secret chat message now also rejects padding longer than 1024
-  bytes and message lengths that are not a multiple of 4.
+- Secret chats are no longer described as unreleased in the README and docs.
+
+---
+
+## [ferogram-e2e 0.1.0] - 2026-11-10
+
+First release of `ferogram-e2e`, Telegram secret chats (MTProto 2.0 end-to-end encryption).
+
+### Added
+
+- Key exchange, message and file encryption, encrypted media upload/download, re-keying, self-destruct TTLs and service messages.
+- Chats persist to a small binary store, `<session_name>.e2e`: atomic writes, checksummed, mode `0600` on Unix.
+- `E2eTransport` trait, so any client can drive the crate. It does not depend on `ferogram`.
+- Decryption rejects padding longer than 1024 bytes and message lengths that are not a multiple of 4.
 
 ---
 

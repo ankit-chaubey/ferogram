@@ -10,6 +10,7 @@
 | `html5ever` | ❌ | Spec-compliant html5ever tokenizer: overrides the built-in `html` parser |
 | `serde` | ❌ | `serde::Serialize` / `Deserialize` on `Config` and public structs |
 | `derive` | ❌ | `#[derive(FsmState)]` proc-macro for FSM state enums |
+| `e2e` | ❌ | Secret chats (end-to-end encryption) as `ferogram::e2e`, backed by the `ferogram-e2e` crate |
 | `parser` | ❌ | Re-exports `ferogram-tl-parser` for custom TL schema tooling |
 | `codegen` | ❌ | Re-exports `ferogram-tl-gen` for custom code generation tooling |
 

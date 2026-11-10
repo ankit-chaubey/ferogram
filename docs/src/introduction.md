@@ -79,7 +79,13 @@ pip install ferogram
 
 ## Secret chats
 
-Secret chats (end-to-end encrypted) are fully implemented but not published to crates.io yet. The plan is to release once there is enough community demand for it.
+Secret chats (end-to-end encrypted) are supported behind the `e2e` feature, built on the separate [`ferogram-e2e`](https://crates.io/crates/ferogram-e2e) crate.
+
+```toml
+ferogram = { version = "0.6", features = ["e2e"] }
+```
+
+See [Secret Chats](./advanced/secret-chats.md) for a walkthrough.
 
 ## Voice and video calls
 

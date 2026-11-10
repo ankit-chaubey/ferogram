@@ -218,7 +218,7 @@
 //! - GitHub: [ankit-chaubey/ferogram](https://github.com/ankit-chaubey/ferogram)
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram/0.6.7-b2")]
+#![doc(html_root_url = "https://docs.rs/ferogram/0.6.7")]
 #![deny(unsafe_code)]
 #![recursion_limit = "256"]
 
@@ -268,6 +268,7 @@ pub mod typing_guard;
 #[macro_use]
 pub mod macros;
 pub mod guest_chat;
+pub mod message_link;
 pub mod peer_ext;
 pub mod peer_ref;
 pub mod poll;
@@ -337,6 +338,7 @@ pub use media::{
     Document, DocumentThumb, Downloadable, MediaQuality, Photo, PhotoThumb, ProfilePhoto,
     RawLocation, Sticker, UploadedFile, VideoQualityInfo, video_cover,
 };
+pub use message_link::{LinkPeer, MessageLink};
 pub use mini_app::{MiniApp, MiniAppSession};
 pub use participants::{Participant, ParticipantStatus, ProfilePhotoIter};
 pub use peer_cache::{ExperimentalFeatures, PeerCache, PeerCacheStats, PeerType};

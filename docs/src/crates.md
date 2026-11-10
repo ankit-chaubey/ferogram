@@ -8,6 +8,7 @@
 Your App
  └ ferogram ← high-level Client, UpdateStream, InputMessage
  ├ ferogram-session ← session persistence, DC table, backends
+ ├ ferogram-e2e ← secret chats (optional, `e2e` feature)
  ├ ferogram-parsers ← Markdown and HTML entity parsing
  ├ ferogram-mtproto ← MTProto session, DH, message framing
  │ └ ferogram-crypto ← AES-IGE, RSA, SHA, factorize
@@ -42,6 +43,22 @@ Your App
 - `TransportKind`: Abridged, Intermediate, Obfuscated
 - Error types: `InvocationError`, `RpcError`, `SignInError`, `LoginToken`, `PasswordToken`
 - Retry traits: `RetryPolicy`, `AutoSleep`, `NoRetries`, `RetryContext`
+
+---
+
+## ferogram-e2e
+
+**Secret chats (end-to-end encryption).** Optional, enabled by the `e2e` feature of `ferogram`. Versioned separately from the rest of the workspace.
+
+| Component | Usage |
+|---|---|
+| `E2eClient` | Request, accept and use secret chats; `for_session` keeps them in `<session_name>.e2e` |
+| `E2eEvent` | Chat requested / ready / discarded, incoming messages, expired messages |
+| `E2eTransport` | Trait that connects any client to the crate (implemented for `ferogram::Client`) |
+| `crypto`, `dh` | MTProto 2.0 message and file encryption, DH key exchange |
+| `tl`, `state`, `upload` | Inner secret chat TL layer, per-chat state and store, encrypted file upload |
+
+It depends only on `ferogram-crypto` and `ferogram-tl-types`, not on `ferogram`.
 
 ---
 

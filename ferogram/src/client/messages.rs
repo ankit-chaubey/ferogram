@@ -988,6 +988,43 @@ impl Client {
         self.rpc_write(&req).await
     }
 
+    /// Fetch the message a `t.me` link points at.
+    ///
+    /// Accepts `t.me/<username>/<id>`, `t.me/c/<channel_id>/<id>` and, for
+    /// forum topics, `t.me/c/<channel_id>/<topic_id>/<id>`. When the link has a
+    /// topic ID, the message must belong to that topic: the topic root itself
+    /// or a message whose reply-to-top ID (falling back to its direct reply ID)
+    /// equals the topic ID. See [`crate::message_link::message_in_topic`].
+    ///
+    /// Returns `Ok(None)` if the message doesn't exist or belongs to a
+    /// different topic, and an error if `link` isn't a message link. Private
+    /// channels must already be known to the client.
+    pub async fn get_message_by_link(
+        &self,
+        link: &str,
+    ) -> Result<Option<update::IncomingMessage>, InvocationError> {
+        let parsed = crate::MessageLink::parse(link)
+            .ok_or_else(|| InvocationError::Deserialize("not a Telegram message link".into()))?;
+
+        let msg = self
+            .get_messages(parsed.peer_ref(), &[parsed.message_id])
+            .await?
+            .into_iter()
+            .find(|m| {
+                m.id() == parsed.message_id && !matches!(m.raw, tl::enums::Message::Empty(_))
+            });
+
+        Ok(msg.filter(|m| match parsed.topic_id {
+            Some(topic) => crate::message_link::message_in_topic(
+                m.id(),
+                m.reply_to_top_message_id(),
+                m.reply_to_message_id(),
+                topic,
+            ),
+            None => true,
+        }))
+    }
+
     /// Fetch a single message by ID.
     pub async fn get_messages(
         &self,

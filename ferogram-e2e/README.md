@@ -9,7 +9,7 @@ Telegram secret chats (end-to-end encryption) for ferogram.
 
 Implements Telegram's secret chat protocol (MTProto 2.0): key exchange, message and file encryption, re-keying, and self-destruct timers. `ferogram` re-exports this as `ferogram::e2e` behind the `e2e` feature, so most people never depend on it directly. For installation instructions see the [ferogram README](https://github.com/ankit-chaubey/ferogram).
 
-> **Beta.** This crate is `0.1.0-b1`. The encryption layer has unit tests and the full flow (request, accept, send, receive) has been tried in live secret chats, but it is still young. Expect API changes before `0.1.0`.
+> **Early release.** This is the first release (`0.1.0`). The encryption layer has unit tests and the full flow (request, accept, send, receive) has been tried in live secret chats, but the crate is young. Expect API changes in `0.x` minor releases.
 
 ## What it does
 

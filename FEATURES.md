@@ -160,7 +160,7 @@ Every received message exposes:
 - `mentioned()`, `silent()`, `post()`, `pinned()`, `noforwards()`
 - `from_scheduled()`, `edit_hide()`, `media_unread()`
 - `forward_count()`, `view_count()`, `reply_count()`, `reaction_count()`
-- `reply_to_message_id()`, `reply_markup()`, `forward_header()`
+- `reply_to_message_id()`, `reply_to_top_message_id()`, `reply_markup()`, `forward_header()`
 - `via_bot_id()`, `post_author()`, `grouped_id()`
 - `media()`, `entities()`, `action()`
 - `photo()`, `document()`: typed media accessors
@@ -344,6 +344,7 @@ Peer ID helpers via `PeerExt` and `OptionPeerExt`:
 - `search_global(query)`: `GlobalSearchBuilder` for searching across all chats
 - `get_message_history(peer, ...)`: paginated message history, returns `MessagePage` (messages + count + offset_id_offset)
 - `get_messages(peer, ids)`: fetch specific messages by ID
+- `get_message_by_link(link)`: fetch the message a `t.me/<user>/<id>`, `t.me/c/<channel>/<id>` or `t.me/c/<channel>/<topic>/<id>` link points at; with a topic ID the message must belong to that topic
 - `get_replies(peer, msg_id, ...)`: fetch comments under a channel post
 - `iter_messages(peer)`: lazy iterator over message history
 
@@ -543,6 +544,20 @@ Built-in: `all`, `none`, `private`, `group`, `channel`, `text`, `media`, `photo`
 - `client.invoke(&req)`: call any TL function against the current DC
 - `client.invoke_on_dc(dc_id, &req)`: call any TL function against a specific DC
 - Full current-layer type coverage via `ferogram::tl`: `tl::types`, `tl::enums`, `tl::functions`
+
+---
+
+## Secret Chats
+
+Requires the `e2e` feature flag. Backed by the `ferogram-e2e` crate, re-exported as `ferogram::e2e`.
+
+- `E2eClient::for_session(client, "mybot.session")`: keep chats in `mybot.e2e` next to the session
+- `E2eClient::new(client)`, `E2eClient::with_persistence(client, path)`: in-memory, or an explicit store path
+- `request_secret_chat("@user")`: start a chat; the access hash comes from the peer cache
+- `handle_client_update(&update)`: feed updates, returns an `E2eEvent` (`ChatRequested`, `ChatReady`, `ChatDiscarded`, `Message`, `MessageExpired`)
+- `send_text(chat_id, text, ttl)`, `send_photo(...)`, `send_file(...)`, `download_decrypted_file(...)`
+- `emoji_fingerprint(chat_id)`: four emojis to compare out of band
+- `initiate_rekey(chat_id)`, `discard(chat_id, delete_history)`, `set_encrypted_typing(chat_id, typing)`
 
 ---
 

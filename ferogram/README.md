@@ -91,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## Examples
 
-19 runnable examples covering everything from sending a message to a full FSM order bot.
+20 runnable examples covering everything from sending a message to a full FSM order bot.
 
 See **[examples](examples/README.md)** for the full list with descriptions and notes on when to use `quick_connect` vs `Client::builder()`.
 
@@ -217,6 +217,7 @@ client.disconnect(); // immediate
 - **Session Backends**: file, in-memory, string, SQLite, LibSQL
 - **Router & Dispatcher**: composable filters (`&`, `|`, `!`) for expressive handlers
 - **FSM**: type-safe finite state machine for multi-step conversations
+- **Secret Chats**: end-to-end encrypted chats, text and media, behind the `e2e` feature
 - **Middleware**: rate limiting, tracing, panic recovery
 - **TgCalls**: group calls, P2P calls, conference calls, screen share/presentation, audio and video
 - **Raw API**: full TL coverage via `client.invoke()`
@@ -226,7 +227,23 @@ client.disconnect(); // immediate
 
 See **[features docs](../FEATURES.md)** for the full list with method signatures. If something is missing, open a feature request or suggest in [@FerogramChat](https://t.me/FerogramChat).
 
-**Secret chats** (end-to-end encrypted) are fully implemented but not published to crates.io yet. The plan is to release once there is enough community demand for it.
+## Secret chats
+
+Secret chats (end-to-end encrypted) are available behind the `e2e` feature, built on the [`ferogram-e2e`](https://crates.io/crates/ferogram-e2e) crate:
+
+```toml
+ferogram = { version = "0.6", features = ["e2e"] }
+```
+
+```rust
+use ferogram::e2e::{E2eClient, E2eClientExt};
+
+// Chats are kept in `mybot.e2e` next to the session, so they survive restarts.
+let e2e = E2eClient::for_session(client.clone(), "mybot.session")?;
+let chat_id = e2e.request_secret_chat("@username").await?;
+```
+
+Feed updates in with `e2e.handle_client_update(&update)` and send with `e2e.send_text(chat_id, "hello", 0)`. See the [`secret_chat` example](examples/README.md#secret_chatrs) and the [secret chats guide](../docs/src/advanced/secret-chats.md).
 
 ## Voice and video calls
 

@@ -91,6 +91,7 @@
 - [Experimental Features](./advanced/experimental-features.md)
 - [Upgrading TL Layer](./advanced/layer-upgrade.md)
 - [CDN Downloads](./advanced/cdn-downloads.md)
+- [Secret Chats](./advanced/secret-chats.md)
 
 ---
 

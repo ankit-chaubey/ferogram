@@ -13,7 +13,7 @@
  */
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(html_root_url = "https://docs.rs/ferogram-e2e/0.1.0-b1")]
+#![doc(html_root_url = "https://docs.rs/ferogram-e2e/0.1.0")]
 #![deny(unsafe_code)]
 
 //! Telegram secret chats (end-to-end encryption) for ferogram.
