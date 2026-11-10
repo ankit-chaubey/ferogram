@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4f2f0348.js";
+            window.path_to_searchindex_js = "searchindex-323c50a2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c3257afc.js"></script>
@@ -250,7 +250,7 @@ tokio    = { version = "1", features = ["full"] }
 <p>Secret chats (end-to-end encrypted) are supported behind the <code>e2e</code> feature, built on the separate <a href="https://crates.io/crates/ferogram-e2e"><code>ferogram-e2e</code></a> crate.</p>
 <pre><code class="language-toml">ferogram = { version = "0.6", features = ["e2e"] }
 </code></pre>
-<p>See <a href="#secret-chats-1">Secret Chats</a> for a walkthrough.</p>
+<p>See <a href="#secret-chats-2">Secret Chats</a> for a walkthrough.</p>
 <h2 id="voice-and-video-calls"><a class="header" href="#voice-and-video-calls">Voice and video calls</a></h2>
 <p>Group audio calls are fully implemented, stable, and already in active production use by the author. Written in Rust from scratch, not a wrapper around anything.</p>
 <p>Group video calls are implemented and stable for most scenarios, with some known codec edge cases still being ironed out.</p>
@@ -268,10 +268,169 @@ tokio    = { version = "1", features = ["full"] }
 <p>Usage must comply with <a href="https://core.telegram.org/api/terms">Telegram’s API Terms of Service</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="release-history"><a class="header" href="#release-history">Release History</a></h1>
-<p>ferogram started as a renamed continuation of <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0. Every release since then has been a proper source release with a tagged version and a changelog entry.</p>
+<p>ferogram is an asynchronous Rust framework for Telegram’s MTProto protocol, built to make working with Telegram easier for both bot and user accounts.</p>
+<p>Here you’ll find an overview of what’s new in each release, from new features and improvements to bug fixes and breaking changes. For a more detailed breakdown, check out the “CHANGELOG” (https://github.com/ankit-chaubey/ferogram/blob/main/CHANGELOG.md).</p>
+<hr>
+<h2 id="v067"><a class="header" href="#v067">v0.6.7</a></h2>
+<p>Released 2026-11-10. TL layer 233, Telegram secret chats, and a round of fixes for downloads, QR login and updates.</p>
+<p>All crates except <code>ferogram-e2e</code> are released as 0.6.7. <code>ferogram-e2e</code> is versioned separately and ships as 0.1.0.</p>
+<h3 id="secret-chats-1"><a class="header" href="#secret-chats-1">Secret chats</a></h3>
+<p>The new <code>e2e</code> feature adds end-to-end encrypted chats as <code>ferogram::e2e</code>, backed by the new <code>ferogram-e2e</code> crate. It covers key exchange, message and file encryption, encrypted media upload and download, re-keying, self-destruct timers and service messages. Chats are stored in <code>&lt;session_name&gt;.e2e</code> next to the session file, with atomic, checksummed writes and mode <code>0600</code> on Unix. The crate does not depend on <code>ferogram</code>, you can drive it from any client through the <code>E2eTransport</code> trait.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::e2e::{E2eClient, E2eClientExt, E2eEvent};
+
+let e2e = E2eClient::for_session(client.clone(), "mybot.session")?;
+let chat_id = e2e.request_secret_chat("@someone").await?;
+
+let mut stream = client.stream_updates();
+while let Some(update) = stream.next().await {
+    if let Ok(Some(E2eEvent::ChatReady { chat_id })) = e2e.handle_client_update(&amp;update).await {
+        e2e.send_text(chat_id, "hello", 0).await?;
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>See the <code>secret_chat</code> example and the Secret Chats page in the docs.</p>
+<h3 id="message-links"><a class="header" href="#message-links">Message links</a></h3>
+<p><code>Client::get_message_by_link(link)</code> resolves <code>t.me/&lt;username&gt;/&lt;id&gt;</code>, <code>t.me/c/&lt;channel_id&gt;/&lt;id&gt;</code> and <code>t.me/c/&lt;channel_id&gt;/&lt;topic_id&gt;/&lt;id&gt;</code>. With a topic ID, the message must be the topic root or belong to that topic. <code>IncomingMessage::reply_to_top_message_id()</code> returns the topic root or thread start from the reply header.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if let Some(msg) = client.get_message_by_link("https://t.me/c/1234567890/42").await? {
+    println!("{}", msg.text().unwrap_or_default());
+}
+<span class="boring">}</span></code></pre>
+<h3 id="tl-layer-233"><a class="header" href="#tl-layer-233">TL layer 233</a></h3>
+<p>The layer moved from 229 to 233 over the 0.6.7 betas and the final release.</p>
+<ul>
+<li><strong>230:</strong> <code>wallet.*</code> and <code>toncenter.*</code> methods, TON Connect sessions, onramp methods, <code>payments.getCurrencyRates</code>, <code>bots.addUsername</code> and <code>bots.removeUsername</code>.</li>
+<li><strong>232:</strong> share themes, no-paid-messages tokens, star gift deposit, withdraw and display methods, <code>quote_rich</code> on reply headers, <code>in_news</code> and <code>pinned_msg_id</code> on <code>channel</code>.</li>
+<li><strong>233:</strong> a widget API (<code>inputMediaWidget</code>, <code>messageMediaWidget</code>, bot widget queries and the <code>messages.*Widget*</code> functions), audio file transcription (<code>messages.transcribeAudioFile</code>, <code>messages.getTranscriptionLangs</code>), and the forum sidebar flags. <code>channels.toggleForum</code> gains a <code>sidebar</code> field. <code>Client::toggle_forum</code> sends it as <code>false</code>, so topics keep their current layout.</li>
+</ul>
+<p>New wallet, widget and forum topic updates arrive as <code>Update::Raw</code>.</p>
+<h3 id="session-file-permissions"><a class="header" href="#session-file-permissions">Session file permissions</a></h3>
+<p><code>BinaryFileBackend::owner_only(true)</code> and <code>PersistedSession::save_owner_only</code> make the session file, which holds the auth key, readable by its owner only (mode <code>0600</code> on Unix). It is off by default, so existing behavior is unchanged.</p>
+<h3 id="fixes"><a class="header" href="#fixes">Fixes</a></h3>
+<ul>
+<li><code>check_qr_login</code> always failed with <code>InvalidCode</code> because it called <code>auth.importLoginToken</code> from the new client. It now polls <code>auth.exportLoginToken</code>, and <code>export_login_token</code> accepts <code>auth.loginTokenSuccess</code> after a DC migration.</li>
+<li>Downloads picked the largest classic photo size and ignored progressive sizes, so a download could be smaller than <code>size()</code> reported. The largest size by bytes is used now, and <code>download_media</code> falls back to it for photos.</li>
+<li>Transfers retry on the regular DC address when the media-only endpoint can’t be reached, and skip that endpoint afterwards.</li>
+<li><code>RawUpdate::constructor_id</code> returned stale ids for <code>updateMessagePoll</code> and <code>updateMessagePollVote</code>.</li>
+<li>Reply headers built from sent messages in <code>ferogram-msgbox</code> keep <code>quote_rich</code>.</li>
+<li>The docs no longer claim downloads follow CDN redirects, and many method signatures and examples that had drifted from the code were corrected.</li>
+</ul>
+<h3 id="upgrading-from-066"><a class="header" href="#upgrading-from-066">Upgrading from 0.6.6</a></h3>
+<pre><code class="language-toml">ferogram = "0.6.7"
+</code></pre>
+<p>No API changes required. Enable the <code>e2e</code> feature if you want secret chats.</p>
+<hr>
+<h2 id="v066"><a class="header" href="#v066">v0.6.6</a></h2>
+<p>Released 2026-10-21. TL layer 229. Inline and reply keyboards are separate types, QR login handles 2FA and DC migration, and the DC pool only uses connections that finished setup.</p>
+<h3 id="separate-inline-and-reply-buttons"><a class="header" href="#separate-inline-and-reply-buttons">Separate inline and reply buttons</a></h3>
+<p><code>Button</code> now builds inline buttons only. Reply keyboard buttons moved to the new <code>ReplyButton</code>, exported at the crate root, and <code>ReplyKeyboard::row</code> takes <code>ReplyButton</code>. Layer 229 has no inline simple webview button, so <code>Button::mini_app_simple</code> is gone.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use ferogram::{Button, ReplyButton, ReplyKeyboard};
+
+let inline = vec![vec![Button::callback("Yes", "yes")]];
+
+let reply = ReplyKeyboard::new()
+    .row(vec![ReplyButton::text("Menu"), ReplyButton::request_phone("Share phone")]);
+<span class="boring">}</span></code></pre>
+<h3 id="qr-login"><a class="header" href="#qr-login">QR login</a></h3>
+<p><code>Client::check_qr_login</code> returns <code>SignInError</code> instead of <code>InvocationError</code>. A 2FA account gives <code>PasswordRequired</code>, an expired or invalid token gives <code>InvalidCode</code>. <code>AUTH_TOKEN_ALREADY_ACCEPTED</code> counts as a successful login, and one DC migration is followed automatically.</p>
+<h3 id="inline-results"><a class="header" href="#inline-results">Inline results</a></h3>
+<p><code>InlineResult::send</code> takes any <code>PeerRef</code> and returns <code>Option&lt;IncomingMessage&gt;</code> with the sent message when Telegram includes it.</p>
+<h3 id="more-reliable-dc-pool"><a class="header" href="#more-reliable-dc-pool">More reliable DC pool</a></h3>
+<p><code>DcPool</code> no longer opens connections by itself, it only picks slots that finished initConnection and the auth import. A slot is evicted on <code>CONNECTION_NOT_INITED</code>, so the next <code>invoke_on_dc</code> call redoes initConnection instead of failing forever. Cancelled or failed RPCs no longer leave a slot marked busy. <code>get_or_create_slot</code> is removed.</p>
+<h3 id="other-changes"><a class="header" href="#other-changes">Other changes</a></h3>
+<ul>
+<li>TL layer 229: ephemeral welcome messages and <code>EphemeralBotCallbackQuery</code>, the <code>manage_welcome_messages</code> admin right, Firebase PNV login methods and new page blocks.</li>
+<li><code>ErrorKind::FileReferenceExpired</code> is returned for <code>FILE_REFERENCE_*</code> errors, so you can refresh the reference and retry. Before, these were <code>ErrorKind::Transfer</code>.</li>
+<li>Rich HTML and Markdown parsers support a <code>compact</code> attribute for tables.</li>
+<li><code>DcConnection::auth_key_bytes</code> and <code>first_salt</code> returned the temporary PFS key and salt. They now return the permanent ones that are safe to save.</li>
+<li><code>tracing</code> no longer enables its <code>log</code> feature in the workspace crates.</li>
+</ul>
+<h3 id="breaking-changes"><a class="header" href="#breaking-changes">Breaking changes</a></h3>
+<ul>
+<li><code>Button::text</code>, <code>request_phone</code>, <code>request_geo</code>, <code>request_poll</code>, <code>request_quiz</code> and <code>mini_app_simple</code> moved to <code>ReplyButton</code>.</li>
+<li><code>check_qr_login</code> returns <code>SignInError</code>.</li>
+<li><code>InlineResult::send</code> signature changed as described above.</li>
+</ul>
+<h3 id="upgrading-from-065"><a class="header" href="#upgrading-from-065">Upgrading from 0.6.5</a></h3>
+<pre><code class="language-toml">ferogram = "0.6.6"
+</code></pre>
+<p>Move reply keyboard buttons from <code>Button</code> to <code>ReplyButton</code>, and match on <code>SignInError</code> where you call <code>check_qr_login</code>.</p>
+<hr>
+<h2 id="v065"><a class="header" href="#v065">v0.6.5</a></h2>
+<p>Released 2026-07-31. Recommended upgrade. All workspace dependencies are updated, and the release includes performance and safety work across the workspace.</p>
+<h3 id="faketls-and-crypto-fixes"><a class="header" href="#faketls-and-crypto-fixes">FakeTLS and crypto fixes</a></h3>
+<p>Several proxy bugs were fixed together:</p>
+<ul>
+<li>The FakeTLS ClientHello was a bare 4-extension hello that real proxies dropped. It now has GREASE values, <code>key_share</code> (X25519), <code>signature_algorithms</code>, ALPN and padding to about 517 bytes.</li>
+<li>FakeTLS framing was treating each TLS record as one MTProto frame. It now carries a PaddedIntermediate stream inside the decoy TLS records, the way real MTProxy does.</li>
+<li><code>decrypt_data_v2</code> rejected valid frames when the server picked a non-zero pad length with <code>dd</code> or <code>ee</code> secrets, which showed up as intermittent <code>Crypto(InvalidBuffer)</code> after a good handshake.</li>
+<li><code>MtpSender</code> silently skipped chunks when <code>cipher.try_lock()</code> failed, which permanently desynced the AES-CTR keystream. It now returns an error.</li>
+<li><code>channelDifferenceTooLong</code> no longer panics when a channel dialog has no <code>pts</code>. It logs and retries with a fresh difference.</li>
+</ul>
+<h3 id="transport-race"><a class="header" href="#transport-race">Transport race</a></h3>
+<p><code>ClientBuilder::probe_transport_race</code> takes an ordered list of <code>RaceLeg { transport, stagger }</code>. The default race is now two legs, <code>Full</code> immediately and <code>Obfuscated</code> 200 ms later. The old <code>Http</code> leg never sent HTTP frames, it fell back to <code>Abridged</code> on the same port, so it was removed.</p>
+<h3 id="dialogs"><a class="header" href="#dialogs">Dialogs</a></h3>
+<ul>
+<li><code>GetDialogsOptions</code> adds <code>exclude_pinned</code> and <code>folder_id</code>. <code>Client::get_dialogs(limit)</code> still works through <code>From&lt;i32&gt;</code>.</li>
+<li><code>DialogCursor</code> is a serializable cursor, resume with <code>Client::iter_dialogs_from()</code>.</li>
+<li><code>Client::stream_dialogs</code> returns a <code>futures::Stream</code>.</li>
+</ul>
+<h3 id="communities-and-sessions"><a class="header" href="#communities-and-sessions">Communities and sessions</a></h3>
+<p>Telegram Community chats are cached with their own access hashes and survive a session restore instead of turning into plain channels. The binary session format is now v8, older files load unchanged and upgrade on the next save. SQLite and libSQL add an <code>is_community</code> column automatically.</p>
+<h3 id="ferogram-msgbox-and-metrics"><a class="header" href="#ferogram-msgbox-and-metrics"><code>ferogram-msgbox</code> and <code>metrics</code></a></h3>
+<p><code>message_box</code> moved into its own <code>ferogram-msgbox</code> crate. <code>ferogram</code> re-exports it as <code>ferogram::message_box</code>, so existing code compiles unchanged. The optional <code>metrics</code> feature adds counters for RPC and connection events, and a no-op shim keeps the cost at zero when it is off.</p>
+<h3 id="transfer-pipelining-default"><a class="header" href="#transfer-pipelining-default">Transfer pipelining default</a></h3>
+<p><code>download_pipeline_depth</code> and <code>upload_pipeline_depth</code> now default to <code>1</code> instead of <code>4</code>. Connection count still scales with file size. Raise the depth yourself through <code>ClientBuilder</code> or <code>TransferLimits</code> if you want in-flight requests per connection.</p>
+<h3 id="upgrading-from-064"><a class="header" href="#upgrading-from-064">Upgrading from 0.6.4</a></h3>
+<pre><code class="language-toml">ferogram = "0.6.5"
+</code></pre>
+<p>No API changes required.</p>
+<hr>
+<h2 id="v064"><a class="header" href="#v064">v0.6.4</a></h2>
+<p>Released 2026-07-14. TL layer 228, tunable transfers, richer media downloads, a callback and inline query dispatcher, and a pipelined sender.</p>
+<h3 id="communities-and-ephemeral-messages"><a class="header" href="#communities-and-ephemeral-messages">Communities and ephemeral messages</a></h3>
+<p>Layer 228 adds Telegram Communities (<code>communities.*</code> methods, <code>Chat::Community</code>, <code>ChatFull::CommunityFull</code>, <code>Dialog::Community</code>) and ephemeral one-time messages (<code>ephemeral.*</code> methods, <code>EphemeralMessage</code>, <code>InputReplyTo::EphemeralMessage</code>).</p>
+<h3 id="transfer-tuning-and-pipelining"><a class="header" href="#transfer-tuning-and-pipelining">Transfer tuning and pipelining</a></h3>
+<p><code>TransferLimits</code> and <code>ClientBuilder::transfer_limits(...)</code> set how many parallel connections a transfer may open and how deep each connection’s request pipeline goes. Shorthands: <code>download_tcp_connections</code>, <code>upload_tcp_connections</code>, <code>max_tcp_connections</code>, <code>download_pipeline_depth</code>, <code>upload_pipeline_depth</code> and <code>bypass_tcp_allotments</code>. Under the hood, <code>ferogram-mtsender</code> gains <code>PipelinedSender</code> and <code>spawn_pipelined</code>, which keep several chunk requests in flight on one connection. Download chunks cap at 512 KB and uploads use a three-tier part size table.</p>
+<h3 id="more-things-you-can-download"><a class="header" href="#more-things-you-can-download">More things you can download</a></h3>
+<p><code>Downloadable</code> now covers <code>tl::enums::MessageMedia</code> (resolved through games, web pages, polls, stories and paid media), <code>ProfilePhoto</code>, specific thumbnails (<code>Photo::thumb(type)</code>, <code>Document::thumb(type)</code>), <code>RawLocation</code>, video cover photos through <code>video_cover(media)</code>, and quality selection with <code>MediaQuality</code> and <code>available_qualities(media)</code>. <code>Client::download_file</code> works with any <code>D: Downloadable</code>.</p>
+<h3 id="dispatcher-for-callbacks-and-inline-queries"><a class="header" href="#dispatcher-for-callbacks-and-inline-queries">Dispatcher for callbacks and inline queries</a></h3>
+<p><code>Router::on_callback_query</code>, <code>on_inline_query</code>, <code>on_inline_send</code> and <code>on_callback_query_fsm</code> route those updates next to messages. <code>Filter</code> is generic over the update type, so the same <code>&amp;</code>, <code>|</code> and <code>!</code> combinators work on <code>CallbackQuery</code> and <code>InlineQuery</code>.</p>
+<h3 id="login"><a class="header" href="#login">Login</a></h3>
+<p><code>request_login_code_with_options</code>, <code>resend_code</code> and <code>SendCodeOptions</code> cover flash call, missed call and Firebase delivery. <code>sign_out()</code> keeps the <code>future_auth_token</code> Telegram returns and replays it on the next <code>request_login_code</code>, so a re-login can skip code entry. In that case you get <code>SendCodeOutcome::AlreadyAuthorized</code>. <code>Client::interactive_sign_in</code> is now public.</p>
+<h3 id="smaller-additions"><a class="header" href="#smaller-additions">Smaller additions</a></h3>
+<ul>
+<li><code>BannedRightsBuilder</code> for granular channel ban rights. <code>ban</code>, <code>kick</code> and <code>restrict</code> all share one implementation built on it.</li>
+<li><code>Client::get_chat_photos(peer, limit)</code> returns photo history for groups and channels.</li>
+<li><code>Client::cache_entities(users, chats)</code> feeds users and chats from a raw RPC call into the peer cache.</li>
+<li><code>ClientBuilder::dc_id_override(dc_id)</code> registers a connection under a custom DC id.</li>
+<li><code>PeerCache::stats()</code>, <code>PersistedSession::stats()</code>, <code>UserFull</code> and <code>MessagePage</code> helpers.</li>
+<li>Session saves and snapshot flushes run on <code>spawn_blocking</code>, so SQLite and file writes no longer stall async tasks.</li>
+</ul>
+<h3 id="fixes-1"><a class="header" href="#fixes-1">Fixes</a></h3>
+<ul>
+<li>The dc-tagged <code>p_q_inner_data</code> is no longer sent on normal connects. Telegram rejects it with RPC 444 outside DC2.</li>
+<li>Reconnect keeps a still-valid auth key on timeout, and clears a rejected one (RPC 401, <code>AUTH_KEY_UNREGISTERED</code>) before retrying with fresh DH.</li>
+<li><code>get_chat_participants</code> returns a clear error for <code>ChatFull::CommunityFull</code>.</li>
+<li><code>#[derive(FsmState)]</code> match-arm codegen and crate path resolution.</li>
+</ul>
+<h3 id="breaking-changes-1"><a class="header" href="#breaking-changes-1">Breaking changes</a></h3>
+<ul>
+<li><code>request_login_code</code> and <code>resend_code</code> return <code>SendCodeOutcome</code> instead of <code>LoginToken</code>. Match on <code>SendCodeOutcome::CodeRequired(token)</code> to get the old value.</li>
+<li><code>media::download_worker_count</code> and <code>upload_worker_count</code> take an extra <code>max_workers: usize</code>.</li>
+</ul>
+<h3 id="upgrading-from-063"><a class="header" href="#upgrading-from-063">Upgrading from 0.6.3</a></h3>
+<pre><code class="language-toml">ferogram = "0.6.4"
+</code></pre>
+<p>Update the <code>request_login_code</code> call sites to match on <code>SendCodeOutcome</code>.</p>
 <hr>
 <h2 id="v063"><a class="header" href="#v063">v0.6.3</a></h2>
-<p>Released 2026-05-29. Transfer progress tracking, resumable transfers, and typed errors.</p>
+<p>Released 2026-06-28. Transfer progress tracking, resumable transfers, and typed errors.</p>
 <h3 id="transfer-progress-and-control"><a class="header" href="#transfer-progress-and-control">Transfer progress and control</a></h3>
 <p><code>TransferHandle</code> and <code>TransferProgress</code> let you track, pause, resume, or cancel any upload or download. Pass a handle as the last argument to <code>upload_file</code>, <code>upload</code>, <code>download</code>, or <code>download_file</code>. Pass <code>None</code> to keep old behavior.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -304,16 +463,40 @@ match result {
 <p><code>UploadedFile::as_auto_media()</code> picks the right Telegram media type from MIME (photo, video, audio, voice, animation, or document). <code>UploadedFile</code> now implements <code>Into&lt;InputMedia&gt;</code> so you can pass it directly to <code>send_file</code>.</p>
 <h3 id="resumable-transfers-experimental"><a class="header" href="#resumable-transfers-experimental">Resumable transfers (experimental)</a></h3>
 <p><code>download_resumable</code> and <code>upload_resumable</code> are available under <code>features = ["experimental"]</code>. Interrupted transfers save a checkpoint JSON and a <code>.partial</code> bytes file to a directory you specify. On the next call with the same media the download picks up from the saved offset. Checkpoint files are deleted on success.</p>
-<h3 id="breaking-changes"><a class="header" href="#breaking-changes">Breaking changes</a></h3>
+<h3 id="breaking-changes-2"><a class="header" href="#breaking-changes-2">Breaking changes</a></h3>
 <ul>
 <li><code>upload_file_from_path</code> renamed to <code>upload_file</code>.</li>
 <li><code>upload_file</code>, <code>upload</code>, <code>download</code>, <code>download_file</code> all take <code>handle: Option&lt;&amp;TransferHandle&gt;</code> as a new last param.</li>
 <li><code>send_file</code> now takes <code>impl Into&lt;InputMedia&gt;</code> instead of <code>InputMedia</code> directly.</li>
 </ul>
 <h3 id="upgrading-from-052"><a class="header" href="#upgrading-from-052">Upgrading from 0.5.2</a></h3>
-<pre><code class="language-toml">ferogram = "0.6.4"
+<pre><code class="language-toml">ferogram = "0.6.3"
 </code></pre>
 <p>Rename <code>upload_file_from_path</code> call sites to <code>upload_file</code>. Add <code>None</code> as the last argument to all upload and download calls.</p>
+<hr>
+<h2 id="v062"><a class="header" href="#v062">v0.6.2</a></h2>
+<p>Released 2026-06-24. Transport, reconnect and update synchronization stabilization.</p>
+<h3 id="pagination"><a class="header" href="#pagination">Pagination</a></h3>
+<p><code>Client::get_message_history</code> and <code>Client::get_replies</code> take an extra <code>add_offset: i32</code> for offset-based pagination. Pass <code>0</code> for the previous behavior.</p>
+<h3 id="reconnect-and-transport"><a class="header" href="#reconnect-and-transport">Reconnect and transport</a></h3>
+<p>Frame parsing and validation in Full transport mode was fixed, along with transport desyncs that caused CRC mismatches. Reconnect handling after network interruptions and auth-key reuse is more reliable, and several cases that left a client disconnected after connectivity returned are gone. Update gap recovery and account and channel difference scheduling were fixed too. Ownership boundaries between <code>ferogram</code>, <code>ferogram-connect</code>, <code>ferogram-mtsender</code>, <code>ferogram-session</code> and <code>ferogram-parsers</code> were cleaned up.</p>
+<h3 id="diagnostics"><a class="header" href="#diagnostics">Diagnostics</a></h3>
+<p>Logs now carry connection generation, reader lifecycle and session identity (<code>[conn_gen=X]</code>, <code>[reader#N]</code>, <code>[sid=...]</code>), plus frame-level transport tracing for sequence tracking and CRC validation.</p>
+<h3 id="upgrading-from-060"><a class="header" href="#upgrading-from-060">Upgrading from 0.6.0</a></h3>
+<pre><code class="language-toml">ferogram = "0.6.2"
+</code></pre>
+<p>Add <code>0</code> as the <code>add_offset</code> argument to <code>get_message_history</code> and <code>get_replies</code> calls.</p>
+<hr>
+<h2 id="v060"><a class="header" href="#v060">v0.6.0</a></h2>
+<p>Released 2026-06-01. Transfer progress and control, typed errors, and resumable transfers. The 0.6.3 section below covers the same APIs with examples.</p>
+<ul>
+<li><code>TransferHandle</code> and <code>TransferProgress</code> for progress, pause, resume and cancel.</li>
+<li><code>InvocationErrorExt</code> with <code>.kind()</code> and <code>.friendly()</code>.</li>
+<li><code>UploadedFile::as_auto_media()</code> and <code>From&lt;UploadedFile&gt; for InputMedia</code>.</li>
+<li><code>download_resumable</code> and <code>upload_resumable</code> under the <code>experimental</code> feature.</li>
+<li>Fixed: <code>download_resumable</code> ignored its saved offset and restarted from byte 0, and compared a partial SHA-256 against the final file. Interrupted downloads now flush to a <code>.partial</code> file that survives a restart.</li>
+<li>Breaking: <code>upload_file_from_path</code> is now <code>upload_file</code>, upload and download calls take a <code>handle: Option&lt;&amp;TransferHandle&gt;</code> last argument, and <code>send_file</code> takes <code>impl Into&lt;InputMedia&gt;</code>.</li>
+</ul>
 <hr>
 <h2 id="v052"><a class="header" href="#v052">v0.5.2</a></h2>
 <p>Released 2026-05-31. Channel kind tracking and session format v6.</p>
@@ -351,7 +534,7 @@ match msg.channel_kind().await {
 <hr>
 <h2 id="v050"><a class="header" href="#v050">v0.5.0</a></h2>
 <p>Released 2026-05-16. API consolidation release. Paired functions that differed only by a single boolean condition have been merged into one. Download and upload paths were redesigned around <code>AsyncRead</code>/<code>AsyncWrite</code>. No new protocol or behavioural changes.</p>
-<h3 id="breaking-changes-1"><a class="header" href="#breaking-changes-1">Breaking changes</a></h3>
+<h3 id="breaking-changes-3"><a class="header" href="#breaking-changes-3">Breaking changes</a></h3>
 <p><strong>Merged paired functions into one</strong></p>
 <div class="table-wrapper">
 <table>
@@ -607,7 +790,7 @@ let chat   = msg.peer_id().bare_id();   // Option&lt;i64&gt;
     })
     .connect().await?;
 <span class="boring">}</span></code></pre>
-<h3 id="breaking-changes-2"><a class="header" href="#breaking-changes-2">Breaking changes</a></h3>
+<h3 id="breaking-changes-4"><a class="header" href="#breaking-changes-4">Breaking changes</a></h3>
 <p><strong><code>download_media_to_file</code> is now <code>download_file</code>:</strong></p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -801,7 +984,7 @@ See <a href="#peer-cache-helpers">Raw API Access</a> for usage details.</p>
 <p>FakeTLS transport now prepends the Change Cipher Spec record to the first application data chunk, matching the TLS handshake pattern Telegram expects. Transport errors <code>-429</code> and <code>-444</code> are now logged clearly before reconnecting rather than failing silently.</p>
 <hr>
 <h2 id="v010"><a class="header" href="#v010">v0.1.0</a></h2>
-<p>Released 2026-04-11. The initial release of ferogram, renamed and rebranded from <a href="https://github.com/ankit-chaubey/layer">layer</a> v0.5.0.</p>
+<p>Released 2026-04-11. The initial release of ferogram.</p>
 <h3 id="proxy-and-transport"><a class="header" href="#proxy-and-transport">Proxy and transport</a></h3>
 <p>Full MTProxy support via <code>t.me/proxy</code> or <code>tg://proxy</code> links, or manually with host, port, and secret. PaddedIntermediate transport (<code>0xDD</code> secrets) adds randomized padding to blend in with official Telegram client traffic. FakeTLS transport (<code>0xEE</code> secrets) wraps MTProto in TLS-like framing. SOCKS5 proxy with optional username and password. IPv6 connectivity for both Telegram DCs and proxy connections.</p>
 <h3 id="session-backends"><a class="header" href="#session-backends">Session backends</a></h3>
@@ -1301,7 +1484,7 @@ non-interactive auth or more control.</p>
 <li>Follow the prompts to choose a name and username</li>
 <li>BotFather gives you a token like: <code>1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ</code></li>
 </ol>
-<h2 id="login"><a class="header" href="#login">Login</a></h2>
+<h2 id="login-1"><a class="header" href="#login-1">Login</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>client.bot_sign_in("1234567890:ABCdef...").await?;
@@ -8580,7 +8763,7 @@ let from_alice = client
     .fetch(&amp;client)
     .await?;
 <span class="boring">}</span></code></pre>
-<h3 id="pagination"><a class="header" href="#pagination">Pagination</a></h3>
+<h3 id="pagination-1"><a class="header" href="#pagination-1">Pagination</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let mut offset_id = 0;
@@ -12220,7 +12403,7 @@ let bytes = cdn.download_all(Some(total_size)).await?;
 println!("Downloaded {} bytes", bytes.len());
 <span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="secret-chats-1"><a class="header" href="#secret-chats-1">Secret Chats</a></h1>
+<h1 id="secret-chats-2"><a class="header" href="#secret-chats-2">Secret Chats</a></h1>
 <p>Secret chats are end-to-end encrypted one-to-one chats (MTProto 2.0). They are available behind the <code>e2e</code> feature, which pulls in the <a href="https://crates.io/crates/ferogram-e2e"><code>ferogram-e2e</code></a> crate and exposes it as <code>ferogram::e2e</code>.</p>
 <pre><code class="language-toml">ferogram = { version = "0.6", features = ["e2e"] }
 </code></pre>
