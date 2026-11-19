@@ -42,6 +42,48 @@ TransportKind::PaddedIntermediate { secret: Some(key) }
 TransportKind::FakeTls { secret: key, domain: "...".into() }
 ```
 
+## Direct address-family fallback
+
+Direct connections to recognized production Telegram addresses on port 443
+(DCs 1-5) try the supplied address first until a successful route is learned.
+An I/O failure or a four-second reachability timeout tries the opposite IP
+family of the same DC once. Both failures are returned if neither route works;
+protocol/auth rejections propagate without an address retry.
+
+Reachability requires an unauthenticated, nonce-matched `req_pq_multi` / `resPQ`
+exchange, since TCP acceptance alone does not detect networks that reset the
+first MTProto packet. The established stream keeps its framing state, and cached
+auth keys are preserved. Every eligible new socket pays one extra round trip;
+the four-second deadline is per attempt, not an end-to-end login deadline.
+
+One atomic, process-wide hint remembers the last successful address family for
+fresh connections, migration, media sockets and reconnects. If the preferred
+family fails and the other succeeds, the preference switches back. It resets on
+process restart, is shared across clients and DCs, and is never persisted in a
+session. Concurrent attempts snapshot the hint independently; the last
+successful probe to store its result wins. Login-code/password failures do not
+change it, and no login requests are replayed by this policy.
+
+SOCKS5 and MTProxy bypass this policy. Custom endpoints, non-443 ports, test DCs
+and CDN DC IDs outside 1-5 are not redirected and do not teach the preference.
+The built-in alternate endpoints are bootstrap routes, not a replacement for
+Telegram's dynamic config. Numeric IPv6 endpoints accept both bracketed and
+unbracketed config forms.
+
+Offline tests use injected dial results and isolated preferences:
+
+```sh
+cargo test -p ferogram-connect --lib
+```
+
+An ignored, opt-in test exercises live DC2/DC5 fresh DH, cached-key preservation,
+and the sender/pool entry point. It uses only temporary in-memory keys, with no
+account login or disk sessions:
+
+```sh
+cargo test -p ferogram-connect live_production_routes -- --ignored --nocapture
+```
+
 ## MTProxy
 
 ```rust
