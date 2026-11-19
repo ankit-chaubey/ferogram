@@ -696,6 +696,28 @@ impl Dispatcher {
         self.fsm_callback_query.extend(flat.fsm_callback_query);
     }
 
+    /// Chaining dispatcher instances.
+    /// Within bot client for example:
+    /// fn dispatcher(&self) -> Dispatcher {
+    ///    Dispatcher::new()
+    ///        .with(self.handle_command())
+    ///        .with(self.handle_message())
+    ///        .with(self.handle_callback())
+    /// }
+    ///
+    /// instead of this:
+    /// fn dispatcher(&self) -> Dispatcher {
+    ///        let mut dispatcher = Dispatcher::new();
+    ///        dispatcher.include(self.handle_command());
+    ///        dispatcher.include(self.handle_message());
+    ///        dispatcher.include(self.handle_callback());
+    ///        dispatcher
+    ///    }
+    pub fn with(mut self, router: Router) -> Self {
+        self.include(router);
+        self
+    }
+
     /// Dispatch a single update through the middleware chain and into every
     /// matching handler (in registration order).
     pub async fn dispatch(&self, update: Update) {
