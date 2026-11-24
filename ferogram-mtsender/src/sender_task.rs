@@ -146,7 +146,7 @@ async fn sender_loop(
 
             // Reconnect request: swap the stream.
             Some(req) = reconnect_rx.recv() => {
-                tracing::info!("[ferogram::sender] reconnect: new stream received, swapping");
+                tracing::debug!("[ferogram::sender] reconnect: new stream received, swapping");
                 sender.set_stream(req.stream, req.enc, req.frame_kind, req.perm_auth_key);
                 let _ = frame_tx
                     .send(FrameEvent::Connected {
@@ -181,7 +181,7 @@ async fn sender_loop(
                         // Wait for a reconnect before driving step() again.
                         match reconnect_rx.recv().await {
                             Some(req) => {
-                                tracing::info!("[ferogram::sender] reconnect received, resuming send loop");
+                                tracing::debug!("[ferogram::sender] reconnect received, resuming send loop");
                                 sender.set_stream(
                                     req.stream,
                                     req.enc,

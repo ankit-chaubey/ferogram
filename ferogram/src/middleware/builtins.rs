@@ -253,7 +253,7 @@ impl Middleware for PanicRecoveryMiddleware {
                     Err(DispatchError::msg(format!("handler panicked: {msg}")))
                 }
                 Err(join_error) => {
-                    tracing::warn!("[ferogram::dispatch] dispatch task cancelled during shutdown");
+                    tracing::debug!("[ferogram::dispatch] dispatch task cancelled during shutdown");
                     Err(DispatchError::msg(format!(
                         "dispatch task cancelled: {join_error}"
                     )))

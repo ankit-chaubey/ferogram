@@ -212,7 +212,7 @@ impl Client {
             match tokio::fs::read(&partial_path).await {
                 Ok(bytes) if !bytes.is_empty() => {
                     let restored = bytes.len() as i64;
-                    tracing::info!(
+                    tracing::debug!(
                         target: "ferogram::transfer",
                         offset = restored,
                         "download: checkpoint found, restoring partial bytes",
@@ -224,7 +224,7 @@ impl Client {
                 }
                 _ => {
                     // Partial file missing or empty; discard checkpoint and restart.
-                    tracing::info!(
+                    tracing::debug!(
                         target: "ferogram::transfer",
                         "download: checkpoint found but partial file missing, restarting",
                     );
@@ -285,7 +285,7 @@ impl Client {
 
                 // SHA-256 of the complete assembled file.
                 let hash = sha256_hex(dest);
-                tracing::info!(
+                tracing::debug!(
                     target: "ferogram::transfer",
                     sha256 = %hash,
                     bytes = n,
@@ -321,7 +321,7 @@ impl Client {
                     sha256_partial: String::new(),
                 };
                 store.save_download(&cp).await;
-                tracing::info!(
+                tracing::debug!(
                     target: "ferogram::transfer",
                     offset = offset_now,
                     "download interrupted, checkpoint saved",
@@ -504,7 +504,7 @@ impl Client {
                                 .unwrap_or_else(now_ms),
                         };
                         store.save_upload(&cp).await;
-                        tracing::info!(
+                        tracing::debug!(
                             target: "ferogram::transfer",
                             part = last_good_part,
                             "upload interrupted, checkpoint saved",
@@ -542,7 +542,7 @@ impl Client {
 
         let inner = crate::media::to_input_file(big, file_id, total_parts, name, &data);
         store.delete_upload(&key).await;
-        tracing::info!(target: "ferogram::transfer", name, total_parts, "upload complete; checkpoint purged");
+        tracing::debug!(target: "ferogram::transfer", name, total_parts, "upload complete; checkpoint purged");
 
         Ok(media::UploadedFile::new(
             inner,
@@ -682,7 +682,7 @@ impl Client {
             })
         };
 
-        tracing::info!(
+        tracing::debug!(
             target: "ferogram::transfer",
             name,
             bytes = total,

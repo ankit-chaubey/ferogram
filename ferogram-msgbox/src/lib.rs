@@ -763,7 +763,7 @@ impl MessageBoxes {
                 })
             }
             tl::enums::updates::Difference::TooLong(d) => {
-                tracing::warn!(
+                tracing::info!(
                     "[ferogram::msgbox] getDifference returned TooLong (pts={}); resetting to server pts",
                     d.pts
                 );
