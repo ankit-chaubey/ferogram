@@ -50,6 +50,7 @@ impl Client {
         let raw = match tl::enums::messages::Dialogs::from_bytes_exact(&body)? {
             tl::enums::messages::Dialogs::Dialogs(d) => d,
             tl::enums::messages::Dialogs::Slice(d) => tl::types::messages::Dialogs {
+                topics: d.topics,
                 dialogs: d.dialogs,
                 messages: d.messages,
                 chats: d.chats,

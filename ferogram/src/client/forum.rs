@@ -42,6 +42,8 @@ impl Client {
         let req = tl::functions::messages::GetForumTopics {
             peer: input_peer,
             q: query,
+            icon_emoji_id: None,
+            closed: None,
             offset_date,
             offset_id,
             offset_topic,

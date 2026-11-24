@@ -740,6 +740,7 @@ impl MessageBoxes {
                 self.apply_difference_type(d)
             }
             tl::enums::updates::Difference::Slice(tl::types::updates::DifferenceSlice {
+                topics,
                 new_messages,
                 new_encrypted_messages,
                 other_updates,
@@ -752,6 +753,7 @@ impl MessageBoxes {
                 );
                 finish = false;
                 self.apply_difference_type(tl::types::updates::Difference {
+                    topics,
                     new_messages,
                     new_encrypted_messages,
                     other_updates,
@@ -782,6 +784,7 @@ impl MessageBoxes {
     fn apply_difference_type(
         &mut self,
         tl::types::updates::Difference {
+            topics: _,
             new_messages,
             new_encrypted_messages,
             other_updates: updates,
@@ -868,6 +871,7 @@ impl MessageBoxes {
             r#final,
             pts,
             timeout,
+            topics: _,
             new_messages,
             other_updates: updates,
             chats,

@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- TL layer bumped to 234.
+- The `Update` constructor ID table uses the new ID of `updateChannelTooLong`, which gained `last_msg_id` and `last_msg_date`.
+- `Client::get_forum_topics` sends the new `icon_emoji_id` and `closed` filters of `messages.getForumTopics` as `None`, so results are unfiltered as before.
+- `topics` returned inside `updates.difference`, `updates.differenceSlice`, `updates.channelDifference` and `messages.dialogs` responses is accepted and not processed yet.
+
+### Schema (layer 234)
+
+- AI compose: `aicompose.setChatStyle`, `inputAiComposeStyle`, and an `ai_style` field on `draftMessage` and `draftMessageEmpty`.
+- Onchain star gifts: `payments.buyStarGiftOnchain`, `sendStarGiftOnchainOffer`, `acceptStarGiftOnchainOffer`, `declineStarGiftOnchainOffer`, `cancelStarGiftOnchainOffer`, `cancelStarGiftOnchainSale`, `updateStarGiftOnchainPrice`, `payments.withdrawStarsRevenueToWallet`, `messageActionStarGiftOnchainOffer` and the `walletOnchainGiftAction*` types. `starGiftUnique` gains sale flags and `payments.getResaleStarGifts` gains `ton_only` and `fragment_only`.
+- Transcription models: `messages.getTranscriptionModels` and `transcriptionModel`.
+- Bots: `messages.inviteUsersToBot`, `messageActionBotInvite`, and `bot_inviter_id` and `bot_owner_id` on `peerSettings`.
+- Forums: `icon_emoji_id` and `closed` filters on `messages.getForumTopics`, `top_icons` on `messages.forumTopics`, and `topics` on dialog and difference responses.
+- Smaller: `notify_settings` on `communityFull`, `fpnv_allowed` on `config`, `collapsed` on `pageBlockBlockquoteBlocks`, `onramp_provider_name` on `messageActionGramTransfer`, `suspected_spam` on `walletTransaction`.
+
 ---
 
 ## [0.6.7] - 2026-11-10

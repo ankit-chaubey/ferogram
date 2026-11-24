@@ -150,7 +150,7 @@ use ferogram_tl_types::LAYER;
 
 fn main() {
     println!("Using Telegram API Layer {}", LAYER);
-    // → Using Telegram API Layer 233
+    // → Using Telegram API Layer 234
 }
 ```
 

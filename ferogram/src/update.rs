@@ -2222,7 +2222,7 @@ fn tl_constructor_id(upd: &tl::enums::Update) -> u32 {
         ChannelMessageViews(_) => 0xf226ac08,
         ChannelParticipant(_) => 0x985d3abb,
         ChannelReadMessagesContents(_) => 0x25f324f7,
-        ChannelTooLong(_) => 0x108d941f,
+        ChannelTooLong(_) => 0xf4e4e5a,
         ChannelUserTyping(_) => 0x8c88c923,
         ChannelViewForumAsMessages(_) => 0x7b68920,
         ChannelWebPage(_) => 0x2f2ba99f,
