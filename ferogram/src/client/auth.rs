@@ -72,6 +72,9 @@ impl Client {
         self.inner
             .signed_in
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.inner
+            .welcomed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let _ = self.sync_pts_state().await;
         Ok(name)
     }
@@ -246,6 +249,9 @@ impl Client {
                         self.inner
                             .signed_in
                             .store(true, std::sync::atomic::Ordering::SeqCst);
+                        self.inner
+                            .welcomed
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
                         let _ = self.sync_pts_state().await;
                         Ok(SendCodeOutcome::AlreadyAuthorized(name))
                     }
@@ -297,6 +303,9 @@ impl Client {
                 tracing::info!("[ferogram::auth] signed in: welcome, {name}");
                 self.inner
                     .signed_in
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                self.inner
+                    .welcomed
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 let _ = self.sync_pts_state().await;
                 Ok(name)
@@ -353,6 +362,9 @@ impl Client {
                 tracing::info!("[ferogram::auth] 2FA verified; signed in: welcome, {name}");
                 self.inner
                     .signed_in
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                self.inner
+                    .welcomed
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 let _ = self.sync_pts_state().await;
                 Ok(name)
@@ -558,7 +570,7 @@ impl Client {
         }
     }
 
-    fn extract_user_name(user: &tl::enums::User) -> String {
+    pub(crate) fn extract_user_name(user: &tl::enums::User) -> String {
         match user {
             tl::enums::User::User(u) => format!(
                 "{} {}",
@@ -619,6 +631,9 @@ impl Client {
                     Self::extract_user_name(&a.user);
                     self.inner
                         .signed_in
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.inner
+                        .welcomed
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                     let _ = self.sync_pts_state().await;
                 }
@@ -699,11 +714,14 @@ impl Client {
                 // poll after a dropped response, or a second concurrent
                 // poll). The account is authorized on this connection now,
                 // so fetch the identity instead of erroring the caller.
-                tracing::info!("[ferogram::auth] QR token already accepted; fetching identity");
+                tracing::debug!("[ferogram::auth] QR token already accepted; fetching identity");
                 let me = self.get_me().await?;
                 let name = Self::extract_user_name(&tl::enums::User::User(me));
                 self.inner
                     .signed_in
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                self.inner
+                    .welcomed
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 let _ = self.sync_pts_state().await;
                 Ok(ImportOutcome::Done(name))
@@ -739,6 +757,9 @@ impl Client {
                     );
                     self.inner
                         .signed_in
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.inner
+                        .welcomed
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                     let _ = self.sync_pts_state().await;
                     Ok(LoginTokenOutcome::Done(Some(name)))

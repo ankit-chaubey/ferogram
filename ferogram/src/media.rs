@@ -1585,7 +1585,7 @@ impl Client {
         }
 
         let inner = to_input_file(big, file_id, total_parts, name, data);
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] upload complete: '{}' ({} bytes, {}B parts x {}, mime={})",
             name,
             total,
@@ -1634,7 +1634,7 @@ impl Client {
         let home_dc = *self.inner.home_dc_id.lock().await;
         let started = std::time::Instant::now();
         let total_mib = total as f64 / (1024.0 * 1024.0);
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] upload starting: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections)",
             name,
             total_mib,
@@ -1685,13 +1685,13 @@ impl Client {
             match res {
                 Ok(Ok(c)) => conns.push(c),
                 Ok(Err(e)) => {
-                    tracing::debug!("[ferogram::transfer] upload worker connection failed: {e}")
+                    tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] upload worker connection failed: {e}")
                 }
-                Err(e) => tracing::debug!("[ferogram::transfer] upload worker task panicked: {e}"),
+                Err(e) => tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] upload worker task panicked: {e}"),
             }
         }
         if conns.is_empty() {
-            tracing::debug!(
+            tracing::debug!(target: "ferogram::transfer",
                 "[ferogram::transfer] no worker connections available; uploading sequentially"
             );
             return self
@@ -1787,7 +1787,7 @@ impl Client {
                             // FLOOD_WAIT: sleep, retry same conn.
                             if rpc.code == 420 {
                                 let secs = rpc.value.unwrap_or(1) as u64;
-                                tracing::debug!("[ferogram::transfer] upload throttled by FLOOD_WAIT_{secs}; sleeping before retry"
+                                tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] upload throttled by FLOOD_WAIT_{secs}; sleeping before retry"
                                 );
                                 tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
                                 continue;
@@ -1795,7 +1795,7 @@ impl Client {
                             // FILE_MIGRATE: server redirected upload to a different DC.
                             if rpc.code == 303 {
                                 let new_dc = rpc.value.unwrap_or(1) as i32;
-                                tracing::debug!("[ferogram::transfer] upload redirected by FILE_MIGRATE to DC{new_dc} (was DC{worker_dc})"
+                                tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] upload redirected by FILE_MIGRATE to DC{new_dc} (was DC{worker_dc})"
                                 );
                                 // On FILE_MIGRATE, use a NEW file_id on
                                 // the new DC. The original DC's partial upload is abandoned.
@@ -1827,7 +1827,7 @@ impl Client {
                             }
                             // AUTH_KEY_UNREGISTERED: reopen with fresh DH + importAuth.
                             if rpc.name == "AUTH_KEY_UNREGISTERED" {
-                                tracing::warn!(
+                                tracing::warn!(target: "ferogram::transfer",
                                     "[ferogram::transfer] upload: AUTH_KEY_UNREGISTERED on DC{worker_dc}; re-establishing worker connection (attempt {}/{MAX_WORKER_RECONNECTS})",
                                     total_reconnects + 1
                                 );
@@ -1857,7 +1857,7 @@ impl Client {
                             return Err(err);
                         }
                         let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
-                        tracing::warn!(
+                        tracing::warn!(target: "ferogram::transfer",
                             "[ferogram::transfer] upload worker error ({err}); reconnecting (attempt {total_reconnects}/{MAX_WORKER_RECONNECTS}, backoff {backoff_ms}ms)"
                         );
                         tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
@@ -1882,7 +1882,7 @@ impl Client {
 
         let file_id = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
         let inner = to_input_file(big, file_id, total_parts, name, &data);
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] upload complete: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, took {:.2}s)",
             name,
             total_mib,
@@ -1943,7 +1943,7 @@ impl Client {
         let home_dc = *self.inner.home_dc_id.lock().await;
         let started = std::time::Instant::now();
         let total_mib = total as f64 / (1024.0 * 1024.0);
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] pipelined upload starting: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, X={} in-flight)",
             name,
             total_mib,
@@ -1991,16 +1991,16 @@ impl Client {
         while let Some(res) = open_set.join_next().await {
             match res {
                 Ok(Ok(s)) => senders.push(s),
-                Ok(Err(e)) => tracing::debug!(
+                Ok(Err(e)) => tracing::debug!(target: "ferogram::transfer",
                     "[ferogram::transfer] pipelined upload worker connection failed: {e}"
                 ),
-                Err(e) => tracing::debug!(
+                Err(e) => tracing::debug!(target: "ferogram::transfer",
                     "[ferogram::transfer] pipelined upload worker task panicked: {e}"
                 ),
             }
         }
         if senders.is_empty() {
-            tracing::debug!(
+            tracing::debug!(target: "ferogram::transfer",
                 "[ferogram::transfer] no pipelined worker connections available; falling back to non-pipelined concurrent upload"
             );
             drop(_global_guard);
@@ -2093,7 +2093,7 @@ impl Client {
                                 window.push_back((part_num, chunk_len, Box::pin(fut)))
                             }
                             Err(e) => {
-                                tracing::debug!(
+                                tracing::debug!(target: "ferogram::transfer",
                                     "[ferogram::transfer] pipelined upload enqueue failed, reconnecting: {e}"
                                 );
                                 total_reconnects += 1;
@@ -2144,7 +2144,7 @@ impl Client {
                     if let InvocationError::Rpc(ref rpc) = err {
                         if rpc.code == 420 {
                             let secs = rpc.value.unwrap_or(1) as u64;
-                            tracing::debug!(
+                            tracing::debug!(target: "ferogram::transfer",
                                 "[ferogram::transfer] pipelined upload throttled by FLOOD_WAIT_{secs}; sleeping before retry"
                             );
                             tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
@@ -2179,7 +2179,7 @@ impl Client {
                         }
                         if rpc.code == 303 {
                             let new_dc = rpc.value.unwrap_or(1) as i32;
-                            tracing::debug!(
+                            tracing::debug!(target: "ferogram::transfer",
                                 "[ferogram::transfer] pipelined upload redirected by FILE_MIGRATE to DC{new_dc} (was DC{worker_dc})"
                             );
                             {
@@ -2200,7 +2200,7 @@ impl Client {
                             continue;
                         }
                         if rpc.name == "AUTH_KEY_UNREGISTERED" {
-                            tracing::warn!(
+                            tracing::warn!(target: "ferogram::transfer",
                                 "[ferogram::transfer] pipelined upload: AUTH_KEY_UNREGISTERED on DC{worker_dc}; re-establishing worker connection (attempt {}/{MAX_WORKER_RECONNECTS})",
                                 total_reconnects + 1
                             );
@@ -2236,7 +2236,7 @@ impl Client {
                         return Err(err);
                     }
                     let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
-                    tracing::warn!(
+                    tracing::warn!(target: "ferogram::transfer",
                         "[ferogram::transfer] pipelined upload worker error ({err}); reconnecting (attempt {total_reconnects}/{MAX_WORKER_RECONNECTS}, backoff {backoff_ms}ms)"
                     );
                     tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
@@ -2270,7 +2270,7 @@ impl Client {
 
         let file_id = file_id_atomic.load(std::sync::atomic::Ordering::Relaxed);
         let inner = to_input_file(big, file_id, total_parts, name, &data);
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] pipelined upload complete: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, X={} in-flight, took {:.2}s)",
             name,
             total_mib,
@@ -2324,7 +2324,7 @@ impl Client {
         let home_dc = *self.inner.home_dc_id.lock().await;
         let started = std::time::Instant::now();
         let total_mib = total as f64 / (1024.0 * 1024.0);
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] upload starting: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, streaming)",
             name,
             total_mib,
@@ -2364,13 +2364,13 @@ impl Client {
             match res {
                 Ok(Ok(c)) => conns.push(c),
                 Ok(Err(e)) => {
-                    tracing::debug!("[ferogram::transfer] upload worker connection failed: {e}")
+                    tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] upload worker connection failed: {e}")
                 }
-                Err(e) => tracing::debug!("[ferogram::transfer] upload worker task panicked: {e}"),
+                Err(e) => tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] upload worker task panicked: {e}"),
             }
         }
         if conns.is_empty() {
-            tracing::debug!(
+            tracing::debug!(target: "ferogram::transfer",
                 "[ferogram::transfer] no worker connections available; uploading sequentially"
             );
             let mut data = Vec::with_capacity(total);
@@ -2479,14 +2479,14 @@ impl Client {
                         if let InvocationError::Rpc(ref rpc) = err {
                             if rpc.code == 420 {
                                 let secs = rpc.value.unwrap_or(1) as u64;
-                                tracing::debug!("[ferogram::transfer] upload throttled by FLOOD_WAIT_{secs}; sleeping before retry"
+                                tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] upload throttled by FLOOD_WAIT_{secs}; sleeping before retry"
                                 );
                                 tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
                                 continue;
                             }
                             if rpc.code == 303 {
                                 let new_dc = rpc.value.unwrap_or(1) as i32;
-                                tracing::debug!("[ferogram::transfer] upload redirected by FILE_MIGRATE to DC{new_dc} (was DC{worker_dc})"
+                                tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] upload redirected by FILE_MIGRATE to DC{new_dc} (was DC{worker_dc})"
                                 );
                                 {
                                     let mut g = next_part.lock().await;
@@ -2510,7 +2510,7 @@ impl Client {
                                 }
                             }
                             if rpc.name == "AUTH_KEY_UNREGISTERED" {
-                                tracing::warn!(
+                                tracing::warn!(target: "ferogram::transfer",
                                     "[ferogram::transfer] upload: AUTH_KEY_UNREGISTERED on DC{worker_dc}; re-establishing worker connection (attempt {}/{MAX_WORKER_RECONNECTS})",
                                     total_reconnects + 1
                                 );
@@ -2538,7 +2538,7 @@ impl Client {
                             return Err(err);
                         }
                         let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
-                        tracing::warn!(
+                        tracing::warn!(target: "ferogram::transfer",
                             "[ferogram::transfer] upload worker error ({err}); reconnecting (attempt {total_reconnects}/{MAX_WORKER_RECONNECTS}, backoff {backoff_ms}ms)"
                         );
                         tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
@@ -2584,7 +2584,7 @@ impl Client {
                 md5_checksum,
             })
         };
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] upload complete: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, streaming, took {:.2}s)",
             name,
             total_mib,
@@ -2647,7 +2647,7 @@ impl Client {
         let home_dc = *self.inner.home_dc_id.lock().await;
         let started = std::time::Instant::now();
         let total_mib = total as f64 / (1024.0 * 1024.0);
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] pipelined upload starting: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, X={} in-flight)",
             name,
             total_mib,
@@ -2702,16 +2702,16 @@ impl Client {
         while let Some(res) = open_set.join_next().await {
             match res {
                 Ok(Ok(s)) => senders.push(s),
-                Ok(Err(e)) => tracing::debug!(
+                Ok(Err(e)) => tracing::debug!(target: "ferogram::transfer",
                     "[ferogram::transfer] pipelined upload worker connection failed: {e}"
                 ),
-                Err(e) => tracing::debug!(
+                Err(e) => tracing::debug!(target: "ferogram::transfer",
                     "[ferogram::transfer] pipelined upload worker task panicked: {e}"
                 ),
             }
         }
         if senders.is_empty() {
-            tracing::debug!(
+            tracing::debug!(target: "ferogram::transfer",
                 "[ferogram::transfer] no pipelined worker connections available; falling back to non-pipelined concurrent upload"
             );
             drop(_global_guard);
@@ -2815,7 +2815,7 @@ impl Client {
                                 window.push_back((part_num, chunk_len as u64, Box::pin(fut)))
                             }
                             Err(e) => {
-                                tracing::debug!(
+                                tracing::debug!(target: "ferogram::transfer",
                                     "[ferogram::transfer] pipelined upload enqueue failed, reconnecting: {e}"
                                 );
                                 total_reconnects += 1;
@@ -2866,7 +2866,7 @@ impl Client {
                     if let InvocationError::Rpc(ref rpc) = err {
                         if rpc.code == 420 {
                             let secs = rpc.value.unwrap_or(1) as u64;
-                            tracing::debug!(
+                            tracing::debug!(target: "ferogram::transfer",
                                 "[ferogram::transfer] pipelined upload throttled by FLOOD_WAIT_{secs}; sleeping before retry"
                             );
                             tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
@@ -2910,7 +2910,7 @@ impl Client {
                         }
                         if rpc.code == 303 {
                             let new_dc = rpc.value.unwrap_or(1) as i32;
-                            tracing::debug!(
+                            tracing::debug!(target: "ferogram::transfer",
                                 "[ferogram::transfer] pipelined upload redirected by FILE_MIGRATE to DC{new_dc} (was DC{worker_dc})"
                             );
                             {
@@ -2934,7 +2934,7 @@ impl Client {
                             continue;
                         }
                         if rpc.name == "AUTH_KEY_UNREGISTERED" {
-                            tracing::warn!(
+                            tracing::warn!(target: "ferogram::transfer",
                                 "[ferogram::transfer] pipelined upload: AUTH_KEY_UNREGISTERED on DC{worker_dc}; re-establishing worker connection (attempt {}/{MAX_WORKER_RECONNECTS})",
                                 total_reconnects + 1
                             );
@@ -2970,7 +2970,7 @@ impl Client {
                         return Err(err);
                     }
                     let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
-                    tracing::warn!(
+                    tracing::warn!(target: "ferogram::transfer",
                         "[ferogram::transfer] pipelined upload worker error ({err}); reconnecting (attempt {total_reconnects}/{MAX_WORKER_RECONNECTS}, backoff {backoff_ms}ms)"
                     );
                     tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
@@ -3025,7 +3025,7 @@ impl Client {
                 md5_checksum,
             })
         };
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] pipelined upload complete: '{}' ({:.1} MiB / {} bytes, {} parts x {}B, DC{}, Y={} connections, X={} in-flight, took {:.2}s)",
             name,
             total_mib,
@@ -3183,7 +3183,7 @@ impl Client {
                 let updates_opt = match tl::enums::Updates::from_bytes_exact(&body) {
                     Ok(updates) => Some(updates),
                     Err(e) => {
-                        tracing::warn!(
+                        tracing::warn!(target: "ferogram::transfer",
                             "[ferogram::transfer] failed to parse server response as an Updates frame: {e}"
                         );
                         None
@@ -3315,7 +3315,7 @@ impl Client {
                     if new_dc == 0 || new_dc == worker_dc {
                         return Err(InvocationError::Rpc(rpc.clone()));
                     }
-                    tracing::debug!(
+                    tracing::debug!(target: "ferogram::transfer",
                         "[ferogram::transfer] sequential download redirected by FILE_MIGRATE to DC{new_dc}"
                     );
                     worker_dc = new_dc;
@@ -3328,7 +3328,7 @@ impl Client {
                     if reopen_attempts > MAX_REOPEN {
                         return Err(InvocationError::Rpc(rpc.clone()));
                     }
-                    tracing::debug!(
+                    tracing::debug!(target: "ferogram::transfer",
                         "[ferogram::transfer] sequential download: AUTH_KEY_UNREGISTERED on DC{worker_dc}; \
                          re-establishing connection (attempt {reopen_attempts}/{MAX_REOPEN})"
                     );
@@ -3505,15 +3505,15 @@ impl Client {
             match res {
                 Ok(Ok(c)) => conns.push(c),
                 Ok(Err(e)) => {
-                    tracing::debug!("[ferogram::transfer] download worker connection failed: {e}")
+                    tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] download worker connection failed: {e}")
                 }
                 Err(e) => {
-                    tracing::debug!("[ferogram::transfer] download worker task panicked: {e}")
+                    tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] download worker task panicked: {e}")
                 }
             }
         }
         if conns.is_empty() {
-            tracing::debug!(
+            tracing::debug!(target: "ferogram::transfer",
                 "[ferogram::transfer] no worker connections available; downloading sequentially"
             );
             return self.download_sequential(location, dc_id).await;
@@ -3587,7 +3587,7 @@ impl Client {
                         if let InvocationError::Rpc(ref rpc) = err {
                             if rpc.code == 420 {
                                 let secs = rpc.value.unwrap_or(1) as u64;
-                                tracing::debug!("[ferogram::transfer] download throttled by FLOOD_WAIT_{secs}; sleeping before retry"
+                                tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] download throttled by FLOOD_WAIT_{secs}; sleeping before retry"
                                 );
                                 if abort.load(Ordering::Relaxed) {
                                     abort.store(true, Ordering::Relaxed);
@@ -3601,7 +3601,7 @@ impl Client {
                             // Does not count against the reconnect budget.
                             if rpc.code == 303 {
                                 let new_dc = rpc.value.unwrap_or(1) as i32;
-                                tracing::debug!("[ferogram::transfer] download redirected by FILE_MIGRATE to DC{new_dc} (was DC{worker_dc})"
+                                tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] download redirected by FILE_MIGRATE to DC{new_dc} (was DC{worker_dc})"
                                 );
                                 worker_dc = new_dc;
                                 match client.open_worker_conn(new_dc).await {
@@ -3619,7 +3619,7 @@ impl Client {
                             // open_worker_conn for foreign DCs does fresh DH + importAuth,
                             // which creates a new registered key. Counts against reconnect budget.
                             if rpc.name == "AUTH_KEY_UNREGISTERED" {
-                                tracing::warn!(
+                                tracing::warn!(target: "ferogram::transfer",
                                     "[ferogram::transfer] download: AUTH_KEY_UNREGISTERED on DC{worker_dc}; re-establishing worker connection (attempt {}/{MAX_WORKER_RECONNECTS})",
                                     total_reconnects + 1
                                 );
@@ -3659,7 +3659,7 @@ impl Client {
                         }
                         // Exponential backoff: 300 ms, 600 ms, 1.2 s, 2.4 s …
                         let backoff_ms = 300u64 * (1u64 << (total_reconnects - 1));
-                        tracing::warn!(
+                        tracing::warn!(target: "ferogram::transfer",
                             "[ferogram::transfer] download worker error ({err}); reconnecting (attempt {total_reconnects}/{MAX_WORKER_RECONNECTS}, backoff {backoff_ms}ms)"
                         );
                         // Check abort before sleeping.
@@ -3789,7 +3789,7 @@ impl Client {
         let started = std::time::Instant::now();
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
         let size_mib = size as f64 / (1024.0 * 1024.0);
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] download starting: '{}' ({:.1} MiB / {} bytes, {} chunks x {}B, DC{}, Y={} connections)",
             file_name,
             size_mib,
@@ -3845,15 +3845,15 @@ impl Client {
             match res {
                 Ok(Ok(c)) => conns.push(c),
                 Ok(Err(e)) => {
-                    tracing::debug!("[ferogram::transfer] download worker connection failed: {e}")
+                    tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] download worker connection failed: {e}")
                 }
                 Err(e) => {
-                    tracing::debug!("[ferogram::transfer] download worker task panicked: {e}")
+                    tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] download worker task panicked: {e}")
                 }
             }
         }
         if conns.is_empty() {
-            tracing::debug!(
+            tracing::debug!(target: "ferogram::transfer",
                 "[ferogram::transfer] no worker connections available; downloading sequentially"
             );
             let mut file = tokio::fs::OpenOptions::new()
@@ -4046,7 +4046,7 @@ impl Client {
             .await
             .map_err(|e| InvocationError::Io(std::io::Error::other(e.to_string())))??;
 
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] download complete: '{}' ({:.1} MiB / {} bytes, {} chunks x {}B, DC{}, Y={} connections, took {:.2}s)",
             file_name,
             total_written as f64 / (1024.0 * 1024.0),
@@ -4105,7 +4105,7 @@ impl Client {
         let started = std::time::Instant::now();
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
         let size_mib = size as f64 / (1024.0 * 1024.0);
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] pipelined download starting: '{}' ({:.1} MiB / {} bytes, {} chunks x {}B, DC{}, Y={} connections, X={} in-flight)",
             file_name,
             size_mib,
@@ -4163,16 +4163,16 @@ impl Client {
         while let Some(res) = open_set.join_next().await {
             match res {
                 Ok(Ok(s)) => senders.push(s),
-                Ok(Err(e)) => tracing::debug!(
+                Ok(Err(e)) => tracing::debug!(target: "ferogram::transfer",
                     "[ferogram::transfer] pipelined download worker connection failed: {e}"
                 ),
-                Err(e) => tracing::debug!(
+                Err(e) => tracing::debug!(target: "ferogram::transfer",
                     "[ferogram::transfer] pipelined download worker task panicked: {e}"
                 ),
             }
         }
         if senders.is_empty() {
-            tracing::debug!(
+            tracing::debug!(target: "ferogram::transfer",
                 "[ferogram::transfer] no pipelined worker connections available; falling back to non-pipelined concurrent download"
             );
             drop(_global_guard);
@@ -4245,7 +4245,7 @@ impl Client {
                             Ok(fut) => window.push_back((part, Box::pin(fut))),
                             Err(e) => {
                                 // Sender task is dead; reconnect and retry filling the window.
-                                tracing::debug!(
+                                tracing::debug!(target: "ferogram::transfer",
                                     "[ferogram::transfer] pipelined enqueue failed, reconnecting: {e}"
                                 );
                                 total_reconnects += 1;
@@ -4445,7 +4445,7 @@ impl Client {
             .await
             .map_err(|e| InvocationError::Io(std::io::Error::other(e.to_string())))??;
 
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] pipelined download complete: '{}' ({:.1} MiB / {} bytes, {} chunks x {}B, DC{}, Y={} connections, X={} in-flight, took {:.2}s)",
             file_name,
             total_written as f64 / (1024.0 * 1024.0),
@@ -4721,7 +4721,7 @@ impl Client {
         }
 
         let inner = to_input_file(big, file_id, total_parts, name, &[]);
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] upload_exp complete: '{}' ({} bytes, {}B chunks x {}, {} workers)",
             name,
             total,
@@ -4843,7 +4843,7 @@ impl Client {
         }
 
         let n = size as u64;
-        tracing::info!(
+        tracing::debug!(target: "ferogram::transfer",
             "[ferogram::transfer] download_exp complete: {} bytes, {} workers, {}B chunks",
             n,
             n_workers,

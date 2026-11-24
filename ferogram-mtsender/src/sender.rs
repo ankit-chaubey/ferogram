@@ -335,7 +335,7 @@ impl DcConnection {
                     continue;
                 }
                 Err(reason) => {
-                    tracing::error!(
+                    tracing::warn!(
                         "[ferogram::sender] PFS bind rejected by server for DC{dc_id}: {reason}"
                     );
                     return Err(InvocationError::Deserialize(format!(

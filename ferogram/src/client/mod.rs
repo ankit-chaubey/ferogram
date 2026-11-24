@@ -428,6 +428,9 @@ pub(crate) struct ClientInner {
     /// reconnect-triggered DH completions don't fire GetState before the client
     /// is actually authorised.
     pub signed_in: std::sync::atomic::AtomicBool,
+    /// Set once the "welcome back" line has been logged for a saved session,
+    /// so repeated `is_authorized()` calls do not repeat it.
+    pub(crate) welcomed: std::sync::atomic::AtomicBool,
 
     /// Tracks which foreign DC IDs have had `auth.importAuthorization` called
     /// successfully in the current process session (in-memory only, not persisted).
@@ -766,7 +769,7 @@ impl Client {
                             }
                         }
                     } else {
-                        tracing::info!(
+                        tracing::warn!(
                             "[ferogram::client] saved session for DC{} has no auth key; fresh login required",
                             s.home_dc_id
                         );
@@ -784,7 +787,7 @@ impl Client {
                         (c, dc, opts, HashMap::new(), None)
                     }
                 } else {
-                    tracing::info!(
+                    tracing::warn!(
                         "[ferogram::client] saved session has no entry for home DC{}; fresh login required",
                         s.home_dc_id
                     );
@@ -898,6 +901,7 @@ impl Client {
             pfs_enabled: config.use_pfs,
             update_config: config.update_config,
             signed_in: std::sync::atomic::AtomicBool::new(false),
+            welcomed: std::sync::atomic::AtomicBool::new(false),
             dc_connect_gates: parking_lot::Mutex::new(std::collections::HashMap::new()),
             auth_import_gates: parking_lot::Mutex::new(std::collections::HashMap::new()),
             auth_imported: parking_lot::Mutex::new(std::collections::HashSet::new()),
@@ -1404,7 +1408,7 @@ impl Client {
             match outcome {
                 Ok(Ok((conn, label, ms))) => {
                     set.abort_all();
-                    tracing::info!(
+                    tracing::debug!(
                         "[ferogram::connect] transport selected: {label} ({ms}ms); reusing connection"
                     );
                     // drain cancelled tasks
@@ -1469,7 +1473,7 @@ impl Client {
 
         // Transport probing: race transports; winner becomes the final connection.
         if probe_transport && mtproxy.is_none() {
-            tracing::info!(
+            tracing::debug!(
                 "[ferogram::connect] probing DC{dc_id}: racing {} transports in parallel",
                 transport_race.len()
             );
@@ -1764,7 +1768,7 @@ impl Client {
             }
         }
 
-        tracing::info!("[ferogram::client] session saved to disk");
+        tracing::debug!("[ferogram::client] session saved to disk");
         Ok(())
     }
 
@@ -1841,7 +1845,19 @@ impl Client {
     /// Returns `true` if the client is already authorized.
     pub async fn is_authorized(&self) -> Result<bool, InvocationError> {
         match self.invoke(&tl::functions::updates::GetState {}).await {
-            Ok(_) => Ok(true),
+            Ok(_) => {
+                // Saved-session login: log the welcome line once.
+                if !self
+                    .inner
+                    .welcomed
+                    .swap(true, std::sync::atomic::Ordering::AcqRel)
+                    && let Ok(me) = self.get_me().await
+                {
+                    let name = Self::extract_user_name(&tl::enums::User::User(me));
+                    tracing::info!("[ferogram::auth] signed in: welcome back, {name}");
+                }
+                Ok(true)
+            }
             Err(e)
                 if e.is("AUTH_KEY_UNREGISTERED")
                     || matches!(&e, InvocationError::Rpc(r) if r.code == 401) =>
@@ -2023,7 +2039,7 @@ impl Client {
             tokio::select! {
                 biased;
                 _ = shutdown_token.cancelled() => {
-                    tracing::info!("[ferogram::client] frame dispatch loop exiting cleanly");
+                    tracing::debug!("[ferogram::client] frame dispatch loop exiting cleanly");
                     return;
                 }
                 event = frame_rx.recv() => {
@@ -2272,7 +2288,7 @@ impl Client {
 
         // updatesTooLong: signal message_box of gap and run getDifference.
         if cid == 0xe317af7e_u32 {
-            tracing::warn!("[ferogram::client] updatesTooLong received; triggering getDifference");
+            tracing::debug!("[ferogram::client] updatesTooLong received; triggering getDifference");
             let c = self.clone();
             tokio::spawn(async move {
                 {
@@ -2833,7 +2849,7 @@ impl Client {
                                 }
                             }
                             Err(ref e) if e.is("CHANNEL_PRIVATE") => {
-                                tracing::info!(
+                                tracing::debug!(
                                     "[ferogram::client] auto_resolve: channel {channel_id} is CHANNEL_PRIVATE; deferring diff"
                                 );
                                 self.inner.message_box.lock().await.end_channel_difference(
@@ -2921,7 +2937,7 @@ impl Client {
                         }
                     }
                     Err(ref e) if e.is("PERSISTENT_TIMESTAMP_OUTDATED") => {
-                        tracing::warn!(
+                        tracing::debug!(
                             "[ferogram::client] getChannelDifference: PERSISTENT_TIMESTAMP_OUTDATED; resetting channel pts"
                         );
                         self.inner
@@ -2943,7 +2959,7 @@ impl Client {
                             .end_channel_difference(PrematureEndReason::TemporaryServerIssues);
                     }
                     Err(ref e) if e.is("CHANNEL_PRIVATE") => {
-                        tracing::info!(
+                        tracing::debug!(
                             "[ferogram::client] getChannelDifference: channel {channel_id} is now private; dropping from diff queue"
                         );
                         self.inner
@@ -2953,7 +2969,7 @@ impl Client {
                             .end_channel_difference(PrematureEndReason::Banned);
                     }
                     Err(InvocationError::Rpc(ref rpc)) if rpc.code == 500 => {
-                        tracing::warn!(
+                        tracing::debug!(
                             "[ferogram::client] getChannelDifference: server returned 500; will retry after backoff"
                         );
                         self.inner
@@ -3503,7 +3519,7 @@ impl Client {
             }
         }
         *self.inner.last_bulk_hydration.lock() = Some(std::time::Instant::now());
-        tracing::info!(
+        tracing::debug!(
             "[ferogram::client] peer cache miss burst detected; loading dialogs to hydrate peer cache"
         );
         if let Err(e) = self.warm_peer_cache_from_dialogs().await {
@@ -3658,7 +3674,7 @@ impl Client {
                 .await
                 {
                     Ok(()) => {}
-                    Err(e) if had_connection => tracing::warn!(
+                    Err(e) if had_connection => tracing::warn!(target: "ferogram::transfer",
                         "[ferogram::transfer] extra connection to DC{target_dc} failed setup: {e}; using an existing slot"
                     ),
                     Err(e) => return Err(e),
@@ -3678,7 +3694,7 @@ impl Client {
                     | "AUTH_KEY_PERM_EMPTY"
             )
         {
-            tracing::warn!(
+            tracing::warn!(target: "ferogram::transfer",
                 "[ferogram::transfer] auth error on DC{target_dc} ({}); evicting and clearing cached key",
                 rpc.name
             );
@@ -3723,7 +3739,7 @@ impl Client {
         })
         .await?;
         if media_bypassed {
-            tracing::warn!(
+            tracing::warn!(target: "ferogram::transfer",
                 "[ferogram::transfer] media endpoint for DC{target_dc} is unreachable; \
                  using the regular DC address for transfers"
             );
@@ -3826,7 +3842,7 @@ impl Client {
             };
 
             if let Some((key, salt, time_offset)) = saved {
-                tracing::debug!(
+                tracing::debug!(target: "ferogram::transfer",
                     "[ferogram::transfer] worker conn DC{target_dc}: cached key found, skipping DH"
                 );
                 let mut conn = dc_pool::DcConnection::connect_with_key(
@@ -3874,7 +3890,7 @@ impl Client {
                     })
                     .await?;
                     self.inner.auth_imported.lock().insert(target_dc);
-                    tracing::debug!(
+                    tracing::debug!(target: "ferogram::transfer",
                         "[ferogram::transfer] worker conn DC{target_dc} ready (cached key, auth re-imported)"
                     );
                 } else {
@@ -3895,7 +3911,7 @@ impl Client {
                         },
                     })
                     .await?;
-                    tracing::debug!(
+                    tracing::debug!(target: "ferogram::transfer",
                         "[ferogram::transfer] worker conn DC{target_dc} ready (cached key, auth already active)"
                     );
                 }
@@ -3958,7 +3974,7 @@ impl Client {
                 // Mark as auth-imported for this process session so subsequent
                 // open_worker_conn calls on this DC can skip re-import.
                 self.inner.auth_imported.lock().insert(target_dc);
-                tracing::debug!("[ferogram::transfer] worker conn DC{target_dc} ready (fresh DH)");
+                tracing::debug!(target: "ferogram::transfer", "[ferogram::transfer] worker conn DC{target_dc} ready (fresh DH)");
                 Ok(conn)
             }
         }

@@ -788,7 +788,7 @@ impl Connection {
                     continue;
                 }
                 Err(reason) => {
-                    tracing::error!(
+                    tracing::warn!(
                         "[ferogram::connect] PFS bind rejected by server for DC{dc_id}: {reason}"
                     );
                     return Err(ConnectError::other(format!(
