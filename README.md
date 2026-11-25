@@ -19,8 +19,6 @@ Built by **[Ankit Chaubey](https://github.com/ankit-chaubey)**
 
 From messaging and media to transfers, calls, MTProxy, and much more, Ferogram brings everything together in one elegant framework.
 
-> Let's build something amazing. High-level APIs where you want them, raw invoke() where you need complete control.
-
 ---
 
 ## Getting started
@@ -62,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
 ## Python support
 Love Python as much as we do? Ferogram is also available for Python with a clean, user-friendly API while keeping the heavy lifting in Rust.
 
-Powered by same high-performance Rust core, it takes care of networking, encryption, TL parsing, and session management. Explore the [ferogram python](https://github.com/ankit-chaubey/ferogram-py) source, learn about its [architecture](https://github.com/ankit-chaubey/ferogram-py/blob/main/assets/architecture.svg), or install the pre-built wheels for your platform from [PyPI](https://pypi.org/project/ferogram), no Rust toolchain needed.
+Powered by same high-performance Rust core, it takes care of networking, encryption, transport, and session management. Explore the [ferogram python](https://github.com/ankit-chaubey/ferogram-py) source, learn about its [architecture](https://github.com/ankit-chaubey/ferogram-py/blob/main/assets/architecture.svg), or install the pre-built wheels for your platform from [PyPI](https://pypi.org/project/ferogram), no Rust toolchain needed.
 
 All you need is:
 ```bash
@@ -73,20 +71,15 @@ pip install ferogram
 
 ## Features
 
-- **TgCalls**: Voice and video calling for Telegram clients, wrapping Telegram's native calling stack in a Rust API for joining voice chats and streaming audio or video. See [tgcalls](https://crates.io/crates/tgcalls).
+- **TgCalls**: Voice and video calling for Telegram clients, wrapping Telegram's native calling stack in a Rust API for making calls and streaming audio or video. See [tgcalls](https://crates.io/crates/tgcalls).
 
 - **Dispatcher & Filters**: A flexible update dispatcher with composable filters (`&`, `|`, `!`) for building expressive and maintainable handlers.
-
-- **FSM**: A type-safe finite state machine for multi-step conversations, featuring pluggable storage backends and configurable state strategies. See [ferogram-fsm](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram-fsm).
 
 - **Session Backends**: Binary file storage by default, with built-in support for SQLite, LibSQL (Turso), and base64 sessions. Custom storage backends can be implemented via `SessionBackend`.
 
 - **MTProxy**: Native support for Classic, DD, and FakeTLS MTProxy transports.
 
 - **Raw API**: Access the complete Telegram MTProto API by invoking any TL function directly with `client.invoke()`, giving you full control whenever the high-level API doesn't cover a use case.
-
-...and more features like this throughout the codebase!
-
 
 ---
 
@@ -110,9 +103,7 @@ Join the ferogram community! Questions, discussions, bugs report and feedback ar
 - **Official Website**: (Projects & crates):
 [ferogram.dev](https://ferogram.dev)
 
-See **[what's covered](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram#whats-covered)** for the quick feature list, or try the [examples](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram/examples) to see it in action.
-
-If something is missing, feel free to open a feature request or share your ideas.
+ - **Quick Start**: [Examples](https://github.com/ankit-chaubey/ferogram/tree/main/ferogram/examples) to see it in action.
 
 
 ## License
